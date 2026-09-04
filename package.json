@@ -1,0 +1,28 @@
+{
+  "name": "seo-platform",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Modular SEO operating platform - Supabase, provider-agnostic SEO core, Qdrant knowledge, pluggable publishing",
+  "packageManager": "pnpm@11.25.0",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "pnpm --parallel --filter @seo/api --filter @seo/web dev",
+    "dev:api": "pnpm --filter @seo/api dev",
+    "dev:web": "pnpm --filter @seo/web dev",
+    "build": "pnpm --filter @seo/contracts build && pnpm --filter @seo/api build && pnpm --filter @seo/web build",
+    "typecheck": "pnpm --filter @seo/api typecheck && pnpm --filter @seo/web typecheck",
+    "test": "pnpm --filter @seo/api test",
+    "db:migrate:local": "bash scripts/db-migrate-local.sh"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild",
+      "@tailwindcss/oxide"
+    ]
+  },
+  "devDependencies": {
+    "typescript": "^5.6.3"
+  }
+}
