@@ -320,9 +320,13 @@ async function collectKnowledgeDocuments(sb: SupabaseClient, projectId: string):
     });
   }
 
-  const { data: content } = await sb.from('seo_content').select('id, title, body, excerpt, url').eq('project_id', projectId).limit(500);
+  const { data: content } = await sb
+    .from('seo_content')
+    .select('id, title, body, excerpt, url, content_html')
+    .eq('project_id', projectId)
+    .limit(500);
   for (const c of content ?? []) {
-    const body = (c.body as string | null) ?? '';
+    const body = ((c.body as string | null) ?? (c.content_html as string | null)) ?? '';
     docs.push({
       externalId: `content:${c.id as string}`,
       kind: 'content',

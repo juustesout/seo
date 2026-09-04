@@ -12,7 +12,26 @@ import { decryptSecret, encryptSecret, type EncryptedPayload } from '../crypto.j
 import type { CredentialReader } from '@seo/contracts';
 import { logger } from '../logger.js';
 
-type Owner = { integrationId: string } | { publisherId: string };
+type Owner = { integrationId: string } | { publisherId: string } | { projectId: string; scope: 'ai' };
+
+/** Column/value pair that identifies the owner row for a credential. */
+function ownerColumn(owner: Owner): string {
+  if ('integrationId' in owner) return 'integration_id';
+  if ('publisherId' in owner) return 'publisher_id';
+  return 'project_id';
+}
+
+function ownerMatch(owner: Owner): Record<string, string> {
+  if ('integrationId' in owner) return { integration_id: owner.integrationId };
+  if ('publisherId' in owner) return { publisher_id: owner.publisherId };
+  return { project_id: owner.projectId };
+}
+
+function ownerConflict(owner: Owner): string {
+  if ('integrationId' in owner) return 'integration_id,key_name';
+  if ('publisherId' in owner) return 'publisher_id,key_name';
+  return 'project_id,key_name';
+}
 
 export class CredentialStore {
   constructor(
@@ -27,16 +46,6 @@ export class CredentialStore {
       );
     }
     return this.key;
-  }
-
-  private match(owner: Owner) {
-    return 'integrationId' in owner
-      ? { integration_id: owner.integrationId }
-      : { publisher_id: owner.publisherId };
-  }
-
-  private onConflict(owner: Owner): string {
-    return 'integrationId' in owner ? 'integration_id,key_name' : 'publisher_id,key_name';
   }
 
   reader(owner: Owner, providerType: string): CredentialReader {
@@ -54,7 +63,7 @@ export class CredentialStore {
       .eq('provider_type', providerType)
       .eq('key_name', keyName);
     const { data, error } = await query
-      .eq('integration_id' in owner ? 'integration_id' : 'publisher_id', 'integrationId' in owner ? owner.integrationId : owner.publisherId)
+      .eq(ownerColumn(owner), ownerMatch(owner)[ownerColumn(owner)])
       .maybeSingle<{ ciphertext: string; iv: string; auth_tag: string | null }>();
     if (error) {
       logger.error({ error, keyName }, 'credential read failed');
@@ -83,7 +92,7 @@ export class CredentialStore {
     const encrypted: EncryptedPayload = encryptSecret(this.requireKey(), value);
     const { error } = await this.sb.from('seo_credentials').upsert(
       {
-        ...this.match(owner),
+        ...ownerMatch(owner),
         provider_type: providerType,
         key_name: keyName,
         ciphertext: encrypted.ciphertext,
@@ -91,7 +100,7 @@ export class CredentialStore {
         auth_tag: encrypted.authTag,
         meta: meta ?? {},
       } as never,
-      { onConflict: this.onConflict(owner) },
+      { onConflict: ownerConflict(owner) },
     );
     if (error) {
       logger.error({ error, keyName }, 'credential write failed');
@@ -105,7 +114,7 @@ export class CredentialStore {
       .delete()
       .eq('provider_type', providerType)
       .eq('key_name', keyName)
-      .eq('integration_id' in owner ? 'integration_id' : 'publisher_id', 'integrationId' in owner ? owner.integrationId : owner.publisherId);
+      .eq(ownerColumn(owner), ownerMatch(owner)[ownerColumn(owner)]);
     if (error) {
       logger.error({ error }, 'credential delete failed');
       throw ApiError.badRequest('Could not delete credential');
@@ -117,7 +126,7 @@ export class CredentialStore {
     const { error } = await this.sb
       .from('seo_credentials')
       .delete()
-      .eq('integration_id' in owner ? 'integration_id' : 'publisher_id', 'integrationId' in owner ? owner.integrationId : owner.publisherId);
+      .eq(ownerColumn(owner), ownerMatch(owner)[ownerColumn(owner)]);
     if (error) {
       logger.error({ error }, 'credential clear failed');
       throw ApiError.badRequest('Could not clear credentials');

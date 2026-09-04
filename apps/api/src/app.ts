@@ -19,6 +19,8 @@ import { integrationsRouter } from './http/routes/integrations.js';
 import { publishersRouter } from './http/routes/publishers.js';
 import { publicationsRouter } from './http/routes/publications.js';
 import { knowledgeRouter } from './http/routes/knowledge.js';
+import { aiSettingsRouter } from './http/routes/aiSettings.js';
+import { contentRouter } from './http/routes/content.js';
 import { jobsRouter } from './http/routes/jobs.js';
 import { seoRouter } from './http/routes/seo.js';
 
@@ -58,6 +60,7 @@ export function createApp(): Express {
         google: config.googleConfigured,
         dataforseo: config.dataforseoConfigured,
         qdrant: config.qdrantConfigured,
+        ai: config.aiConfigured,
         credentials_encryption: config.encryptionConfigured,
       },
     });
@@ -77,6 +80,8 @@ export function createApp(): Express {
   app.use('/api/projects/:projectId/publishers', publishersRouter);
   app.use('/api/projects/:projectId/publications', publicationsRouter);
   app.use('/api/projects/:projectId/knowledge', knowledgeRouter);
+  app.use('/api/projects/:projectId/ai', aiSettingsRouter);
+  app.use('/api/projects/:projectId/content', contentRouter);
   app.use('/api/projects/:projectId/jobs', jobsRouter);
   app.use('/api/projects/:projectId', seoRouter);
 

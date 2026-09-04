@@ -18,6 +18,15 @@ export interface EmbedderConfig {
   model?: string;
 }
 
+/** Known OpenAI embedding model dimensions (used when EMBEDDINGS_DIMENSIONS is absent). */
+export function dimensionsForModel(model: string | undefined, fallback = 1536): number {
+  if (!model) return fallback;
+  const m = model.toLowerCase();
+  if (m.includes('text-embedding-3-large')) return 3072;
+  if (m.includes('text-embedding-3-small') || m.includes('ada-002')) return 1536;
+  return fallback;
+}
+
 export class OpenAiCompatibleEmbedder implements Embedder {
   readonly dimensions: number;
 
@@ -33,7 +42,7 @@ export class OpenAiCompatibleEmbedder implements Embedder {
     const apiKey = this.config.apiKey;
     const model = this.config.model ?? 'text-embedding-3-small';
     if (!apiKey) {
-      throw new Error('Embedding provider is not configured: set EMBEDDINGS_API_KEY');
+      throw new Error('Embedding provider is not configured: set EMBEDDINGS_API_KEY or OPENAI_API_KEY');
     }
     const batches: number[][] = [];
     for (let i = 0; i < texts.length; i += 8) {
@@ -58,11 +67,37 @@ export class OpenAiCompatibleEmbedder implements Embedder {
   }
 }
 
+/**
+ * Resolve an embedder from server env. Priority:
+ *   1. Explicit EMBEDDINGS_* endpoint (any OpenAI-compatible server)
+ *   2. OPENAI_API_KEY (defaults to the OpenAI /v1 embeddings endpoint)
+ * Returns null when neither is configured - callers then report themselves as
+ * "not configured" instead of inventing vectors.
+ */
 export function embedderFromConfig(config: Record<string, string | undefined>): Embedder | null {
-  const baseUrl = config.EMBEDDINGS_BASE_URL;
-  const apiKey = config.EMBEDDINGS_API_KEY;
-  const model = config.EMBEDDINGS_MODEL;
-  const dims = config.EMBEDDINGS_DIMENSIONS ? Number(config.EMBEDDINGS_DIMENSIONS) : 1536;
-  if (!apiKey && !baseUrl) return null;
-  return new OpenAiCompatibleEmbedder({ baseUrl, apiKey, model }, Number.isFinite(dims) ? dims : 1536);
+  const fallbackDims = config.EMBEDDINGS_DIMENSIONS ? Number(config.EMBEDDINGS_DIMENSIONS) : undefined;
+  const resolvedDims = Number.isFinite(fallbackDims) ? (fallbackDims as number) : undefined;
+
+  if (config.EMBEDDINGS_API_KEY || config.EMBEDDINGS_BASE_URL) {
+    const model = config.EMBEDDINGS_MODEL;
+    return new OpenAiCompatibleEmbedder(
+      {
+        baseUrl: config.EMBEDDINGS_BASE_URL,
+        apiKey: config.EMBEDDINGS_API_KEY,
+        model,
+      },
+      resolvedDims ?? dimensionsForModel(model),
+    );
+  }
+
+  if (config.OPENAI_API_KEY) {
+    const model = config.OPENAI_EMBEDDING_MODEL ?? 'text-embedding-3-small';
+    return new OpenAiCompatibleEmbedder(
+      { baseUrl: config.OPENAI_BASE_URL, apiKey: config.OPENAI_API_KEY, model },
+      resolvedDims ?? dimensionsForModel(model),
+    );
+  }
+
+  return null;
 }
+

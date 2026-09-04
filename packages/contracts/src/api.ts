@@ -42,7 +42,7 @@ export interface ProviderDescriptorDto {
   name: string;
   description: string;
   capabilities: string[];
-  kind: 'datasource' | 'knowledge' | 'publisher';
+  kind: 'datasource' | 'knowledge' | 'publisher' | 'ai' | 'media';
   ui?: { icon: string; color?: string };
 }
 
@@ -50,6 +50,32 @@ export interface ProvidersCatalogDto {
   dataSources: ProviderDescriptorDto[];
   knowledge: ProviderDescriptorDto[];
   publishers: ProviderDescriptorDto[];
+  ai: ProviderDescriptorDto[];
+  media: ProviderDescriptorDto[];
+}
+
+// ---------------------------------------------------------------------------
+// Project AI configuration (BYOK, server-side only)
+// ---------------------------------------------------------------------------
+
+/** Key source priority: project-stored key first, then server env, then none. */
+export type AiKeySource = 'project' | 'env' | 'none';
+
+export interface ProjectAiStatusDto {
+  provider: string;
+  providerConfigured: boolean;
+  chatModel: string;
+  embeddingModel: string;
+  configured: boolean;
+  keySource: AiKeySource;
+  models: Array<{ id: string; kind: 'chat' | 'embedding'; name?: string }>;
+  capabilities: string[];
+}
+
+export interface ProjectAiSettingsInput {
+  provider?: string;
+  chatModel?: string;
+  embeddingModel?: string;
 }
 
 // ---------------------------------------------------------------------------

@@ -14,6 +14,8 @@ catalogRouter.get('/', (req, res) => {
     dataSources: registry.listDataSources().map((d) => ({ ...d, kind: 'datasource' as const })),
     knowledge: registry.listKnowledge().map((d) => ({ ...d, kind: 'knowledge' as const })),
     publishers: registry.listPublishers().map((d) => ({ ...d, kind: 'publisher' as const })),
+    ai: registry.listAI().map((d) => ({ ...d, kind: 'ai' as const })),
+    media: registry.listMedia().map((d) => ({ ...d, kind: 'media' as const })),
   };
   res.json({ data: dto });
 });

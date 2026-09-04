@@ -9,9 +9,11 @@
  */
 
 import type {
+  AICapability,
   DataSourceCapability,
   IsoDate,
   KnowledgeCapability,
+  MediaCapability,
   PublisherCapability,
 } from './common.js';
 import type {
@@ -178,6 +180,119 @@ export interface PublisherProvider {
 }
 
 // ---------------------------------------------------------------------------
+// AI providers (chat/generation + embeddings)
+// ---------------------------------------------------------------------------
+//
+// Application services (content agent, embedding service, analysis) depend on
+// this interface only. Which provider answers is decided by configuration and
+// per-project credentials resolved server-side - never by the browser.
+
+export type AIChatRole = 'system' | 'user' | 'assistant';
+
+export interface AIChatMessage {
+  role: AIChatRole;
+  content: string;
+}
+
+export interface AIChatRequest {
+  messages: AIChatMessage[];
+  /** Provider model id; when omitted the provider default is used. */
+  model?: string;
+  temperature?: number;
+  maxTokens?: number;
+  /** Structured output schema hint (JSON object the model must conform to). */
+  json?: boolean;
+}
+
+export interface AIChatResult {
+  content: string;
+  model: string;
+  usage?: { inputTokens?: number; outputTokens?: number };
+}
+
+export interface AIGenerateRequest {
+  prompt: string;
+  system?: string;
+  model?: string;
+  temperature?: number;
+  maxTokens?: number;
+  json?: boolean;
+}
+
+export interface AIEmbeddingRequest {
+  input: string | string[];
+  model?: string;
+}
+
+export interface AIEmbeddingResult {
+  vectors: number[][];
+  model: string;
+  usage?: { inputTokens?: number };
+}
+
+export interface AIModelInfo {
+  id: string;
+  name?: string;
+  kind: 'chat' | 'embedding';
+  contextWindow?: number;
+}
+
+export interface AIProvider {
+  readonly id: string;
+  readonly name: string;
+  readonly description: string;
+  readonly capabilities: readonly AICapability[];
+
+  /** Whether the provider is usable with the resolved server credentials. */
+  isConfigured(): boolean;
+  /** List models the provider can serve (config defaults merged in first). */
+  models(): AIModelInfo[];
+  chat(req: AIChatRequest): Promise<AIChatResult>;
+  generate(req: AIGenerateRequest): Promise<AIChatResult>;
+  embed(req: AIEmbeddingRequest): Promise<AIEmbeddingResult>;
+}
+
+// ---------------------------------------------------------------------------
+// Media providers (image search / generation / upload)
+// ---------------------------------------------------------------------------
+//
+// Content Studio inserts media placeholders; image resolution happens through
+// a MediaProvider (Unsplash search, OpenAI image generation, ...). The web UI
+// never holds media vendor secrets.
+
+export interface MediaSearchOptions {
+  query: string;
+  limit?: number;
+  orientation?: 'landscape' | 'portrait' | 'squarish';
+}
+
+export interface MediaResult {
+  id: string;
+  url: string;
+  thumbUrl?: string;
+  width?: number;
+  height?: number;
+  description?: string;
+  source: string;
+}
+
+export interface MediaGenerateOptions {
+  prompt: string;
+  size?: '1024x1024' | '1792x1024' | '1024x1792';
+}
+
+export interface MediaProvider {
+  readonly id: string;
+  readonly name: string;
+  readonly description: string;
+  readonly capabilities: readonly MediaCapability[];
+
+  isConfigured(): boolean;
+  search?(opts: MediaSearchOptions): Promise<MediaResult[]>;
+  generate?(opts: MediaGenerateOptions): Promise<MediaResult>;
+}
+
+// ---------------------------------------------------------------------------
 // Provider registry
 // ---------------------------------------------------------------------------
 
@@ -190,13 +305,15 @@ export interface ProviderDeps {
 export type DataSourceFactory = (deps: ProviderDeps) => SeoDataSource;
 export type KnowledgeFactory = (deps: ProviderDeps) => KnowledgeProvider;
 export type PublisherFactory = (deps: ProviderDeps) => PublisherProvider;
+export type AIFactory = (deps: ProviderDeps) => AIProvider;
+export type MediaFactory = (deps: ProviderDeps) => MediaProvider;
 
 export interface ProviderDescriptor<T = unknown> {
   id: string;
   name: string;
   description: string;
   capabilities: string[];
-  kind: 'datasource' | 'knowledge' | 'publisher';
+  kind: 'datasource' | 'knowledge' | 'publisher' | 'ai' | 'media';
   /** UI hints (icon key, color). */
   ui?: { icon: string; color?: string };
 }
@@ -205,12 +322,18 @@ export interface ProviderRegistry {
   registerDataSource(factory: DataSourceFactory, descriptor: Omit<ProviderDescriptor, 'kind'>): void;
   registerKnowledge(factory: KnowledgeFactory, descriptor: Omit<ProviderDescriptor, 'kind'>): void;
   registerPublisher(factory: PublisherFactory, descriptor: Omit<ProviderDescriptor, 'kind'>): void;
+  registerAI(factory: AIFactory, descriptor: Omit<ProviderDescriptor, 'kind'>): void;
+  registerMedia(factory: MediaFactory, descriptor: Omit<ProviderDescriptor, 'kind'>): void;
 
   getDataSource(id: string): SeoDataSource | undefined;
   getKnowledge(id: string): KnowledgeProvider | undefined;
   getPublisher(id: string): PublisherProvider | undefined;
+  getAI(id: string): AIProvider | undefined;
+  getMedia(id: string): MediaProvider | undefined;
 
   listDataSources(): ProviderDescriptor<'datasource'>[];
   listKnowledge(): ProviderDescriptor<'knowledge'>[];
   listPublishers(): ProviderDescriptor<'publisher'>[];
+  listAI(): ProviderDescriptor<'ai'>[];
+  listMedia(): ProviderDescriptor<'media'>[];
 }

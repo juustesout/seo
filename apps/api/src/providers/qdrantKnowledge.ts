@@ -69,7 +69,7 @@ export class QdrantKnowledgeProvider implements KnowledgeProvider {
     }
     if (!this.embedder) {
       throw new Error(
-        'No embedding provider configured: set EMBEDDINGS_API_KEY (and optionally EMBEDDINGS_BASE_URL / EMBEDDINGS_MODEL)',
+        'No embedding provider configured: set EMBEDDINGS_API_KEY or OPENAI_API_KEY',
       );
     }
   }
@@ -86,6 +86,7 @@ export class QdrantKnowledgeProvider implements KnowledgeProvider {
       const chunks = chunkText(doc.text);
       if (chunks.length === 0) continue;
       const embeddings = await this.embedder!.embed(chunks);
+      const indexedAt = new Date().toISOString();
       chunks.forEach((text, i) => {
         points.push({
           id: deterministicId(ctx.projectId, doc.externalId, i),
@@ -93,11 +94,15 @@ export class QdrantKnowledgeProvider implements KnowledgeProvider {
           payload: {
             project_id: ctx.projectId,
             external_id: doc.externalId,
+            source_type: doc.kind,
+            source_id: doc.externalId,
             kind: doc.kind,
             title: doc.title ?? null,
             url: doc.url ?? null,
             text,
             chunk_index: i,
+            chunk_total: chunks.length,
+            indexed_at: indexedAt,
             meta: doc.meta ?? {},
           },
         });

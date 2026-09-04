@@ -16,6 +16,9 @@ export const PROVIDER_IDS = {
   QDRANT: 'qdrant',
   WORDPRESS: 'wordpress',
   MANUAL: 'manual',
+  OPENAI: 'openai',
+  OPENAI_MEDIA: 'openai_media',
+  UNSPLASH: 'unsplash',
 } as const;
 
 export type ProviderId = (typeof PROVIDER_IDS)[keyof typeof PROVIDER_IDS];
@@ -37,6 +40,12 @@ export type DataSourceCapability =
 export type PublisherCapability = 'post' | 'update' | 'delete' | 'media' | 'schedule';
 
 export type KnowledgeCapability = 'index' | 'search' | 'update' | 'delete';
+
+/** Capabilities declared by AI providers (chat/generation and embeddings). */
+export type AICapability = 'chat' | 'generate' | 'embed' | 'models';
+
+/** Capabilities declared by media providers (stock search / generation). */
+export type MediaCapability = 'search' | 'generate' | 'upload';
 
 // ---------------------------------------------------------------------------
 // Generic statuses

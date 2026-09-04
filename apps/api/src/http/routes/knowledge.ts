@@ -22,8 +22,11 @@ knowledgeRouter.post(
     const body = z.object({ query: z.string().min(1).max(500), kind: z.string().optional(), limit: z.number().int().min(1).max(20).optional() }).parse(req.body);
     const provider = container.registry.getKnowledge('qdrant');
     if (!provider) throw ApiError.notConfigured('No knowledge provider is configured on this server');
-    if (!container.config.env.QDRANT_URL || !process.env.EMBEDDINGS_API_KEY) {
-      throw ApiError.notConfigured('Knowledge search is not configured (QDRANT_URL / EMBEDDINGS_API_KEY)');
+    const hasEmbeddingKey = Boolean(process.env.EMBEDDINGS_API_KEY || container.config.env.OPENAI_API_KEY);
+    if (!container.config.env.QDRANT_URL || !hasEmbeddingKey) {
+      throw ApiError.notConfigured(
+        'Knowledge search is not configured (set QDRANT_URL and an embedding key: EMBEDDINGS_API_KEY or OPENAI_API_KEY)',
+      );
     }
 
     const hits = await provider.search({

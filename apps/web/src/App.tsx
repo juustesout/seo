@@ -6,6 +6,7 @@ import { Integrations } from './views/Integrations';
 import { DataViews } from './views/Data';
 import { Knowledge } from './views/Knowledge';
 import { Publishing } from './views/Publishing';
+import { Content } from './views/Content';
 
 interface ProjectRow {
   id: string;
@@ -40,6 +41,7 @@ const NAV = [
   { id: 'data', label: 'Keywords & Rankings', dot: true },
   { id: 'integrations', label: 'Integrations', dot: true },
   { id: 'knowledge', label: 'Knowledge Base', dot: false },
+  { id: 'content', label: 'Content Studio', dot: false },
   { id: 'publishing', label: 'Publishing', dot: false },
 ];
 
@@ -175,6 +177,7 @@ export function App() {
           {route.view === 'data' && <DataViews projectId={pid} />}
           {route.view === 'integrations' && <Integrations projectId={pid} />}
           {route.view === 'knowledge' && <Knowledge projectId={pid} />}
+          {route.view === 'content' && <Content projectId={pid} />}
           {route.view === 'publishing' && <Publishing projectId={pid} />}
         </main>
       </div>

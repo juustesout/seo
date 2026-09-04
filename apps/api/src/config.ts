@@ -38,6 +38,15 @@ const envSchema = z.object({
   QDRANT_URL: z.string().url().optional(),
   QDRANT_API_KEY: z.string().optional(),
 
+  // OpenAI (AI chat/generation/embeddings - BYOK key, server-side only).
+  OPENAI_API_KEY: z.string().optional(),
+  OPENAI_BASE_URL: z.string().url().optional(),
+  OPENAI_CHAT_MODEL: z.string().optional(),
+  OPENAI_EMBEDDING_MODEL: z.string().optional(),
+
+  // Unsplash (stock image search for content).
+  UNSPLASH_ACCESS_KEY: z.string().optional(),
+
   // AES-256 key (base64, 32 bytes) used to encrypt seo_credentials at rest.
   CREDENTIALS_ENCRYPTION_KEY: z.string().optional(),
 
@@ -53,6 +62,8 @@ export interface AppConfig {
   googleConfigured: boolean;
   dataforseoConfigured: boolean;
   qdrantConfigured: boolean;
+  /** True when an OpenAI key is present server-side (AI + embeddings usable). */
+  aiConfigured: boolean;
   /** null when the encryption key is missing (credential storage disabled). */
   encryptionConfigured: boolean;
   publicAppUrl: string | null;
@@ -69,6 +80,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       parsed.DATAFORSEO_BASE64 || (parsed.DATAFORSEO_LOGIN && parsed.DATAFORSEO_PASSWORD),
     ),
     qdrantConfigured: Boolean(parsed.QDRANT_URL && parsed.QDRANT_API_KEY),
+    aiConfigured: Boolean(parsed.OPENAI_API_KEY),
     encryptionConfigured: Boolean(parsed.CREDENTIALS_ENCRYPTION_KEY),
     publicAppUrl: parsed.PUBLIC_APP_URL ?? null,
   };

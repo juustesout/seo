@@ -84,4 +84,67 @@ begin
 end $$;
 SQL
 
+echo "==> smoke test: BYOK project-scoped AI credential ownership"
+PSQL -d "${DB_NAME}" <<'SQL'
+set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-000000000001"}';
+do $$
+declare
+  v_project uuid;
+  v_id uuid;
+begin
+  select id into v_project from public.seo_projects where slug = 'demo' limit 1;
+  if v_project is null then raise exception 'smoke: project missing for ai credential test'; end if;
+
+  insert into public.seo_credentials (project_id, provider_type, key_name, ciphertext, iv)
+  values (v_project, 'ai', 'OPENAI_API_KEY', 'cipher', 'iv') returning id into v_id;
+  if v_id is null then raise exception 'smoke: ai project credential was not stored'; end if;
+
+  begin
+    insert into public.seo_credentials (project_id, provider_type, key_name, ciphertext, iv)
+    values (v_project, 'ai', 'OPENAI_API_KEY', 'cipher2', 'iv2');
+    raise exception 'smoke: duplicate ai key unexpectedly allowed';
+  exception when unique_violation then
+    null;
+  end;
+
+  begin
+    insert into public.seo_credentials (provider_type, key_name, ciphertext, iv)
+    values ('ai', 'NO_OWNER', 'cipher', 'iv');
+    raise exception 'smoke: ownerless credential unexpectedly allowed';
+  exception when check_violation then
+    null;
+  end;
+
+  raise notice 'smoke: ai project credentials OK';
+end $$;
+SQL
+
+echo "==> smoke test: structured content model"
+PSQL -d "${DB_NAME}" <<'SQL'
+set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-000000000001"}';
+do $$
+declare
+  v_project uuid;
+  v_content uuid;
+  v_blocks jsonb := '[{"type":"heading","attrs":{"level":2,"text":"Intro"}},{"type":"paragraph","attrs":{"text":"Hello world"}}]'::jsonb;
+begin
+  select id into v_project from public.seo_projects where slug = 'demo' limit 1;
+
+  insert into public.seo_content (project_id, title, slug, target_keyword, meta_title, meta_description, content_json, content_html, outline, status)
+  values (v_project, 'Demo article', 'demo-article', 'demo keyword', 'Demo | SEO', 'A demo description', v_blocks, '<p>Hello</p>', '[{"level":2,"text":"Intro"}]', 'draft')
+  returning id into v_content;
+  if v_content is null then raise exception 'smoke: content row was not created'; end if;
+
+  begin
+    insert into public.seo_content (project_id, title, slug)
+    values (v_project, 'Duplicate slug', 'demo-article');
+    raise exception 'smoke: duplicate project slug unexpectedly allowed';
+  exception when unique_violation then
+    null;
+  end;
+
+  raise notice 'smoke: structured content OK';
+end $$;
+SQL
+
 echo "==> migration validation OK (${DB_NAME})"
