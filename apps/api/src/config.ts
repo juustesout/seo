@@ -43,6 +43,7 @@ const envSchema = z.object({
   OPENAI_BASE_URL: z.string().url().optional(),
   OPENAI_CHAT_MODEL: z.string().optional(),
   OPENAI_EMBEDDING_MODEL: z.string().optional(),
+  OPENAI_IMAGE_MODEL: z.string().optional(),
 
   // Unsplash (stock image search for content).
   UNSPLASH_ACCESS_KEY: z.string().optional(),

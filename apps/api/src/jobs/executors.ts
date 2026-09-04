@@ -17,6 +17,9 @@ import { DataForSeoDataSource } from '../providers/dataforseo/dataSource.js';
 import { urlBelongsToDomain } from '../providers/dataforseo/normalize.js';
 import { delay } from '../util.js';
 import type { ServiceContainer } from '../context.js';
+import { ContentService } from '../services/contentService.js';
+import { ContentAgentService } from '../services/contentAgentService.js';
+import type { ContentBlock } from '@seo/contracts';
 
 export interface JobExecContext {
   container: ServiceContainer;
@@ -497,6 +500,103 @@ const publish: JobExecutor = async ({ container, job, report }) => {
 };
 
 // ---------------------------------------------------------------------------
+// Content agent
+// ---------------------------------------------------------------------------
+
+async function contentGenerate(ctx: JobExecContext): Promise<Record<string, unknown>> {
+  const { container, job } = ctx;
+  const input = (job.params ?? {}) as Record<string, unknown>;
+  const topic = typeof input.topic === 'string' ? input.topic.trim() : '';
+  if (!topic) throw new ApiError(400, 'bad_request', 'content_generate requires a topic');
+
+  const agent = new ContentAgentService(container);
+  const stage = (label: string, progress: number) => ctx.report(progress, label);
+  const result = await agent.generate(job.project_id, String(job.created_by ?? 'system'), {
+    topic,
+    targetKeyword: typeof input.target_keyword === 'string' ? input.target_keyword : null,
+    language: typeof input.language === 'string' ? input.language : undefined,
+    audience: typeof input.audience === 'string' ? input.audience : null,
+    tone: typeof input.tone === 'string' ? input.tone : null,
+    contentLength: input.content_length === 'short' || input.content_length === 'long' ? input.content_length : 'medium',
+    includeKnowledge: input.include_knowledge !== false,
+    imageHint: typeof input.image_hint === 'string' ? input.image_hint : null,
+    imageCount: typeof input.image_count === 'number' ? input.image_count : undefined,
+  }, stage);
+
+  await ctx.report(100, `Content draft "${result.title}" created`);
+  return result;
+}
+
+async function contentImages(ctx: JobExecContext): Promise<Record<string, unknown>> {
+  const { container, job } = ctx;
+  const params = (job.params ?? {}) as Record<string, unknown>;
+  const contentId = typeof params.content_id === 'string' ? params.content_id : '';
+  if (!contentId) throw new ApiError(400, 'bad_request', 'content_images requires a content_id');
+  const providerId = typeof params.image_provider === 'string' ? params.image_provider : 'unsplash';
+  const cap = typeof params.limit === 'number' ? Math.max(1, Math.min(Math.floor(params.limit), 6)) : 4;
+
+  const service = new ContentService(container.sb);
+  const row = await service.get(job.project_id, contentId);
+  const blocks = (row.content_json ?? []) as ContentBlock[];
+  type MediaBlock = Extract<ContentBlock, { type: 'media' }>;
+  const isImagePlaceholder = (b: ContentBlock): b is MediaBlock =>
+    b.type === 'media' && b.attrs.kind === 'placeholder' && !b.attrs.src;
+  const placeholders: Array<{ block: MediaBlock; index: number }> = [];
+  blocks.forEach((b, index) => {
+    if (isImagePlaceholder(b)) placeholders.push({ block: b, index });
+  });
+  if (placeholders.length === 0) {
+    await ctx.report(100, 'No media placeholders in this content draft');
+    return { resolved: 0, skipped: 0 };
+  }
+
+  const media = container.registry.getMedia(providerId);
+  if (!media) throw new ApiError(400, 'bad_request', `No media provider "${providerId}" is registered`);
+  if (!media.isConfigured()) {
+    throw ApiError.notConfigured(`Media provider "${providerId}" is not configured on this server`);
+  }
+
+  let resolved = 0;
+  for (const target of placeholders) {
+    if (resolved >= cap) break;
+    const title = typeof row.title === 'string' ? row.title : '';
+    const alt = String(target.block.attrs.alt || title || 'illustration').slice(0, 500);
+    let src: string | null = null;
+    if (media.capabilities.includes('search') && media.search) {
+      const hits = await media.search({ query: alt, limit: 1, orientation: 'landscape' });
+      src = hits[0]?.url ?? null;
+    }
+    if (!src && media.capabilities.includes('generate') && media.generate) {
+      const gen = await media.generate({
+        prompt: `High-quality editorial image for an article section: ${alt}`,
+        size: '1792x1024',
+      });
+      src = gen.url;
+    }
+    if (!src) continue;
+    const updated = {
+      ...target.block,
+      attrs: {
+        ...target.block.attrs,
+        kind: 'image' as const,
+        src,
+        provider: providerId,
+      },
+    } as unknown as ContentBlock;
+    blocks[target.index] = updated;
+    resolved += 1;
+    await ctx.report(Math.round((resolved / placeholders.length) * 90), `Resolved ${resolved} image(s)`);
+  }
+
+  const skipped = placeholders.length - resolved;
+  if (resolved > 0) {
+    await service.update(job.project_id, String(job.created_by ?? 'system'), contentId, { contentJson: blocks });
+  }
+  await ctx.report(100, `Resolved ${resolved} image(s), ${skipped} left as placeholders`);
+  return { resolved, skipped, provider: providerId };
+}
+
+// ---------------------------------------------------------------------------
 // Registry
 // ---------------------------------------------------------------------------
 
@@ -508,6 +608,8 @@ export const EXECUTORS: Record<string, JobExecutor> = {
   knowledge_index: knowledgeIndex,
   knowledge_reindex: knowledgeReindex,
   knowledge_delete: knowledgeDelete,
+  content_generate: contentGenerate,
+  content_images: contentImages,
   publish,
   publish_update: publish,
   publish_delete: publish,

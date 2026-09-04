@@ -115,7 +115,7 @@ export class ContentService {
     userId: string,
     mode: 'create' | 'update',
     id: string | undefined,
-    input: ContentInput,
+    input: ContentPatch,
   ) {
     const existing = mode === 'update' ? await this.get(projectId, id!) : null;
     const status = (input.status ?? existing?.status ?? 'draft') as ContentStatusValue;
@@ -177,7 +177,7 @@ export class ContentService {
     return this.write(projectId, userId, 'create', undefined, input);
   }
 
-  update(projectId: string, userId: string, id: string, input: ContentInput) {
+  update(projectId: string, userId: string, id: string, input: ContentPatch) {
     return this.write(projectId, userId, 'update', id, input);
   }
 

@@ -71,6 +71,7 @@ export function getContainer(): ServiceContainer {
         OPENAI_BASE_URL: config.env.OPENAI_BASE_URL,
         OPENAI_CHAT_MODEL: config.env.OPENAI_CHAT_MODEL,
         OPENAI_EMBEDDING_MODEL: config.env.OPENAI_EMBEDDING_MODEL,
+        OPENAI_IMAGE_MODEL: config.env.OPENAI_IMAGE_MODEL,
         UNSPLASH_ACCESS_KEY: config.env.UNSPLASH_ACCESS_KEY,
         EMBEDDINGS_BASE_URL: process.env.EMBEDDINGS_BASE_URL,
         EMBEDDINGS_API_KEY: process.env.EMBEDDINGS_API_KEY,

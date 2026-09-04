@@ -35,6 +35,67 @@ const patchSchema = contentInputSchema.partial().refine((v) => Object.keys(v).le
   message: 'Provide at least one field to update',
 });
 
+const generateSchema = z
+  .object({
+    topic: z.string().min(3).max(500),
+    target_keyword: z.string().max(200).optional(),
+    language: z.string().max(16).optional(),
+    audience: z.string().max(300).optional(),
+    tone: z.string().max(100).optional(),
+    content_length: z.enum(['short', 'medium', 'long']).optional(),
+    include_knowledge: z.boolean().optional(),
+    image_hint: z.string().max(200).nullable().optional(),
+    image_count: z.number().int().min(1).max(4).optional(),
+  })
+  .passthrough();
+
+const imagesSchema = z
+  .object({
+    image_provider: z.enum(['unsplash', 'openai_media']),
+    limit: z.number().int().min(1).max(6).optional(),
+  })
+  .passthrough();
+
+/** Queue the staged content agent pipeline as a job (never blocks HTTP). */
+contentRouter.post(
+  '/generate',
+  asyncHandler(async (req, res) => {
+    const projectId = parseProjectId(req);
+    const { container, user } = req;
+    await container.access.requireRole(user!.sub, projectId, 'editor');
+    const body = generateSchema.parse(req.body);
+    const job = await container.jobStore.enqueue({
+      project_id: projectId,
+      provider: 'content',
+      job_type: 'content_generate',
+      params: body,
+      created_by: user!.sub,
+    });
+    res.status(202).json({ data: { job } });
+  }),
+);
+
+/** Resolve media placeholders in a draft via a media provider (job). */
+contentRouter.post(
+  '/:id/images',
+  asyncHandler(async (req, res) => {
+    const projectId = parseProjectId(req);
+    const { container, user } = req;
+    await container.access.requireRole(user!.sub, projectId, 'editor');
+    const body = imagesSchema.parse(req.body);
+    const svc = new ContentService(container.sb);
+    await svc.get(projectId, parseId(req, 'id'));
+    const job = await container.jobStore.enqueue({
+      project_id: projectId,
+      provider: 'content',
+      job_type: 'content_images',
+      params: { content_id: parseId(req, 'id'), image_provider: body.image_provider, limit: body.limit },
+      created_by: user!.sub,
+    });
+    res.status(202).json({ data: { job } });
+  }),
+);
+
 contentRouter.get(
   '/',
   asyncHandler(async (req, res) => {

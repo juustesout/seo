@@ -76,6 +76,9 @@ export type JobType =
   | 'knowledge_index'
   | 'knowledge_reindex'
   | 'knowledge_delete'
+  | 'content_generate'
+  | 'content_images'
+  | 'content_analyze'
   | 'publish'
   | 'publish_update'
   | 'publish_delete';
@@ -91,6 +94,7 @@ export const JOB_TYPE_GROUPS: Record<string, JobType[]> = {
     'website_audit',
   ],
   knowledge: ['knowledge_index', 'knowledge_reindex', 'knowledge_delete'],
+  content: ['content_generate', 'content_images', 'content_analyze'],
   publish: ['publish', 'publish_update', 'publish_delete'],
 };
 

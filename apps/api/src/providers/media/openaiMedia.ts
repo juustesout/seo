@@ -50,7 +50,12 @@ export class OpenAiMediaProvider implements MediaProvider {
         authorization: `Bearer ${this.deps.config.OPENAI_API_KEY}`,
         'content-type': 'application/json',
       },
-      body: JSON.stringify({ model: 'dall-e-3', prompt: opts.prompt, size, n: 1 }),
+      body: JSON.stringify({
+        model: this.deps.config.OPENAI_IMAGE_MODEL ?? 'dall-e-3',
+        prompt: opts.prompt,
+        size,
+        n: 1,
+      }),
     });
     if (!res.ok) {
       const text = await res.text().catch(() => '');
