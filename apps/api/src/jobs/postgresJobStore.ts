@@ -81,6 +81,17 @@ export class PostgresJobStore implements JobStore {
     return mapRow(result.rows[0]);
   }
 
+  async list(projectId: string, limit = 50): Promise<JobRecord[]> {
+    const result = await this.pool.query(
+      `select ${JOB_COLUMNS} from seo_sync_jobs
+        where project_id = $1
+        order by created_at desc
+        limit $2`,
+      [projectId, Math.max(1, Math.min(200, limit))],
+    );
+    return (result.rows as Record<string, unknown>[]).map((row) => mapRow(row)!);
+  }
+
   async claimNext(): Promise<JobRecord | null> {
     const result = await this.pool.query(
       `update seo_sync_jobs j

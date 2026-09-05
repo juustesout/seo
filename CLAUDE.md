@@ -37,6 +37,7 @@ Run services (env is loaded from `apps/api/.env` with `node --env-file`):
 ```bash
 node --env-file=apps/api/.env apps/api/dist/index.js   # API, :3001
 node --env-file=apps/api/.env apps/api/dist/worker.js   # job worker
+MCP_API_KEY=seo_live_... node --env-file=apps/api/.env apps/api/dist/mcp/index.js   # MCP (stdio), bound to a project API key
 pnpm --filter @seo/web dev                              # Vite, :5173, /api -> :3001
 ```
 

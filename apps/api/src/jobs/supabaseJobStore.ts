@@ -73,6 +73,20 @@ export class SupabaseJobStore implements JobStore {
     return rowToRecord(data);
   }
 
+  async list(projectId: string, limit = 50): Promise<JobRecord[]> {
+    const { data, error } = await this.sb
+      .from('seo_sync_jobs')
+      .select('*')
+      .eq('project_id', projectId)
+      .order('created_at', { ascending: false })
+      .limit(Math.max(1, Math.min(200, limit)));
+    if (error) {
+      logger.error({ error }, 'job list failed');
+      throw ApiError.badRequest('Could not read jobs');
+    }
+    return (data ?? []).map((row) => rowToRecord(row as Record<string, unknown>));
+  }
+
   async claimNext(): Promise<JobRecord | null> {
     const now = new Date().toISOString();
     const { data: candidates, error } = await this.sb

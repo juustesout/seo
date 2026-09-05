@@ -59,12 +59,15 @@ Two hard consequences of this picture:
 | Monorepo | `@seo/contracts`, `@seo/api`, `@seo/web` (pnpm workspaces) |
 | Database | All `seo_*` tables + RLS + RPCs applied to hosted Supabase; validated against local Postgres via `scripts/db-migrate-local.sh` |
 | Projects | `seo_projects` + membership roles (owner/admin/editor/viewer), project selector in UI, project-scoped routes |
+| Content | Structured `seo_content` (blocks source of truth + HTML render, metadata, keyword, statuses, `seo_score`), block studio, staged content agent (brief/outline/article) into drafts, deterministic SEO audit with optional AI pass |
+| REST v1 | `/api/v1/projects/:projectId/content` (+ analysis) behind project-scoped, SHA-256-hashed, revocable API keys with `read`/`write` scopes; shares the SEO Core services |
+| MCP | Stdio MCP server bound to a project API key (read/write scopes); tools `content_list/get/analyze`, `jobs_list`, `content_generate`, `content_resolve_images`, `content_update`; publish/archive demand explicit `confirm`, delete is not exposed; no direct Postgres/provider access |
 | DataForSEO | Working adapter; live keyword research + SERP retrieval through background jobs (verified end-to-end) |
 | GSC | OAuth flow + property attach implemented; needs Google OAuth env + public URL to activate |
 | Qdrant | Knowledge provider with per-project isolated collections; blocked on embedding key |
-| WordPress | Basic publisher (draft/publish/update/delete) implemented |
-| Jobs | Durable `seo_sync_jobs`, worker with retry/backoff/cancel, no long ops in HTTP handlers |
-| Web | Capability-driven React UI (dashboard, keywords/rankings, integrations, knowledge, publishing) |
+| WordPress | Basic publisher (draft/publish/update/delete) implemented; publish jobs run through the worker and publication rows stay honest on failure (`failed`/`queued` + message) |
+| Jobs | Durable `seo_sync_jobs`, worker with retry/backoff/cancel, unknown job types fail loudly, stale `running` jobs are swept, no long ops in HTTP handlers |
+| Web | Capability-driven React UI (dashboard, keywords/rankings, integrations, knowledge, publishing, content studio) |
 
 ## 4. Milestones (proposed order)
 

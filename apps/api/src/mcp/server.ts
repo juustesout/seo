@@ -119,14 +119,7 @@ export function buildTools(): ToolDef[] {
     handler: async (deps, args) => {
       requireRead(deps);
       const limit = typeof args.limit === 'number' ? args.limit : 50;
-      const { data, error } = await deps.sb
-        .from('seo_sync_jobs')
-        .select('id, job_type, status, progress, message, result, error, created_at, completed_at')
-        .eq('project_id', deps.projectId)
-        .order('created_at', { ascending: false })
-        .limit(limit);
-      if (error) throw new ApiError(400, 'bad_request', 'Could not read jobs');
-      return { data: data ?? [] };
+      return { data: await deps.jobStore.list(deps.projectId, limit) };
     },
   });
 

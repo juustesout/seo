@@ -78,8 +78,29 @@ async function runOnce(container: ReturnType<typeof getContainer>): Promise<bool
     });
     log.error({ err, retryable }, 'job failed');
     await container.jobStore.fail(job.id, error, retryable);
+    await flagFailedPublication(container, job, error.message, retryable);
   }
   return true;
+}
+
+const PUBLISH_JOB_TYPES = new Set(['publish', 'publish_update', 'publish_delete']);
+
+/** Keep seo_publications state honest when a publish job fails. */
+async function flagFailedPublication(
+  container: ReturnType<typeof getContainer>,
+  job: JobRecord,
+  message: string,
+  retryable: boolean,
+): Promise<void> {
+  if (!PUBLISH_JOB_TYPES.has(job.job_type)) return;
+  const publicationId = job.params?.publication_id;
+  if (typeof publicationId !== 'string') return;
+  const status = retryable ? 'queued' : 'failed';
+  await container.sb
+    .from('seo_publications')
+    .update({ status, error: message.slice(0, 500) })
+    .eq('project_id', job.project_id)
+    .eq('id', publicationId);
 }
 
 function waitForWork(container: ReturnType<typeof getContainer>): Promise<void> {

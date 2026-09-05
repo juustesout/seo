@@ -46,6 +46,8 @@ export interface JobStore {
   enqueue(input: EnqueueJobInput): Promise<JobRecord>;
   claimNext(): Promise<JobRecord | null>;
   get(id: string): Promise<JobRecord | null>;
+  /** Most recent jobs for a project, newest first. */
+  list(projectId: string, limit?: number): Promise<JobRecord[]>;
   updateProgress(id: string, progress: number, message?: string | null): Promise<void>;
   complete(id: string, result: Record<string, unknown>): Promise<void>;
   fail(id: string, error: JobError, retryable: boolean): Promise<void>;

@@ -127,14 +127,8 @@ jobsRouter.get(
     const { container, user } = req;
     await container.access.requireRole(user!.sub, projectId, 'viewer');
     const parsed = z.object({ limit: z.coerce.number().int().min(1).max(100).default(50) }).parse(req.query);
-    const { data, error } = await container.sb
-      .from('seo_sync_jobs')
-      .select('id, job_type, status, progress, message, result, error, run_after, created_at, completed_at')
-      .eq('project_id', projectId)
-      .order('created_at', { ascending: false })
-      .limit(parsed.limit);
-    if (error) throw ApiError.badRequest('Could not read jobs');
-    res.json({ data: data ?? [] });
+    const jobs = await container.jobStore.list(projectId, parsed.limit);
+    res.json({ data: jobs });
   }),
 );
 
