@@ -10,6 +10,7 @@ import { requireAuth } from '../middleware.js';
 import { asyncHandler } from '../asyncHandler.js';
 import { parseId, parseProjectId } from './utils.js';
 import { ContentService, contentBlocksSchema, CONTENT_STATUSES } from '../../services/contentService.js';
+import { ContentAnalysisService } from '../../services/contentAnalysisService.js';
 
 export const contentRouter: Router = Router({ mergeParams: true });
 
@@ -90,6 +91,42 @@ contentRouter.post(
       provider: 'content',
       job_type: 'content_images',
       params: { content_id: parseId(req, 'id'), image_provider: body.image_provider, limit: body.limit },
+      created_by: user!.sub,
+    });
+    res.status(202).json({ data: { job } });
+  }),
+);
+
+const analyzeSchema = z.object({ with_ai: z.boolean().optional() }).passthrough();
+
+/** Deterministic audit (no network) - returns the reusable report shape. */
+contentRouter.get(
+  '/:id/analysis',
+  asyncHandler(async (req, res) => {
+    const projectId = parseProjectId(req);
+    const { container, user } = req;
+    await container.access.requireRole(user!.sub, projectId, 'viewer');
+    const svc = new ContentAnalysisService(container);
+    const result = await svc.analyze(projectId, parseId(req, 'id'));
+    res.json({ data: result });
+  }),
+);
+
+/** Full analysis (deterministic + optional AI pass) persisted via job. */
+contentRouter.post(
+  '/:id/analyze',
+  asyncHandler(async (req, res) => {
+    const projectId = parseProjectId(req);
+    const { container, user } = req;
+    await container.access.requireRole(user!.sub, projectId, 'editor');
+    const body = analyzeSchema.parse(req.body);
+    const svc = new ContentService(container.sb);
+    await svc.get(projectId, parseId(req, 'id'));
+    const job = await container.jobStore.enqueue({
+      project_id: projectId,
+      provider: 'content',
+      job_type: 'content_analyze',
+      params: { content_id: parseId(req, 'id'), with_ai: body.with_ai !== false },
       created_by: user!.sub,
     });
     res.status(202).json({ data: { job } });

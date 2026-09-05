@@ -43,19 +43,15 @@ export class OpenAiMediaProvider implements MediaProvider {
     if (!this.isConfigured()) {
       throw new Error('OpenAI images are not configured: set OPENAI_API_KEY');
     }
-    const size = opts.size ?? '1024x1024';
+    const model = this.deps.config.OPENAI_IMAGE_MODEL ?? 'dall-e-3';
+    const size = this.normalizeSize(opts.size, model);
     const res = await this.fetchFn(`${this.baseUrl}/images/generations`, {
       method: 'POST',
       headers: {
         authorization: `Bearer ${this.deps.config.OPENAI_API_KEY}`,
         'content-type': 'application/json',
       },
-      body: JSON.stringify({
-        model: this.deps.config.OPENAI_IMAGE_MODEL ?? 'dall-e-3',
-        prompt: opts.prompt,
-        size,
-        n: 1,
-      }),
+      body: JSON.stringify({ model, prompt: opts.prompt, size, n: 1 }),
     });
     if (!res.ok) {
       const text = await res.text().catch(() => '');
@@ -74,5 +70,16 @@ export class OpenAiMediaProvider implements MediaProvider {
       description: opts.prompt.slice(0, 300),
       source: 'openai',
     };
+  }
+
+  /** gpt-image models expose 1536x1024 / 1024x1536 instead of the 1792x1024 dall-e sizes. */
+  private normalizeSize(size: string | undefined, model: string): string {
+    const requested = size ?? '1024x1024';
+    if (model.includes('gpt-image')) {
+      if (requested === '1792x1024') return '1536x1024';
+      if (requested === '1024x1792') return '1024x1536';
+      return '1024x1024';
+    }
+    return requested;
   }
 }

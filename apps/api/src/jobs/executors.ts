@@ -19,6 +19,7 @@ import { delay } from '../util.js';
 import type { ServiceContainer } from '../context.js';
 import { ContentService } from '../services/contentService.js';
 import { ContentAgentService } from '../services/contentAgentService.js';
+import { ContentAnalysisService } from '../services/contentAnalysisService.js';
 import type { ContentBlock } from '@seo/contracts';
 
 export interface JobExecContext {
@@ -596,6 +597,32 @@ async function contentImages(ctx: JobExecContext): Promise<Record<string, unknow
   return { resolved, skipped, provider: providerId };
 }
 
+async function contentAnalyze(ctx: JobExecContext): Promise<Record<string, unknown>> {
+  const { container, job } = ctx;
+  const params = (job.params ?? {}) as Record<string, unknown>;
+  const contentId = typeof params.content_id === 'string' ? params.content_id : '';
+  if (!contentId) throw new ApiError(400, 'bad_request', 'content_analyze requires a content_id');
+
+  const service = new ContentAnalysisService(container);
+  await ctx.report(10, 'Running deterministic audit');
+  const { report, aiRecommendations } = await service.analyzeAndPersist(
+    job.project_id,
+    String(job.created_by ?? 'system'),
+    contentId,
+    { withAi: params.with_ai !== false },
+  );
+  await ctx.report(100, `Analysis score ${report.score}`);
+  return {
+    score: report.score,
+    issues: report.issues.length,
+    warnings: report.issues.filter((i) => i.severity === 'warning').length,
+    errors: report.issues.filter((i) => i.severity === 'error').length,
+    recommendations: report.recommendations.length + aiRecommendations.length,
+    ai_recommendations: aiRecommendations.length,
+    summary: report.summary,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Registry
 // ---------------------------------------------------------------------------
@@ -610,6 +637,7 @@ export const EXECUTORS: Record<string, JobExecutor> = {
   knowledge_delete: knowledgeDelete,
   content_generate: contentGenerate,
   content_images: contentImages,
+  content_analyze: contentAnalyze,
   publish,
   publish_update: publish,
   publish_delete: publish,
