@@ -61,7 +61,7 @@ export class SeoWriter {
 
   async persistGsc(projectId: string, payload: GscSyncPayload) {
     const { propertyId, daily, queries, pages } = payload;
-    const gscProperty = { id: propertyId };
+    const gscProperty = { property_id: propertyId };
 
     if (daily.length > 0) {
       await chunkedUpsert(
