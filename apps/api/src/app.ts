@@ -23,6 +23,8 @@ import { aiSettingsRouter } from './http/routes/aiSettings.js';
 import { contentRouter } from './http/routes/content.js';
 import { jobsRouter } from './http/routes/jobs.js';
 import { seoRouter } from './http/routes/seo.js';
+import { projectApiKeysRouter } from './http/routes/projectApiKeys.js';
+import { v1Router } from './http/routes/v1.js';
 
 export function createApp(): Express {
   const app = express();
@@ -83,6 +85,8 @@ export function createApp(): Express {
   app.use('/api/projects/:projectId/ai', aiSettingsRouter);
   app.use('/api/projects/:projectId/content', contentRouter);
   app.use('/api/projects/:projectId/jobs', jobsRouter);
+  app.use('/api/projects/:projectId/api-keys', projectApiKeysRouter);
+  app.use('/api/v1', v1Router);
   app.use('/api/projects/:projectId', seoRouter);
 
   // -- terminal handlers -----------------------------------------------------

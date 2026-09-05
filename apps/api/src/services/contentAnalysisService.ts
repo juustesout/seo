@@ -60,7 +60,7 @@ export class ContentAnalysisService {
    */
   async analyzeAndPersist(
     projectId: string,
-    userId: string,
+    userId: string | null,
     contentId: string,
     opts: { withAi?: boolean } = {},
   ): Promise<{ id: string; report: ContentAnalysisReport; aiRecommendations: string[] }> {

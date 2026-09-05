@@ -147,4 +147,31 @@ begin
 end $$;
 SQL
 
+echo "==> smoke test: rest api keys"
+PSQL -d "${DB_NAME}" <<'SQL'
+set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-000000000001"}';
+do $$
+declare
+  v_project uuid;
+  v_key uuid;
+begin
+  select id into v_project from public.seo_projects where slug = 'demo' limit 1;
+
+  insert into public.seo_api_keys (project_id, name, key_prefix, key_hash, scopes)
+  values (v_project, 'ci-key', 'seo_live_abcd', 'deadbeef', array['read'])
+  returning id into v_key;
+  if v_key is null then raise exception 'smoke: api key row was not created'; end if;
+
+  begin
+    insert into public.seo_api_keys (project_id, name, key_prefix, key_hash, scopes)
+    values (v_project, 'ci-key', 'seo_live_xxxx', 'cafebabe', array['read']);
+    raise exception 'smoke: duplicate api key name unexpectedly allowed';
+  exception when unique_violation then
+    null;
+  end;
+
+  raise notice 'smoke: rest api keys OK';
+end $$;
+SQL
+
 echo "==> migration validation OK (${DB_NAME})"

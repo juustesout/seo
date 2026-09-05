@@ -20,6 +20,7 @@ import type { ServiceContainer } from '../context.js';
 import { ContentService } from '../services/contentService.js';
 import { ContentAgentService } from '../services/contentAgentService.js';
 import { ContentAnalysisService } from '../services/contentAnalysisService.js';
+import { isDataImage, storeImageDataUrl } from '../infra/mediaStorage.js';
 import type { ContentBlock } from '@seo/contracts';
 
 export interface JobExecContext {
@@ -512,7 +513,7 @@ async function contentGenerate(ctx: JobExecContext): Promise<Record<string, unkn
 
   const agent = new ContentAgentService(container);
   const stage = (label: string, progress: number) => ctx.report(progress, label);
-  const result = await agent.generate(job.project_id, String(job.created_by ?? 'system'), {
+  const result = await agent.generate(job.project_id, job.created_by, {
     topic,
     targetKeyword: typeof input.target_keyword === 'string' ? input.target_keyword : null,
     language: typeof input.language === 'string' ? input.language : undefined,
@@ -575,6 +576,11 @@ async function contentImages(ctx: JobExecContext): Promise<Record<string, unknow
       src = gen.url;
     }
     if (!src) continue;
+    // Never embed raw image bytes into content_json - store to project
+    // storage and keep only the public object URL in the block.
+    if (isDataImage(src)) {
+      src = await storeImageDataUrl(container.sb, job.project_id, src);
+    }
     const updated = {
       ...target.block,
       attrs: {
@@ -591,7 +597,7 @@ async function contentImages(ctx: JobExecContext): Promise<Record<string, unknow
 
   const skipped = placeholders.length - resolved;
   if (resolved > 0) {
-    await service.update(job.project_id, String(job.created_by ?? 'system'), contentId, { contentJson: blocks });
+    await service.update(job.project_id, job.created_by, contentId, { contentJson: blocks });
   }
   await ctx.report(100, `Resolved ${resolved} image(s), ${skipped} left as placeholders`);
   return { resolved, skipped, provider: providerId };
@@ -607,7 +613,7 @@ async function contentAnalyze(ctx: JobExecContext): Promise<Record<string, unkno
   await ctx.report(10, 'Running deterministic audit');
   const { report, aiRecommendations } = await service.analyzeAndPersist(
     job.project_id,
-    String(job.created_by ?? 'system'),
+    job.created_by,
     contentId,
     { withAi: params.with_ai !== false },
   );

@@ -144,7 +144,7 @@ export class ContentAgentService {
    */
   async generate(
     projectId: string,
-    userId: string,
+    userId: string | null,
     input: GenerateContentInput,
     onStage?: (label: string, progress: number) => Promise<void>,
   ): Promise<Record<string, unknown>> {

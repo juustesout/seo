@@ -112,7 +112,7 @@ export class ContentService {
 
   private async write(
     projectId: string,
-    userId: string,
+    userId: string | null,
     mode: 'create' | 'update',
     id: string | undefined,
     input: ContentPatch,
@@ -147,22 +147,24 @@ export class ContentService {
 
     const hasPublishedAt = existing?.published_at ? true : false;
     if (mode === 'create') {
-      payload.created_by = userId;
-      payload.updated_by = userId;
       payload.project_id = projectId;
       payload.status = status;
       payload.published_at = status === 'published' ? new Date().toISOString() : null;
+      if (userId) {
+        payload.created_by = userId;
+        payload.updated_by = userId;
+      }
       const { data, error } = await this.sb.from('seo_content').insert(payload).select().single();
       if (error) throw ApiError.badRequest('Could not create content');
       return data as Row;
     }
 
+    if (userId) payload.updated_by = userId;
     const { data, error } = await this.sb
       .from('seo_content')
       .update({
         ...payload,
         status,
-        updated_by: userId,
         published_at: status === 'published' && !hasPublishedAt ? new Date().toISOString() : existing?.published_at ?? null,
       })
       .eq('project_id', projectId)
@@ -173,11 +175,11 @@ export class ContentService {
     return data as Row;
   }
 
-  create(projectId: string, userId: string, input: ContentInput) {
+  create(projectId: string, userId: string | null, input: ContentInput) {
     return this.write(projectId, userId, 'create', undefined, input);
   }
 
-  update(projectId: string, userId: string, id: string, input: ContentPatch) {
+  update(projectId: string, userId: string | null, id: string, input: ContentPatch) {
     return this.write(projectId, userId, 'update', id, input);
   }
 
