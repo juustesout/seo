@@ -12,6 +12,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "@seo/contracts": "workspace:*",
     "@supabase/supabase-js": "^2.45.4",
     "express": "^4.21.0",
