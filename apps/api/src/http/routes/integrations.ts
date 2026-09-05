@@ -300,36 +300,67 @@ integrationsRouter.post(
     const body = z.object({ siteUrl: z.string().min(1), name: z.string().optional() }).parse(req.body);
 
     const descriptor = descriptorFor(container, 'gsc')!;
+    const accountId = integration.account_id as string | undefined;
+    if (!accountId) throw new ApiError(500, 'internal_error', 'GSC integration has no account');
+
+    const { data: property, error: propError } = await container.sb
+      .from('seo_gsc_properties')
+      .upsert(
+        {
+          account_id: accountId,
+          integration_id: integrationId,
+          site_url: body.siteUrl,
+          is_active: true,
+        } as never,
+        { onConflict: 'account_id,site_url' },
+      )
+      .select()
+      .single();
+    if (propError) throw ApiError.badRequest(`Could not register property: ${propError.message}`);
+
     const { data: ds, error: dsError } = await container.sb
       .from('seo_data_sources')
-      .upsert({
-        project_id: projectId,
-        integration_id: integrationId,
-        provider_type: 'gsc',
-        kind: 'gsc_property',
-        name: body.name ?? body.siteUrl,
-        status: 'active',
-        external_id: body.siteUrl,
-        external_url: body.siteUrl,
-        config: { siteUrl: body.siteUrl },
-        capabilities: descriptor.capabilities,
-      } as never)
+      .upsert(
+        {
+          project_id: projectId,
+          integration_id: integrationId,
+          provider_type: 'gsc',
+          kind: 'gsc_property',
+          name: body.name ?? body.siteUrl,
+          status: 'active',
+          external_id: body.siteUrl,
+          external_url: body.siteUrl,
+          config: { siteUrl: body.siteUrl },
+          capabilities: descriptor.capabilities,
+        } as never,
+        { onConflict: 'project_id,provider_type,external_id' },
+      )
       .select()
       .single();
     if (dsError) throw ApiError.badRequest(`Could not attach property: ${dsError.message}`);
 
-    const { data: property, error: propError } = await container.sb
-      .from('seo_gsc_properties')
-      .upsert({
-        project_id: projectId,
-        integration_id: integrationId,
-        data_source_id: ds.id,
-        site_url: body.siteUrl,
-        is_active: true,
-      } as never)
-      .select()
-      .single();
-    if (propError) throw ApiError.badRequest(`Could not register property: ${propError.message}`);
+    const { error: linkError } = await container.sb
+      .from('seo_project_properties')
+      .upsert(
+        {
+          project_id: projectId,
+          property_id: property.id as string,
+          is_primary: true,
+        } as never,
+        { onConflict: 'project_id,property_id' },
+      );
+    if (linkError) {
+      if (String(linkError.message).includes('duplicate') || String(linkError.code) === '23505') {
+        throw ApiError.conflict('This property is already attached to another project');
+      }
+      throw ApiError.badRequest(`Could not link property: ${linkError.message}`);
+    }
+
+    await container.sb
+      .from('seo_project_properties')
+      .update({ is_primary: false })
+      .eq('project_id', projectId)
+      .neq('property_id', property.id as string);
 
     await container.sb
       .from('seo_integrations')

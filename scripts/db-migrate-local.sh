@@ -64,6 +64,7 @@ declare
   v_prop uuid;
   v_summary jsonb;
   v_role text;
+  v_acc uuid;
 begin
   select id into v_project from public.seo_projects where slug = 'demo' limit 1;
   if v_project is null then raise exception 'smoke: project was not created'; end if;
@@ -71,8 +72,13 @@ begin
   select role into v_role from public.seo_project_members where project_id = v_project and user_id = '00000000-0000-0000-0000-000000000001';
   if v_role is distinct from 'owner' then raise exception 'smoke: owner membership not auto-created (role=%)', v_role; end if;
 
-  insert into public.seo_gsc_properties (project_id, site_url, is_active)
-  values (v_project, 'sc-domain:example.com', true) returning id into v_prop;
+  select account_id into v_acc from public.seo_projects where id = v_project;
+  if v_acc is null then raise exception 'smoke: project has no account'; end if;
+
+  insert into public.seo_gsc_properties (account_id, site_url, is_active)
+  values (v_acc, 'sc-domain:example.com', true) returning id into v_prop;
+  insert into public.seo_project_properties (project_id, property_id, is_primary)
+  values (v_project, v_prop, true);
   insert into public.seo_gsc_performance (project_id, property_id, date, clicks, impressions, ctr, position)
   values (v_project, v_prop, current_date, 10, 1000, 0.01, 5.5);
   insert into public.seo_domains (project_id, domain, protocol, is_primary)
@@ -215,6 +221,53 @@ begin
   end if;
 
   raise notice 'smoke: account layer OK';
+end $$;
+SQL
+
+echo "==> smoke test: property registry (stage 3)"
+PSQL -d "${DB_NAME}" <<'SQL'
+set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-000000000001"}';
+do $$
+declare
+  v_acc uuid;
+  v_prop uuid;
+  v_project uuid;
+  v_proj2 uuid;
+begin
+  select id into v_acc from public.seo_accounts where owner_user_id = '00000000-0000-0000-0000-000000000001';
+  select id into v_prop from public.seo_gsc_properties where site_url = 'sc-domain:example.com' and account_id = v_acc limit 1;
+  if v_prop is null then raise exception 'smoke: registry property missing'; end if;
+  select id into v_project from public.seo_projects where slug = 'demo' limit 1;
+  select id into v_proj2 from public.seo_projects where slug = 'second-user-project' limit 1;
+
+  if not exists (
+    select 1 from public.seo_project_properties
+    where project_id = v_project and property_id = v_prop and is_primary
+  ) then raise exception 'smoke: project property link not backfilled as primary'; end if;
+
+  begin
+    insert into public.seo_gsc_properties (account_id, site_url, is_active)
+    values (v_acc, 'sc-domain:example.com', true);
+    raise exception 'smoke: duplicate registry site unexpectedly allowed';
+  exception when unique_violation then
+    null;
+  end;
+
+  begin
+    insert into public.seo_project_properties (project_id, property_id, is_primary)
+    values (v_proj2, v_prop, false);
+    raise exception 'smoke: cross-project property link unexpectedly allowed';
+  exception when unique_violation then
+    null;
+  end;
+
+  if exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'seo_gsc_properties'
+      and column_name in ('project_id', 'data_source_id')
+  ) then raise exception 'smoke: legacy project-scoped property columns still present'; end if;
+
+  raise notice 'smoke: property registry OK';
 end $$;
 SQL
 

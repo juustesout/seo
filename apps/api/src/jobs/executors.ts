@@ -50,15 +50,19 @@ async function integrationRow(sb: SupabaseClient, projectId: string, integration
   return data as Record<string, unknown>;
 }
 
-async function gscPropertyForDataSource(sb: SupabaseClient, projectId: string, dataSourceId?: string | null) {
-  if (!dataSourceId) return null;
-  const { data } = await sb
-    .from('seo_gsc_properties')
-    .select('*')
+async function gscPropertyForProject(sb: SupabaseClient, projectId: string) {
+  const { data: link } = await sb
+    .from('seo_project_properties')
+    .select('property_id')
     .eq('project_id', projectId)
-    .eq('data_source_id', dataSourceId)
+    .order('is_primary', { ascending: false })
+    .order('created_at', { ascending: true })
+    .limit(1)
     .maybeSingle();
-  return data ? (data as Record<string, unknown>) : null;
+  if (!link) return null;
+  const propertyId = (link as { property_id: string }).property_id;
+  const { data: property } = await sb.from('seo_gsc_properties').select('*').eq('id', propertyId).maybeSingle();
+  return property ? (property as Record<string, unknown>) : null;
 }
 
 async function trackedKeywords(sb: SupabaseClient, projectId: string, limit = 60): Promise<string[]> {
@@ -116,9 +120,10 @@ function noopCredentialReader(): ProviderContext['credentials'] {
 
 const gscSync: JobExecutor = async ({ container, job, writer, report }) => {
   const ds = await dataSourceRow(container.sb, job.project_id, job.data_source_id);
-  const property = await gscPropertyForDataSource(container.sb, job.project_id, job.data_source_id);
-  const siteUrl = ((ds.config as Record<string, unknown>)?.siteUrl as string | undefined) ?? (property?.site_url as string | undefined);
-  if (!siteUrl) throw new ApiError(400, 'bad_request', 'GSC data source has no property attached');
+  const property = await gscPropertyForProject(container.sb, job.project_id);
+  if (!property) throw new ApiError(400, 'bad_request', 'GSC project has no property attached');
+  const siteUrl = (property.site_url as string | undefined) ?? ((ds.config as Record<string, unknown>)?.siteUrl as string | undefined);
+  if (!siteUrl) throw new ApiError(400, 'bad_request', 'GSC project property has no site_url');
 
   const endDate = (job.params.endDate as string) ?? new Date().toISOString().slice(0, 10);
   const days = Number(job.params.days ?? job.params.rangeDays ?? 28);
@@ -145,11 +150,7 @@ const gscSync: JobExecutor = async ({ container, job, writer, report }) => {
   const pageRows = await gsc.fetchDimension(ctx, range, ['date', 'page']);
   await report(65, 'Persisting Search Console data');
 
-  const propertyId = (property?.id as string | undefined) ?? (job.params.property_id as string | undefined);
-  if (!propertyId) {
-    // property row should exist; create a reference if it does not yet
-    throw new ApiError(400, 'bad_request', 'GSC property record is missing for this data source');
-  }
+  const propertyId = property.id as string;
   await writer.persistGsc(job.project_id, { propertyId, daily, queries: queryRows as never[], pages: pageRows as never[] });
   await writer.ingestGscKeywords(job.project_id, queryRows as never[]);
   await writer.persistPages(
