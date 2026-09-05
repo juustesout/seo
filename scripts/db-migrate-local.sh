@@ -174,4 +174,48 @@ begin
 end $$;
 SQL
 
+echo "==> smoke test: account layer (stage 1+2)"
+PSQL -d "${DB_NAME}" <<'SQL'
+set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-000000000001"}';
+do $$
+declare
+  v_project uuid;
+  v_project2 uuid;
+  v_account uuid;
+  v_account2 uuid;
+  v_integration uuid;
+begin
+  select id into v_project from public.seo_projects where slug = 'demo' limit 1;
+  if v_project is null then raise exception 'smoke: account test project missing'; end if;
+
+  select id into v_account from public.seo_accounts where owner_user_id = '00000000-0000-0000-0000-000000000001';
+  if v_account is null then raise exception 'smoke: creator account was not created'; end if;
+
+  if not exists (select 1 from public.seo_projects where id = v_project and account_id = v_account) then
+    raise exception 'smoke: project account_id not backfilled to creator account';
+  end if;
+
+  insert into public.seo_integrations (project_id, provider_type, name, status)
+  values (v_project, 'dataforseo', 'DataForSEO', 'disconnected')
+  returning id into v_integration;
+  if not exists (select 1 from public.seo_integrations where id = v_integration and account_id = v_account) then
+    raise exception 'smoke: integration account_id not set from project';
+  end if;
+
+  insert into auth.users (id, email) values ('00000000-0000-0000-0000-000000000002', 'member@example.com') on conflict (id) do nothing;
+  insert into public.seo_projects (name, slug, created_by)
+  values ('Second user project', 'second-user-project', '00000000-0000-0000-0000-000000000002')
+  returning id into v_project2;
+
+  select id into v_account2 from public.seo_accounts where owner_user_id = '00000000-0000-0000-0000-000000000002';
+  if v_account2 is null then raise exception 'smoke: second user account not auto-created by trigger'; end if;
+  if v_account2 = v_account then raise exception 'smoke: two users share one account'; end if;
+  if not exists (select 1 from public.seo_projects where id = v_project2 and account_id = v_account2) then
+    raise exception 'smoke: second project account_id not set';
+  end if;
+
+  raise notice 'smoke: account layer OK';
+end $$;
+SQL
+
 echo "==> migration validation OK (${DB_NAME})"
