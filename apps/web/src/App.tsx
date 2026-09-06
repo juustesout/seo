@@ -196,7 +196,7 @@ export function App() {
             {view === 'data' && <DataViews projectId={pid} />}
             {view === 'integrations' && <Integrations projectId={pid} />}
             {view === 'knowledge' && <Knowledge projectId={pid} />}
-            {view === 'content' && <Content projectId={pid} />}
+            {view === 'content' && <Content projectId={pid} role={project.role} />}
             {view === 'publishing' && <Publishing projectId={pid} />}
             {view === 'settings' && <ProjectSettings projectId={pid} />}
           </main>

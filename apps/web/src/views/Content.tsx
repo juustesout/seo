@@ -25,6 +25,9 @@ type Meta = Partial<{
   slug: string | null;
 }>;
 
+const STATUSES = ['draft', 'in_review', 'published', 'archived'] as const;
+const ROLE_RANK: Record<string, number> = { viewer: 0, editor: 1, admin: 2, owner: 3 };
+
 function newBlock(type: string, index: number): ContentBlock {
   const base = { id: `b${Date.now()}-${index}` };
   switch (type) {
@@ -175,7 +178,11 @@ function BlockEditor({ block, onChange }: { block: ContentBlock; onChange: (b: C
   }
 }
 
-export function Content({ projectId }: { projectId: string }) {
+export function Content({ projectId, role = 'viewer' }: { projectId: string; role?: string }) {
+  const rank = ROLE_RANK[role] ?? 0;
+  const canEdit = rank >= 1;
+  const canDelete = rank >= 2;
+
   const [refresh, setRefresh] = useState(0);
   const list = useAsync<{ content: ContentRow[]; total: number }>(
     () => api(`/projects/${projectId}/content?limit=300`),
@@ -194,6 +201,11 @@ export function Content({ projectId }: { projectId: string }) {
   const [status, setStatus] = useState('draft');
   const [blocks, setBlocks] = useState<ContentBlock[]>([]);
   const [initial, setInitial] = useState<string>('');
+  const [savedAt, setSavedAt] = useState<string | null>(null);
+  const [lastSnapshot, setLastSnapshot] = useState('');
+
+  const snapOf = (t: string, s: string, m: Meta, b: ContentBlock[]) => JSON.stringify([t, s, m, b]);
+  const dirty = snapOf(title, status, meta, blocks) !== lastSnapshot;
 
   const detail = useAsync<ContentRow & { content_json: ContentBlock[]; content_html: string | null; outline: unknown }>(
     () => api(`/projects/${projectId}/content/${editingId}`),
@@ -212,12 +224,29 @@ export function Content({ projectId }: { projectId: string }) {
       meta_title: d.meta_title,
       meta_description: d.meta_description,
     });
+    setSavedAt(d.updated_at ?? null);
+    setLastSnapshot(
+      snapOf(d.title, d.status, {
+        slug: d.slug,
+        target_keyword: d.target_keyword,
+        meta_title: d.meta_title,
+        meta_description: d.meta_description,
+      } as Meta,
+      Array.isArray(d.content_json) ? d.content_json : []),
+    );
     setInitial(d.title);
   }, [detail.data]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const open = (id: string) => {
     setEditingId(id);
     setInitial('');
+    setErr(null);
+  };
+
+  const goList = () => {
+    setEditingId(null);
+    setCreating(false);
+    setNotice(null);
     setErr(null);
   };
 
@@ -261,7 +290,9 @@ export function Content({ projectId }: { projectId: string }) {
         setEditingId(created.id);
       }
       setStatus(targetStatus);
-      setNotice(targetStatus === 'published' ? 'Saved and published.' : 'Saved as draft.');
+      setSavedAt(new Date().toISOString());
+      setLastSnapshot(snapOf(title, targetStatus, meta, blocks));
+      setNotice(targetStatus === 'published' ? 'Saved and published.' : `Saved as ${targetStatus}.`);
       setTimeout(() => setRefresh((x) => x + 1), 300);
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
@@ -270,22 +301,30 @@ export function Content({ projectId }: { projectId: string }) {
     }
   };
 
-  const remove = async () => {
-    if (!editingId) return;
-    if (!window.confirm('Delete this article permanently?')) return;
+  const changeStatus = async (next: string) => {
+    if (next === status) return;
+    await save(next);
+  };
+
+  const remove = async (id: string | null) => {
+    if (!id) return;
+    const row = list.data?.content.find((c) => c.id === id);
+    if (!window.confirm(`Delete "${row?.title ?? 'this article'}" permanently?`)) return;
     setErr(null);
     try {
-      await api(`/projects/${projectId}/content/${editingId}`, { method: 'DELETE' });
-      setEditingId(null);
+      await api(`/projects/${projectId}/content/${id}`, { method: 'DELETE' });
+      if (editingId === id) {
+        setEditingId(null);
+        setCreating(false);
+        setNotice(null);
+      }
       setRefresh((x) => x + 1);
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
     }
   };
 
-  const dirty = editingId !== null || creating;
-
-  if (!dirty) {
+  if (!creating && editingId === null) {
     return (
       <div>
         <h1>Content Studio</h1>
@@ -293,32 +332,35 @@ export function Content({ projectId }: { projectId: string }) {
           Structured, block-based articles. content_json is the source of truth; HTML and the outline are rendered
           from it — no raw HTML editing.
         </p>
-        <form
-          className="row"
-          onSubmit={(e) => {
-            e.preventDefault();
-            if (!newTitle.trim()) return;
-            setCreating(true);
-            setEditingId(null);
-            setTitle(newTitle);
-            setNewTitle('');
-            setBlocks([newBlock('heading', 0), newBlock('paragraph', 1)]);
-          }}
-        >
-          <input
-            type="text"
-            placeholder="New article title…"
-            value={newTitle}
-            onChange={(e) => setNewTitle(e.target.value)}
-            style={{ minWidth: 320 }}
-          />
-          <button className="btn primary" disabled={!newTitle.trim()}>
-            Start article
-          </button>
-        </form>
-
+        {canEdit && (
+          <form
+            className="row"
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (!newTitle.trim()) return;
+              setCreating(true);
+              setEditingId(null);
+              setTitle(newTitle);
+              setNewTitle('');
+              setBlocks([newBlock('heading', 0), newBlock('paragraph', 1)]);
+            }}
+          >
+            <input
+              type="text"
+              placeholder="New article title…"
+              value={newTitle}
+              onChange={(e) => setNewTitle(e.target.value)}
+              style={{ minWidth: 320 }}
+            />
+            <button className="btn primary" disabled={!newTitle.trim()}>
+              Start article
+            </button>
+          </form>
+        )}
+        {!canEdit && <p className="muted">You have read-only access to this project's content.</p>}
         {notice && <div className="banner ok">{notice}</div>}
-        {list.data && list.data.content.length === 0 && <Empty>No content yet. Start your first article above.</Empty>}
+        {err && <div className="banner error">{err}</div>}
+        {list.data && list.data.content.length === 0 && <Empty>No content yet{canEdit ? '. Start your first article above.' : '.'}</Empty>}
         {list.data && list.data.content.length > 0 && (
           <table>
             <thead>
@@ -328,6 +370,7 @@ export function Content({ projectId }: { projectId: string }) {
                 <th>Target keyword</th>
                 <th>Score</th>
                 <th>Updated</th>
+                {canDelete && <th>Actions</th>}
               </tr>
             </thead>
             <tbody>
@@ -343,6 +386,19 @@ export function Content({ projectId }: { projectId: string }) {
                   <td className="muted">{c.target_keyword ?? '—'}</td>
                   <td className="num">{c.seo_score != null ? Math.round(c.seo_score) : '—'}</td>
                   <td className="muted">{fmtDate(c.updated_at)}</td>
+                  {canDelete && (
+                    <td>
+                      <button
+                        className="btn sm danger"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          void remove(c.id);
+                        }}
+                      >
+                        Delete
+                      </button>
+                    </td>
+                  )}
                 </tr>
               ))}
             </tbody>
@@ -361,15 +417,49 @@ export function Content({ projectId }: { projectId: string }) {
     );
   }
 
+  // Read-only workspace for viewers: no editing affordances, content rendered.
+  if (!canEdit && detail.data) {
+    const d = detail.data;
+    return (
+      <div>
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+          <button className="btn" onClick={goList}>
+            ← Back
+          </button>
+          <h1 style={{ margin: 0 }}>{d.title}</h1>
+          <span className={`pill ${d.status === 'published' ? 'ok' : ''}`}>{d.status}</span>
+        </div>
+        <p className="sub muted">
+          {d.updated_at ? `Updated ${fmtDate(d.updated_at)}` : ''}
+          {d.target_keyword ? ` · Target keyword: ${d.target_keyword}` : ''}
+        </p>
+        {d.content_html ? (
+          <div className="card">
+            <div dangerouslySetInnerHTML={{ __html: d.content_html }} />
+          </div>
+        ) : (
+          <p className="muted">This document has no content yet.</p>
+        )}
+        <p className="muted" style={{ fontSize: 12 }}>
+          Read-only view — you do not have edit access to this project.
+        </p>
+      </div>
+    );
+  }
+
   const ADD_TYPES = ['heading', 'paragraph', 'list', 'quote', 'code', 'media', 'link'];
 
   return (
     <div>
       <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-        <button className="btn" onClick={() => setEditingId(null)}>
+        <button className="btn" onClick={goList}>
           ← Back
         </button>
         <h1 style={{ margin: 0 }}>Content Studio</h1>
+        <span className={`pill ${status === 'published' ? 'ok' : ''}`}>{status}</span>
+        <span className="muted" style={{ fontSize: 12 }}>
+          {saving ? 'Saving…' : dirty ? 'Unsaved changes' : savedAt ? `Saved ${fmtDate(savedAt)}` : '—'}
+        </span>
       </div>
 
       {err && <div className="banner error">{err}</div>}
@@ -381,6 +471,14 @@ export function Content({ projectId }: { projectId: string }) {
       <div className="grid" style={{ marginTop: 8 }}>
         <div className="card">
           <h3>Metadata</h3>
+          <label className="fld">Status</label>
+          <select value={status} disabled={saving} onChange={(e) => void changeStatus(e.target.value)}>
+            {STATUSES.map((s) => (
+              <option key={s} value={s}>
+                {s}
+              </option>
+            ))}
+          </select>
           <label className="fld">Target keyword</label>
           <input
             type="text"
@@ -454,14 +552,16 @@ export function Content({ projectId }: { projectId: string }) {
       </div>
 
       <div className="row">
-        <button className="btn" onClick={() => save(status === 'published' ? 'draft' : status)} disabled={saving}>
+        <button className="btn" onClick={() => void save(status === 'published' ? 'draft' : status)} disabled={saving}>
           Save draft
         </button>
-        <button className="btn primary" onClick={() => save('published')} disabled={saving}>
-          Publish
-        </button>
-        {editingId && (
-          <button className="btn danger" onClick={() => void remove()}>
+        {status !== 'published' && (
+          <button className="btn primary" onClick={() => void save('published')} disabled={saving}>
+            Publish
+          </button>
+        )}
+        {canDelete && editingId && (
+          <button className="btn danger" onClick={() => void remove(editingId)} disabled={saving}>
             Delete
           </button>
         )}
