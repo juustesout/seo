@@ -264,5 +264,36 @@ input.ce-title:focus { border-color: var(--accent); background: var(--panel-2); 
 .ai-block .ai-heading, .ai-heading { margin: 4px 0 8px; font-size: 14px; }
 .ai-source summary { cursor: pointer; font-size: 12px; color: var(--muted); }
 .ai-source .ai-block { margin-top: 6px; white-space: pre-wrap; }
+.ai-knowledge-row { border-top: 1px solid var(--border); margin-top: 6px; padding-top: 6px; }
+.ai-knowledge-row:first-of-type { border-top: none; margin-top: 0; padding-top: 4px; }
+.ai-knowledge-row p { margin: 2px 0 0; font-size: 12px; }
 .ai-working { font-size: 12px; }
+
+/* ---- AI context option (Phase E) ---- */
+.ce-ai-opt {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+/* ---- Project knowledge panel (Phase E) ---- */
+.kno-panel { margin-top: 14px; }
+.kno-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.kno-sub { margin: 4px 0 10px; font-size: 12px; }
+.kno-form { display: grid; gap: 8px; margin-bottom: 10px; }
+.kno-form textarea { resize: vertical; min-height: 60px; font-family: inherit; }
+.kno-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.kno-row {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+.kno-actions { display: flex; gap: 6px; margin-top: 6px; }
+.kno-error { color: var(--danger); font-size: 12px; margin-top: 4px; white-space: pre-wrap; }
+
 

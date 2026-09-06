@@ -17,6 +17,7 @@ import {
   asTipDoc,
   evaluateSeo,
   type ContentAiAction,
+  type ContentAiKnowledgeDto,
   type ContentAiSuggestionDto,
 } from '@seo/contracts';
 import { ApiError } from '../apiErrors.js';
@@ -36,6 +37,8 @@ export interface ContentAiActionInput {
   context?: string | null;
   /** Client-provided target keyword override (never trusted for storage). */
   keyword?: string | null;
+  /** When true (default), project knowledge passages may be offered as context. */
+  useKnowledge?: boolean;
 }
 
 /** Deterministic checks whose fixes live inside body copy (usable by 'improve_seo'). */
@@ -99,10 +102,53 @@ export interface ContentAiPrompt {
 }
 
 /**
+ * Renders supplied project-knowledge passages as an explicit, delimited
+ * reference block. Passages are clearly separated from the document copy so
+ * the model treats them as reference only - AI output must never be conflated
+ * with supplied knowledge.
+ */
+export function knowledgePromptBlock(entries: ContentAiKnowledgeDto[]): string {
+  if (entries.length === 0) return '';
+  const refs = entries
+    .map(
+      (e, i) =>
+        `[Source ${i + 1}]\nTitle: ${e.name}${e.url ? `\nURL: ${e.url}` : ''}\nPassage: ${e.excerpt ?? ''}`,
+    )
+    .join('\n\n');
+  return [
+    'Project knowledge base passages (reference material - they may or may not be relevant to the task).',
+    "Treat them strictly as reference, never as the document author's own words. Do not copy them verbatim and do not invent facts beyond what they contain. If a passage is unrelated, ignore it. If you relied on any passage, name its title in your \"reason\".",
+    '<<<KNOWLEDGE',
+    refs,
+    'KNOWLEDGE>>>',
+  ].join('\n');
+}
+
+/**
+ * Query text used to retrieve relevant project knowledge for an action.
+ * Prefers the selected copy, then the target keyword, then the document title.
+ */
+export function contentAiKnowledgeQuery(
+  input: ContentAiActionInput,
+  keyword: string | null,
+  title: string | null,
+): string {
+  const candidates = [input.selection?.trim(), keyword?.trim(), title?.trim()].filter(
+    (c): c is string => Boolean(c),
+  );
+  return (candidates[0] ?? '').slice(0, 400);
+}
+
+/**
  * Builds the minimal context prompt for an AI action. Only the selection, its
  * immediate surrounding context, and metadata needed for the action are sent.
  */
-export function buildContentAiPrompt(input: ContentAiActionInput, keyword: string | null, seoChecks: string[]): ContentAiPrompt {
+export function buildContentAiPrompt(
+  input: ContentAiActionInput,
+  keyword: string | null,
+  seoChecks: string[],
+  knowledge: ContentAiKnowledgeDto[] = [],
+): ContentAiPrompt {
   const directive = actionDirective(input);
   const extra = input.instruction?.trim();
   const parts: string[] = [];
@@ -126,6 +172,9 @@ export function buildContentAiPrompt(input: ContentAiActionInput, keyword: strin
       parts.push(`Context that immediately precedes the selection:\n<<<CONTEXT\n${input.context!.trim()}\nCONTEXT>>>`);
     }
   }
+
+  const block = knowledgePromptBlock(knowledge);
+  if (block) parts.push(block);
 
   return { system: outputRule(), user: parts.join('\n\n') };
 }
@@ -250,6 +299,36 @@ export class ContentAiService {
   }
 
   /**
+   * Best-effort project knowledge retrieval for an action. Returns [] when no
+   * provider exists, nothing is indexed, or the search fails - normal Phase D
+   * AI behavior must keep working without knowledge.
+   */
+  private async retrieveKnowledge(projectId: string, query: string): Promise<ContentAiKnowledgeDto[]> {
+    const provider = this.container.registry?.getKnowledge?.('qdrant');
+    if (!provider) return [];
+    try {
+      const hits = await provider.search({ query, projectId, limit: 3 });
+      const entries: ContentAiKnowledgeDto[] = [];
+      for (const hit of hits) {
+        const payload = hit.payload as { title?: string; url?: string; source_type?: string; text?: string; source_id?: string };
+        const text = typeof payload.text === 'string' ? payload.text.trim() : '';
+        if (!text) continue;
+        const entry: ContentAiKnowledgeDto = {
+          name: payload.title || payload.source_id || 'Knowledge source',
+          excerpt: text.slice(0, 600),
+        };
+        if (payload.url) entry.url = payload.url;
+        entries.push(entry);
+        if (entries.length >= 3) break;
+      }
+      return entries;
+    } catch {
+      // Knowledge is optional context - never fail the AI action because of it.
+      return [];
+    }
+  }
+
+  /**
    * Runs one AI action for a stored content row and returns a suggestion.
    * The client applies or rejects it; this method never writes the document.
    */
@@ -273,7 +352,13 @@ export class ContentAiService {
 
     const { keyword, lines } = ContentAiService.seoChecksFor(row);
     const effectiveKeyword = input.keyword?.trim() || keyword;
-    const { system, user } = buildContentAiPrompt(input, effectiveKeyword, lines);
+
+    let knowledge: ContentAiKnowledgeDto[] = [];
+    if (input.useKnowledge !== false) {
+      const query = contentAiKnowledgeQuery(input, effectiveKeyword, typeof row.title === 'string' ? row.title : null);
+      if (query) knowledge = await this.retrieveKnowledge(projectId, query);
+    }
+    const { system, user } = buildContentAiPrompt(input, effectiveKeyword, lines, knowledge);
 
     let parsed: ParsedAiOutput;
     try {
@@ -285,12 +370,14 @@ export class ContentAiService {
       throw mapContentAiError(err);
     }
 
-    return {
+    const suggestion: ContentAiSuggestionDto = {
       action: input.action,
       source: (input.action === 'generate_section' ? '' : input.selection?.trim() ?? '').slice(0, 8000),
       text: parsed.text,
       reason: parsed.reason,
       model: provider.id,
     };
+    if (knowledge.length > 0) suggestion.knowledge = knowledge;
+    return suggestion;
   }
 }

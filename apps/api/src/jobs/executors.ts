@@ -18,6 +18,7 @@ import { urlBelongsToDomain } from '../providers/dataforseo/normalize.js';
 import { delay } from '../util.js';
 import type { ServiceContainer } from '../context.js';
 import { ContentService } from '../services/contentService.js';
+import { KnowledgeService } from '../services/knowledgeService.js';
 import { ContentAgentService } from '../services/contentAgentService.js';
 import { ContentAnalysisService } from '../services/contentAnalysisService.js';
 import { isDataImage, storeImageDataUrl } from '../infra/mediaStorage.js';
@@ -427,7 +428,30 @@ const knowledgeDelete: JobExecutor = async ({ container, job }) => {
     logger: logger.child({ projectId: job.project_id, provider: 'qdrant' }) as unknown as ProviderContext['logger'],
   };
   await provider.deleteProject(ctx);
+  // The source rows describe the state of their vectors; after a full wipe they
+  // are honest again only as 'pending' (they can be re-ingested on demand).
+  const { error: resetError } = await container.sb
+    .from('seo_knowledge_sources')
+    .update({ status: 'pending', chunk_count: 0, error: null })
+    .eq('project_id', job.project_id);
+  if (resetError) throw new ApiError(502, 'knowledge_provider_error', 'Knowledge cleared but source flags could not be reset');
   return { message: 'Project knowledge base cleared' };
+};
+
+/** Ingest one user-managed knowledge source (vectors + row status). */
+const knowledgeSourceIngest: JobExecutor = async ({ container, job, report }) => {
+  const sourceId = typeof job.params?.source_id === 'string' ? job.params.source_id : '';
+  if (!sourceId) throw new ApiError(400, 'bad_request', 'knowledge_source_ingest requires a source_id');
+  const service = new KnowledgeService(container);
+  return service.ingestSource(job.project_id, sourceId, report);
+};
+
+/** Remove one user-managed knowledge source: vectors first, then the row. */
+const knowledgeSourceDelete: JobExecutor = async ({ container, job }) => {
+  const sourceId = typeof job.params?.source_id === 'string' ? job.params.source_id : '';
+  if (!sourceId) throw new ApiError(400, 'bad_request', 'knowledge_source_delete requires a source_id');
+  const service = new KnowledgeService(container);
+  return service.deleteSource(job.project_id, sourceId);
 };
 
 // ---------------------------------------------------------------------------
@@ -642,6 +666,8 @@ export const EXECUTORS: Record<string, JobExecutor> = {
   knowledge_index: knowledgeIndex,
   knowledge_reindex: knowledgeReindex,
   knowledge_delete: knowledgeDelete,
+  knowledge_source_ingest: knowledgeSourceIngest,
+  knowledge_source_delete: knowledgeSourceDelete,
   content_generate: contentGenerate,
   content_images: contentImages,
   content_analyze: contentAnalyze,

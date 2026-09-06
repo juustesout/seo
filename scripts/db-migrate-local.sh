@@ -224,6 +224,46 @@ begin
 end $$;
 SQL
 
+echo "==> smoke test: knowledge sources (phase E) + cross-project isolation"
+PSQL -d "${DB_NAME}" <<'SQL'
+set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-000000000001"}';
+do $$
+declare
+  v_project uuid;
+  v_source uuid;
+begin
+  select id into v_project from public.seo_projects where slug = 'demo' limit 1;
+  if v_project is null then raise exception 'smoke: demo project missing for knowledge sources'; end if;
+
+  insert into public.seo_knowledge_sources (project_id, source_type, name, url, content_text, status, chunk_count)
+  values (v_project, 'note', 'Smoke note', null, 'A short project note about phase E ingestion.', 'pending', 0)
+  returning id into v_source;
+  if v_source is null then raise exception 'smoke: knowledge source row was not created'; end if;
+
+  update public.seo_knowledge_sources set status = 'indexed', chunk_count = 1 where id = v_source;
+  if not exists (select 1 from public.seo_knowledge_sources where id = v_source and status = 'indexed' and chunk_count = 1) then
+    raise exception 'smoke: source status transition failed';
+  end if;
+
+  raise notice 'smoke: knowledge source insert + status transition OK';
+end $$;
+SQL
+
+# RLS can only be exercised as a non-superuser role (superusers bypass RLS).
+LEAK_COUNT="$(PSQL -d "${DB_NAME}" -t -A <<'SQL'
+grant usage on schema public to authenticated;
+grant select on public.seo_knowledge_sources to authenticated;
+set role authenticated;
+set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-000000000002"}';
+select count(*) from public.seo_knowledge_sources where name = 'Smoke note';
+SQL
+)"
+if [ -z "${LEAK_COUNT}" ] || [ "${LEAK_COUNT}" != "0" ]; then
+  echo "!! RLS leak: non-member read ${LEAK_COUNT} rows from a foreign project source" >&2
+  exit 1
+fi
+echo "   smoke: non-member cannot read a foreign project source (RLS isolation OK)"
+
 echo "==> smoke test: property registry (stage 3)"
 PSQL -d "${DB_NAME}" <<'SQL'
 set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-000000000001"}';

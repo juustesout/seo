@@ -108,6 +108,7 @@ const contentAiActionSchema = z
     tone: z.string().max(120).nullable().optional(),
     context: z.string().max(4000).nullable().optional(),
     keyword: z.string().max(200).nullable().optional(),
+    use_knowledge: z.boolean().optional(),
   })
   .passthrough();
 
@@ -131,6 +132,7 @@ contentRouter.post(
       tone: body.tone ?? null,
       context: body.context ?? null,
       keyword: body.keyword ?? null,
+      useKnowledge: body.use_knowledge ?? true,
     });
     res.json({ data: suggestion });
   }),

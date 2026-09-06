@@ -21,6 +21,7 @@ import { ContentOutline } from '../components/content/ContentOutline';
 import { ContentEditorHeader } from '../components/content/ContentEditorHeader';
 import { SeoPanel } from '../components/content/SeoPanel';
 import { ContentAiPanel } from '../components/content/ContentAiPanel';
+import { KnowledgePanel } from '../components/content/KnowledgePanel';
 import { textToBlocksHtml } from '../components/content/contentAi';
 import { useAutosave } from '../components/content/useAutosave';
 
@@ -80,6 +81,7 @@ export function Content({ projectId, role = 'viewer' }: { projectId: string; rol
   const [aiSuggestion, setAiSuggestion] = useState<ContentAiSuggestionDto | null>(null);
   const [aiSelRange, setAiSelRange] = useState<{ from: number; to: number } | null>(null);
   const [hasSelection, setHasSelection] = useState(false);
+  const [useKnowledge, setUseKnowledge] = useState(true);
 
   const detail = useAsync<DetailRow>(() => api(`/projects/${projectId}/content/${editingId}`), [projectId, editingId]);
 
@@ -312,6 +314,7 @@ export function Content({ projectId, role = 'viewer' }: { projectId: string; rol
           tone,
           context: context || null,
           keyword: live.current.targetKeyword.trim() || null,
+          use_knowledge: useKnowledge,
         },
       });
       setAiSuggestion(data);
@@ -525,6 +528,13 @@ export function Content({ projectId, role = 'viewer' }: { projectId: string; rol
         </div>
       )}
 
+      {aiConfigured && (
+        <label className="ce-ai-opt">
+          <input type="checkbox" checked={useKnowledge} onChange={(e) => setUseKnowledge(e.target.checked)} />
+          <span>Include this project's knowledge as context when available</span>
+        </label>
+      )}
+
       <div className="ce-grid">
         <div className="ce-main">
           <div className="rt-shell">
@@ -574,6 +584,8 @@ export function Content({ projectId, role = 'viewer' }: { projectId: string; rol
           <ContentOutline items={outline} onSelect={(i) => editorRef.current?.selectHeading(i)} />
         </aside>
       </div>
+
+      <KnowledgePanel projectId={projectId} canEdit={canEdit} />
     </div>
   );
 }

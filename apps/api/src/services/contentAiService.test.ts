@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { ApiError } from '../apiErrors.js';
 import {
   buildContentAiPrompt,
+  contentAiKnowledgeQuery,
+  knowledgePromptBlock,
   mapContentAiError,
   parseContentAiOutput,
   ContentAiService,
@@ -10,6 +12,11 @@ import type { ServiceContainer } from '../context.js';
 
 const KEYWORD = 'seo tooling';
 const CHECKS = ['Fail — Content length: short (Warning line)'];
+
+const KNOWLEDGE = [
+  { name: 'Internal style guide', url: 'https://intra.example/style', excerpt: 'Use active voice and short paragraphs.' },
+  { name: 'Competitor research', excerpt: 'Competitors rarely target the long tail.' },
+];
 
 describe('content AI prompt building', () => {
   it('sends selection and directive for rewrite actions', () => {
@@ -41,6 +48,41 @@ describe('content AI prompt building', () => {
   it('keeps tone action user-directed when a tone is given', () => {
     const p = buildContentAiPrompt({ action: 'tone', selection: 'Copy.', tone: 'friendly' }, KEYWORD, []);
     expect(p.user).toContain('requested tone: friendly');
+  });
+});
+
+describe('content AI knowledge context (Phase E)', () => {
+  it('appends no knowledge block when no passages were supplied', () => {
+    const p = buildContentAiPrompt({ action: 'rewrite', selection: 'Copy.' }, KEYWORD, []);
+    expect(p.user).not.toContain('<<<KNOWLEDGE');
+    expect(p.user).not.toContain('project knowledge base');
+  });
+
+  it('embeds supplied passages inside a delimited, labelled reference block', () => {
+    const p = buildContentAiPrompt({ action: 'expand', selection: 'Copy.' }, KEYWORD, [], KNOWLEDGE);
+    expect(p.user).toContain('<<<KNOWLEDGE');
+    expect(p.user).toContain('KNOWLEDGE>>>');
+    expect(p.user).toContain('[Source 1]');
+    expect(p.user).toContain('Internal style guide');
+    expect(p.user).toContain('https://intra.example/style');
+    expect(p.user).toContain('active voice');
+    // The block is explicitly labelled as reference material so AI output is
+    // never conflated with supplied knowledge.
+    expect(p.user).toContain('reference');
+  });
+
+  it('knowledgePromptBlock is empty for no entries and always delimited otherwise', () => {
+    expect(knowledgePromptBlock([])).toBe('');
+    const block = knowledgePromptBlock(KNOWLEDGE);
+    expect(block.startsWith('Project knowledge base passages')).toBe(true);
+    expect(block).toContain('never as the document');
+  });
+
+  it('builds a retrieval query preferring the selection, then keyword, then title', () => {
+    expect(contentAiKnowledgeQuery({ action: 'rewrite', selection: '  Selected copy  ' }, KEYWORD, 'Title')).toBe('Selected copy');
+    expect(contentAiKnowledgeQuery({ action: 'rewrite', selection: '' }, KEYWORD, 'Title')).toBe('seo tooling');
+    expect(contentAiKnowledgeQuery({ action: 'rewrite' }, null, 'Document title')).toBe('Document title');
+    expect(contentAiKnowledgeQuery({ action: 'rewrite' }, null, null)).toBe('');
   });
 });
 

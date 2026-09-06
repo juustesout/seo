@@ -23,6 +23,24 @@ export function ContentAiPanel({ suggestion, onApply, onReject }: ContentAiPanel
           <div className="ai-block">{suggestion.source}</div>
         </details>
       )}
+      {suggestion.knowledge && suggestion.knowledge.length > 0 && (
+        <details className="ai-source">
+          <summary>
+            Using {suggestion.knowledge.length} knowledge source{suggestion.knowledge.length === 1 ? '' : 's'} as context
+          </summary>
+          {suggestion.knowledge.map((k, i) => (
+            <div key={i} className="ai-knowledge-row">
+              <b>{k.name}</b>
+              {k.url ? (
+                <span className="mono muted" style={{ fontSize: 12 }}>
+                  {k.url}
+                </span>
+              ) : null}
+              <p className="sub">{k.excerpt}</p>
+            </div>
+          ))}
+        </details>
+      )}
       {suggestion.reason && <p className="sub" style={{ margin: '8px 0' }}>{suggestion.reason}</p>}
       <div className="ai-block">
         {suggestion.text.split(/\n\s*\n/).map((p, i) =>

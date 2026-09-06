@@ -124,6 +124,19 @@ export const CONTENT_AI_ACTIONS = [
 
 export type ContentAiAction = (typeof CONTENT_AI_ACTIONS)[number];
 
+/**
+ * One project-knowledge passage offered to the AI for an action. The passage
+ * is reference material the human can verify - AI output is generated text and
+ * must never be conflated with these sources.
+ */
+export interface ContentAiKnowledgeDto {
+  /** Source row name (or the passage title stored in Qdrant). */
+  name: string;
+  url?: string;
+  /** Short excerpt of the passage that was sent to the provider. */
+  excerpt?: string;
+}
+
 export interface ContentAiSuggestionDto {
   action: ContentAiAction;
   /** Existing text the suggestion replaces (empty for generate_section). */
@@ -133,6 +146,11 @@ export interface ContentAiSuggestionDto {
   /** Short explanation of what changed and why. */
   reason: string | null;
   model: string;
+  /**
+   * Project-knowledge passages the AI was allowed to use, when knowledge was
+   * requested and any existed. Absent/empty means no knowledge was supplied.
+   */
+  knowledge?: ContentAiKnowledgeDto[];
 }
 
 // ---------------------------------------------------------------------------
@@ -210,6 +228,51 @@ export interface KnowledgeStatusResponse {
   ready: boolean;
   indexed_kinds: string[];
   error?: string | null;
+}
+
+// ---------------------------------------------------------------------------
+// Knowledge sources (Content Studio Phase E) - user-managed, project-scoped
+// ---------------------------------------------------------------------------
+
+export type KnowledgeSourceStatus = 'pending' | 'indexing' | 'indexed' | 'error' | 'deleting';
+
+export type KnowledgeSourceType = 'note' | 'reference' | 'url';
+
+/**
+ * Logical model of one indexed knowledge item. Vectors live in Qdrant under
+ * external_id `source:<id>`; the row is the traceability record + status.
+ */
+export interface KnowledgeSourceDto {
+  id: string;
+  project_id: string;
+  source_type: KnowledgeSourceType;
+  name: string;
+  url: string | null;
+  status: KnowledgeSourceStatus;
+  error: string | null;
+  chunk_count: number;
+  last_indexed_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface KnowledgeSourcesResponse {
+  project_id: string;
+  /** True when Qdrant + an embedding key are configured on this server. */
+  configured: boolean;
+  provider: ProviderDescriptorDto | null;
+  /** Human note explaining why knowledge is (not) usable. */
+  note: string | null;
+  sources: KnowledgeSourceDto[];
+}
+
+export interface KnowledgeSourceCreateInput {
+  /** note | reference | url (defaults to 'note'). */
+  source_type?: KnowledgeSourceType;
+  name: string;
+  url?: string | null;
+  /** Body text to index. Optional when a URL is supplied. */
+  text?: string | null;
 }
 
 // ---------------------------------------------------------------------------
