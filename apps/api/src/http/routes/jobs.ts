@@ -38,11 +38,56 @@ async function resolveDataSource(container: ReturnType<typeof import('../../cont
   return data ? (data as Record<string, unknown>) : null;
 }
 
+/**
+ * Resolve the connected GSC integration behind a project's linked property.
+ * Since Stage 4 the Google connection lives at the account level (integration
+ * has project_id NULL) and the project's property references it; legacy rows
+ * reference a project-scoped integration. Returns null when unresolved.
+ */
+async function resolveGscIntegrationForProject(
+  container: ReturnType<typeof import('../../context.js').getContainer>,
+  projectId: string,
+): Promise<string | null> {
+  const { data: link } = await container.sb
+    .from('seo_project_properties')
+    .select('property_id')
+    .eq('project_id', projectId)
+    .order('is_primary', { ascending: false })
+    .order('created_at', { ascending: true })
+    .limit(1)
+    .maybeSingle();
+  if (!link) return null;
+  const { data: property } = await container.sb
+    .from('seo_gsc_properties')
+    .select('integration_id')
+    .eq('id', (link as Record<string, unknown>).property_id as string)
+    .maybeSingle();
+  const integrationId = (property as Record<string, unknown> | null)?.integration_id as string | null;
+  if (!integrationId) return null;
+  const { data: integration } = await container.sb
+    .from('seo_integrations')
+    .select('id, project_id, account_id')
+    .eq('id', integrationId)
+    .eq('status', 'connected')
+    .maybeSingle();
+  if (!integration) return null;
+  const { data: project } = await container.sb.from('seo_projects').select('account_id').eq('id', projectId).maybeSingle();
+  const accountId = (project as Record<string, unknown> | null)?.account_id as string | null;
+  const row = integration as Record<string, unknown>;
+  const ownedByProject = (row.project_id as string | null) === projectId;
+  const ownedByProjectAccount = (row.project_id as string | null) === null && (row.account_id as string | null) === accountId;
+  return ownedByProject || ownedByProjectAccount ? integrationId : null;
+}
+
 async function assertConnectedIntegration(
   container: ReturnType<typeof import('../../context.js').getContainer>,
   projectId: string,
   provider: string,
 ) {
+  if (provider === 'gsc') {
+    const linked = await resolveGscIntegrationForProject(container, projectId);
+    if (linked) return linked;
+  }
   const { data } = await container.sb
     .from('seo_integrations')
     .select('id')

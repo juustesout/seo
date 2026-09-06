@@ -47,13 +47,20 @@ oauthRouter.get(
       throw ApiError.forbidden('Invalid OAuth state');
     }
 
-    // Confirm the integration still belongs to this project.
-    const { data: integration } = await container.sb
+    // Confirm the integration still belongs to this project or account (the
+    // state is signed server-side, so its scope cannot be tampered with).
+    let query = container.sb
       .from('seo_integrations')
-      .select('id')
-      .eq('id', state.integrationId)
-      .eq('project_id', state.projectId)
-      .maybeSingle();
+      .select('id, project_id')
+      .eq('id', state.integrationId);
+    if (state.accountId) {
+      query = query.eq('account_id', state.accountId).is('project_id', null);
+    } else if (state.projectId) {
+      query = query.eq('project_id', state.projectId);
+    } else {
+      throw ApiError.badRequest('OAuth state has no scope');
+    }
+    const { data: integration } = await query.maybeSingle();
     if (!integration) throw ApiError.notFound('Integration no longer exists');
 
     const redirectUri = `${base}/api/oauth/gsc/callback`;
@@ -69,7 +76,16 @@ oauthRouter.get(
       .update({ status: 'connected', last_error: null })
       .eq('id', state.integrationId);
 
-    logger.info({ projectId: state.projectId, integrationId: state.integrationId }, 'gsc oauth completed');
-    res.redirect(`${base}/p/${state.projectId}/integrations?gsc=connected`);
+    logger.info(
+      { scope: state.accountId ? 'account' : 'project', integrationId: state.integrationId, accountId: state.accountId ?? null, projectId: state.projectId ?? null },
+      'gsc oauth completed',
+    );
+    if (state.accountId) {
+      res.redirect(`${base}/overview?gsc=connected`);
+    } else if (state.projectId) {
+      res.redirect(`${base}/p/${state.projectId}/integrations?gsc=connected`);
+    } else {
+      res.redirect(`${base}/overview`);
+    }
   }),
 );

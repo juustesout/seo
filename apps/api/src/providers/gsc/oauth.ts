@@ -107,7 +107,10 @@ export async function refreshAccessToken(opts: {
 // ---------------------------------------------------------------------------
 
 export interface OAuthState {
-  projectId: string;
+  /** Set for a legacy project-scoped connect. */
+  projectId?: string;
+  /** Set for an account-scoped connect (Stage 4). */
+  accountId?: string;
   integrationId: string;
   userId: string;
   nonce: string;

@@ -215,3 +215,115 @@ export interface MeDto {
   email: string | null;
   projects: ProjectSummary[];
 }
+
+// ---------------------------------------------------------------------------
+// Account (Stage 4): account-level Google connection, property registry and
+// cross-project overview. The account owns the Google connection and the GSC
+// property registry; projects optionally link a property via seo_project_properties.
+// ---------------------------------------------------------------------------
+
+export interface GscConnectionDto {
+  connected: boolean;
+  integration_id: string | null;
+  status: string | null;
+  last_sync_at: string | null;
+  error: string | null;
+}
+
+export interface AccountPropertyLinkDto {
+  property_id: string;
+  site_url: string;
+  is_primary: boolean;
+}
+
+export interface AccountProjectSummaryDto extends ProjectSummary {
+  /** The GSC property currently attached to this project, if any. */
+  property: AccountPropertyLinkDto | null;
+  content_count: number;
+}
+
+export interface AccountRecentActivityDto {
+  id: string;
+  project_id: string | null;
+  project_name: string | null;
+  action: string;
+  entity_type: string;
+  entity_id: string | null;
+  created_at: string;
+  meta: Record<string, unknown>;
+}
+
+export interface AccountDto {
+  account: { id: string; name: string; created_at: string };
+  google: GscConnectionDto;
+  /** Account-level GSC registry size (properties this account can attach). */
+  registry_count: number;
+  /** Projects in this account that currently link a GSC property. */
+  attached_projects: number;
+  projects: AccountProjectSummaryDto[];
+  recent_activity: AccountRecentActivityDto[];
+}
+
+/** GSC registry property with its current project link (server-computed). */
+export interface GscRegistryPropertyDto {
+  id: string;
+  site_url: string;
+  permission_level: string | null;
+  verified_at: string | null;
+  is_active: boolean;
+  integration_id: string | null;
+  linked_project: { id: string; name: string } | null;
+}
+
+export interface OverviewMetricRow {
+  date: string;
+  clicks: number;
+  impressions: number;
+  ctr: number;
+  position: number;
+}
+
+/**
+ * Adaptive account overview. `totals` / `series` / `properties` are null until
+ * the account has a connected Google integration AND at least one project with
+ * an attached property - never fabricated zeros for an unconnected account.
+ */
+export interface AccountOverviewDto {
+  connected: boolean;
+  registry_count: number;
+  attached_count: number;
+  totals: {
+    clicks: number;
+    impressions: number;
+    ctr: number;
+    position: number;
+    clicks_trend: number | null;
+    impressions_trend: number | null;
+  } | null;
+  series: OverviewMetricRow[] | null;
+  properties: Array<{
+    property_id: string;
+    site_url: string;
+    project_id: string;
+    project_name: string;
+    clicks: number;
+    impressions: number;
+    ctr: number;
+    position: number;
+  }> | null;
+}
+
+/** Per-project GSC state + attach candidates (project Settings / dashboard CTA). */
+export interface ProjectGscStateDto {
+  google: GscConnectionDto;
+  current: AccountPropertyLinkDto | null;
+  candidates: GscRegistryPropertyDto[];
+}
+
+export interface ProjectGscAttachRequest {
+  /** Existing account registry property to attach. */
+  property_id?: string;
+  /** Alternatively register a newly discovered site under the account. */
+  siteUrl?: string;
+  name?: string;
+}

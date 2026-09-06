@@ -9,6 +9,31 @@ interface Dash {
   features: Record<string, boolean>;
 }
 
+interface GscState {
+  google: { connected: boolean; status: string | null };
+  current: { property_id: string; site_url: string } | null;
+}
+
+/** Dashboard CTA when this project has no GSC property attached yet. */
+function GscAttachCta({ projectId, onOpenSettings }: { projectId: string; onOpenSettings: () => void }) {
+  const { data } = useAsync<GscState>(() => api(`/projects/${projectId}/gsc/state`), [projectId]);
+  if (!data || data.current) return null;
+  return (
+    <div className="banner info" style={{ marginBottom: 12 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
+        <span>
+          {data.google.connected
+            ? 'This project has no Google Search Console property connected.'
+            : 'This project is not connected to Google Search Console yet.'}
+        </span>
+        <button className="btn sm primary" onClick={onOpenSettings}>
+          {data.google.connected ? 'Attach GSC Property' : 'Set up Search Console'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function Sparkline({ values, height = 40 }: { values: number[]; height?: number }) {
   const max = Math.max(...values, 1);
   return (
@@ -20,7 +45,7 @@ function Sparkline({ values, height = 40 }: { values: number[]; height?: number 
   );
 }
 
-export function Dashboard({ projectId }: { projectId: string }) {
+export function Dashboard({ projectId, onOpenSettings }: { projectId: string; onOpenSettings: () => void }) {
   const { data, error, loading, reload } = useAsync<Dash>(
     () => api(`/projects/${projectId}/dashboard`),
     [projectId],
@@ -41,6 +66,7 @@ export function Dashboard({ projectId }: { projectId: string }) {
         Last sync {data.sources.last_sync_at ? fmtDate(data.sources.last_sync_at) : 'never'} ·{' '}
         {data.sources.integrations.length} integrations · {data.sources.data_sources.length} data source(s)
       </p>
+      <GscAttachCta projectId={projectId} onOpenSettings={onOpenSettings} />
       <div className="grid">
         <div className="card stat">
           <div className="label">Clicks (7d)</div>

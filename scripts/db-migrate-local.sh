@@ -271,4 +271,54 @@ begin
 end $$;
 SQL
 
+echo "==> smoke test: account-scoped integrations (stage 4)"
+PSQL -d "${DB_NAME}" <<'SQL'
+set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-000000000001"}';
+do $$
+declare
+  v_acc uuid;
+  v_project uuid;
+  v_account_gsc uuid;
+begin
+  select id into v_acc from public.seo_accounts where owner_user_id = '00000000-0000-0000-0000-000000000001';
+  if v_acc is null then raise exception 'smoke: stage4 account missing'; end if;
+  select id into v_project from public.seo_projects where slug = 'demo' limit 1;
+  if v_project is null then raise exception 'smoke: stage4 project missing'; end if;
+
+  -- A legacy project-scoped GSC integration can stay connected for the same
+  -- account without colliding with the new account-scoped one.
+  insert into public.seo_integrations (project_id, account_id, provider_type, name, status, created_by)
+  values (v_project, v_acc, 'gsc', 'GSC legacy', 'connected', '00000000-0000-0000-0000-000000000001');
+
+  -- Account-scoped connect: project_id NULL is accepted and account_id sticks.
+  insert into public.seo_integrations (project_id, account_id, provider_type, name, status, created_by)
+  values (null, v_acc, 'gsc', 'Google Search Console', 'connected', '00000000-0000-0000-0000-000000000001')
+  returning id into v_account_gsc;
+  if v_account_gsc is null then raise exception 'smoke: account-scoped integration was not created'; end if;
+  if not exists (
+    select 1 from public.seo_integrations where id = v_account_gsc and account_id = v_acc and project_id is null
+  ) then raise exception 'smoke: account-scoped integration not attributed to the account'; end if;
+
+  -- One active account-scoped connection per provider per account.
+  begin
+    insert into public.seo_integrations (account_id, provider_type, name, status, created_by)
+    values (v_acc, 'gsc', 'GSC duplicate', 'connected', '00000000-0000-0000-0000-000000000001');
+    raise exception 'smoke: duplicate account-scoped connection unexpectedly allowed';
+  exception when unique_violation then
+    null;
+  end;
+
+  -- An integration must resolve to a project or an account.
+  begin
+    insert into public.seo_integrations (provider_type, name, status)
+    values ('gsc', 'Ownerless', 'disconnected');
+    raise exception 'smoke: ownerless integration unexpectedly allowed';
+  exception when check_violation then
+    null;
+  end;
+
+  raise notice 'smoke: account-scoped integrations OK';
+end $$;
+SQL
+
 echo "==> migration validation OK (${DB_NAME})"

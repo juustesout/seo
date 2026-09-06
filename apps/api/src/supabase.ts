@@ -103,4 +103,20 @@ export class AccessService {
     }
     return Boolean(data);
   }
+
+  /**
+   * Authorize an account-scoped operation. The caller must own the account
+   * (one user = one account for now); a missing account is created lazily so a
+   * fresh signup can connect Google before creating any project.
+   */
+  async requireAccount(userId: string): Promise<{ account_id: string }> {
+    const { data, error } = await this.sb.rpc('seo_ensure_account', { p_user: userId });
+    if (error) {
+      logger.error({ error }, 'account resolution failed');
+      throw new ApiError(500, 'storage_error', 'Could not resolve your account');
+    }
+    const accountId = Array.isArray(data) ? (data[0] as { id?: string } | null)?.id : (data as string | null);
+    if (!accountId) throw new ApiError(500, 'storage_error', 'Could not resolve your account');
+    return { account_id: accountId };
+  }
 }

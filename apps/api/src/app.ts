@@ -13,6 +13,7 @@ import { resolveContainer, optionalAuth } from './http/middleware.js';
 import { errorHandler, notFoundHandler } from './apiErrors.js';
 
 import { meRouter } from './http/routes/me.js';
+import { accountRouter } from './http/routes/account.js';
 import { catalogRouter } from './http/routes/catalog.js';
 import { oauthRouter } from './http/routes/oauth.js';
 import { integrationsRouter } from './http/routes/integrations.js';
@@ -24,6 +25,7 @@ import { contentRouter } from './http/routes/content.js';
 import { jobsRouter } from './http/routes/jobs.js';
 import { seoRouter } from './http/routes/seo.js';
 import { projectApiKeysRouter } from './http/routes/projectApiKeys.js';
+import { projectGscRouter } from './http/routes/projectGsc.js';
 import { v1Router } from './http/routes/v1.js';
 
 export function createApp(): Express {
@@ -76,6 +78,7 @@ export function createApp(): Express {
   app.use('/api/oauth', oauthRouter);
 
   app.use('/api/me', meRouter);
+  app.use('/api/account', accountRouter);
   app.use('/api/providers', catalogRouter);
 
   app.use('/api/projects/:projectId/integrations', integrationsRouter);
@@ -86,6 +89,7 @@ export function createApp(): Express {
   app.use('/api/projects/:projectId/content', contentRouter);
   app.use('/api/projects/:projectId/jobs', jobsRouter);
   app.use('/api/projects/:projectId/api-keys', projectApiKeysRouter);
+  app.use('/api/projects/:projectId/gsc', projectGscRouter);
   app.use('/api/v1', v1Router);
   app.use('/api/projects/:projectId', seoRouter);
 
