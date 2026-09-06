@@ -63,7 +63,7 @@ export function buildContentAnalysisReport(result: SeoResult, generatedAt = new 
       headings: result.stats.headings,
       paragraphs: result.stats.paragraphs,
       links: result.stats.links,
-      media: 0,
+      media: result.stats.images,
       mediaPlaceholders: 0,
       longParagraphs: result.stats.longParagraphs,
     },

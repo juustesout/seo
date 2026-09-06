@@ -2,6 +2,7 @@ import { forwardRef, useImperativeHandle } from 'react';
 import { useEditor, EditorContent, type Editor } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import Link from '@tiptap/extension-link';
+import { ImageBlock } from './ImageBlock';
 import type { TipDoc } from '@seo/contracts';
 
 export interface RichTextEditorHandle {
@@ -30,6 +31,7 @@ export const RichTextEditor = forwardRef<RichTextEditorHandle, RichTextEditorPro
         defaultProtocol: 'https',
         HTMLAttributes: { rel: 'noopener noreferrer', target: '_blank' },
       }),
+      ImageBlock,
     ],
     content: initialDoc,
     onUpdate: ({ editor: e }) => {

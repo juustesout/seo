@@ -12,6 +12,7 @@
 
 import {
   docHeadings,
+  docImages,
   docIntroduction,
   docPlainText,
   docWordCount,
@@ -57,6 +58,8 @@ export interface SeoStats {
   paragraphs: number;
   links: number;
   longParagraphs: number;
+  images: number;
+  imagesMissingAlt: number;
 }
 
 export interface SeoResult {
@@ -156,6 +159,7 @@ function collectStats(doc: TipDoc): SeoStats {
   const headings = docHeadings(doc);
   const paras = paragraphs(doc);
   const longParagraphs = paras.filter((p) => p.words > 220).length;
+  const images = docImages(doc);
   return {
     words: docWordCount(doc),
     headings: headings.length,
@@ -164,6 +168,8 @@ function collectStats(doc: TipDoc): SeoStats {
     paragraphs: paras.length,
     links: linkCount(doc),
     longParagraphs,
+    images: images.length,
+    imagesMissingAlt: images.filter((img) => !isAltText(img.alt)).length,
   };
 }
 
@@ -179,6 +185,16 @@ const LONG_PARAGRAPH_WORDS = 220;
 
 interface CheckAccumulator {
   checks: SeoCheck[];
+}
+
+/** Alt text that meaningfully describes an image (not empty or placeholder-y). */
+const GENERIC_ALTS = new Set(['image', 'photo', 'picture', 'img', 'illustration', 'screenshot', 'cover', 'hero', 'thumbnail', 'banner']);
+
+function isAltText(alt: unknown): boolean {
+  if (typeof alt !== 'string') return false;
+  const value = alt.trim();
+  if (!value || value.length < 3) return false;
+  return !GENERIC_ALTS.has(value.toLowerCase());
 }
 
 function addCheck(acc: CheckAccumulator, check: SeoCheck): void {
@@ -387,6 +403,67 @@ export function evaluateSeo({ doc, meta = {} }: SeoEvalInput): SeoResult {
     push('content_length', 'Content', 'Content length', 'pass', 9, `${words} words — meets the ${MIN_GOOD_WORDS}+ word guide`);
   } else {
     push('content_length', 'Content', 'Content length', 'warn', 9, `${words} words — short of the ${MIN_GOOD_WORDS}+ word guide`, 'Expand the article with genuinely useful detail.');
+  }
+
+  // ---- Images (participate in on-page SEO when present) --------------------
+  const images = docImages(doc);
+  if (images.length > 0) {
+    const missing = images.filter((img) => !isAltText(img.alt));
+    if (missing.length === 0) {
+      push(
+        'image_alt_present',
+        'Content',
+        'Image alt text',
+        'pass',
+        4,
+        `${images.length} ${images.length === 1 ? 'image has' : 'images have'} alt text`,
+      );
+    } else if (missing.length < images.length) {
+      push(
+        'image_alt_present',
+        'Content',
+        'Image alt text',
+        'warn',
+        4,
+        `${missing.length} of ${images.length} ${images.length === 1 ? 'image is' : 'images are'} missing alt text`,
+        'Add descriptive alt text to every image.',
+      );
+    } else {
+      push(
+        'image_alt_present',
+        'Content',
+        'Image alt text',
+        'fail',
+        4,
+        `${images.length} ${images.length === 1 ? 'image is' : 'images are'} missing alt text`,
+        'Add descriptive alt text to every image.',
+      );
+    }
+
+    const meaningful = images.filter((img) => isAltText(img.alt));
+    if (meaningful.length === images.length) {
+      push('image_alt_descriptive', 'Content', 'Descriptive image alt text', 'pass', 3, 'Image alt text describes what each image shows');
+    } else if (meaningful.length > 0) {
+      push(
+        'image_alt_descriptive',
+        'Content',
+        'Descriptive image alt text',
+        'warn',
+        3,
+        `${images.length - meaningful.length} alt ${images.length - meaningful.length === 1 ? 'value' : 'values'} look generic or too short`,
+        'Describe the image content, not "image" or "photo".',
+      );
+    } else {
+      push(
+        'image_alt_descriptive',
+        'Content',
+        'Descriptive image alt text',
+        'fail',
+        3,
+        'Alt text is missing or generic',
+        'Describe the image content, not "image" or "photo".',
+      );
+    }
   }
 
   // ---- Structure ---------------------------------------------------------

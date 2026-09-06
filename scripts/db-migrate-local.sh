@@ -264,6 +264,87 @@ if [ -z "${LEAK_COUNT}" ] || [ "${LEAK_COUNT}" != "0" ]; then
 fi
 echo "   smoke: non-member cannot read a foreign project source (RLS isolation OK)"
 
+echo "==> smoke test: media library (phase F) + safe deletion + isolation"
+PSQL -d "${DB_NAME}" <<'SQL'
+set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-000000000001"}';
+do $$
+declare
+  v_project uuid;
+  v_content uuid;
+  v_media_a uuid;
+  v_media_b uuid;
+begin
+  select id into v_project from public.seo_projects where slug = 'demo' limit 1;
+  if v_project is null then raise exception 'smoke: demo project missing for media'; end if;
+  select id into v_content from public.seo_content where slug = 'demo-article' and project_id = v_project limit 1;
+  if v_content is null then raise exception 'smoke: demo content missing for media refs'; end if;
+
+  insert into public.seo_media (project_id, filename, mime_type, size, storage_key, width, height, alt_text)
+  values (v_project, 'Smoke image A.png', 'image/png', 123, 'p-smoke/smoke-a.png', 800, 600, 'Smoke alt')
+  returning id into v_media_a;
+  insert into public.seo_media (project_id, filename, mime_type, size, storage_key, width, height, alt_text)
+  values (v_project, 'Smoke image B.webp', 'image/webp', 456, 'p-smoke/smoke-b.webp', 640, 480, '')
+  returning id into v_media_b;
+  if v_media_a is null or v_media_b is null then raise exception 'smoke: media rows were not created'; end if;
+
+  insert into public.seo_content_media (content_id, media_id) values (v_content, v_media_a);
+
+  begin
+    delete from public.seo_media where id = v_media_a;
+    raise exception 'smoke: deleting referenced media unexpectedly allowed';
+  exception when foreign_key_violation then
+    null;
+  end;
+
+  delete from public.seo_media where id = v_media_b;
+  if exists (select 1 from public.seo_media where id = v_media_b) then
+    raise exception 'smoke: unreferenced media delete failed';
+  end if;
+
+  if not exists (select 1 from public.seo_media where id = v_media_a) then
+    raise exception 'smoke: referenced media was deleted';
+  end if;
+
+  raise notice 'smoke: media lifecycle (referenced delete refused) OK';
+end $$;
+SQL
+
+# RLS can only be exercised as a non-superuser role (superusers bypass RLS).
+MEDIA_LEAK_COUNT="$(PSQL -d "${DB_NAME}" -t -A <<'SQL'
+grant usage on schema public to authenticated;
+grant select on public.seo_media to authenticated;
+set role authenticated;
+set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-000000000002"}';
+select count(*) from public.seo_media where filename = 'Smoke image A.png';
+SQL
+)"
+if [ -z "${MEDIA_LEAK_COUNT}" ] || [ "${MEDIA_LEAK_COUNT}" != "0" ]; then
+  echo "!! RLS leak: non-member read ${MEDIA_LEAK_COUNT} rows from a foreign project media library" >&2
+  exit 1
+fi
+echo "   smoke: non-member cannot read a foreign project media library (RLS isolation OK)"
+
+PSQL -d "${DB_NAME}" <<'SQL'
+set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-000000000001"}';
+do $$
+declare
+  v_project uuid;
+  v_media_a uuid;
+begin
+  select id into v_project from public.seo_projects where slug = 'demo' limit 1;
+  select id into v_media_a from public.seo_media where filename = 'Smoke image A.png' limit 1;
+  if v_media_a is null then raise exception 'smoke: referenced media A missing after ref delete test'; end if;
+
+  delete from public.seo_content_media where media_id = v_media_a;
+  delete from public.seo_media where id = v_media_a;
+  if exists (select 1 from public.seo_media where id = v_media_a) then
+    raise exception 'smoke: media delete after dereference failed';
+  end if;
+
+  raise notice 'smoke: media delete after dereference OK';
+end $$;
+SQL
+
 echo "==> smoke test: property registry (stage 3)"
 PSQL -d "${DB_NAME}" <<'SQL'
 set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-000000000001"}';

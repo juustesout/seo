@@ -20,6 +20,7 @@ import { ContentToolbar } from '../components/content/ContentToolbar';
 import { ContentOutline } from '../components/content/ContentOutline';
 import { ContentEditorHeader } from '../components/content/ContentEditorHeader';
 import { SeoPanel } from '../components/content/SeoPanel';
+import { MediaPanel } from '../components/content/MediaPanel';
 import { ContentAiPanel } from '../components/content/ContentAiPanel';
 import { KnowledgePanel } from '../components/content/KnowledgePanel';
 import { textToBlocksHtml } from '../components/content/contentAi';
@@ -582,6 +583,7 @@ export function Content({ projectId, role = 'viewer' }: { projectId: string; rol
             onMetaDescriptionChange={setMetaDescription}
           />
           <ContentOutline items={outline} onSelect={(i) => editorRef.current?.selectHeading(i)} />
+          {editor && <MediaPanel projectId={projectId} editor={editor} canEdit={canEdit} canDelete={canDelete} />}
         </aside>
       </div>
 

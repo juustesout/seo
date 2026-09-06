@@ -170,6 +170,43 @@ describe('seo evaluator (contracts)', () => {
   });
 });
 
+describe('seo evaluator image checks (phase F)', () => {
+  const image = (alt: string): TipNode => ({
+    type: 'image',
+    attrs: { mediaId: 'm-1', src: 'https://cdn.example/x.png', alt },
+  });
+  const withImage = (alt: string) => docOf(p('Body copy mentioning a content engine cadence.'), image(alt));
+
+  it('passes when every image carries descriptive alt text', () => {
+    const result = evaluateSeo({
+      doc: withImage('A red fox crossing a snowy field at dusk'),
+      meta: META,
+    });
+    expect(result.stats.images).toBe(1);
+    expect(result.stats.imagesMissingAlt).toBe(0);
+    expect(find(result, 'image_alt_present').status).toBe('pass');
+    expect(find(result, 'image_alt_descriptive').status).toBe('pass');
+  });
+
+  it('fails when an image has no alt text', () => {
+    const result = evaluateSeo({ doc: withImage(''), meta: META });
+    expect(result.stats.imagesMissingAlt).toBe(1);
+    expect(find(result, 'image_alt_present').status).toBe('fail');
+  });
+
+  it('treats generic single-word alts as not descriptive', () => {
+    const result = evaluateSeo({ doc: withImage('image'), meta: META });
+    expect(find(result, 'image_alt_present').status).toBe('fail');
+    expect(find(result, 'image_alt_descriptive').status).toBe('fail');
+  });
+
+  it('leaves the checks out entirely when the document has no images', () => {
+    const result = evaluateSeo({ doc: docOf(p('Body only')), meta: META });
+    expect(result.checks.some((c) => c.code === 'image_alt_present')).toBe(false);
+    expect(result.stats.images).toBe(0);
+  });
+});
+
 function find(result: ReturnType<typeof evaluateSeo>, code: string) {
   const check = result.checks.find((c) => c.code === code);
   if (!check) throw new Error(`check ${code} missing`);

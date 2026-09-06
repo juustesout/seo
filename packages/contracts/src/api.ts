@@ -154,6 +154,53 @@ export interface ContentAiSuggestionDto {
 }
 
 // ---------------------------------------------------------------------------
+// Media library (Content Studio Phase F) - project-scoped object storage
+// ---------------------------------------------------------------------------
+
+/** Image formats the Phase F upload accepts (bytes are sniffed, not trusted). */
+export type MediaMimeType = 'image/png' | 'image/jpeg' | 'image/webp';
+
+/** One media-library item. The file lives in project storage; only metadata
+ *  (never bytes) lives in Postgres. `url` is a stable public object URL that
+ *  document renders resolve the media reference to. */
+export interface MediaItemDto {
+  id: string;
+  project_id: string;
+  filename: string;
+  mime_type: MediaMimeType;
+  /** Size in bytes. */
+  size: number;
+  url: string;
+  width: number | null;
+  height: number | null;
+  alt_text: string;
+  caption: string;
+  /** Number of content documents that currently reference this item. */
+  usage_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface MediaListResponse {
+  project_id: string;
+  /** True when the object store is reachable/configured. */
+  configured: boolean;
+  note: string | null;
+  media: MediaItemDto[];
+}
+
+export interface MediaUploadRequest {
+  /** Original file name; sanitized server-side for storage/display. */
+  filename?: string;
+  alt?: string;
+}
+
+export interface MediaPatchRequest {
+  alt_text?: string;
+  caption?: string;
+}
+
+// ---------------------------------------------------------------------------
 // Integrations
 // ---------------------------------------------------------------------------
 

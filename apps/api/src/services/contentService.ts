@@ -19,13 +19,16 @@ import {
   isValidDocStructure,
   renderDocHtml,
   docHeadings,
+  docImages,
   evaluateSeo,
   asTipDoc,
   type ContentBlock,
   type ContentOutlineItem,
   type TipDoc,
+  type TipNode,
 } from '@seo/contracts';
 import { ApiError } from '../apiErrors.js';
+import { SupabaseStorageStore } from '../infra/mediaStorage.js';
 
 export const CONTENT_STATUSES = ['draft', 'in_review', 'published', 'archived'] as const;
 
@@ -160,7 +163,19 @@ export class ContentService {
     // Canonicalize whatever representation is stored so content_html and
     // outline are always derived from the same source in the same way.
     const isDoc = isTiptapDoc(rawJson);
-    const content_json = mode === 'create' && input.contentJson === undefined ? tiptapEmptyDoc() : rawJson;
+    let content_json: TipDoc | ContentBlock[] =
+      mode === 'create' && input.contentJson === undefined ? tiptapEmptyDoc() : rawJson;
+
+    // Image nodes carry a media reference (mediaId). The server re-verifies
+    // every reference belongs to this project and re-resolves the object URL
+    // from storage, so a forged mediaId from another project can never slip in
+    // and a stale src is corrected on every save.
+    let mediaIds: string[] = [];
+    if (isDoc && docImages(content_json as TipDoc).length > 0) {
+      const resolved = await this.resolveDocMedia(projectId, content_json as TipDoc);
+      content_json = resolved.doc;
+      mediaIds = resolved.mediaIds;
+    }
     const content_html = isDoc ? renderDocHtml(content_json as TipDoc) : renderContentHtml(content_json as ContentBlock[]);
     const outline = isDoc ? docHeadings(content_json as TipDoc) : contentOutline(content_json as ContentBlock[]);
 
@@ -186,6 +201,7 @@ export class ContentService {
     }).score;
 
     const hasPublishedAt = existing?.published_at ? true : false;
+    let saved: Row | null = null;
     if (mode === 'create') {
       payload.project_id = projectId;
       payload.status = status;
@@ -196,23 +212,79 @@ export class ContentService {
       }
       const { data, error } = await this.sb.from('seo_content').insert(payload).select().single();
       if (error) throw ApiError.badRequest('Could not create content');
-      return data as Row;
+      saved = data as Row;
+    } else {
+      if (userId) payload.updated_by = userId;
+      const { data, error } = await this.sb
+        .from('seo_content')
+        .update({
+          ...payload,
+          status,
+          published_at: status === 'published' && !hasPublishedAt ? new Date().toISOString() : existing?.published_at ?? null,
+        })
+        .eq('project_id', projectId)
+        .eq('id', id)
+        .select()
+        .single();
+      if (error) throw ApiError.badRequest('Could not update content');
+      saved = data as Row;
     }
 
-    if (userId) payload.updated_by = userId;
-    const { data, error } = await this.sb
-      .from('seo_content')
-      .update({
-        ...payload,
-        status,
-        published_at: status === 'published' && !hasPublishedAt ? new Date().toISOString() : existing?.published_at ?? null,
-      })
-      .eq('project_id', projectId)
-      .eq('id', id)
-      .select()
-      .single();
-    if (error) throw ApiError.badRequest('Could not update content');
-    return data as Row;
+    // Keep the content<->media reference index in sync so deletion can refuse
+    // to remove library items that are still in use.
+    const previouslyHadImages = isDoc && existing ? docImages(existing.content_json as TipDoc).length > 0 : false;
+    if (saved && (mediaIds.length > 0 || previouslyHadImages)) {
+      await this.syncContentMedia(projectId, String(saved.id), mediaIds);
+    }
+    return saved as Row;
+  }
+
+  /**
+   * Verify every image node's mediaId belongs to this project and set the src
+   * (plus dimensions) authoritatively from the stored object. Rejects documents
+   * that reference media from another project or unknown items.
+   */
+  private async resolveDocMedia(projectId: string, doc: TipDoc): Promise<{ doc: TipDoc; mediaIds: string[] }> {
+    const refs = docImages(doc);
+    const mediaIds = [...new Set(refs.map((r) => r.mediaId).filter((id): id is string => Boolean(id)))];
+    if (mediaIds.length === 0) return { doc, mediaIds: [] };
+
+    const { data, error } = await this.sb.from('seo_media').select('id, storage_key, width, height').in('id', mediaIds).eq('project_id', projectId);
+    if (error) throw ApiError.badRequest('Could not verify media references');
+    const rows = (data ?? []) as Row[];
+    if (rows.length !== mediaIds.length) {
+      throw ApiError.badRequest('Document references media that does not exist in this project');
+    }
+    const byId = new Map(rows.map((r) => [String(r.id), r]));
+    const store = new SupabaseStorageStore(this.sb);
+    const next = structuredClone(doc) as TipDoc;
+    const walk = (nodes: TipNode[]): void => {
+      for (const node of nodes) {
+        if (node.type === 'image' && node.attrs) {
+          const attrs = node.attrs as Record<string, unknown>;
+          const row = typeof attrs.mediaId === 'string' ? byId.get(attrs.mediaId) : undefined;
+          if (row) {
+            attrs.src = store.urlFor(String(row.storage_key));
+            if (typeof row.width === 'number') attrs.width = row.width;
+            if (typeof row.height === 'number') attrs.height = row.height;
+          }
+        } else if (node.content) {
+          walk(node.content as TipNode[]);
+        }
+      }
+    };
+    walk(next.content ?? []);
+    return { doc: next, mediaIds };
+  }
+
+  /** Replace the content<->media links for one content row (delete + insert). */
+  private async syncContentMedia(_projectId: string, contentId: string, mediaIds: string[]): Promise<void> {
+    const { error: del } = await this.sb.from('seo_content_media').delete().eq('content_id', contentId);
+    if (del) throw ApiError.badRequest('Could not update media references');
+    if (mediaIds.length === 0) return;
+    const rows = mediaIds.map((mediaId) => ({ content_id: contentId, media_id: mediaId }));
+    const { error: ins } = await this.sb.from('seo_content_media').insert(rows as never);
+    if (ins) throw ApiError.badRequest('Could not record media references');
   }
 
   create(projectId: string, userId: string | null, input: ContentInput) {

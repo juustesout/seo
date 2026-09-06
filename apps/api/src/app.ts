@@ -23,6 +23,7 @@ import { publicationsRouter } from './http/routes/publications.js';
 import { knowledgeRouter } from './http/routes/knowledge.js';
 import { aiSettingsRouter } from './http/routes/aiSettings.js';
 import { contentRouter } from './http/routes/content.js';
+import { mediaRouter } from './http/routes/media.js';
 import { jobsRouter } from './http/routes/jobs.js';
 import { seoRouter } from './http/routes/seo.js';
 import { projectApiKeysRouter } from './http/routes/projectApiKeys.js';
@@ -89,6 +90,19 @@ export function createApp(): Express {
   app.use('/api/projects/:projectId/knowledge', knowledgeRouter);
   app.use('/api/projects/:projectId/ai', aiSettingsRouter);
   app.use('/api/projects/:projectId/content', contentRouter);
+  // Media uploads are raw image bodies (never JSON), parsed only for media
+  // routes so the global JSON limit does not constrain file uploads.
+  app.use(
+    '/api/projects/:projectId/media',
+    express.raw({
+      type: (req) => {
+        const ct = req.headers['content-type'];
+        return typeof ct === 'string' && /^image\//i.test(ct);
+      },
+      limit: '12mb',
+    }),
+  );
+  app.use('/api/projects/:projectId/media', mediaRouter);
   app.use('/api/projects/:projectId/jobs', jobsRouter);
   app.use('/api/projects/:projectId/api-keys', projectApiKeysRouter);
   app.use('/api/projects/:projectId/gsc', projectGscRouter);

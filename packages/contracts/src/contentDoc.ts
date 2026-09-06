@@ -34,7 +34,22 @@ export interface TipDoc {
   content?: TipNode[];
 }
 
-/** Node types the Phase B editor emits (StarterKit + link). */
+/**
+ * A resolved image reference inside a document (Phase F). The canonical value
+ * is `mediaId` - it points at a project media-library row. `src` is the stable
+ * public object URL that rendering resolves the reference to (never an expiring
+ * signed URL).
+ */
+export interface DocImageRef {
+  mediaId?: string;
+  src?: string;
+  alt?: string;
+  caption?: string;
+  width?: number;
+  height?: number;
+}
+
+/** Node types the Phase B editor emits (StarterKit + link) + Phase F image. */
 export const TIPTAP_BLOCK_TYPES = new Set([
   'paragraph',
   'heading',
@@ -43,6 +58,7 @@ export const TIPTAP_BLOCK_TYPES = new Set([
   'listItem',
   'blockquote',
   'codeBlock',
+  'image',
   'hardBreak',
   'horizontalRule',
 ]);
@@ -83,6 +99,14 @@ export function isValidDocStructure(value: unknown): boolean {
       if (node.type === 'codeBlock') {
         // Code block text is a child text node; no nested block elements.
         if (node.content && !node.content.every((c) => c.type === 'text')) return false;
+      }
+      if (node.type === 'image') {
+        // Image nodes are leaf blocks carrying a stable media-library id. The
+        // src is resolved server-side from that id; nothing nests inside them.
+        const attrs = node.attrs as { mediaId?: unknown; src?: unknown } | undefined;
+        if (!attrs || typeof attrs.mediaId !== 'string' || !attrs.mediaId) return false;
+        if (attrs.src !== undefined && typeof attrs.src !== 'string') return false;
+        if (node.content) return false;
       }
       if (!TIPTAP_BLOCK_TYPES.has(node.type)) return false;
       if (node.type === 'bulletList' || node.type === 'orderedList' || node.type === 'listItem') {
@@ -189,6 +213,24 @@ export function renderDocHtml(doc: TipDoc): string {
         case 'horizontalRule':
           out.push('<hr>');
           break;
+        case 'image': {
+          const attrs = (node.attrs ?? {}) as Record<string, unknown>;
+          const src = typeof attrs.src === 'string' ? attrs.src : '';
+          const alt = typeof attrs.alt === 'string' ? attrs.alt : '';
+          const caption = typeof attrs.caption === 'string' ? attrs.caption : '';
+          const dims =
+            (typeof attrs.width === 'number' && Number.isFinite(attrs.width) ? ` width="${attrs.width}"` : '') +
+            (typeof attrs.height === 'number' && Number.isFinite(attrs.height) ? ` height="${attrs.height}"` : '');
+          const figcaption = caption ? `\n<figcaption>${escapeHtml(caption)}</figcaption>` : '';
+          if (src) {
+            out.push(`<figure class="seo-media"><img src="${escapeHtml(src)}" alt="${escapeHtml(alt)}"${dims} />${figcaption}\n</figure>`);
+          } else {
+            // A reference with no resolvable URL renders as an explicit
+            // placeholder rather than silently disappearing.
+            out.push(`<figure class="seo-media" data-image-missing="true">[image]${figcaption ? ` ${figcaption}` : ''}</figure>`);
+          }
+          break;
+        }
         default:
           out.push(walk(node.content ?? []));
       }
@@ -256,6 +298,30 @@ export function docHeadings(doc: TipDoc): ContentOutlineItem[] {
   return items;
 }
 
+/** Image references in document order (drives SEO/media checks + ref sync). */
+export function docImages(doc: TipDoc): DocImageRef[] {
+  const out: DocImageRef[] = [];
+  const walk = (nodes: TipNode[]): void => {
+    for (const node of nodes) {
+      if (node.type === 'image') {
+        const attrs = (node.attrs ?? {}) as Partial<DocImageRef>;
+        const ref: DocImageRef = {};
+        if (typeof attrs.mediaId === 'string') ref.mediaId = attrs.mediaId;
+        if (typeof attrs.src === 'string') ref.src = attrs.src;
+        if (typeof attrs.alt === 'string') ref.alt = attrs.alt;
+        if (typeof attrs.caption === 'string') ref.caption = attrs.caption;
+        if (typeof attrs.width === 'number') ref.width = attrs.width;
+        if (typeof attrs.height === 'number') ref.height = attrs.height;
+        out.push(ref);
+      } else if (node.content) {
+        walk(node.content as TipNode[]);
+      }
+    }
+  };
+  walk(doc.content ?? []);
+  return out;
+}
+
 export function docWordCount(doc: TipDoc): number {
   return docPlainText(doc).split(/\s+/).filter(Boolean).length;
 }
@@ -311,6 +377,19 @@ export function asContentBlocks(value: unknown): ContentBlock[] {
       case 'codeBlock':
         out.push({ type: 'code', attrs: { text: (node.content ?? []).map((c) => c.text ?? '').join('') } });
         break;
+      case 'image': {
+        const attrs = (node.attrs ?? {}) as Record<string, unknown>;
+        out.push({
+          type: 'media',
+          attrs: {
+            kind: 'image',
+            src: typeof attrs.src === 'string' ? attrs.src : undefined,
+            alt: typeof attrs.alt === 'string' ? attrs.alt : undefined,
+            caption: typeof attrs.caption === 'string' ? attrs.caption : undefined,
+          },
+        });
+        break;
+      }
       default:
         break;
     }

@@ -280,6 +280,101 @@ input.ce-title:focus { border-color: var(--accent); background: var(--panel-2); 
   cursor: pointer;
 }
 
+/* ---- Editor media figure (Phase F) ---- */
+.ProseMirror figure.seo-media,
+.article-body figure.seo-media {
+  margin: 14px 0;
+  text-align: center;
+}
+.ProseMirror figure.seo-media img,
+.article-body figure.seo-media img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  display: inline-block;
+}
+.ProseMirror figure.seo-media figcaption,
+.article-body figure.seo-media figcaption {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 6px;
+}
+.ProseMirror figure.seo-media-missing {
+  border: 1px dashed var(--warn);
+  border-radius: 8px;
+  padding: 14px;
+  color: var(--muted);
+  font-size: 13px;
+  text-align: center;
+}
+
+/* ---- Media library panel (Phase F) ---- */
+.media-panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px;
+}
+.media-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.media-panel .pill { font-size: 11px; }
+.media-upload { margin: 8px 0 4px; }
+.media-list {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 10px;
+  max-height: 46vh;
+  overflow-y: auto;
+}
+.media-row {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px;
+}
+.media-thumb {
+  flex: 0 0 64px;
+  width: 64px;
+  height: 48px;
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.media-thumb img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: cover;
+}
+.media-info { flex: 1; min-width: 0; display: grid; gap: 5px; }
+.media-name {
+  font-size: 12.5px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.media-meta { font-size: 11px; }
+.media-alt-form input {
+  width: 100%;
+  font-size: 11.5px;
+  padding: 3px 6px;
+}
+.media-actions { display: flex; gap: 6px; }
+
 /* ---- Project knowledge panel (Phase E) ---- */
 .kno-panel { margin-top: 14px; }
 .kno-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }

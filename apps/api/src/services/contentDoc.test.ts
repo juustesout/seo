@@ -4,6 +4,7 @@ import {
   asTipDoc,
   docFromBlocks,
   docHeadings,
+  docImages,
   docPlainText,
   docWordCount,
   isValidDocStructure,
@@ -96,5 +97,75 @@ describe('content doc model (contracts)', () => {
     expect(asTipDoc('nonsense')).toEqual(tiptapEmptyDoc());
     expect(asTipDoc(null)).toEqual(tiptapEmptyDoc());
     expect(asContentBlocks(sampleDoc).length).toBeGreaterThan(0);
+  });
+});
+
+describe('media image nodes (phase F contracts)', () => {
+  const image = {
+    type: 'image',
+    attrs: { mediaId: 'm-1', src: 'https://cdn.example/p/seo-media/p/1/x.png', alt: 'A red fox crossing a snowy field', caption: 'Fox', width: 800, height: 600 },
+  } as const;
+  const imgDoc: TipDoc = {
+    type: 'doc',
+    content: [
+      { type: 'paragraph', content: [{ type: 'text', text: 'Before' }] },
+      image,
+      { type: 'paragraph', content: [{ type: 'text', text: 'After' }] },
+    ],
+  };
+
+  it('accepts image leaf nodes carrying a mediaId', () => {
+    expect(isValidDocStructure(imgDoc)).toBe(true);
+  });
+
+  it('rejects image nodes without a mediaId or with nested content', () => {
+    expect(
+      isValidDocStructure({ type: 'doc', content: [{ type: 'image', attrs: { src: 'x.png', alt: 'x' } }] }),
+    ).toBe(false);
+    expect(
+      isValidDocStructure({ type: 'doc', content: [{ type: 'image', attrs: { mediaId: 'm', src: 5 } }] }),
+    ).toBe(false);
+  });
+
+  it('renders a resolved figure with img, dimensions and figcaption', () => {
+    const html = renderDocHtml(imgDoc).replace(/\n/g, '');
+    expect(html).toContain(
+      '<figure class="seo-media"><img src="https://cdn.example/p/seo-media/p/1/x.png" alt="A red fox crossing a snowy field" width="800" height="600" /><figcaption>Fox</figcaption>',
+    );
+  });
+
+  it('renders an explicit placeholder instead of dropping an unresolvable reference', () => {
+    const html = renderDocHtml({
+      type: 'doc',
+      content: [{ type: 'image', attrs: { mediaId: 'm-2', alt: 'Ghost' } }],
+    });
+    expect(html).toContain('data-image-missing="true"');
+    expect(html).not.toContain('<img');
+  });
+
+  it('collects image references in document order via docImages', () => {
+    expect(docImages(imgDoc)).toEqual([
+      {
+        mediaId: 'm-1',
+        src: 'https://cdn.example/p/seo-media/p/1/x.png',
+        alt: 'A red fox crossing a snowy field',
+        caption: 'Fox',
+        width: 800,
+        height: 600,
+      },
+    ]);
+  });
+
+  it('maps image nodes to the legacy media content block shape', () => {
+    const blocks = asContentBlocks(imgDoc);
+    expect(blocks.find((b) => b.type === 'media')).toEqual({
+      type: 'media',
+      attrs: {
+        kind: 'image',
+        src: 'https://cdn.example/p/seo-media/p/1/x.png',
+        alt: 'A red fox crossing a snowy field',
+        caption: 'Fox',
+      },
+    });
   });
 });
