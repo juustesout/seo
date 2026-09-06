@@ -23,6 +23,7 @@ import { SeoPanel } from '../components/content/SeoPanel';
 import { MediaPanel } from '../components/content/MediaPanel';
 import { ContentAiPanel } from '../components/content/ContentAiPanel';
 import { KnowledgePanel } from '../components/content/KnowledgePanel';
+import { IntelligencePanel } from '../components/content/IntelligencePanel';
 import { textToBlocksHtml } from '../components/content/contentAi';
 import { useAutosave } from '../components/content/useAutosave';
 
@@ -466,6 +467,11 @@ export function Content({ projectId, role = 'viewer' }: { projectId: string; rol
             />
           </div>
         )}
+        {editingId && (
+          <div style={{ maxWidth: 460, marginBottom: 16 }}>
+            <IntelligencePanel projectId={projectId} contentId={editingId} />
+          </div>
+        )}
         {d.content_html ? (
           <div className="card">
             <div className="article-body" dangerouslySetInnerHTML={{ __html: d.content_html }} />
@@ -584,6 +590,7 @@ export function Content({ projectId, role = 'viewer' }: { projectId: string; rol
           />
           <ContentOutline items={outline} onSelect={(i) => editorRef.current?.selectHeading(i)} />
           {editor && <MediaPanel projectId={projectId} editor={editor} canEdit={canEdit} canDelete={canDelete} />}
+          {editingId && <IntelligencePanel projectId={projectId} contentId={editingId} />}
         </aside>
       </div>
 

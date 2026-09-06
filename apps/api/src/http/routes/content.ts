@@ -12,6 +12,7 @@ import { parseId, parseProjectId } from './utils.js';
 import { ContentService, contentJsonSchema, CONTENT_STATUSES } from '../../services/contentService.js';
 import { ContentAnalysisService } from '../../services/contentAnalysisService.js';
 import { ContentAiService } from '../../services/contentAiService.js';
+import { ContentIntelligenceService } from '../../services/contentIntelligenceService.js';
 import { CONTENT_AI_ACTIONS } from '@seo/contracts';
 
 export const contentRouter: Router = Router({ mergeParams: true });
@@ -169,6 +170,25 @@ contentRouter.post(
       created_by: user!.sub,
     });
     res.status(202).json({ data: { job } });
+  }),
+);
+
+/**
+ * Content intelligence (Phase G): read-only aggregate of deterministic
+ * signals (SEO, GSC, DataForSEO, Knowledge) with an optional, explicit AI
+ * assistant pass (?with_ai=1). Never mutates; never blocks on providers.
+ */
+contentRouter.get(
+  '/:id/intelligence',
+  asyncHandler(async (req, res) => {
+    const projectId = parseProjectId(req);
+    const { container, user } = req;
+    await container.access.requireRole(user!.sub, projectId, 'viewer');
+    const svc = new ContentIntelligenceService(container);
+    const report = await svc.report(projectId, parseId(req, 'id'), {
+      withAi: req.query.with_ai === 'true' || req.query.with_ai === '1',
+    });
+    res.json({ data: report });
   }),
 );
 
