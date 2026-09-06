@@ -20,6 +20,7 @@ import { oauthRouter } from './http/routes/oauth.js';
 import { integrationsRouter } from './http/routes/integrations.js';
 import { publishersRouter } from './http/routes/publishers.js';
 import { publicationsRouter } from './http/routes/publications.js';
+import { schedulesRouter } from './http/routes/schedules.js';
 import { knowledgeRouter } from './http/routes/knowledge.js';
 import { aiSettingsRouter } from './http/routes/aiSettings.js';
 import { contentRouter } from './http/routes/content.js';
@@ -87,6 +88,7 @@ export function createApp(): Express {
   app.use('/api/projects/:projectId/integrations', integrationsRouter);
   app.use('/api/projects/:projectId/publishers', publishersRouter);
   app.use('/api/projects/:projectId/publications', publicationsRouter);
+  app.use('/api/projects/:projectId/schedules', schedulesRouter);
   app.use('/api/projects/:projectId/knowledge', knowledgeRouter);
   app.use('/api/projects/:projectId/ai', aiSettingsRouter);
   app.use('/api/projects/:projectId/content', contentRouter);

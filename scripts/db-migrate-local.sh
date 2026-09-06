@@ -442,4 +442,94 @@ begin
 end $$;
 SQL
 
+echo "==> smoke test: content scheduling core (phase H1)"
+PSQL -d "${DB_NAME}" <<'SQL'
+set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-000000000001"}';
+do $$
+declare
+  v_project uuid;
+  v_content uuid;
+  v_publisher uuid;
+  v_schedule uuid;
+  v_job uuid;
+  v_publication uuid;
+begin
+  select id into v_project from public.seo_projects where slug = 'demo' limit 1;
+  if v_project is null then raise exception 'smoke: h1 project missing'; end if;
+  select id into v_content from public.seo_content where slug = 'demo-article' and project_id = v_project limit 1;
+  if v_content is null then raise exception 'smoke: h1 content missing'; end if;
+
+  insert into public.seo_publishers (project_id, provider, name, status)
+  values (v_project, 'wordpress', 'Smoke WP', 'connected')
+  returning id into v_publisher;
+  if v_publisher is null then raise exception 'smoke: h1 publisher was not created'; end if;
+
+  insert into public.seo_sync_jobs (project_id, provider, job_type, params, run_after, idempotency_key, created_by)
+  values (v_project, 'wordpress', 'publish', '{"publication_id":"00000000-0000-0000-0000-000000000000"}'::jsonb,
+          now() + interval '1 hour', 'smoke-schedule:publish', '00000000-0000-0000-0000-000000000001')
+  returning id into v_job;
+  if v_job is null then raise exception 'smoke: h1 backing job was not created'; end if;
+
+  begin
+    insert into public.seo_sync_jobs (project_id, provider, job_type, idempotency_key)
+    values (v_project, 'wordpress', 'publish', 'smoke-schedule:publish');
+    raise exception 'smoke: duplicate idempotency key unexpectedly allowed';
+  exception when unique_violation then
+    null;
+  end;
+
+  insert into public.seo_schedules (project_id, content_id, publisher_id, scheduled_at, status, job_id, created_by)
+  values (v_project, v_content, v_publisher, now() + interval '1 day', 'scheduled', v_job, '00000000-0000-0000-0000-000000000001')
+  returning id into v_schedule;
+  if v_schedule is null then raise exception 'smoke: h1 schedule row was not created'; end if;
+
+  begin
+    insert into public.seo_schedules (project_id, content_id, publisher_id, scheduled_at, status, created_by)
+    values (v_project, v_content, v_publisher, now() + interval '2 days', 'bogus', '00000000-0000-0000-0000-000000000001');
+    raise exception 'smoke: invalid schedule status unexpectedly allowed';
+  exception when check_violation then
+    null;
+  end;
+
+  insert into public.seo_publications (project_id, publisher_id, content_id, schedule_id, status, title, content, scheduled_for, created_by)
+  values (v_project, v_publisher, v_content, v_schedule, 'scheduled', 'Demo article', '<p>Hello</p>', now() + interval '1 day',
+          '00000000-0000-0000-0000-000000000001')
+  returning id into v_publication;
+  if v_publication is null then raise exception 'smoke: h1 publication was not created'; end if;
+  if not exists (
+    select 1 from public.seo_publications where id = v_publication and schedule_id = v_schedule
+  ) then raise exception 'smoke: publication.schedule_id link missing'; end if;
+
+  if not exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'seo_publications' and column_name in ('content', 'excerpt', 'slug')
+  ) then raise exception 'smoke: existing publication payload columns were removed'; end if;
+
+  update public.seo_schedules set status = 'cancelled', cancelled_at = now() where id = v_schedule;
+  if not exists (select 1 from public.seo_schedules where id = v_schedule and status = 'cancelled' and cancelled_at is not null) then
+    raise exception 'smoke: h1 schedule cancellation transition failed';
+  end if;
+
+  raise notice 'smoke: content scheduling core OK';
+end $$;
+SQL
+
+# RLS can only be exercised as a non-superuser role (superusers bypass RLS).
+H1_LEAK_COUNT="$(PSQL -d "${DB_NAME}" -t -A <<'SQL'
+grant usage on schema public to authenticated;
+grant select on public.seo_schedules to authenticated;
+grant select on public.seo_content to authenticated;
+set role authenticated;
+set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-000000000002"}';
+select count(*) from public.seo_schedules s
+join public.seo_content c on c.id = s.content_id
+where c.slug = 'demo-article';
+SQL
+)"
+if [ -z "${H1_LEAK_COUNT}" ] || [ "${H1_LEAK_COUNT}" != "0" ]; then
+  echo "!! RLS leak: non-member read ${H1_LEAK_COUNT} rows from a foreign project schedule" >&2
+  exit 1
+fi
+echo "   smoke: non-member cannot read a foreign project schedule (RLS isolation OK)"
+
 echo "==> migration validation OK (${DB_NAME})"

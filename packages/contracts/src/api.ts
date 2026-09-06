@@ -6,7 +6,7 @@
  * (PostgREST) under Row Level Security.
  */
 
-import type { JobType, MemberRole } from './common.js';
+import type { JobType, MemberRole, ScheduleStatus } from './common.js';
 import type {
   DataSource,
   Integration,
@@ -348,6 +348,37 @@ export interface PublishRequest {
 export interface PublishResultDto {
   job: SyncJob;
   publication?: Publication;
+}
+
+/**
+ * Schedule as seen by the API: the planning row enriched with the content
+ * title and publisher name so calendar/list surfaces need no extra lookups.
+ */
+export interface ScheduleDto {
+  id: string;
+  project_id: string;
+  content_id: string;
+  content_title: string | null;
+  publisher_id: string;
+  publisher_name: string | null;
+  scheduled_at: string;
+  status: ScheduleStatus;
+  job_id: string | null;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+  cancelled_at: string | null;
+}
+
+export interface CreateScheduleInput {
+  content_id: string;
+  publisher_id: string;
+  /** Absolute ISO-8601 timestamp (timestamptz); stored unambiguously in UTC. */
+  scheduled_at: string;
+}
+
+export interface UpdateScheduleInput {
+  scheduled_at: string;
 }
 
 // ---------------------------------------------------------------------------

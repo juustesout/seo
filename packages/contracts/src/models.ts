@@ -15,6 +15,7 @@ import type {
   MemberRole,
   PublicationStatus,
   ProviderId,
+  ScheduleStatus,
 } from './common.js';
 import type { ContentBlock, ContentOutlineItem } from './content.js';
 import type { TipDoc } from './contentDoc.js';
@@ -400,6 +401,21 @@ export interface Publication extends ProjectScopedRow {
   scheduled_for: IsoDateTime | null;
   published_at: IsoDateTime | null;
   created_by: string | null;
+}
+
+/**
+ * A planned publication (Content Studio Phase H1). Intention only - execution
+ * lives on the backing publish job (job_id) and the publication attempts
+ * (seo_publications rows linked via schedule_id).
+ */
+export interface Schedule extends ProjectScopedRow {
+  content_id: string;
+  publisher_id: string;
+  scheduled_at: IsoDateTime;
+  status: ScheduleStatus;
+  job_id: string | null;
+  created_by: string;
+  cancelled_at: IsoDateTime | null;
 }
 
 // ---------------------------------------------------------------------------

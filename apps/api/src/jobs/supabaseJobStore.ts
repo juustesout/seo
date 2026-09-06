@@ -168,4 +168,19 @@ export class SupabaseJobStore implements JobStore {
       .update({ status: 'canceled', completed_at: new Date().toISOString() })
       .eq('id', id);
   }
+
+  async reschedule(id: string, runAfter: string): Promise<boolean> {
+    const { data, error } = await this.sb
+      .from('seo_sync_jobs')
+      .update({ run_after: runAfter })
+      .eq('id', id)
+      .eq('status', 'queued')
+      .select('id')
+      .maybeSingle<Record<string, unknown>>();
+    if (error) {
+      logger.error({ error }, 'job reschedule failed');
+      throw ApiError.badRequest('Could not reschedule job');
+    }
+    return Boolean(data);
+  }
 }

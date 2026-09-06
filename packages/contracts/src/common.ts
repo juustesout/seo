@@ -119,6 +119,19 @@ export type PublicationStatus =
   | 'deleted'
   | 'scheduled';
 
+/**
+ * Planning/read-model status of a content schedule (seo_schedules). Execution
+ * truth lives on the backing seo_sync_jobs row + seo_publications attempt;
+ * this is synchronized from those outcomes, never a second source of truth.
+ */
+export type ScheduleStatus =
+  | 'scheduled'
+  | 'queued'
+  | 'publishing'
+  | 'published'
+  | 'failed'
+  | 'cancelled';
+
 // ---------------------------------------------------------------------------
 // SEO domain entity statuses
 // ---------------------------------------------------------------------------

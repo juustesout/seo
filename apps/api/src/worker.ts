@@ -16,6 +16,7 @@ import { SeoWriter } from './persistence/seoWriter.js';
 import { getExecutor } from './jobs/executors.js';
 import { jobErrorPayload } from './jobs/types.js';
 import type { JobRecord } from './jobs/types.js';
+import { syncScheduleStatus } from './services/scheduleService.js';
 
 const IDLE_POLL_MS = 5_000;
 const STALE_RUNNING_MS = 25 * 60 * 1000;
@@ -46,6 +47,13 @@ async function runOnce(container: ReturnType<typeof getContainer>): Promise<bool
   const executor = getExecutor(job.job_type);
   const log = logger.child({ jobId: job.id, jobType: job.job_type, projectId: job.project_id });
 
+  // Schedules are planning rows; reflect execution on the read model. The
+  // sync is best-effort and scoped to publish jobs that carry a schedule_id.
+  const scheduleId = typeof job.params?.schedule_id === 'string' ? job.params.schedule_id : null;
+  if (scheduleId && PUBLISH_JOB_TYPES.has(job.job_type)) {
+    await syncScheduleStatus(container, { projectId: job.project_id, scheduleId, status: 'publishing' });
+  }
+
   if (!executor) {
     const { error, retryable } = jobErrorPayload(
       new Error(`Job type '${job.job_type}' has no executor registered`),
@@ -69,6 +77,9 @@ async function runOnce(container: ReturnType<typeof getContainer>): Promise<bool
     });
     await container.jobStore.complete(job.id, result ?? {});
     log.info({ result }, 'job completed');
+    if (scheduleId && PUBLISH_JOB_TYPES.has(job.job_type)) {
+      await syncScheduleStatus(container, { projectId: job.project_id, scheduleId, status: 'published' });
+    }
   } catch (err) {
     const { error, retryable } = jobErrorPayload(err, {
       provider: job.provider,
@@ -79,6 +90,16 @@ async function runOnce(container: ReturnType<typeof getContainer>): Promise<bool
     log.error({ err, retryable }, 'job failed');
     await container.jobStore.fail(job.id, error, retryable);
     await flagFailedPublication(container, job, error.message, retryable);
+    if (scheduleId && PUBLISH_JOB_TYPES.has(job.job_type)) {
+      // Retryable means the job store requeued it with backoff -> the schedule
+      // is waiting again; otherwise the attempt is terminal.
+      const willRetry = retryable && job.retry_count + 1 <= job.max_retries;
+      await syncScheduleStatus(container, {
+        projectId: job.project_id,
+        scheduleId,
+        status: willRetry ? 'queued' : 'failed',
+      });
+    }
   }
   return true;
 }

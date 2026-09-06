@@ -144,6 +144,14 @@ export class PostgresJobStore implements JobStore {
     await this.pool.query('update seo_sync_jobs set status=$2, completed_at=now() where id=$1', [id, 'canceled']);
   }
 
+  async reschedule(id: string, runAfter: string): Promise<boolean> {
+    const result = await this.pool.query(
+      `update seo_sync_jobs set run_after = $2 where id = $1 and status = 'queued'`,
+      [id, new Date(runAfter).toISOString()],
+    );
+    return (result.rowCount ?? 0) > 0;
+  }
+
   static assertPool(): Pool {
     throw ApiError.notConfigured('Direct Postgres access is required for the pg job store');
   }

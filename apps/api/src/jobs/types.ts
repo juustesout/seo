@@ -52,6 +52,12 @@ export interface JobStore {
   complete(id: string, result: Record<string, unknown>): Promise<void>;
   fail(id: string, error: JobError, retryable: boolean): Promise<void>;
   cancel(id: string): Promise<void>;
+  /**
+   * Move a still-queued job to a new run time. Returns false when the job is no
+   * longer queued (already claimed/canceled/completed) so callers can refuse
+   * rescheduling without creating a second job.
+   */
+  reschedule(id: string, runAfter: string): Promise<boolean>;
 }
 
 /** Exponential retry backoff (capped at 1h). */
