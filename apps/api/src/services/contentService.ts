@@ -19,6 +19,8 @@ import {
   isValidDocStructure,
   renderDocHtml,
   docHeadings,
+  evaluateSeo,
+  asTipDoc,
   type ContentBlock,
   type ContentOutlineItem,
   type TipDoc,
@@ -70,6 +72,8 @@ export interface ContentInput {
   language?: string;
   status?: ContentStatusValue;
   contentJson?: TipDoc | ContentBlock[];
+  /** Retained for the analysis job; the value is ignored - seo_score is always
+   *  recomputed from the canonical evaluator on write. */
   seoScore?: number | null;
 }
 
@@ -148,7 +152,6 @@ export class ContentService {
         input.metaDescription !== undefined ? input.metaDescription : (existing?.meta_description ?? null),
       excerpt: input.excerpt !== undefined ? input.excerpt : (existing?.excerpt ?? null),
       language: input.language ?? existing?.language ?? 'en',
-      seo_score: input.seoScore !== undefined ? input.seoScore : (existing?.seo_score ?? null),
     } as Row;
 
     const rawJson: TipDoc | ContentBlock[] =
@@ -169,6 +172,18 @@ export class ContentService {
       content_html,
       outline,
     } as Row;
+
+    // seo_score always comes from the canonical deterministic evaluator - never
+    // from a client-supplied value.
+    payload.seo_score = evaluateSeo({
+      doc: asTipDoc(content_json),
+      meta: {
+        title: typeof merged.title === 'string' ? merged.title : '',
+        targetKeyword: typeof merged.target_keyword === 'string' ? merged.target_keyword : null,
+        metaTitle: typeof merged.meta_title === 'string' ? merged.meta_title : null,
+        metaDescription: typeof merged.meta_description === 'string' ? merged.meta_description : null,
+      },
+    }).score;
 
     const hasPublishedAt = existing?.published_at ? true : false;
     if (mode === 'create') {

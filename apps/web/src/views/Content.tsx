@@ -4,8 +4,10 @@ import {
   asTipDoc,
   docHeadings,
   docWordCount,
+  evaluateSeo,
   tiptapEmptyDoc,
   type ContentOutlineItem,
+  type SeoResult,
   type TipDoc,
 } from '@seo/contracts';
 import { api } from '../lib/api';
@@ -14,6 +16,7 @@ import { RichTextEditor, type RichTextEditorHandle } from '../components/content
 import { ContentToolbar } from '../components/content/ContentToolbar';
 import { ContentOutline } from '../components/content/ContentOutline';
 import { ContentEditorHeader } from '../components/content/ContentEditorHeader';
+import { SeoPanel } from '../components/content/SeoPanel';
 import { useAutosave } from '../components/content/useAutosave';
 
 interface ContentRow {
@@ -57,6 +60,9 @@ export function Content({ projectId, role = 'viewer' }: { projectId: string; rol
   const [title, setTitle] = useState('');
   const [status, setStatus] = useState('draft');
   const [doc, setDoc] = useState<TipDoc>(() => tiptapEmptyDoc());
+  const [targetKeyword, setTargetKeyword] = useState('');
+  const [metaTitle, setMetaTitle] = useState('');
+  const [metaDescription, setMetaDescription] = useState('');
   const [slug, setSlug] = useState<string | null>(null);
   const [savedAt, setSavedAt] = useState<string | null>(null);
   const [editor, setEditor] = useState<Editor | null>(null);
@@ -66,19 +72,54 @@ export function Content({ projectId, role = 'viewer' }: { projectId: string; rol
 
   // Synchronous mirror of the current workspace so autosave always reads the
   // latest document/title/status, even mid-render or right after a state update.
-  const live = useRef({ title, status, doc });
-  live.current = { title, status, doc };
+  const live = useRef({ title, status, doc, targetKeyword, metaTitle, metaDescription });
+  live.current = { title, status, doc, targetKeyword, metaTitle, metaDescription };
 
   const outline: ContentOutlineItem[] = useMemo(() => docHeadings(doc), [doc]);
   const wordCount = useMemo(() => docWordCount(doc), [doc]);
+  const seo = useMemo<SeoResult>(
+    () =>
+      evaluateSeo({
+        doc,
+        meta: {
+          title,
+          targetKeyword: targetKeyword.trim() || null,
+          metaTitle: metaTitle.trim() || null,
+          metaDescription: metaDescription.trim() || null,
+        },
+      }),
+    [doc, title, targetKeyword, metaTitle, metaDescription],
+  );
+
+  const viewerSeo = useMemo<SeoResult | null>(() => {
+    const row = detail.data;
+    if (!row) return null;
+    return evaluateSeo({
+      doc: asTipDoc(row.content_json),
+      meta: {
+        title: row.title ?? '',
+        targetKeyword: typeof row.target_keyword === 'string' ? row.target_keyword : null,
+        metaTitle: typeof row.meta_title === 'string' ? row.meta_title : null,
+        metaDescription: typeof row.meta_description === 'string' ? row.meta_description : null,
+      },
+    });
+  }, [detail.data]);
 
   const workspaceReady = creating || (editingId !== null && detail.data?.id === editingId);
 
-  const snapshotOf = (t: string, s: string, d: TipDoc) => JSON.stringify({ t, s, d });
+  const snapshotOf = (t: string, s: string, d: TipDoc, k: string, mt: string, md: string) =>
+    JSON.stringify({ t, s, d, k, mt, md });
 
   const commit = async (snapshot: string) => {
-    const parsed = JSON.parse(snapshot) as { t: string; s: string; d: TipDoc };
-    const body = { title: parsed.t, status: parsed.s, content_json: parsed.d };
+    const parsed = JSON.parse(snapshot) as { t: string; s: string; d: TipDoc; k: string; mt: string; md: string };
+    const body = {
+      title: parsed.t,
+      status: parsed.s,
+      content_json: parsed.d,
+      target_keyword: parsed.k.trim() || null,
+      meta_title: parsed.mt.trim() || null,
+      meta_description: parsed.md.trim() || null,
+    };
     const row = editingId
       ? await api<ContentRow>(`/projects/${projectId}/content/${editingId}`, { method: 'PATCH', body })
       : await api<ContentRow>(`/projects/${projectId}/content`, { method: 'POST', body });
@@ -93,7 +134,8 @@ export function Content({ projectId, role = 'viewer' }: { projectId: string; rol
   const auto = useAutosave({
     enabled: workspaceReady && canEdit,
     delayMs: 1600,
-    makeSnapshot: () => snapshotOf(live.current.title, live.current.status, live.current.doc),
+    makeSnapshot: () =>
+      snapshotOf(live.current.title, live.current.status, live.current.doc, live.current.targetKeyword, live.current.metaTitle, live.current.metaDescription),
     persist: commit,
   });
 
@@ -106,13 +148,19 @@ export function Content({ projectId, role = 'viewer' }: { projectId: string; rol
     if (!row || row.id !== editingId || loadedRef.current === editingId) return;
     loadedRef.current = editingId;
     const next = asTipDoc(row.content_json);
-    live.current = { title: row.title ?? '', status: row.status ?? 'draft', doc: next };
+    const kw = typeof row.target_keyword === 'string' ? row.target_keyword : '';
+    const mt = typeof row.meta_title === 'string' ? row.meta_title : '';
+    const md = typeof row.meta_description === 'string' ? row.meta_description : '';
+    live.current = { title: row.title ?? '', status: row.status ?? 'draft', doc: next, targetKeyword: kw, metaTitle: mt, metaDescription: md };
     setTitle(row.title ?? '');
     setStatus(row.status ?? 'draft');
     setDoc(next);
+    setTargetKeyword(kw);
+    setMetaTitle(mt);
+    setMetaDescription(md);
     setSlug(row.slug ?? null);
     setSavedAt(row.updated_at ?? null);
-    auto.setBaseline(snapshotOf(live.current.title, live.current.status, next));
+    auto.setBaseline(snapshotOf(live.current.title, live.current.status, next, kw, mt, md));
   }, [editingId, detail.data]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Seed a brand-new document so opening the editor never auto-creates a row.
@@ -121,7 +169,9 @@ export function Content({ projectId, role = 'viewer' }: { projectId: string; rol
     const next = tiptapEmptyDoc();
     live.current = { ...live.current, doc: next };
     setDoc(next);
-    auto.setBaseline(snapshotOf(live.current.title, live.current.status, next));
+    auto.setBaseline(
+      snapshotOf(live.current.title, live.current.status, next, live.current.targetKeyword, live.current.metaTitle, live.current.metaDescription),
+    );
   }, [creating]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const open = (id: string) => {
@@ -284,6 +334,17 @@ export function Content({ projectId, role = 'viewer' }: { projectId: string; rol
           {d.updated_at ? `Updated ${fmtDate(d.updated_at)}` : ''}
           {d.target_keyword ? ` · Target keyword: ${d.target_keyword}` : ''}
         </p>
+        {viewerSeo && (
+          <div style={{ maxWidth: 460, marginBottom: 16 }}>
+            <SeoPanel
+              result={viewerSeo}
+              editable={false}
+              targetKeyword={d.target_keyword ?? ''}
+              metaTitle={d.meta_title ?? ''}
+              metaDescription={d.meta_description ?? ''}
+            />
+          </div>
+        )}
         {d.content_html ? (
           <div className="card">
             <div className="article-body" dangerouslySetInnerHTML={{ __html: d.content_html }} />
@@ -355,6 +416,16 @@ export function Content({ projectId, role = 'viewer' }: { projectId: string; rol
           </div>
         </div>
         <aside className="ce-aside">
+          <SeoPanel
+            result={seo}
+            editable={canEdit}
+            targetKeyword={targetKeyword}
+            metaTitle={metaTitle}
+            metaDescription={metaDescription}
+            onKeywordChange={setTargetKeyword}
+            onMetaTitleChange={setMetaTitle}
+            onMetaDescriptionChange={setMetaDescription}
+          />
           <ContentOutline items={outline} onSelect={(i) => editorRef.current?.selectHeading(i)} />
         </aside>
       </div>

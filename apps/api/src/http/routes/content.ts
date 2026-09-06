@@ -28,7 +28,6 @@ const contentInputSchema = z
     language: z.string().max(16).optional(),
     status: z.enum(CONTENT_STATUSES).optional(),
     content_json: contentJsonSchema.optional(),
-    seo_score: z.number().min(0).max(100).nullable().optional(),
   })
   .passthrough();
 
@@ -212,7 +211,6 @@ function toService(body: Record<string, unknown>) {
     language: body.language,
     status: body.status,
     contentJson: body.content_json,
-    seoScore: body.seo_score,
   };
   for (const key of Object.keys(out)) {
     if (out[key] === undefined) delete out[key];

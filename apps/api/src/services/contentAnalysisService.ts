@@ -1,34 +1,23 @@
 /**
  * Content analysis application service (SEO Core).
  *
- * Deterministic audit over structured content (score/issues/recommendations)
- * shared by the UI, REST v1 and MCP. The AI-assisted pass runs only inside the
- * content_analyze job and only appends extra recommendations - it never
- * replaces the reproducible deterministic report.
+ * Runs the shared deterministic SEO evaluator over a stored content row and
+ * returns the reusable report shape. The AI-assisted pass only runs inside the
+ * content_analyze job and only appends extra recommendations - the score and
+ * base checks always come from the canonical, deterministic evaluator.
  */
 
-import { asContentBlocks, type ContentBlock } from '@seo/contracts';
+import { asTipDoc, contentTextOf, evaluateSeo } from '@seo/contracts';
 import type { ServiceContainer } from '../context.js';
 import { ApiError } from '../apiErrors.js';
 import { ContentService } from './contentService.js';
 import { AIService } from './aiService.js';
-import { analyzeContent, type ContentAnalysisReport } from './contentAnalysis.js';
+import { buildContentAnalysisReport, type ContentAnalysisReport } from './contentAnalysis.js';
 
-function textOf(block: ContentBlock): string {
-  if (block.type === 'heading' || block.type === 'paragraph' || block.type === 'quote' || block.type === 'code') {
-    return block.attrs.text;
-  }
-  if (block.type === 'list') return block.attrs.items.join(' ');
-  if (block.type === 'link') return block.attrs.text;
-  return '';
-}
+type Row = Record<string, unknown>;
 
-/** Compact prompt-safe view of the article (truncated) used for AI advice. */
-function articlePreview(blocks: ContentBlock[]): string {
-  return blocks
-    .map((b) => (b.type === 'media' ? `[${b.attrs.kind}${b.attrs.alt ? ': ' + b.attrs.alt : ''}]` : textOf(b)))
-    .join('\n')
-    .slice(0, 12000);
+function textOf(value: unknown): string | null {
+  return typeof value === 'string' ? value : null;
 }
 
 export class ContentAnalysisService {
@@ -41,22 +30,29 @@ export class ContentAnalysisService {
   }
 
   /** Deterministic audit (no network) of a project content row. */
+  private evaluate(row: Row): ContentAnalysisReport {
+    const result = evaluateSeo({
+      doc: asTipDoc(row.content_json),
+      meta: {
+        title: textOf(row.title),
+        targetKeyword: textOf(row.target_keyword),
+        metaTitle: textOf(row.meta_title),
+        metaDescription: textOf(row.meta_description),
+      },
+    });
+    return buildContentAnalysisReport(result);
+  }
+
+  /** Deterministic audit (no network) of a project content row. */
   async analyze(projectId: string, contentId: string): Promise<{ id: string; report: ContentAnalysisReport }> {
     const row = await this.content.get(projectId, contentId);
-    const blocks = asContentBlocks(row.content_json);
-    const report = analyzeContent(blocks, {
-      title: typeof row.title === 'string' ? row.title : undefined,
-      targetKeyword: typeof row.target_keyword === 'string' ? row.target_keyword : undefined,
-      metaTitle: typeof row.meta_title === 'string' ? row.meta_title : undefined,
-      metaDescription: typeof row.meta_description === 'string' ? row.meta_description : undefined,
-    });
-    return { id: contentId, report };
+    return { id: contentId, report: this.evaluate(row) };
   }
 
   /**
    * Runs the deterministic audit, optionally appends AI recommendations when a
-   * working AI provider exists, and persists seo_score. Only the deterministic
-   * report is authoritative - AI input is clearly labelled as suggestions.
+   * working AI provider exists, and refreshes the persisted seo_score. Only the
+   * deterministic report is authoritative - AI input is clearly labelled.
    */
   async analyzeAndPersist(
     projectId: string,
@@ -65,13 +61,7 @@ export class ContentAnalysisService {
     opts: { withAi?: boolean } = {},
   ): Promise<{ id: string; report: ContentAnalysisReport; aiRecommendations: string[] }> {
     const row = await this.content.get(projectId, contentId);
-    const blocks = asContentBlocks(row.content_json);
-    const report = analyzeContent(blocks, {
-      title: typeof row.title === 'string' ? row.title : undefined,
-      targetKeyword: typeof row.target_keyword === 'string' ? row.target_keyword : undefined,
-      metaTitle: typeof row.meta_title === 'string' ? row.meta_title : undefined,
-      metaDescription: typeof row.meta_description === 'string' ? row.meta_description : undefined,
-    });
+    const report = this.evaluate(row);
 
     let aiRecommendations: string[] = [];
     if (opts.withAi) {
@@ -95,7 +85,7 @@ export class ContentAnalysisService {
                   role: 'user',
                   content: `Deterministic score: ${report.score}\nIssues: ${report.issues
                     .map((i) => `${i.severity}:${i.code}`)
-                    .join(', ')}\nArticle:\n${articlePreview(blocks)}`,
+                    .join(', ')}\nArticle:\n${contentTextOf(row.content_json).slice(0, 12000)}`,
                 },
               ],
             });
