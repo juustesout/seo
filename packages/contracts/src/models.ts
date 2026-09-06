@@ -17,6 +17,7 @@ import type {
   ProviderId,
 } from './common.js';
 import type { ContentBlock, ContentOutlineItem } from './content.js';
+import type { TipDoc } from './contentDoc.js';
 
 // ---------------------------------------------------------------------------
 // Row base
@@ -220,14 +221,15 @@ export interface ContentItem extends ProjectScopedRow {
   created_by: string | null;
   updated_by: string | null;
   published_at: IsoDateTime | null;
-  // Structured content model (phase 7.2). content_json is the source of
-  // truth; content_html is always a render of it.
+  // Structured content model. content_json is the canonical representation: a
+  // Tiptap document ({type:'doc',...}) for Phase B content, with older records
+  // tolerated as a legacy block array. content_html is always a render of it.
   slug: string | null;
   target_keyword: string | null;
   meta_title: string | null;
   meta_description: string | null;
   outline: ContentOutlineItem[];
-  content_json: ContentBlock[];
+  content_json: TipDoc | ContentBlock[];
   content_html: string | null;
   seo_score: number | null;
   language: string | null;

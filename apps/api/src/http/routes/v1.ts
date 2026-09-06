@@ -14,7 +14,7 @@ import { z } from 'zod';
 import { asyncHandler } from '../asyncHandler.js';
 import { ApiError } from '../../apiErrors.js';
 import { ApiKeyStore, type ApiKeyRecord, type ApiKeyScope } from '../../infra/apiKeys.js';
-import { ContentService, contentBlocksSchema, CONTENT_STATUSES } from '../../services/contentService.js';
+import { ContentService, contentJsonSchema, CONTENT_STATUSES } from '../../services/contentService.js';
 import { ContentAnalysisService } from '../../services/contentAnalysisService.js';
 
 declare global {
@@ -96,7 +96,7 @@ const contentPatchSchema = z
     meta_description: z.string().max(1000).nullable().optional(),
     excerpt: z.string().max(2000).nullable().optional(),
     status: z.enum(CONTENT_STATUSES).optional(),
-    content_json: contentBlocksSchema.optional(),
+    content_json: contentJsonSchema.optional(),
   })
   .passthrough();
 

@@ -21,7 +21,7 @@ import { ContentService } from '../services/contentService.js';
 import { ContentAgentService } from '../services/contentAgentService.js';
 import { ContentAnalysisService } from '../services/contentAnalysisService.js';
 import { isDataImage, storeImageDataUrl } from '../infra/mediaStorage.js';
-import type { ContentBlock } from '@seo/contracts';
+import { asContentBlocks, type ContentBlock } from '@seo/contracts';
 
 export interface JobExecContext {
   container: ServiceContainer;
@@ -540,7 +540,7 @@ async function contentImages(ctx: JobExecContext): Promise<Record<string, unknow
 
   const service = new ContentService(container.sb);
   const row = await service.get(job.project_id, contentId);
-  const blocks = (row.content_json ?? []) as ContentBlock[];
+  const blocks = asContentBlocks(row.content_json);
   type MediaBlock = Extract<ContentBlock, { type: 'media' }>;
   const isImagePlaceholder = (b: ContentBlock): b is MediaBlock =>
     b.type === 'media' && b.attrs.kind === 'placeholder' && !b.attrs.src;

@@ -7,7 +7,7 @@
  * replaces the reproducible deterministic report.
  */
 
-import type { ContentBlock } from '@seo/contracts';
+import { asContentBlocks, type ContentBlock } from '@seo/contracts';
 import type { ServiceContainer } from '../context.js';
 import { ApiError } from '../apiErrors.js';
 import { ContentService } from './contentService.js';
@@ -43,7 +43,7 @@ export class ContentAnalysisService {
   /** Deterministic audit (no network) of a project content row. */
   async analyze(projectId: string, contentId: string): Promise<{ id: string; report: ContentAnalysisReport }> {
     const row = await this.content.get(projectId, contentId);
-    const blocks = (row.content_json ?? []) as ContentBlock[];
+    const blocks = asContentBlocks(row.content_json);
     const report = analyzeContent(blocks, {
       title: typeof row.title === 'string' ? row.title : undefined,
       targetKeyword: typeof row.target_keyword === 'string' ? row.target_keyword : undefined,
@@ -65,7 +65,7 @@ export class ContentAnalysisService {
     opts: { withAi?: boolean } = {},
   ): Promise<{ id: string; report: ContentAnalysisReport; aiRecommendations: string[] }> {
     const row = await this.content.get(projectId, contentId);
-    const blocks = (row.content_json ?? []) as ContentBlock[];
+    const blocks = asContentBlocks(row.content_json);
     const report = analyzeContent(blocks, {
       title: typeof row.title === 'string' ? row.title : undefined,
       targetKeyword: typeof row.target_keyword === 'string' ? row.target_keyword : undefined,

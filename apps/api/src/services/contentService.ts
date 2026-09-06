@@ -1,9 +1,11 @@
 /**
  * Content application service (SEO Core).
  *
- * Structured content CRUD. seo_content.content_json (blocks) is the source of
- * truth; content_html + outline are always derived with the shared contracts
- * renderer so the UI, REST, MCP and the content agent agree on the same output.
+ * Structured content CRUD. seo_content.content_json is the canonical source of
+ * truth (a Tiptap document {type:'doc',...} for Phase B content; older records
+ * tolerate the legacy block array). content_html + outline are always derived
+ * with the shared contracts renderer so the UI, REST, MCP and the content agent
+ * agree on the same output.
  */
 
 import { z } from 'zod';
@@ -12,7 +14,14 @@ import {
   contentOutline,
   renderContentHtml,
   slugifyTitle,
+  tiptapEmptyDoc,
+  isTiptapDoc,
+  isValidDocStructure,
+  renderDocHtml,
+  docHeadings,
   type ContentBlock,
+  type ContentOutlineItem,
+  type TipDoc,
 } from '@seo/contracts';
 import { ApiError } from '../apiErrors.js';
 
@@ -41,6 +50,15 @@ export const contentBlockSchema = z.discriminatedUnion('type', [
 
 export const contentBlocksSchema = z.array(contentBlockSchema).max(500);
 
+/** Write-path shape for content_json: a Tiptap document or (legacy) block array. */
+export const contentJsonSchema = z.union([
+  contentBlocksSchema,
+  z
+    .object({ type: z.literal('doc') })
+    .passthrough()
+    .refine((doc) => isValidDocStructure(doc), { message: 'content_json must be a valid Tiptap document' }),
+]);
+
 export interface ContentInput {
   title: string;
   slug?: string | null;
@@ -51,7 +69,7 @@ export interface ContentInput {
   excerpt?: string | null;
   language?: string;
   status?: ContentStatusValue;
-  contentJson?: ContentBlock[];
+  contentJson?: TipDoc | ContentBlock[];
   seoScore?: number | null;
 }
 
@@ -133,16 +151,23 @@ export class ContentService {
       seo_score: input.seoScore !== undefined ? input.seoScore : (existing?.seo_score ?? null),
     } as Row;
 
-    const blocks: ContentBlock[] =
-      input.contentJson !== undefined ? input.contentJson : ((existing?.content_json ?? []) as ContentBlock[]);
+    const rawJson: TipDoc | ContentBlock[] =
+      input.contentJson !== undefined ? input.contentJson : ((existing?.content_json ?? []) as TipDoc | ContentBlock[]);
+
+    // Canonicalize whatever representation is stored so content_html and
+    // outline are always derived from the same source in the same way.
+    const isDoc = isTiptapDoc(rawJson);
+    const content_json = mode === 'create' && input.contentJson === undefined ? tiptapEmptyDoc() : rawJson;
+    const content_html = isDoc ? renderDocHtml(content_json as TipDoc) : renderContentHtml(content_json as ContentBlock[]);
+    const outline = isDoc ? docHeadings(content_json as TipDoc) : contentOutline(content_json as ContentBlock[]);
 
     merged.slug = await this.uniqueSlug(projectId, merged.title as string, merged.slug as string | null, id);
 
     const payload = {
       ...merged,
-      content_json: blocks,
-      content_html: renderContentHtml(blocks),
-      outline: contentOutline(blocks),
+      content_json,
+      content_html,
+      outline,
     } as Row;
 
     const hasPublishedAt = existing?.published_at ? true : false;

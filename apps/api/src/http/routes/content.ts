@@ -9,7 +9,7 @@ import { z } from 'zod';
 import { requireAuth } from '../middleware.js';
 import { asyncHandler } from '../asyncHandler.js';
 import { parseId, parseProjectId } from './utils.js';
-import { ContentService, contentBlocksSchema, CONTENT_STATUSES } from '../../services/contentService.js';
+import { ContentService, contentJsonSchema, CONTENT_STATUSES } from '../../services/contentService.js';
 import { ContentAnalysisService } from '../../services/contentAnalysisService.js';
 
 export const contentRouter: Router = Router({ mergeParams: true });
@@ -27,7 +27,7 @@ const contentInputSchema = z
     excerpt: z.string().max(2000).nullable().optional(),
     language: z.string().max(16).optional(),
     status: z.enum(CONTENT_STATUSES).optional(),
-    content_json: contentBlocksSchema.optional(),
+    content_json: contentJsonSchema.optional(),
     seo_score: z.number().min(0).max(100).nullable().optional(),
   })
   .passthrough();
