@@ -58,8 +58,11 @@ export interface ProvidersCatalogDto {
 // Project AI configuration (BYOK, server-side only)
 // ---------------------------------------------------------------------------
 
-/** Key source priority: project-stored key first, then server env, then none. */
-export type AiKeySource = 'project' | 'env' | 'none';
+/**
+ * Key source priority: account-stored key first, then project-stored key,
+ * then the server env, then none. No key value is ever exposed to the browser.
+ */
+export type AiKeySource = 'account' | 'project' | 'env' | 'none';
 
 export interface ProjectAiStatusDto {
   provider: string;
@@ -76,6 +79,60 @@ export interface ProjectAiSettingsInput {
   provider?: string;
   chatModel?: string;
   embeddingModel?: string;
+}
+
+// ---------------------------------------------------------------------------
+// Account-level AI providers (BYOK shared across an account's projects)
+// ---------------------------------------------------------------------------
+
+export interface AiModelInfoDto {
+  id: string;
+  kind: 'chat' | 'embedding';
+  name?: string;
+}
+
+/** One AI provider the account has configured (or not), never its key. */
+export interface AccountAiProviderDto {
+  id: string;
+  name: string;
+  description: string | null;
+  /** True when the account stores a working key for this provider. */
+  configured: boolean;
+  capabilities: string[];
+  models: AiModelInfoDto[];
+  /** Non-secret error while reading the stored credential, when any. */
+  error: string | null;
+}
+
+export interface AccountAiStatusDto {
+  providers: AccountAiProviderDto[];
+}
+
+// ---------------------------------------------------------------------------
+// Content Studio AI actions (in-editor, review-before-apply)
+// ---------------------------------------------------------------------------
+
+export const CONTENT_AI_ACTIONS = [
+  'rewrite',
+  'improve',
+  'expand',
+  'shorten',
+  'tone',
+  'improve_seo',
+  'generate_section',
+] as const;
+
+export type ContentAiAction = (typeof CONTENT_AI_ACTIONS)[number];
+
+export interface ContentAiSuggestionDto {
+  action: ContentAiAction;
+  /** Existing text the suggestion replaces (empty for generate_section). */
+  source: string;
+  /** Suggested plain-text replacement or new copy. */
+  text: string;
+  /** Short explanation of what changed and why. */
+  reason: string | null;
+  model: string;
 }
 
 // ---------------------------------------------------------------------------

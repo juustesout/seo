@@ -1,5 +1,7 @@
 import type { ReactNode } from 'react';
 import type { Editor } from '@tiptap/react';
+import type { ContentAiAction } from '@seo/contracts';
+import { AI_ACTION_LABELS, SELECTION_ACTIONS } from './contentAi';
 
 interface ToolbarButtonProps {
   title: string;
@@ -17,8 +19,62 @@ function ToolbarButton({ title, label, active, disabled, onClick }: ToolbarButto
   );
 }
 
+export interface ContentAiToolbar {
+  configured: boolean;
+  busy: boolean;
+  hasSelection: boolean;
+  onAction: (action: ContentAiAction) => void;
+}
+
+function AiMenu({ ai }: { ai: ContentAiToolbar }) {
+  const disabledReason = ai.configured
+    ? ai.busy
+      ? 'AI is working…'
+      : ''
+    : 'AI is not configured — add an OpenAI key under Account → Integrations.';
+  return (
+    <details className="ai-dd">
+      <summary className={`tb ai-dd-toggle${ai.configured ? '' : ' muted'}`} title={disabledReason || 'AI actions'}>
+        {ai.busy ? '…' : 'AI'}
+      </summary>
+      <div className="ai-dd-menu">
+        {!ai.configured && (
+          <p className="muted" style={{ fontSize: 12, margin: 0, maxWidth: 260 }}>
+            AI is not configured for this account. Add an OpenAI key under Account → Integrations.
+          </p>
+        )}
+        {ai.configured && (
+          <p className="muted" style={{ fontSize: 12, margin: 0, maxWidth: 260 }}>
+            Select text to edit it with AI, or generate a new section. Suggestions are previewed before you apply them.
+          </p>
+        )}
+        {SELECTION_ACTIONS.map((action) => (
+          <button
+            key={action}
+            type="button"
+            className="btn sm ai-dd-item"
+            disabled={ai.busy || !ai.configured || !ai.hasSelection}
+            onClick={() => ai.onAction(action)}
+          >
+            {AI_ACTION_LABELS[action]}
+            {!ai.hasSelection && <span className="muted ai-dd-hint">select text</span>}
+          </button>
+        ))}
+        <button
+          type="button"
+          className="btn sm ai-dd-item"
+          disabled={ai.busy || !ai.configured}
+          onClick={() => ai.onAction('generate_section')}
+        >
+          {AI_ACTION_LABELS.generate_section}
+        </button>
+      </div>
+    </details>
+  );
+}
+
 /** Markdown-style content controls bound to the Tiptap editor instance. */
-export function ContentToolbar({ editor }: { editor: Editor | null }) {
+export function ContentToolbar({ editor, ai }: { editor: Editor | null; ai?: ContentAiToolbar }) {
   if (!editor) return <div className="etoolbar muted">Loading editor…</div>;
 
   const cmd = (fn: (chain: ReturnType<Editor['chain']>) => ReturnType<Editor['chain']>) => {
@@ -67,6 +123,7 @@ export function ContentToolbar({ editor }: { editor: Editor | null }) {
       <span className="tb-sep" />
       <ToolbarButton title="Undo" label="undo" disabled={!editor.can().undo()} onClick={run(() => cmd((c) => c.undo()))} />
       <ToolbarButton title="Redo" label="redo" disabled={!editor.can().redo()} onClick={run(() => cmd((c) => c.redo()))} />
+      {ai && <AiMenu ai={ai} />}
     </div>
   );
 }

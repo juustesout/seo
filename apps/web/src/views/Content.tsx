@@ -6,7 +6,10 @@ import {
   docWordCount,
   evaluateSeo,
   tiptapEmptyDoc,
+  type ContentAiAction,
+  type ContentAiSuggestionDto,
   type ContentOutlineItem,
+  type ProjectAiStatusDto,
   type SeoResult,
   type TipDoc,
 } from '@seo/contracts';
@@ -17,6 +20,8 @@ import { ContentToolbar } from '../components/content/ContentToolbar';
 import { ContentOutline } from '../components/content/ContentOutline';
 import { ContentEditorHeader } from '../components/content/ContentEditorHeader';
 import { SeoPanel } from '../components/content/SeoPanel';
+import { ContentAiPanel } from '../components/content/ContentAiPanel';
+import { textToBlocksHtml } from '../components/content/contentAi';
 import { useAutosave } from '../components/content/useAutosave';
 
 interface ContentRow {
@@ -67,6 +72,14 @@ export function Content({ projectId, role = 'viewer' }: { projectId: string; rol
   const [savedAt, setSavedAt] = useState<string | null>(null);
   const [editor, setEditor] = useState<Editor | null>(null);
   const editorRef = useRef<RichTextEditorHandle | null>(null);
+
+  // In-editor AI action state (review-before-apply; never auto-applies).
+  const [aiConfigured, setAiConfigured] = useState(false);
+  const [aiBusy, setAiBusy] = useState(false);
+  const [aiError, setAiError] = useState<string | null>(null);
+  const [aiSuggestion, setAiSuggestion] = useState<ContentAiSuggestionDto | null>(null);
+  const [aiSelRange, setAiSelRange] = useState<{ from: number; to: number } | null>(null);
+  const [hasSelection, setHasSelection] = useState(false);
 
   const detail = useAsync<DetailRow>(() => api(`/projects/${projectId}/content/${editingId}`), [projectId, editingId]);
 
@@ -174,12 +187,42 @@ export function Content({ projectId, role = 'viewer' }: { projectId: string; rol
     );
   }, [creating]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // AI provider availability (account BYOK + env) for this project.
+  useEffect(() => {
+    let alive = true;
+    if (!workspaceReady || !canEdit || !editingId) return;
+    api<ProjectAiStatusDto>(`/projects/${projectId}/ai`)
+      .then((s) => {
+        if (alive) setAiConfigured(Boolean(s.configured));
+      })
+      .catch(() => {
+        if (alive) setAiConfigured(false);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [projectId, workspaceReady, canEdit, editingId]);
+
+  // Keep the toolbar's "AI" action availability in sync with the selection.
+  useEffect(() => {
+    if (!editor) return;
+    const sync = () => setHasSelection(!editor.state.selection.empty);
+    sync();
+    editor.on('selectionUpdate', sync);
+    editor.on('transaction', sync);
+    return () => {
+      editor.off('selectionUpdate', sync);
+      editor.off('transaction', sync);
+    };
+  }, [editor]);
+
   const open = (id: string) => {
     setEditingId(id);
     setCreating(false);
     setErr(null);
     setNotice(null);
     loadedRef.current = null;
+    resetAi();
     setLoadSeq((n) => n + 1);
   };
 
@@ -191,6 +234,7 @@ export function Content({ projectId, role = 'viewer' }: { projectId: string; rol
     setErr(null);
     setNotice(null);
     loadedRef.current = null;
+    resetAi();
     setLoadSeq((n) => n + 1);
   };
 
@@ -200,7 +244,15 @@ export function Content({ projectId, role = 'viewer' }: { projectId: string; rol
     setNotice(null);
     setErr(null);
     loadedRef.current = null;
+    resetAi();
     setLoadSeq((n) => n + 1);
+  };
+
+  const resetAi = () => {
+    setAiBusy(false);
+    setAiError(null);
+    setAiSuggestion(null);
+    setAiSelRange(null);
   };
 
   const changeStatus = (next: string) => {
@@ -226,6 +278,71 @@ export function Content({ projectId, role = 'viewer' }: { projectId: string; rol
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
     }
+  };
+
+  // --- AI document actions (structured suggestions, review-before-apply) ---
+
+  const runAi = async (action: ContentAiAction) => {
+    if (!editor || !editingId || aiBusy) return;
+    const needsSel = action !== 'generate_section';
+    const { from, to, empty } = editor.state.selection;
+    if (needsSel && (empty || from >= to)) {
+      setAiError('Select the text you want to edit first.');
+      return;
+    }
+    let tone: string | null = null;
+    if (action === 'tone') {
+      const value = window.prompt('Describe the tone you want (e.g. professional, friendly, persuasive)', 'Professional');
+      if (value === null) return;
+      tone = value.trim() || null;
+    }
+    const selText = needsSel ? editor.state.doc.textBetween(from, to, '\n') : '';
+    const ctxFrom = Math.max(0, from - 600);
+    const context = needsSel ? editor.state.doc.textBetween(ctxFrom, from, '\n') : '';
+    setAiBusy(true);
+    setAiError(null);
+    setAiSuggestion(null);
+    setAiSelRange(null);
+    try {
+      const data = await api<ContentAiSuggestionDto>(`/projects/${projectId}/content/${editingId}/ai`, {
+        method: 'POST',
+        body: {
+          action,
+          selection: needsSel ? selText : null,
+          tone,
+          context: context || null,
+          keyword: live.current.targetKeyword.trim() || null,
+        },
+      });
+      setAiSuggestion(data);
+      if (needsSel) setAiSelRange({ from, to });
+    } catch (e) {
+      setAiError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setAiBusy(false);
+    }
+  };
+
+  const applyAi = () => {
+    const s = aiSuggestion;
+    if (!s || !editor) return;
+    const html = textToBlocksHtml(s.text);
+    if (s.action === 'generate_section') {
+      editor
+        .chain()
+        .focus()
+        .insertContentAt(editor.state.doc.content.size, html, { updateSelection: false })
+        .run();
+    } else if (aiSelRange) {
+      editor.chain().focus().insertContentAt({ from: aiSelRange.from, to: aiSelRange.to }, html).run();
+    }
+    setAiSuggestion(null);
+    setAiSelRange(null);
+  };
+
+  const rejectAi = () => {
+    setAiSuggestion(null);
+    setAiSelRange(null);
   };
 
   if (!creating && editingId === null) {
@@ -402,10 +519,28 @@ export function Content({ projectId, role = 'viewer' }: { projectId: string; rol
         </div>
       )}
 
+      {aiError && (
+        <div className="banner error" style={{ marginTop: 8 }}>
+          {aiError}
+        </div>
+      )}
+
       <div className="ce-grid">
         <div className="ce-main">
           <div className="rt-shell">
-            <ContentToolbar editor={editor} />
+            <ContentToolbar
+              editor={editor}
+              ai={
+                editingId
+                  ? {
+                      configured: aiConfigured,
+                      busy: aiBusy,
+                      hasSelection,
+                      onAction: runAi,
+                    }
+                  : undefined
+              }
+            />
             <RichTextEditor
               key={`${editingId ?? 'new'}-${loadSeq}`}
               ref={editorRef}
@@ -414,6 +549,16 @@ export function Content({ projectId, role = 'viewer' }: { projectId: string; rol
               onEditor={(e) => setEditor(e)}
             />
           </div>
+          {aiBusy && (
+            <p className="muted" style={{ marginTop: 8 }}>
+              Generating with AI… suggestions are previewed before they touch the document.
+            </p>
+          )}
+          {aiSuggestion && (
+            <div style={{ marginTop: 12 }}>
+              <ContentAiPanel suggestion={aiSuggestion} onApply={applyAi} onReject={rejectAi} />
+            </div>
+          )}
         </div>
         <aside className="ce-aside">
           <SeoPanel
