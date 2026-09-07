@@ -44,6 +44,13 @@ export interface ProviderDescriptorDto {
   capabilities: string[];
   kind: 'datasource' | 'knowledge' | 'publisher' | 'ai' | 'media';
   ui?: { icon: string; color?: string };
+  /** Publisher connect/setup hints (see ProviderDescriptor). */
+  setup?: {
+    category?: string;
+    config?: Array<{ key: string; label: string; type?: 'text' | 'url' | 'password'; placeholder?: string }>;
+    credentials?: Array<{ key: string; label: string; type?: 'text' | 'url' | 'password'; placeholder?: string }>;
+    note?: string;
+  };
 }
 
 export interface ProvidersCatalogDto {

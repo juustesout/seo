@@ -101,7 +101,7 @@ export class WordPressPublisher implements PublisherProvider {
   readonly id = 'wordpress';
   readonly name = 'WordPress';
   readonly description = 'Publish content to a WordPress site via its REST API';
-  readonly capabilities = ['post', 'update', 'delete'] as const;
+  readonly capabilities = ['publish_article', 'update', 'delete'] as const;
 
   constructor(private readonly deps: ProviderDeps) {}
 

@@ -3,6 +3,7 @@ import type { ScheduleDto } from '@seo/contracts';
 import { api } from '../../lib/api';
 import { useAsync } from '../../lib/ui';
 import { fmtDateTime, fromLocalInput, parseDate, toLocalInput } from './scheduleMeta';
+import { canPublishContentKind } from '../../lib/publishers';
 
 interface ContentOption {
   id: string;
@@ -10,8 +11,8 @@ interface ContentOption {
   status: string | null;
 }
 interface PublisherOption {
-  publisher: { id: string; name: string; provider: string; status: string };
-  descriptor: { name: string } | null;
+  publisher: { id: string; name: string; provider: string; status: string; capabilities?: string[] };
+  descriptor: { name: string; capabilities?: string[] } | null;
 }
 
 /** One hour from now, floored to a clean :00 for a sensible default. */
@@ -52,7 +53,9 @@ export function ScheduleModal({
   );
   const pubs = useAsync<PublisherOption[]>(() => api(`/projects/${projectId}/publishers`), [projectId]);
 
-  const connected = (pubs.data ?? []).filter((p) => p.publisher.status === 'connected');
+  const connected = (pubs.data ?? []).filter(
+    (p) => p.publisher.status === 'connected' && canPublishContentKind('article', p.publisher, p.descriptor),
+  );
 
   const [contentId, setContentId] = useState('');
   const [publisherId, setPublisherId] = useState('');

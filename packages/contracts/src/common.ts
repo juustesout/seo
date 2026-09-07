@@ -37,7 +37,90 @@ export type DataSourceCapability =
   | 'crawl'
   | 'audit';
 
-export type PublisherCapability = 'post' | 'update' | 'delete' | 'media' | 'schedule';
+/**
+ * Publisher capabilities. Canonical tokens describe the content kinds a
+ * publisher can accept (publish_article / publish_text / publish_image /
+ * publish_video) plus lifecycle support (update / delete / schedule). The
+ * legacy aliases `post` and `media` are kept so capability snapshots stored on
+ * older seo_publishers rows keep type-checking; use
+ * `normalizePublisherCapabilities` when deciding what a publisher can do.
+ */
+export type PublisherCapability =
+  | 'publish_article'
+  | 'publish_text'
+  | 'publish_image'
+  | 'publish_video'
+  | 'update'
+  | 'delete'
+  | 'schedule'
+  | 'post'
+  | 'media';
+
+export const PUBLISHER_CAPABILITIES: readonly PublisherCapability[] = [
+  'publish_article',
+  'publish_text',
+  'publish_image',
+  'publish_video',
+  'update',
+  'delete',
+  'schedule',
+  'post',
+  'media',
+];
+
+/** The content kind a user is trying to send to a publisher. */
+export type PublishContentKind = 'article' | 'text' | 'image' | 'video';
+
+const LEGACY_PUBLISHER_ALIASES: Record<string, PublisherCapability[]> = {
+  post: ['publish_article'],
+  media: ['publish_image'],
+};
+
+const KIND_TOKEN: Record<PublishContentKind, PublisherCapability> = {
+  article: 'publish_article',
+  text: 'publish_text',
+  image: 'publish_image',
+  video: 'publish_video',
+};
+
+/** Capabilities that can carry article-style content (full article or text render). */
+const ARTICLE_ACCEPTANCE = new Set<PublisherCapability>(['publish_article', 'publish_text']);
+
+/**
+ * Expand a publisher's declared capabilities into the canonical vocabulary.
+ * Legacy aliases map to their canonical tokens (`post` -> publish_article,
+ * `media` -> publish_image); unknown strings are dropped. Canonical tokens and
+ * the shared lifecycle tokens (update/delete/schedule) pass through.
+ */
+export function normalizePublisherCapabilities(declared: readonly string[]): PublisherCapability[] {
+  const out: PublisherCapability[] = [];
+  for (const raw of declared ?? []) {
+    const aliases = LEGACY_PUBLISHER_ALIASES[raw];
+    if (aliases) {
+      for (const a of aliases) if (!out.includes(a)) out.push(a);
+    } else if ((PUBLISHER_CAPABILITIES as readonly string[]).includes(raw)) {
+      if (!out.includes(raw as PublisherCapability)) out.push(raw as PublisherCapability);
+    }
+  }
+  return out;
+}
+
+/**
+ * True when the publisher's capabilities allow publishing content of the given
+ * kind. Articles are accepted by publish_article and publish_text channels (a
+ * text adapter renders the article into a post); image/video kinds require
+ * their exact token. An empty or unknown capability set stays permissive so
+ * legacy publisher rows without a snapshot never break scheduling.
+ */
+export function publisherCanPublishContent(kind: PublishContentKind, declared: readonly string[]): boolean {
+  if (!declared || declared.length === 0) return true;
+  const normalized = new Set(normalizePublisherCapabilities(declared));
+  if (normalized.size === 0) return true;
+  if (kind === 'article') {
+    return [...normalized].some((c) => ARTICLE_ACCEPTANCE.has(c));
+  }
+  return normalized.has(KIND_TOKEN[kind]);
+}
 
 export type KnowledgeCapability = 'index' | 'search' | 'update' | 'delete';
 

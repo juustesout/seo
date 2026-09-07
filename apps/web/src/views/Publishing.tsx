@@ -1,17 +1,37 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { api } from '../lib/api';
 import { useAsync, fmtDate, useJobs, JobTable, StatusPill, Empty } from '../lib/ui';
+import { canPublishContentKind, categoryLabel, publisherCapabilityChips } from '../lib/publishers';
 
+interface SetupField {
+  key: string;
+  label: string;
+  type?: 'text' | 'url' | 'password';
+  placeholder?: string;
+}
+interface Descriptor {
+  id: string;
+  name: string;
+  description: string;
+  capabilities: string[];
+  setup?: {
+    category?: string;
+    config?: SetupField[];
+    credentials?: SetupField[];
+    note?: string;
+  };
+}
 interface PubRow {
   id: string;
   name: string;
   provider: string;
   status: string;
   config: Record<string, unknown>;
+  capabilities: string[];
 }
 interface PubWrap {
   publisher: PubRow;
-  descriptor: { name: string; id: string; description: string } | null;
+  descriptor: Descriptor | null;
 }
 interface Publication {
   id: string;
@@ -25,15 +45,14 @@ interface Publication {
   created_at: string;
 }
 
+const CATEGORY_ORDER = ['website', 'social'];
+
 export function Publishing({ projectId }: { projectId: string }) {
   const [refresh, setRefresh] = useState(0);
   const [err, setErr] = useState<string | null>(null);
   const reload = () => setRefresh((x) => x + 1);
   const pubs = useAsync<PubWrap[]>(() => api(`/projects/${projectId}/publishers`), [projectId, refresh]);
-  const catalog = useAsync<{ publishers: { id: string; name: string; description: string }[] }>(
-    () => api('/providers'),
-    [],
-  );
+  const catalog = useAsync<{ publishers: { id: string; name: string }[] }>(() => api('/providers'), []);
   const list = useAsync<Publication[]>(() => api(`/projects/${projectId}/publications?limit=200`), [projectId, refresh]);
   const { jobs } = useJobs(projectId, true);
 
@@ -52,10 +71,30 @@ export function Publishing({ projectId }: { projectId: string }) {
   const addPublisher = (provider: string) =>
     action(() => api(`/projects/${projectId}/publishers`, { method: 'POST', body: { provider } }));
 
+  // Group connected/configured publisher cards by category (website/social).
+  const grouped = useMemo(() => {
+    const groups = new Map<string, PubWrap[]>();
+    for (const wrap of pubs.data ?? []) {
+      const category = wrap.descriptor?.setup?.category ?? '';
+      const list = groups.get(category) ?? [];
+      list.push(wrap);
+      groups.set(category, list);
+    }
+    const keys = [...groups.keys()].sort(
+      (a, b) => CATEGORY_ORDER.indexOf(a) - CATEGORY_ORDER.indexOf(b),
+    );
+    return keys.map((category) => ({ category, wraps: groups.get(category) ?? [] }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pubs.data]);
+
+  const connectedCapable = (pubs.data ?? []).filter(
+    (p) => p.publisher.status === 'connected' && canPublishContentKind('article', p.publisher, p.descriptor),
+  );
+
   return (
     <div>
       <h1>Publishing</h1>
-      <p className="sub">Connect content channels (WordPress) and publish project content to them.</p>
+      <p className="sub">Connect output channels (websites and social) and publish project content to them.</p>
       {err && <div className="banner error">{err}</div>}
 
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 16 }}>
@@ -67,10 +106,19 @@ export function Publishing({ projectId }: { projectId: string }) {
         {catalogProviders.length === 0 && <span className="muted">No publisher plugins registered on this server.</span>}
       </div>
 
-      {(pubs.data ?? []).map(({ publisher, descriptor }) => (
-        <PublisherCard key={publisher.id} projectId={projectId} publisher={publisher} descriptor={descriptor} onChanged={reload} onError={setErr} />
+      {grouped.map(({ category, wraps }) => (
+        <section key={category || 'other'} className="mb">
+          {category && <h3 className="sub" style={{ textTransform: 'capitalize' }}>{categoryLabel(category)}</h3>}
+          {wraps.map(({ publisher, descriptor }) => (
+            <PublisherCard key={publisher.id} projectId={projectId} publisher={publisher} descriptor={descriptor} onChanged={reload} onError={setErr} />
+          ))}
+        </section>
       ))}
-      {(pubs.data ?? []).length > 0 && (pubs.data ?? []).length === 0 && <Empty>No publishers.</Empty>}
+      {(pubs.data ?? []).length === 0 && <Empty>No publishers yet. Add one above to start publishing.</Empty>}
+
+      {connectedCapable.length > 0 && (
+        <NewPublication projectId={projectId} publishers={connectedCapable} onDone={reload} onError={setErr} />
+      )}
 
       <div className="card mt">
         <h2>Publications</h2>
@@ -110,10 +158,6 @@ export function Publishing({ projectId }: { projectId: string }) {
         )}
       </div>
 
-      {(pubs.data ?? []).some((p) => p.publisher.status === 'connected') && (
-        <NewPublication projectId={projectId} publishers={(pubs.data ?? []).filter((p) => p.publisher.status === 'connected')} onDone={reload} onError={setErr} />
-      )}
-
       <div className="card mt">
         <h2>Publish jobs</h2>
         <JobTable jobs={jobs.filter((j) => String(j.job_type).startsWith('publish_') || j.job_type === 'publish')} />
@@ -131,16 +175,25 @@ function PublisherCard({
 }: {
   projectId: string;
   publisher: PubRow;
-  descriptor: { name: string } | null;
+  descriptor: Descriptor | null;
   onChanged: () => void;
   onError: (m: string) => void;
 }) {
   const id = publisher.id;
   const connected = publisher.status === 'connected';
   const [busy, setBusy] = useState<string | null>(null);
-  const [url, setUrl] = useState(String(publisher.config?.base_url ?? ''));
-  const [user, setUser] = useState('');
-  const [appPass, setAppPass] = useState('');
+
+  const setup = descriptor?.setup;
+  const configFields = setup?.config ?? [];
+  const credFields = setup?.credentials ?? [];
+  const chips = publisherCapabilityChips(publisher.capabilities.length > 0 ? publisher.capabilities : descriptor?.capabilities);
+
+  const [values, setValues] = useState<Record<string, string>>(() => {
+    const init: Record<string, string> = {};
+    for (const f of configFields) init[f.key] = String((publisher.config ?? {})[f.key] ?? '');
+    return init;
+  });
+  const [creds, setCreds] = useState<Record<string, string>>({});
 
   const action = async (label: string, fn: () => Promise<unknown>) => {
     setBusy(label);
@@ -154,48 +207,103 @@ function PublisherCard({
     }
   };
 
+  const saveConfig = async () => {
+    const patch: Record<string, string> = {};
+    for (const f of configFields) {
+      const v = (values[f.key] ?? '').trim();
+      if (v) patch[f.key] = v;
+    }
+    if (Object.keys(patch).length === 0) return;
+    await api(`/projects/${projectId}/publishers/${id}/config`, { method: 'POST', body: { config: patch } });
+  };
+
+  const saveCredentials = async () => {
+    for (const f of credFields) {
+      const v = (creds[f.key] ?? '').trim();
+      if (v) await api(`/projects/${projectId}/publishers/${id}/credentials`, { method: 'POST', body: { key: f.key, value: v } });
+    }
+    setCreds({});
+  };
+
   return (
     <div className="card mb">
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
         <b>{descriptor?.name ?? publisher.name}</b>
         <StatusPill status={publisher.status} />
         <span className="muted mono" style={{ fontSize: 12 }}>
           {publisher.provider}
         </span>
+        {categoryLabel(setup?.category) && <span className="pill">{categoryLabel(setup?.category)}</span>}
         <span style={{ flex: 1 }} />
         {busy && <span className="pill busy">{busy}…</span>}
       </div>
 
-      <label className="fld">Site URL (REST root, e.g. https://example.com)</label>
-      <div className="row">
-        <input type="text" value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://example.com" style={{ flex: 1 }} />
-        <button className="btn" disabled={busy !== null} onClick={() => void action('config', () => api(`/projects/${projectId}/publishers/${id}/config`, { method: 'POST', body: { base_url: url } }))}>
-          Save URL
-        </button>
-      </div>
-      <label className="fld">WordPress username / application password (encrypted at rest)</label>
-      <div className="row">
-        <input type="text" value={user} onChange={(e) => setUser(e.target.value)} placeholder="username" />
-        <input type="password" value={appPass} onChange={(e) => setAppPass(e.target.value)} placeholder="application password" />
-        <button
-          className="btn"
-          disabled={busy !== null || (!user && !appPass)}
-          onClick={() =>
-            void action('creds', async () => {
-              if (user) await api(`/projects/${projectId}/publishers/${id}/credentials`, { method: 'POST', body: { key: 'wordpress_username', value: user } });
-              if (appPass) await api(`/projects/${projectId}/publishers/${id}/credentials`, { method: 'POST', body: { key: 'wordpress_application_password', value: appPass } });
-            })
-          }
-        >
-          Save credentials
-        </button>
+      {chips.length > 0 && (
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', margin: '8px 0' }}>
+          {chips.map((c) => (
+            <span key={c} className="pill" title="Capability this channel supports">
+              {c}
+            </span>
+          ))}
+        </div>
+      )}
+
+      {setup?.note && <p className="muted" style={{ fontSize: 13 }}>{setup.note}</p>}
+
+      {configFields.length > 0 && (
+        <>
+          <label className="fld">Site settings</label>
+          {configFields.map((f) => (
+            <div key={f.key} className="row">
+              <input
+                type={f.type ?? 'text'}
+                value={values[f.key] ?? ''}
+                onChange={(e) => setValues((prev) => ({ ...prev, [f.key]: e.target.value }))}
+                placeholder={f.placeholder ?? f.label}
+                style={{ flex: 1 }}
+              />
+            </div>
+          ))}
+          <div className="row">
+            <button className="btn" disabled={busy !== null} onClick={() => void action('config', () => saveConfig())}>
+              Save settings
+            </button>
+          </div>
+        </>
+      )}
+
+      {credFields.length > 0 && (
+        <>
+          <label className="fld">Credentials (encrypted at rest)</label>
+          <div className="row" style={{ flexWrap: 'wrap' }}>
+            {credFields.map((f) => (
+              <input
+                key={f.key}
+                type={f.type ?? 'password'}
+                value={creds[f.key] ?? ''}
+                onChange={(e) => setCreds((prev) => ({ ...prev, [f.key]: e.target.value }))}
+                placeholder={f.placeholder ?? f.label}
+              />
+            ))}
+            <button
+              className="btn"
+              disabled={busy !== null || !credFields.some((f) => (creds[f.key] ?? '').trim().length > 0)}
+              onClick={() => void action('creds', saveCredentials)}
+            >
+              Save credentials
+            </button>
+          </div>
+        </>
+      )}
+
+      <div className="row" style={{ marginTop: 8 }}>
         <button className="btn primary" disabled={busy !== null} onClick={() => void action('test', () => api(`/projects/${projectId}/publishers/${id}/test`, { method: 'POST' }))}>
-          {connected ? 'Re-test' : 'Test connection'}
+          {connected ? 'Re-test connection' : 'Test connection'}
+        </button>
+        <button className="btn sm danger" disabled={busy !== null} onClick={() => void action('del', () => api(`/projects/${projectId}/publishers/${id}`, { method: 'DELETE' }))}>
+          Delete publisher
         </button>
       </div>
-      <button className="btn sm danger" disabled={busy !== null} onClick={() => void action('del', () => api(`/projects/${projectId}/publishers/${id}`, { method: 'DELETE' }))}>
-        Delete publisher
-      </button>
     </div>
   );
 }
@@ -249,7 +357,7 @@ function NewPublication({
       </select>
       <label className="fld">Title</label>
       <input type="text" value={title} onChange={(e) => setTitle(e.target.value)} style={{ width: '100%' }} />
-      <label className="fld">Content (markdown)</label>
+      <label className="fld">Content (markdown or plain text)</label>
       <textarea value={content} onChange={(e) => setContent(e.target.value)} />
       <label className="fld">Excerpt (optional)</label>
       <input type="text" value={excerpt} onChange={(e) => setExcerpt(e.target.value)} style={{ width: '100%' }} />

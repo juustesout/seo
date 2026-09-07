@@ -51,6 +51,10 @@ const envSchema = z.object({
   // AES-256 key (base64, 32 bytes) used to encrypt seo_credentials at rest.
   CREDENTIALS_ENCRYPTION_KEY: z.string().optional(),
 
+  // Opt-in test/demo providers (e.g. the mock social publisher). Defaults off
+  // so non-real channels never appear in production catalogs.
+  ENABLE_TEST_PUBLISHERS: z.enum(['true', 'false']).default('false'),
+
   LOG_LEVEL: z.enum(['trace', 'debug', 'info', 'warn', 'error']).default('info'),
 });
 

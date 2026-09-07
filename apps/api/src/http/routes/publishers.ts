@@ -12,7 +12,12 @@ export const publishersRouter: Router = Router({ mergeParams: true });
 
 publishersRouter.use(requireAuth);
 
-const WP_CRED_KEYS = ['wordpress_username', 'wordpress_application_password'] as const;
+/** Keys the descriptor declares as safe to store as config / encrypted credentials. */
+function declaredKeys(container: ReturnType<typeof import('../../context.js').getContainer>, provider: string, kind: 'config' | 'credentials'): string[] {
+  const descriptor = container.registry.listPublishers().find((p) => p.id === provider);
+  const fields = descriptor?.setup?.[kind] ?? [];
+  return fields.map((f) => f.key);
+}
 
 async function loadPublisher(container: ReturnType<typeof import('../../context.js').getContainer>, projectId: string, publisherId: string) {
   const { data } = await container.sb
@@ -85,7 +90,7 @@ publishersRouter.get(
   }),
 );
 
-/** Store a non-secret site URL for the publisher (WP REST base). */
+/** Store non-secret publisher config (field keys come from the registry descriptor). */
 publishersRouter.post(
   '/:publisherId/config',
   asyncHandler(async (req, res) => {
@@ -94,16 +99,30 @@ publishersRouter.post(
     const { container, user } = req;
     await container.access.requireRole(user!.sub, projectId, 'editor');
     const publisher = await loadPublisher(container, projectId, publisherId);
-    const body = z.object({ base_url: z.string().url().or(z.string().min(1)) }).parse(req.body);
+
+    // Accept the modern { config } envelope plus the legacy { base_url } shape.
+    const body = z
+      .object({
+        config: z.record(z.string(), z.string().or(z.number()).or(z.boolean())).optional(),
+        base_url: z.string().url().or(z.string().min(1)).optional(),
+      })
+      .parse(req.body);
+    const allowed = declaredKeys(container, String(publisher.provider), 'config');
+    const incoming = { ...(body.config ?? {}), ...(body.base_url !== undefined ? { base_url: body.base_url } : {}) };
+    const patch: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(incoming)) {
+      if (!allowed.includes(key)) throw ApiError.badRequest(`Config key '${key}' is not allowed for publisher '${publisher.provider}'`);
+      patch[key] = value;
+    }
     await container.sb
       .from('seo_publishers')
-      .update({ config: { ...((publisher.config as Record<string, unknown>) ?? {}), base_url: body.base_url } })
+      .update({ config: { ...((publisher.config as Record<string, unknown>) ?? {}), ...patch } })
       .eq('id', publisherId);
     res.json({ data: { ok: true } });
   }),
 );
 
-/** Store a publisher credential (encrypted server-side). */
+/** Store a publisher credential (encrypted server-side; key from the registry descriptor). */
 publishersRouter.post(
   '/:publisherId/credentials',
   asyncHandler(async (req, res) => {
@@ -113,7 +132,8 @@ publishersRouter.post(
     await container.access.requireRole(user!.sub, projectId, 'editor');
     const publisher = await loadPublisher(container, projectId, publisherId);
     const body = z.object({ key: z.string().min(1), value: z.string().min(1) }).parse(req.body);
-    if (!(WP_CRED_KEYS as readonly string[]).includes(body.key)) {
+    const allowed = declaredKeys(container, String(publisher.provider), 'credentials');
+    if (!allowed.includes(body.key)) {
       throw ApiError.badRequest(`Credential key '${body.key}' is not allowed for publisher '${publisher.provider}'`);
     }
     if (!container.config.encryptionConfigured) {

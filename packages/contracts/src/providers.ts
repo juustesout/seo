@@ -308,6 +308,30 @@ export type PublisherFactory = (deps: ProviderDeps) => PublisherProvider;
 export type AIFactory = (deps: ProviderDeps) => AIProvider;
 export type MediaFactory = (deps: ProviderDeps) => MediaProvider;
 
+/** One non-secret field the connect UI should render for a publisher. */
+export interface PublisherSetupField {
+  key: string;
+  label: string;
+  type?: 'text' | 'url' | 'password';
+  placeholder?: string;
+}
+
+/**
+ * Publisher-only connect/setup hints served through the catalog. Values are
+ * field *shapes* (keys/labels), never secrets - the UI renders these instead of
+ * hardcoding per-vendor screens, and the API only ever accepts keys declared
+ * here. `category` groups publishers in the UI (e.g. website vs social).
+ */
+export interface PublisherSetupHint {
+  category?: string;
+  /** Non-secret persisted settings stored on seo_publishers.config. */
+  config?: PublisherSetupField[];
+  /** Credential fields stored encrypted server-side via the credentials API. */
+  credentials?: PublisherSetupField[];
+  /** Plain informational note shown in the connect card (e.g. "demo only"). */
+  note?: string;
+}
+
 export interface ProviderDescriptor<T = unknown> {
   id: string;
   name: string;
@@ -316,6 +340,8 @@ export interface ProviderDescriptor<T = unknown> {
   kind: 'datasource' | 'knowledge' | 'publisher' | 'ai' | 'media';
   /** UI hints (icon key, color). */
   ui?: { icon: string; color?: string };
+  /** Publisher connect/setup hints (see PublisherSetupHint). */
+  setup?: PublisherSetupHint;
 }
 
 export interface ProviderRegistry {

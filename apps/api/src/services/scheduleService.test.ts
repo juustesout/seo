@@ -518,3 +518,55 @@ describe('ScheduleService isolation + status sync', () => {
     expect(stores.seo_schedules[1].status).toBe('cancelled');
   });
 });
+
+describe('ScheduleService capability gating (Content Studio Phase H5)', () => {
+  it('allows scheduling article content to a connected text-capable social publisher', async () => {
+    const stores = baseStores();
+    stores.seo_publishers = [
+      publisherRow('pb-social', 'p1', {
+        name: 'Social demo (mock)',
+        provider: 'mock_social',
+        capabilities: ['publish_text'],
+      }),
+    ];
+    const jobStore = new FakeJobStore();
+    const svc = new ScheduleService(container(stores, jobStore));
+
+    const dto = await svc.create('p1', 'u1', { content_id: 'c1', publisher_id: 'pb-social', scheduled_at: inOneDay });
+
+    expect(dto.status).toBe('scheduled');
+    expect(jobStore.records).toHaveLength(1);
+    expect(jobStore.records[0].provider).toBe('mock_social');
+    expect(jobStore.records[0].job_type).toBe('publish');
+    expect(stores.seo_publications).toHaveLength(1);
+  });
+
+  it('keeps legacy capability snapshots working (post -> publish_article)', async () => {
+    const stores = baseStores();
+    stores.seo_publishers = [
+      publisherRow('pb-legacy', 'p1', { name: 'Old WordPress', capabilities: ['post', 'update', 'delete'] }),
+    ];
+    const jobStore = new FakeJobStore();
+    const svc = new ScheduleService(container(stores, jobStore));
+
+    const dto = await svc.create('p1', 'u1', { content_id: 'c1', publisher_id: 'pb-legacy', scheduled_at: inOneDay });
+    expect(dto.status).toBe('scheduled');
+  });
+
+  it('rejects scheduling article content to a publisher without a matching capability', async () => {
+    const stores = baseStores();
+    stores.seo_publishers = [
+      publisherRow('pb-video', 'p1', { name: 'Video only', provider: 'future_video', capabilities: ['publish_video'] }),
+    ];
+    const jobStore = new FakeJobStore();
+    const svc = new ScheduleService(container(stores, jobStore));
+
+    await expectErrorCode(
+      svc.create('p1', 'u1', { content_id: 'c1', publisher_id: 'pb-video', scheduled_at: inOneDay }),
+      'unsupported_capability',
+    );
+    expect(stores.seo_schedules).toHaveLength(0);
+    expect(stores.seo_publications).toHaveLength(0);
+    expect(jobStore.records).toHaveLength(0);
+  });
+});

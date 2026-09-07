@@ -2,6 +2,7 @@
 
 import { Router } from 'express';
 import { z } from 'zod';
+import { publisherCanPublishContent } from '@seo/contracts';
 import { requireAuth } from '../middleware.js';
 import { asyncHandler } from '../asyncHandler.js';
 import { ApiError } from '../../apiErrors.js';
@@ -21,6 +22,15 @@ async function loadPublisher(container: ReturnType<typeof import('../../context.
     .maybeSingle();
   if (!data) throw ApiError.notFound('Publisher not found for this project');
   return data as Record<string, unknown>;
+}
+
+/** Capability gate (Content Studio Phase H5): reject content the publisher cannot carry. */
+function requireContentCapability(publisher: Record<string, unknown>): void {
+  const capabilities = Array.isArray(publisher.capabilities) ? (publisher.capabilities as string[]) : [];
+  if (!publisherCanPublishContent('article', capabilities)) {
+    const known = capabilities.length > 0 ? capabilities.join(', ') : 'none declared';
+    throw ApiError.badRequest(`Publisher '${String(publisher.name)}' cannot publish article content (capabilities: ${known})`);
+  }
 }
 
 /**
@@ -90,6 +100,7 @@ publicationsRouter.post(
     if (publisher.status !== 'connected') {
       throw ApiError.badRequest(`Publisher '${publisher.name}' is not connected. Test the connection first.`);
     }
+    requireContentCapability(publisher);
 
     if (body.content_id) {
       const { data } = await container.sb

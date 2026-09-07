@@ -16,7 +16,7 @@
 
 import { randomUUID } from 'node:crypto';
 import type { CreateScheduleInput, ScheduleDto, ScheduleStatus } from '@seo/contracts';
-import { asTipDoc, renderDocHtml } from '@seo/contracts';
+import { asTipDoc, publisherCanPublishContent, renderDocHtml } from '@seo/contracts';
 import { ApiError } from '../apiErrors.js';
 import { logger } from '../logger.js';
 import type { ServiceContainer } from '../context.js';
@@ -133,6 +133,7 @@ export class ScheduleService {
 
     const content = await this.requireContent(projectId, input.content_id);
     const publisher = await this.requirePublisher(projectId, input.publisher_id);
+    this.requireContentCapability(publisher);
 
     const scheduleId = randomUUID();
     const now = new Date().toISOString();
@@ -331,7 +332,7 @@ export class ScheduleService {
   private async requirePublisher(projectId: string, publisherId: string): Promise<Row> {
     const { data, error } = await this.sb
       .from('seo_publishers')
-      .select('id, name, provider, status')
+      .select('id, name, provider, status, capabilities')
       .eq('project_id', projectId)
       .eq('id', publisherId)
       .maybeSingle();
@@ -345,6 +346,24 @@ export class ScheduleService {
       );
     }
     return publisher;
+  }
+
+  /**
+   * Capability gate (Content Studio Phase H5): scheduling article content to a
+   * publisher is only allowed when its declared capabilities can carry an
+   * article (publish_article or publish_text). Legacy/unknown snapshots stay
+   * permissive (see publisherCanPublishContent).
+   */
+  private requireContentCapability(publisher: Row): void {
+    const capabilities = Array.isArray(publisher.capabilities) ? (publisher.capabilities as string[]) : [];
+    if (!publisherCanPublishContent('article', capabilities)) {
+      const known = capabilities.length > 0 ? capabilities.join(', ') : 'none declared';
+      throw new ApiError(
+        400,
+        'unsupported_capability',
+        `Publisher '${String(publisher.name)}' cannot publish article content (capabilities: ${known})`,
+      );
+    }
   }
 
   private async linkJob(projectId: string, scheduleId: string, jobId: string): Promise<boolean> {

@@ -20,6 +20,7 @@ import { GscDataSource } from './gsc/gscDataSource.js';
 import { DataForSeoDataSource } from './dataforseo/dataSource.js';
 import { QdrantKnowledgeProvider } from './qdrantKnowledge.js';
 import { WordPressPublisher } from './wordpress.js';
+import { MockSocialPublisher } from './social/mockSocial.js';
 import { OpenAIProvider } from './ai/openai.js';
 import { OpenAiMediaProvider } from './media/openaiMedia.js';
 import { UnsplashMediaProvider } from './media/unsplash.js';
@@ -175,10 +176,38 @@ export function buildRegistry(deps: RegistryBuildDeps): ProviderRegistry {
       id: 'wordpress',
       name: 'WordPress',
       description: 'Publish to a WordPress site via its REST API',
-      capabilities: ['post', 'update', 'delete'],
+      capabilities: ['publish_article', 'update', 'delete'],
       ui: { icon: 'globe', color: '#21759B' },
+      setup: {
+        category: 'website',
+        config: [{ key: 'base_url', label: 'Site URL (REST root)', type: 'url', placeholder: 'https://example.com' }],
+        credentials: [
+          { key: 'wordpress_username', label: 'Username', type: 'text', placeholder: 'username' },
+          { key: 'wordpress_application_password', label: 'Application password', type: 'password', placeholder: 'application password' },
+        ],
+      },
     },
   );
+
+  // Demo/test social channel. Registered only when the server explicitly opts
+  // in (ENABLE_TEST_PUBLISHERS=true) so it never appears in a production
+  // catalog by default; it never calls an external platform.
+  if (deps.config.ENABLE_TEST_PUBLISHERS === 'true') {
+    registry.registerPublisher(
+      () => new MockSocialPublisher({ config: deps.config, logger: deps.logger }),
+      {
+        id: 'mock_social',
+        name: 'Social demo (mock)',
+        description: 'Demo social channel for testing the publishing pipeline - no external network calls',
+        capabilities: ['publish_text'],
+        ui: { icon: 'share', color: '#6B7280' },
+        setup: {
+          category: 'social',
+          note: 'Test/demo provider. It never reaches an external platform and is meant to exercise schedules, jobs and publication history.',
+        },
+      },
+    );
+  }
 
   // -- AI providers ---------------------------------------------------------
   registry.registerAI(
