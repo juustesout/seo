@@ -17,9 +17,14 @@
 
 import type { OAuthAccountIdentity, OAuthTokenResult, ProviderContext, ProviderDeps, PublisherOAuthConnector } from '@seo/contracts';
 
-/** X API base. Authorize/token/post/me all hang off api.x.com (OAuth 2.0). */
+/**
+ * X API base. api.x.com is the API host (token + tweets + users/me) and wants
+ * a Bearer token, so it can NOT serve the browser consent page. The consent
+ * page lives on x.com/i/oauth2/authorize (the pre-rebrand twitter.com URL
+ * redirects there too).
+ */
 export const X_API_BASE = 'https://api.x.com';
-export const X_AUTHORIZE_URL = `${X_API_BASE}/2/oauth2/authorize`;
+export const X_AUTHORIZE_URL = 'https://x.com/i/oauth2/authorize';
 export const X_TOKEN_URL = `${X_API_BASE}/2/oauth2/token`;
 export const X_POST_MAX_CHARS = 280;
 
