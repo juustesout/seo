@@ -46,7 +46,15 @@ type DetailRow = ContentRow & { content_json: unknown; content_html: string | nu
 
 const ROLE_RANK: Record<string, number> = { viewer: 0, editor: 1, admin: 2, owner: 3 };
 
-export function Content({ projectId, role = 'viewer' }: { projectId: string; role?: string }) {
+export function Content({
+  projectId,
+  role = 'viewer',
+  onOpenCalendar,
+}: {
+  projectId: string;
+  role?: string;
+  onOpenCalendar?: () => void;
+}) {
   const rank = ROLE_RANK[role] ?? 0;
   const canEdit = rank >= 1;
   const canDelete = rank >= 2;
@@ -358,28 +366,36 @@ export function Content({ projectId, role = 'viewer' }: { projectId: string; rol
           Structured articles edited as a Tiptap document. content_json is the source of truth; HTML and the outline
           are rendered from it — no raw HTML editing.
         </p>
-        {canEdit && (
-          <form
-            className="row"
-            onSubmit={(e) => {
-              e.preventDefault();
-              if (!newTitle.trim()) return;
-              startNew();
-            }}
-          >
-            <input
-              type="text"
-              placeholder="New article title…"
-              value={newTitle}
-              onChange={(e) => setNewTitle(e.target.value)}
-              style={{ minWidth: 320 }}
-            />
-            <button className="btn primary" disabled={!newTitle.trim()}>
-              Start article
+        <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start', flexWrap: 'wrap', justifyContent: 'space-between' }}>
+          {canEdit ? (
+            <form
+              className="row"
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (!newTitle.trim()) return;
+                startNew();
+              }}
+            >
+              <input
+                type="text"
+                placeholder="New article title…"
+                value={newTitle}
+                onChange={(e) => setNewTitle(e.target.value)}
+                style={{ minWidth: 320 }}
+              />
+              <button className="btn primary" disabled={!newTitle.trim()}>
+                Start article
+              </button>
+            </form>
+          ) : (
+            <p className="muted">You have read-only access to this project's content.</p>
+          )}
+          {onOpenCalendar && (
+            <button className="btn" onClick={onOpenCalendar} title="View and manage publication schedules">
+              Schedule calendar
             </button>
-          </form>
-        )}
-        {!canEdit && <p className="muted">You have read-only access to this project's content.</p>}
+          )}
+        </div>
         {notice && <div className="banner ok">{notice}</div>}
         {err && <div className="banner error">{err}</div>}
         {list.data && list.data.content.length === 0 && <Empty>No content yet{canEdit ? '. Start your first article above.' : '.'}</Empty>}

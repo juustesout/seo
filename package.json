@@ -14,6 +14,7 @@
     "build": "pnpm --filter @seo/contracts build && pnpm --filter @seo/api build && pnpm --filter @seo/web build",
     "typecheck": "pnpm --filter @seo/api typecheck && pnpm --filter @seo/web typecheck",
     "test": "pnpm --filter @seo/api test",
+    "check:h2-schedule": "bash scripts/h2-schedule-utils-check.sh",
     "db:migrate:local": "bash scripts/db-migrate-local.sh"
   },
   "pnpm": {
