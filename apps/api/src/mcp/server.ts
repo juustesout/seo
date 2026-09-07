@@ -3,10 +3,12 @@
  *
  * Exposes the same SEO Core services (ContentService, ContentAnalysisService,
  * ScheduleService, PublicationService) that REST and the UI use. Invariants:
- *  - Identity is a project API key bound at startup (MCP_API_KEY env). The
- *    caller can only ever reach that key's project; scheduling/publishing tools
- *    accept a project_id that must match the bound project, and it is never
- *    trusted beyond that equality check.
+ *  - Identity comes from an API key bound at startup / session open
+ *    (MCP_API_KEY env or the HTTP Authorization header). A project key can
+ *    only ever reach its own project. An account (master) key can reach every
+ *    project its owning user is a member of - resolved + authorized per tool
+ *    call, never stronger than that membership (reads need viewer, writes
+ *    need editor).
  *  - Read tools require the key's "read" scope; write tools require "write"
  *    (this mirrors the effective project role: viewers read schedules and
  *    publications, editors and above manage them).
@@ -28,6 +30,7 @@ import { ContentAnalysisService } from '../services/contentAnalysisService.js';
 import { ScheduleService, SCHEDULE_STATUSES } from '../services/scheduleService.js';
 import { PublicationService, PUBLICATION_STATUSES } from '../services/publicationService.js';
 import { ApiError } from '../apiErrors.js';
+import type { AccessService } from '../supabase.js';
 
 const asContainer = (sb: SupabaseClient): ServiceContainer => ({ sb } as unknown as ServiceContainer);
 
@@ -38,12 +41,20 @@ const fullContainer = (deps: MpcDeps): ServiceContainer =>
 export interface MpcDeps {
   sb: SupabaseClient;
   jobStore: JobStore;
-  /** Project the bound key belongs to (authoritative). */
-  projectId: string;
+  /**
+   * 'project' keys are bound to one project (projectId is set). 'account'
+   * (master) keys are bound to their owning user and resolve the target
+   * project per tool call via access.
+   */
+  scope: 'project' | 'account';
+  /** Project the bound project key belongs to; null for account keys. */
+  projectId: string | null;
   /** User id recorded on writes (the key creator when known). */
   userId: string | null;
   canRead: boolean;
   canWrite: boolean;
+  /** Membership authorization, present for account-key sessions. */
+  access?: AccessService;
 }
 
 export interface ToolDef {
@@ -67,18 +78,39 @@ function requireWrite(deps: MpcDeps): void {
 }
 
 /**
- * Resolve + authorize a project_id. The MCP server is bound to one project;
- * any other id is refused so a client can never address another project.
+ * Resolve + authorize the project a tool call targets.
+ *
+ * Project keys: the project is the bound one; an explicit project_id (tools
+ * that accept one) must match it, any other id is refused so a client can
+ * never address another project.
+ *
+ * Account (master) keys: the caller must pass a project_id and the key's
+ * owner must be a member of that project. Reads need at least the viewer role,
+ * writes the editor role - a master key therefore never exceeds the owner's
+ * membership in the target project, and the owner identity is enforced on
+ * every call rather than baked into the key.
  */
-function projectOf(deps: MpcDeps, args: Record<string, unknown>): string {
-  const pid = args.project_id;
-  if (typeof pid !== 'string' || pid.length === 0) {
-    throw new ApiError(400, 'invalid_input', 'project_id is required');
+async function resolveProjectId(deps: MpcDeps, args: Record<string, unknown>, mode: 'read' | 'write'): Promise<string> {
+  const explicit = typeof args.project_id === 'string' && args.project_id.length > 0 ? args.project_id : null;
+  const accountKey = deps.scope === 'account' || deps.projectId === null;
+  if (!accountKey) {
+    const bound = deps.projectId as string;
+    if (explicit && explicit !== bound) {
+      throw new ApiError(403, 'forbidden', 'project_id does not match the project this API key is bound to');
+    }
+    return bound;
   }
-  if (pid !== deps.projectId) {
-    throw new ApiError(403, 'forbidden', 'project_id does not match the project this API key is bound to');
+  if (!explicit) {
+    throw new ApiError(400, 'invalid_input', 'project_id is required when using an account API key');
   }
-  return pid;
+  if (!deps.userId) {
+    throw new ApiError(403, 'forbidden', 'No user identity is bound to this account API key');
+  }
+  if (!deps.access) {
+    throw new ApiError(500, 'storage_error', 'Membership authorization is unavailable for this session');
+  }
+  await deps.access.requireRole(deps.userId, explicit, mode === 'write' ? 'editor' : 'viewer');
+  return explicit;
 }
 
 // ISO-8601 datetime with a mandatory timezone offset (Z or +hh:mm / -hh:mm).
@@ -131,17 +163,20 @@ export function buildTools(): ToolDef[] {
   tools.push({
     name: 'content_list',
     title: 'List content',
-    description: 'List project content items (schema v1, read).',
+    description:
+      'List project content items (schema v1, read). For account/master keys project_id is required and must be a project you are a member of.',
     readOnly: true,
     inputSchema: {
+      project_id: z.string().uuid().optional().describe('Project to operate on (required for account keys; must match the bound project otherwise)'),
       status: z.enum(['draft', 'in_review', 'published', 'archived']).optional().describe('Filter by status'),
       search: z.string().max(200).optional().describe('Substring match on title'),
       limit: z.number().int().min(1).max(200).optional().describe('Max rows'),
     },
     handler: async (deps, args) => {
       requireRead(deps);
+      const projectId = await resolveProjectId(deps, args, 'read');
       const svc = new ContentService(deps.sb);
-      const result = await svc.list(deps.projectId, {
+      const result = await svc.list(projectId, {
         status: strArg(args.status),
         search: strArg(args.search),
         limit: intArg(args.limit, 200, 1, 200),
@@ -153,13 +188,18 @@ export function buildTools(): ToolDef[] {
   tools.push({
     name: 'content_get',
     title: 'Get content',
-    description: 'Fetch a content item with its structured blocks and rendered HTML (schema v1, read).',
+    description:
+      'Fetch a content item with its structured blocks and rendered HTML (schema v1, read). For account/master keys project_id is required and must be a project you are a member of.',
     readOnly: true,
-    inputSchema: { id: z.string().uuid().describe('Content id') },
+    inputSchema: {
+      project_id: z.string().uuid().optional().describe('Project to operate on (required for account keys; must match the bound project otherwise)'),
+      id: z.string().uuid().describe('Content id'),
+    },
     handler: async (deps, args) => {
       requireRead(deps);
+      const projectId = await resolveProjectId(deps, args, 'read');
       const svc = new ContentService(deps.sb);
-      return { data: await svc.get(deps.projectId, String(args.id)) };
+      return { data: await svc.get(projectId, String(args.id)) };
     },
   });
 
@@ -167,26 +207,35 @@ export function buildTools(): ToolDef[] {
     name: 'content_analyze',
     title: 'Analyze content',
     description:
-      'Deterministic SEO audit (score/issues/warnings/recommendations) of one content item (schema v1, read, no persistence).',
+      'Deterministic SEO audit (score/issues/warnings/recommendations) of one content item (schema v1, read, no persistence). For account/master keys project_id is required and must be a project you are a member of.',
     readOnly: true,
-    inputSchema: { id: z.string().uuid().describe('Content id') },
+    inputSchema: {
+      project_id: z.string().uuid().optional().describe('Project to operate on (required for account keys; must match the bound project otherwise)'),
+      id: z.string().uuid().describe('Content id'),
+    },
     handler: async (deps, args) => {
       requireRead(deps);
+      const projectId = await resolveProjectId(deps, args, 'read');
       const svc = new ContentAnalysisService(asContainer(deps.sb));
-      return { data: await svc.analyze(deps.projectId, String(args.id)) };
+      return { data: await svc.analyze(projectId, String(args.id)) };
     },
   });
 
   tools.push({
     name: 'jobs_list',
     title: 'List jobs',
-    description: 'List recent project jobs so async results can be polled (schema v1, read).',
+    description:
+      'List recent project jobs so async results can be polled (schema v1, read). For account/master keys project_id is required and must be a project you are a member of.',
     readOnly: true,
-    inputSchema: { limit: z.number().int().min(1).max(100).optional().describe('Max rows') },
+    inputSchema: {
+      project_id: z.string().uuid().optional().describe('Project to operate on (required for account keys; must match the bound project otherwise)'),
+      limit: z.number().int().min(1).max(100).optional().describe('Max rows'),
+    },
     handler: async (deps, args) => {
       requireRead(deps);
+      const projectId = await resolveProjectId(deps, args, 'read');
       const limit = intArg(args.limit, 50, 1, 100);
-      return { data: await deps.jobStore.list(deps.projectId, limit) };
+      return { data: await deps.jobStore.list(projectId, limit) };
     },
   });
 
@@ -198,9 +247,10 @@ export function buildTools(): ToolDef[] {
     name: 'content_generate',
     title: 'Generate content draft',
     description:
-      'Run the staged content agent (brief/outline/article) as a durable job and return the job id (schema v1, write). Poll jobs_list.',
+      'Run the staged content agent (brief/outline/article) as a durable job and return the job id (schema v1, write). Poll jobs_list. For account/master keys project_id is required and must be a project you are a member of with editor access.',
     readOnly: false,
     inputSchema: {
+      project_id: z.string().uuid().optional().describe('Project to operate on (required for account keys; must match the bound project otherwise)'),
       topic: z.string().min(3).max(500).describe('Article topic'),
       target_keyword: z.string().max(200).optional(),
       language: z.string().max(16).optional().describe('ISO language code'),
@@ -211,8 +261,9 @@ export function buildTools(): ToolDef[] {
     },
     handler: async (deps, args) => {
       requireWrite(deps);
+      const projectId = await resolveProjectId(deps, args, 'write');
       const job = await deps.jobStore.enqueue({
-        project_id: deps.projectId,
+        project_id: projectId,
         provider: 'content',
         job_type: 'content_generate',
         params: {
@@ -234,17 +285,19 @@ export function buildTools(): ToolDef[] {
     name: 'content_resolve_images',
     title: 'Resolve media placeholders',
     description:
-      'Fill media placeholders of a draft with real images via a media provider (schema v1, write). Poll jobs_list.',
+      'Fill media placeholders of a draft with real images via a media provider (schema v1, write). Poll jobs_list. For account/master keys project_id is required and must be a project you are a member of with editor access.',
     readOnly: false,
     inputSchema: {
+      project_id: z.string().uuid().optional().describe('Project to operate on (required for account keys; must match the bound project otherwise)'),
       id: z.string().uuid().describe('Content id'),
       image_provider: z.enum(['unsplash', 'openai_media']).default('unsplash'),
       limit: z.number().int().min(1).max(6).optional(),
     },
     handler: async (deps, args) => {
       requireWrite(deps);
+      const projectId = await resolveProjectId(deps, args, 'write');
       const job = await deps.jobStore.enqueue({
-        project_id: deps.projectId,
+        project_id: projectId,
         provider: 'content',
         job_type: 'content_images',
         params: { content_id: args.id, image_provider: args.image_provider, limit: intArg(args.limit, 3, 1, 6) },
@@ -258,9 +311,10 @@ export function buildTools(): ToolDef[] {
     name: 'content_update',
     title: 'Update content',
     description:
-      'Update content metadata, blocks or status (schema v1, write). Publishing/archiving requires confirm=true.',
+      'Update content metadata, blocks or status (schema v1, write). Publishing/archiving requires confirm=true. For account/master keys project_id is required and must be a project you are a member of with editor access.',
     readOnly: false,
     inputSchema: {
+      project_id: z.string().uuid().optional().describe('Project to operate on (required for account keys; must match the bound project otherwise)'),
       id: z.string().uuid().describe('Content id'),
       title: z.string().max(300).optional(),
       target_keyword: z.string().max(200).nullable().optional(),
@@ -272,13 +326,14 @@ export function buildTools(): ToolDef[] {
     },
     handler: async (deps, args) => {
       requireWrite(deps);
+      const projectId = await resolveProjectId(deps, args, 'write');
       const status = args.status as string | undefined;
       if ((status === 'published' || status === 'archived') && args.confirm !== true) {
         throw new ApiError(400, 'confirmation_required', 'Set confirm=true to publish or archive content');
       }
       const str = (v: unknown): string | null | undefined => (typeof v === 'string' || v === null || v === undefined ? v : undefined);
       const svc = new ContentService(deps.sb);
-      const row = await svc.update(deps.projectId, deps.userId, String(args.id), {
+      const row = await svc.update(projectId, deps.userId, String(args.id), {
         title: str(args.title) ?? undefined,
         targetKeyword: str(args.target_keyword),
         metaTitle: str(args.meta_title),
@@ -298,10 +353,10 @@ export function buildTools(): ToolDef[] {
     name: 'schedule_list',
     title: 'List schedules',
     description:
-      'List publication schedules for a project. Read-only: inspect what is planned, queued, publishing, published, failed or cancelled. Optionally filter by status or a from/to window on scheduled_at. Times are ISO-8601 with a timezone offset (schema v1, read).',
+      'List publication schedules for a project. Read-only: inspect what is planned, queued, publishing, published, failed or cancelled. Optionally filter by status or a from/to window on scheduled_at. Times are ISO-8601 with a timezone offset (schema v1, read). For account/master keys project_id must be a project you are a member of.',
     readOnly: true,
     inputSchema: {
-      project_id: z.string().uuid().describe('Must match the project this API key is bound to'),
+      project_id: z.string().uuid().describe('Project to operate on (the one this API key is bound to, or any project you are a member of for account keys)'),
       status: z.enum(SCHEDULE_STATUSES).optional().describe('Filter by schedule status'),
       from: z.string().optional().describe('Only schedules at or after this ISO datetime (inclusive)'),
       to: z.string().optional().describe('Only schedules at or before this ISO datetime (inclusive)'),
@@ -309,7 +364,7 @@ export function buildTools(): ToolDef[] {
     },
     handler: async (deps, args) => {
       requireRead(deps);
-      const projectId = projectOf(deps, args);
+      const projectId = await resolveProjectId(deps, args, 'read');
       const svc = new ScheduleService(fullContainer(deps));
       const data = await svc.list(projectId, {
         status: enumArg(args.status, SCHEDULE_STATUSES, 'status'),
@@ -328,7 +383,7 @@ export function buildTools(): ToolDef[] {
       'Schedule an existing content item for publication through a connected publisher. The publication executes at scheduled_at (ISO-8601 with timezone offset, must be in the future). publish_kind declares the publication intent and must be supported by the publisher: article requires publish_article (e.g. WordPress), text requires publish_text (e.g. X), image/video their exact capabilities. It defaults to article. This creates a schedule, prepares the publication, and enqueues a single durable job - one schedule maps to one backing job (schema v1, write).',
     readOnly: false,
     inputSchema: {
-      project_id: z.string().uuid().describe('Must match the project this API key is bound to'),
+      project_id: z.string().uuid().describe('Project to operate on (the one this API key is bound to, or any project you are a member of for account keys)'),
       content_id: z.string().uuid().describe('Content item to publish'),
       publisher_id: z.string().uuid().describe('Connected publisher to publish through'),
       publish_kind: z.enum(['article', 'text', 'image', 'video']).default('article').describe('Publication intent (default article)'),
@@ -336,7 +391,7 @@ export function buildTools(): ToolDef[] {
     },
     handler: async (deps, args) => {
       requireWrite(deps);
-      const projectId = projectOf(deps, args);
+      const projectId = await resolveProjectId(deps, args, 'write');
       const userId = deps.userId;
       if (!userId) {
         throw new ApiError(403, 'forbidden', 'No user identity is bound to this API key; cannot create schedules');
@@ -364,13 +419,13 @@ export function buildTools(): ToolDef[] {
       'Move a not-yet-started schedule to a new scheduled_at (ISO-8601 with timezone offset, must be in the future). The existing backing job is moved to the new time - it is never cancelled and no second job is created (schema v1, write).',
     readOnly: false,
     inputSchema: {
-      project_id: z.string().uuid().describe('Must match the project this API key is bound to'),
+      project_id: z.string().uuid().describe('Project to operate on (the one this API key is bound to, or any project you are a member of for account keys)'),
       schedule_id: z.string().uuid().describe('Schedule to move'),
       scheduled_at: z.string().describe('New publish time (ISO-8601 datetime with timezone offset, e.g. 2026-09-10T09:00:00+02:00)'),
     },
     handler: async (deps, args) => {
       requireWrite(deps);
-      const projectId = projectOf(deps, args);
+      const projectId = await resolveProjectId(deps, args, 'write');
       const scheduleId = requireUuid(args.schedule_id, 'schedule_id');
       const scheduledAt = requireOffsetIsoValue(args.scheduled_at, 'scheduled_at');
       const svc = new ScheduleService(fullContainer(deps));
@@ -382,15 +437,15 @@ export function buildTools(): ToolDef[] {
     name: 'schedule_cancel',
     title: 'Cancel a pending publication schedule',
     description:
-      'Cancel a pending content publication schedule. The backing job is cancelled and the schedule will not publish. Scheduling and publication history are preserved (the row is never deleted) and cancelling twice is a harmless no-op (schema v1, write).',
+      'Cancel a pending content publication schedule. The backing job is cancelled and the schedule will not publish. Scheduling and publication history are preserved (the row is never deleted) and cancelling twice is a harmless no-op (schema v1, write). For account/master keys project_id must be a project you are a member of with editor access.',
     readOnly: false,
     inputSchema: {
-      project_id: z.string().uuid().describe('Must match the project this API key is bound to'),
+      project_id: z.string().uuid().describe('Project to operate on (the one this API key is bound to, or any project you are a member of for account keys)'),
       schedule_id: z.string().uuid().describe('Schedule to cancel'),
     },
     handler: async (deps, args) => {
       requireWrite(deps);
-      const projectId = projectOf(deps, args);
+      const projectId = await resolveProjectId(deps, args, 'write');
       const scheduleId = requireUuid(args.schedule_id, 'schedule_id');
       const svc = new ScheduleService(fullContainer(deps));
       return { data: await svc.cancel(projectId, scheduleId) };
@@ -405,10 +460,10 @@ export function buildTools(): ToolDef[] {
     name: 'publication_list',
     title: 'List publication attempts',
     description:
-      'List publication attempts and outcomes for a project - what was published, failed, or is currently publishing, newest first. Optionally filter by content, publisher, schedule or status. Returns safe metadata only; never article bodies or credentials (schema v1, read).',
+      'List publication attempts and outcomes for a project - what was published, failed, or is currently publishing, newest first. Optionally filter by content, publisher, schedule or status. Returns safe metadata only; never article bodies or credentials (schema v1, read). For account/master keys project_id must be a project you are a member of.',
     readOnly: true,
     inputSchema: {
-      project_id: z.string().uuid().describe('Must match the project this API key is bound to'),
+      project_id: z.string().uuid().describe('Project to operate on (the one this API key is bound to, or any project you are a member of for account keys)'),
       content_id: z.string().uuid().optional().describe('Only attempts of this content item'),
       publisher_id: z.string().uuid().optional().describe('Only attempts through this publisher'),
       schedule_id: z.string().uuid().optional().describe('Only attempts created by this schedule'),
@@ -418,7 +473,7 @@ export function buildTools(): ToolDef[] {
     },
     handler: async (deps, args) => {
       requireRead(deps);
-      const projectId = projectOf(deps, args);
+      const projectId = await resolveProjectId(deps, args, 'read');
       const svc = new PublicationService(deps.sb);
       const data = await svc.list(projectId, {
         content_id: uuidArg(args.content_id, 'content_id'),
@@ -436,15 +491,15 @@ export function buildTools(): ToolDef[] {
     name: 'publication_get',
     title: 'Get a publication attempt',
     description:
-      'Fetch one publication attempt by id - its status, target URL, publish time and any failure message. Safe metadata only; never article bodies or credentials (schema v1, read).',
+      'Fetch one publication attempt by id - its status, target URL, publish time and any failure message. Safe metadata only; never article bodies or credentials (schema v1, read). For account/master keys project_id must be a project you are a member of.',
     readOnly: true,
     inputSchema: {
-      project_id: z.string().uuid().describe('Must match the project this API key is bound to'),
+      project_id: z.string().uuid().describe('Project to operate on (the one this API key is bound to, or any project you are a member of for account keys)'),
       publication_id: z.string().uuid().describe('Publication attempt id'),
     },
     handler: async (deps, args) => {
       requireRead(deps);
-      const projectId = projectOf(deps, args);
+      const projectId = await resolveProjectId(deps, args, 'read');
       const publicationId = requireUuid(args.publication_id, 'publication_id');
       const svc = new PublicationService(deps.sb);
       return { data: await svc.get(projectId, publicationId) };

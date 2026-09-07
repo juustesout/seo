@@ -3,7 +3,10 @@ import { buildTools, registerTools } from '../mcp/server.js';
 import type { MpcDeps } from '../mcp/server.js';
 import { ScheduleService } from '../services/scheduleService.js';
 import { PublicationService } from '../services/publicationService.js';
+import { ContentService } from '../services/contentService.js';
+import type { AccessService } from '../supabase.js';
 import { ApiError } from '../apiErrors.js';
+import type { MemberRole } from '@seo/contracts';
 
 const readOnlyDeps = { canRead: false, canWrite: false } as unknown as MpcDeps;
 const readWriteDeps = { canRead: true, canWrite: true } as unknown as MpcDeps;
@@ -356,5 +359,84 @@ describe('mcp publication tools reuse PublicationService', () => {
       'invalid_input',
     );
     expect(spy).not.toHaveBeenCalled();
+  });
+});
+
+describe('mcp account (master) key sessions resolve project per call', () => {
+  const ROLE_ORDER: Record<MemberRole, number> = { viewer: 0, editor: 1, admin: 2, owner: 3 };
+
+  /** AccessService double granting the creator a fixed role everywhere (or none). */
+  function access(role: MemberRole | null): AccessService {
+    return {
+      requireRole: async (_userId: string, projectId: string, minRole: MemberRole) => {
+        if (!role) throw ApiError.forbidden('You do not have access to this project');
+        if (ROLE_ORDER[role] < ROLE_ORDER[minRole]) {
+          throw new ApiError(403, 'forbidden', `This action requires the ${minRole} role`);
+        }
+        return { project_id: projectId, role };
+      },
+    } as unknown as AccessService;
+  }
+
+  function accountDeps(role: MemberRole | null, jobStore?: { enqueue: (...args: unknown[]) => Promise<unknown> }): MpcDeps {
+    return deps({
+      scope: 'account',
+      projectId: null,
+      userId: 'u1',
+      access: access(role),
+      ...(jobStore ? { jobStore: jobStore as never } : {}),
+    });
+  }
+
+  it('content read tools require an explicit project_id for account keys', async () => {
+    const d = accountDeps('editor');
+    await expectsCode(byName('content_list').handler(d, {}), 'invalid_input');
+    await expectsCode(byName('jobs_list').handler(d, {}), 'invalid_input');
+  });
+
+  it('an account key can read any project its owner belongs to (membership viewer+)', async () => {
+    const spy = vi.spyOn(ContentService.prototype, 'list').mockResolvedValue([] as never);
+    const d = accountDeps('viewer');
+    const out = await byName('content_list').handler(d, { project_id: 'p2' });
+    expect(out.data).toEqual([]);
+    expect(spy).toHaveBeenCalledWith('p2', expect.objectContaining({ limit: 200 }));
+  });
+
+  it('an account key cannot read a project its owner does not belong to', async () => {
+    const spy = vi.spyOn(ContentService.prototype, 'list').mockResolvedValue([] as never);
+    const d = accountDeps(null);
+    await expectsDenied(byName('content_list').handler(d, { project_id: 'p2' }));
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it('a viewer-only membership cannot satisfy a write even with a write-scoped account key', async () => {
+    const enqueue: (...args: unknown[]) => Promise<unknown> = vi.fn();
+    const d = accountDeps('viewer', { enqueue });
+    await expectsDenied(byName('content_generate').handler(d, { project_id: 'p2', topic: 'A new article about SEO' }));
+    await expectsDenied(
+      byName('schedule_create').handler(d, { project_id: 'p2', content_id: CID, publisher_id: PID, scheduled_at: '2026-09-10T09:00:00+02:00' }),
+    );
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+
+  it('an editor membership can enqueue a write through an account key', async () => {
+    const enqueue: (...args: unknown[]) => Promise<unknown> = vi.fn(async () => ({ id: 'job-new' }));
+    const d = accountDeps('editor', { enqueue });
+    const out = await byName('content_generate').handler(d, { project_id: 'p2', topic: 'A new article about SEO' });
+    expect(out.data).toMatchObject({ job: { id: 'job-new' } });
+    expect(enqueue).toHaveBeenCalledWith(expect.objectContaining({ project_id: 'p2', job_type: 'content_generate' }));
+  });
+
+  it('schedule reads are authorized through membership for account keys', async () => {
+    const spy = vi.spyOn(ScheduleService.prototype, 'list').mockResolvedValue([] as never);
+    const d = accountDeps('editor');
+    const out = await byName('schedule_list').handler(d, { project_id: 'p2' });
+    expect(out.data).toEqual([]);
+    expect(spy).toHaveBeenCalledWith('p2', expect.any(Object));
+  });
+
+  it('an account key without an owner identity is refused everywhere', async () => {
+    const d = deps({ scope: 'account', projectId: null, userId: null, access: access('editor') });
+    await expectsDenied(byName('content_list').handler(d, { project_id: 'p2' }));
   });
 });

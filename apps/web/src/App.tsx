@@ -12,6 +12,7 @@ import { Publications } from './views/Publications';
 import { openProjectView } from './lib/nav';
 import { Overview } from './views/Overview';
 import { AccountIntegrations } from './views/AccountIntegrations';
+import { AccountApiKeys } from './views/AccountApiKeys';
 import { ProjectsPage } from './views/ProjectsPage';
 import { ProjectSettings } from './views/ProjectSettings';
 
@@ -32,7 +33,7 @@ interface Me {
   projects: ProjectRow[];
 }
 
-type TopArea = 'overview' | 'projects' | 'integrations';
+type TopArea = 'overview' | 'projects' | 'integrations' | 'keys';
 type Route =
   | { area: TopArea }
   | { area: 'project'; projectId: string; view: string };
@@ -40,7 +41,7 @@ type Route =
 function parseRoute(): Route {
   const seg = window.location.pathname.split('/').filter(Boolean);
   if (seg[0] === 'p' && seg[1]) return { area: 'project', projectId: seg[1], view: seg[2] || 'dashboard' };
-  const area = seg[0] === 'projects' || seg[0] === 'integrations' ? seg[0] : 'overview';
+  const area = seg[0] === 'projects' || seg[0] === 'integrations' || seg[0] === 'keys' ? seg[0] : 'overview';
   return { area };
 }
 
@@ -53,6 +54,7 @@ const TOP_NAV: Array<{ id: TopArea; label: string }> = [
   { id: 'overview', label: 'Overview' },
   { id: 'projects', label: 'Projects' },
   { id: 'integrations', label: 'Integrations' },
+  { id: 'keys', label: 'API keys' },
 ];
 
 const PROJECT_NAV = [
@@ -219,6 +221,7 @@ export function App() {
         {route.area === 'overview' && <Overview onOpenProject={goProject} onGoProjects={() => goArea('projects')} />}
         {route.area === 'projects' && <ProjectsPage onOpenProject={goProject} />}
         {route.area === 'integrations' && <AccountIntegrations onOpenProject={goProject} />}
+        {route.area === 'keys' && <AccountApiKeys />}
       </div>
     </div>
   );

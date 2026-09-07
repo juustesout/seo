@@ -1,12 +1,14 @@
 /**
  * MCP server entry point (stdio).
  *
- * Start with a project API key bound in the environment:
+ * Start with an API key bound in the environment:
  *   MCP_API_KEY=seo_live_... node apps/api/dist/mcp/index.js
  *
- * The key's project and scopes are loaded from seo_api_keys at startup and
- * never come from the client. The HTTP twin of this entry point lives in
- * http.ts and shares the same registry + context builder (see session.ts).
+ * A project key binds the server to one project; an account (master) key makes
+ * it multi-project (every tool resolves + authorizes the target project per
+ * call). The key is loaded from seo_api_keys at startup and never comes from
+ * the client. The HTTP twin of this entry point lives in http.ts and shares
+ * the same registry + context builder (see session.ts).
  */
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -19,7 +21,7 @@ import { logger } from '../logger.js';
 async function main(): Promise<void> {
   const token = process.env.MCP_API_KEY?.trim();
   if (!token) {
-    logger.error('MCP_API_KEY is required (a project API key, seo_live_...)');
+    logger.error('MCP_API_KEY is required (a project or account API key, seo_live_...)');
     process.exit(1);
   }
   const container = getContainer();
@@ -34,7 +36,8 @@ async function main(): Promise<void> {
 
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  logger.info(`MCP server started for project ${key.project_id} (read=${key.scopes.includes('read')} write=${key.scopes.includes('write')})`);
+  const bound = key.project_id ? `project ${key.project_id}` : 'all your member projects';
+  logger.info(`MCP server started for ${bound} (read=${key.scopes.includes('read')} write=${key.scopes.includes('write')})`);
 }
 
 main().catch((err) => {

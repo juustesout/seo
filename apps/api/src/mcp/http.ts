@@ -1,12 +1,13 @@
 /**
  * MCP over streamable HTTP (the remote twin of the stdio entry in index.ts).
  *
- * Mounted at /api/mcp. A client opens a session with a project API key in the
+ * Mounted at /api/mcp. A client opens a session with an API key in the
  * Authorization header (`Bearer seo_live_...`); the key is resolved through
- * the same ApiKeyStore the stdio entry uses, and its project + read/write
- * scopes are bound into the session exactly as in session.ts. Every session
- * therefore talks to the same SEO Core services with the same tools, and a
- * key can only ever reach the project it belongs to.
+ * the same ApiKeyStore the stdio entry uses, and its scope context is bound
+ * into the session exactly as in session.ts (a project key reaches one
+ * project; an account/master key reaches every project the owner is a member
+ * of, authorized per tool call). Every session therefore talks to the same SEO
+ * Core services with the same tools.
  */
 
 import { randomUUID } from 'node:crypto';
@@ -82,7 +83,7 @@ export function createMcpHttpRouter(options: McpHttpRouterOptions = {}): Router 
       const container = req.container;
       const key = token ? await authenticate(token, container) : null;
       if (!key) {
-        respondMpcError(res, 401, 'Unauthorized: a valid project API key is required');
+        respondMpcError(res, 401, 'Unauthorized: a valid API key is required');
         return;
       }
 

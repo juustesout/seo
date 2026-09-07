@@ -14,6 +14,7 @@ import { errorHandler, notFoundHandler } from './apiErrors.js';
 
 import { meRouter } from './http/routes/me.js';
 import { accountRouter } from './http/routes/account.js';
+import { accountApiKeysRouter } from './http/routes/accountApiKeys.js';
 import { accountAiRouter } from './http/routes/accountAi.js';
 import { catalogRouter } from './http/routes/catalog.js';
 import { oauthRouter } from './http/routes/oauth.js';
@@ -84,6 +85,7 @@ export function createApp(): Express {
   app.use('/api/me', meRouter);
   app.use('/api/account', accountRouter);
   app.use('/api/account/ai', accountAiRouter);
+  app.use('/api/account/api-keys', accountApiKeysRouter);
   app.use('/api/providers', catalogRouter);
 
   app.use('/api/projects/:projectId/integrations', integrationsRouter);

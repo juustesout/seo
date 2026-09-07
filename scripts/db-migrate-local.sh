@@ -180,6 +180,42 @@ begin
 end $$;
 SQL
 
+echo "==> smoke test: account (master) api keys"
+PSQL -d "${DB_NAME}" <<'SQL'
+set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-000000000001"}';
+do $$
+declare
+  v_master uuid;
+begin
+  -- Account/master keys carry project_id = NULL and belong to the creator.
+  insert into public.seo_api_keys (project_id, name, key_prefix, key_hash, scopes, created_by)
+  values (null, 'master-ci', 'seo_live_master1', 'deadbeef1', array['read', 'write'], '00000000-0000-0000-0000-000000000001')
+  returning id into v_master;
+  if v_master is null then raise exception 'smoke: account api key was not created'; end if;
+
+  -- One name per owner for account keys.
+  begin
+    insert into public.seo_api_keys (project_id, name, key_prefix, key_hash, scopes, created_by)
+    values (null, 'master-ci', 'seo_live_master2', 'cafebabe1', array['read'], '00000000-0000-0000-0000-000000000001');
+    raise exception 'smoke: duplicate account key name for one owner unexpectedly allowed';
+  exception when unique_violation then
+    null;
+  end;
+
+  -- Two owners may both name a key 'master-ci' (the account index is per owner).
+  insert into auth.users (id, email) values ('00000000-0000-0000-0000-000000000002', 'member2@example.com') on conflict (id) do nothing;
+  insert into public.seo_api_keys (project_id, name, key_prefix, key_hash, scopes, created_by)
+  values (null, 'master-ci', 'seo_live_master3', 'cafebabe2', array['read'], '00000000-0000-0000-0000-000000000002');
+
+  -- A project key and an account key with the same name coexist.
+  insert into public.seo_api_keys (project_id, name, key_prefix, key_hash, scopes, created_by)
+  values ((select id from public.seo_projects where slug = 'demo'), 'master-ci', 'seo_live_master4', 'cafebabe3', array['read'],
+          '00000000-0000-0000-0000-000000000001');
+
+  raise notice 'smoke: account api keys OK';
+end $$;
+SQL
+
 echo "==> smoke test: account layer (stage 1+2)"
 PSQL -d "${DB_NAME}" <<'SQL'
 set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-000000000001"}';

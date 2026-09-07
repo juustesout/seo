@@ -1,9 +1,12 @@
 /**
- * Project API keys (REST v1 bearer tokens).
+ * Project + account (master) API keys.
  *
- * Only a SHA-256 hash of each key is stored; the plaintext key is returned
- * once at creation. Lookups go through the short key prefix, then compare the
- * full hash, so a leaked table never reveals usable keys.
+ * Project keys are bound to one project; account keys (project_id = NULL)
+ * belong to a user and may reach any project that user is a member of, never
+ * stronger than that membership (authorized per request by the caller). Only a
+ * SHA-256 hash of each key is stored; the plaintext key is returned once at
+ * creation. Lookups go through the short key prefix, then compare the full
+ * hash, so a leaked table never reveals usable keys.
  */
 
 import { createHash, randomBytes } from 'node:crypto';
@@ -17,7 +20,8 @@ export type ApiKeyScope = 'read' | 'write';
 
 export interface ApiKeyRecord {
   id: string;
-  project_id: string;
+  /** NULL means this is an account (master) key bound to the owning user. */
+  project_id: string | null;
   name: string;
   key_prefix: string;
   scopes: ApiKeyScope[];
@@ -61,9 +65,24 @@ export class ApiKeyStore {
     return (data ?? []) as unknown as ApiKeyRecord[];
   }
 
-  /** Creates a key and returns it exactly once (plaintext). */
+  /** Account (master) keys owned by a user (project_id is NULL). */
+  async listAccountKeys(userId: string): Promise<ApiKeyRecord[]> {
+    const { data, error } = await this.sb
+      .from('seo_api_keys')
+      .select(PUBLIC_COLUMNS)
+      .is('project_id', null)
+      .eq('created_by', userId)
+      .order('created_at', { ascending: false });
+    if (error) throw ApiError.badRequest('Could not list API keys');
+    return (data ?? []) as unknown as ApiKeyRecord[];
+  }
+
+  /**
+   * Creates a key and returns it exactly once (plaintext). projectId null
+   * creates an account (master) key owned by the user.
+   */
   async create(
-    projectId: string,
+    projectId: string | null,
     userId: string,
     name: string,
     scopes: ApiKeyScope[],
@@ -85,11 +104,23 @@ export class ApiKeyStore {
     return { key, record: data as unknown as ApiKeyRecord };
   }
 
+  /** Revokes a project key (projectId must match the key's project). */
   async revoke(projectId: string, id: string): Promise<void> {
     const { error } = await this.sb
       .from('seo_api_keys')
       .update({ revoked_at: new Date().toISOString() })
       .eq('project_id', projectId)
+      .eq('id', id);
+    if (error) throw ApiError.badRequest('Could not revoke API key');
+  }
+
+  /** Revokes one of the user's own account (master) keys. */
+  async revokeAccountKey(userId: string, id: string): Promise<void> {
+    const { error } = await this.sb
+      .from('seo_api_keys')
+      .update({ revoked_at: new Date().toISOString() })
+      .is('project_id', null)
+      .eq('created_by', userId)
       .eq('id', id);
     if (error) throw ApiError.badRequest('Could not revoke API key');
   }

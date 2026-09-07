@@ -9,18 +9,29 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { JobStore } from '../jobs/types.js';
 import type { ApiKeyRecord } from '../infra/apiKeys.js';
+import { AccessService } from '../supabase.js';
 import type { MpcDeps } from './server.js';
 import { registerTools } from './server.js';
 
-/** Project + scope context derived from an authenticated project API key. */
+/**
+ * Project + scope context derived from an authenticated API key.
+ *
+ * Project keys bind the session to one project. Account (master) keys bind it
+ * to their owning user: every tool resolves the target project per request and
+ * the AccessService authorizes that the user is a member (never stronger than
+ * their membership role in that project).
+ */
 export function depsFromApiKey(sb: SupabaseClient, jobStore: JobStore, key: ApiKeyRecord): MpcDeps {
+  const accountKey = key.project_id === null;
   return {
     sb,
     jobStore,
+    scope: accountKey ? 'account' : 'project',
     projectId: key.project_id,
     userId: key.created_by,
     canRead: key.scopes.includes('read'),
     canWrite: key.scopes.includes('write'),
+    ...(accountKey ? { access: new AccessService(sb) } : {}),
   };
 }
 
