@@ -21,6 +21,7 @@ import { DataForSeoDataSource } from './dataforseo/dataSource.js';
 import { QdrantKnowledgeProvider } from './qdrantKnowledge.js';
 import { WordPressPublisher } from './wordpress.js';
 import { MockSocialPublisher } from './social/mockSocial.js';
+import { XPublisher } from './social/xPublisher.js';
 import { OpenAIProvider } from './ai/openai.js';
 import { OpenAiMediaProvider } from './media/openaiMedia.js';
 import { UnsplashMediaProvider } from './media/unsplash.js';
@@ -185,6 +186,25 @@ export function buildRegistry(deps: RegistryBuildDeps): ProviderRegistry {
           { key: 'wordpress_username', label: 'Username', type: 'text', placeholder: 'username' },
           { key: 'wordpress_application_password', label: 'Application password', type: 'password', placeholder: 'application password' },
         ],
+      },
+    },
+  );
+
+  // X social channel (Phase H6.1 foundation). Real publisher registration with
+  // publish_text + schedule so gates/flows treat it as a genuine text channel;
+  // the adapter itself fails safely because live auth + posting are not part of
+  // this phase.
+  registry.registerPublisher(
+    () => new XPublisher({ config: deps.config, logger: deps.logger }),
+    {
+      id: 'x',
+      name: 'X',
+      description: 'Publish short text posts to X (foundation: live posting arrives in a later phase)',
+      capabilities: ['publish_text', 'schedule'],
+      ui: { icon: 'share', color: '#000000' },
+      setup: {
+        category: 'social',
+        note: 'Foundation-only: X is registered as a text channel but live authentication and posting are not implemented yet.',
       },
     },
   );

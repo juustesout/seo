@@ -1,13 +1,15 @@
 /**
- * Publisher capability helpers for the UI (Content Studio Phase H5).
+ * Publisher capability helpers for the UI (Content Studio Phase H5 + H6.1).
  *
  * The UI never hardcodes a publisher id or vendor; it reasons about what a
  * publisher can do purely through the descriptor + stored capability tokens
- * that the catalog already exposes.
+ * that the catalog already exposes. Since Phase H6.1 each publication intent
+ * (article / text / image / video) maps to exactly one capability, and the UI
+ * only offers the kinds a selected publisher can actually carry.
  */
 
 import type { PublishContentKind } from '@seo/contracts';
-import { normalizePublisherCapabilities, publisherCanPublishContent } from '@seo/contracts';
+import { normalizePublisherCapabilities, publisherCanPublishKind, publisherKindsFor } from '@seo/contracts';
 
 export interface CapabilitySource {
   capabilities?: string[];
@@ -24,13 +26,24 @@ export function effectiveCapabilities(publisher: CapabilitySource, descriptor?: 
   return descriptor?.capabilities ?? [];
 }
 
-/** Whether a publisher can carry content of the given kind (article/text/image/video). */
-export function canPublishContentKind(
+/** Whether a publisher can carry a publication intent of the given kind. */
+export function canPublishKind(
   kind: PublishContentKind,
   publisher: CapabilitySource,
   descriptor?: DescriptorSource | null,
 ): boolean {
-  return publisherCanPublishContent(kind, effectiveCapabilities(publisher, descriptor));
+  return publisherCanPublishKind(kind, effectiveCapabilities(publisher, descriptor));
+}
+
+/** The canonical kinds a publisher can carry, in a stable order (article first). */
+export function supportedPublishKinds(publisher: CapabilitySource, descriptor?: DescriptorSource | null): PublishContentKind[] {
+  return publisherKindsFor(effectiveCapabilities(publisher, descriptor));
+}
+
+/** Best default intent for a publisher: its first supported kind (article first). */
+export function defaultPublishKind(publisher: CapabilitySource, descriptor?: DescriptorSource | null): PublishContentKind {
+  const kinds = supportedPublishKinds(publisher, descriptor);
+  return kinds.length > 0 ? (kinds[0] ?? 'article') : 'article';
 }
 
 export const PUBLISHER_CAPABILITY_LABELS: Record<string, string> = {
@@ -41,6 +54,14 @@ export const PUBLISHER_CAPABILITY_LABELS: Record<string, string> = {
   update: 'Update',
   delete: 'Delete',
   schedule: 'Scheduled',
+};
+
+/** Labels for publication intents (what a user schedules/publishes as). */
+export const PUBLISH_KIND_LABELS: Record<PublishContentKind, string> = {
+  article: 'Article',
+  text: 'Text post',
+  image: 'Image',
+  video: 'Video',
 };
 
 /** Canonical capability tokens for display (legacy aliases expanded, unknown dropped). */

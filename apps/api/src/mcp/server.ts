@@ -325,12 +325,13 @@ export function buildTools(): ToolDef[] {
     name: 'schedule_create',
     title: 'Create a publication schedule',
     description:
-      'Schedule an existing content item for publication through a connected publisher. The publication executes at scheduled_at (ISO-8601 with timezone offset, must be in the future). This creates a schedule, prepares the publication, and enqueues a single durable job - one schedule maps to one backing job (schema v1, write).',
+      'Schedule an existing content item for publication through a connected publisher. The publication executes at scheduled_at (ISO-8601 with timezone offset, must be in the future). publish_kind declares the publication intent and must be supported by the publisher: article requires publish_article (e.g. WordPress), text requires publish_text (e.g. X), image/video their exact capabilities. It defaults to article. This creates a schedule, prepares the publication, and enqueues a single durable job - one schedule maps to one backing job (schema v1, write).',
     readOnly: false,
     inputSchema: {
       project_id: z.string().uuid().describe('Must match the project this API key is bound to'),
       content_id: z.string().uuid().describe('Content item to publish'),
       publisher_id: z.string().uuid().describe('Connected publisher to publish through'),
+      publish_kind: z.enum(['article', 'text', 'image', 'video']).default('article').describe('Publication intent (default article)'),
       scheduled_at: z.string().describe('When to publish (ISO-8601 datetime with timezone offset, e.g. 2026-09-10T09:00:00+02:00)'),
     },
     handler: async (deps, args) => {
@@ -342,9 +343,17 @@ export function buildTools(): ToolDef[] {
       }
       const contentId = requireUuid(args.content_id, 'content_id');
       const publisherId = requireUuid(args.publisher_id, 'publisher_id');
+      const publishKind = enumArg(args.publish_kind, ['article', 'text', 'image', 'video'] as const, 'publish_kind');
       const scheduledAt = requireOffsetIsoValue(args.scheduled_at, 'scheduled_at');
       const svc = new ScheduleService(fullContainer(deps));
-      return { data: await svc.create(projectId, userId, { content_id: contentId, publisher_id: publisherId, scheduled_at: scheduledAt }) };
+      return {
+        data: await svc.create(projectId, userId, {
+          content_id: contentId,
+          publisher_id: publisherId,
+          publish_kind: publishKind ?? 'article',
+          scheduled_at: scheduledAt,
+        }),
+      };
     },
   });
 

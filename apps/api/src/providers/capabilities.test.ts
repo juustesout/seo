@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { normalizePublisherCapabilities, publisherCanPublishContent } from '@seo/contracts';
+import { normalizePublisherCapabilities, publisherCanPublishKind, publisherKindsFor } from '@seo/contracts';
 
 describe('publisher capability normalization (Content Studio Phase H5)', () => {
   it('maps legacy tokens to their canonical vocabulary', () => {
@@ -14,26 +14,44 @@ describe('publisher capability normalization (Content Studio Phase H5)', () => {
   it('deduplicates after alias expansion', () => {
     expect(normalizePublisherCapabilities(['post', 'publish_article', 'delete'])).toEqual(['publish_article', 'delete']);
   });
+});
 
-  it('treats article content as accepted by article and text channels', () => {
-    expect(publisherCanPublishContent('article', ['publish_article'])).toBe(true);
-    expect(publisherCanPublishContent('article', ['publish_text'])).toBe(true);
-    expect(publisherCanPublishContent('article', ['post'])).toBe(true);
-    expect(publisherCanPublishContent('article', ['publish_image', 'publish_video'])).toBe(false);
-    expect(publisherCanPublishContent('article', ['publish_video'])).toBe(false);
+describe('publish-kind capability gate (Content Studio Phase H6.1)', () => {
+  it('maps each kind to exactly one capability with no article-as-text fallback', () => {
+    expect(publisherCanPublishKind('article', ['publish_article'])).toBe(true);
+    expect(publisherCanPublishKind('article', ['publish_text'])).toBe(false);
+    expect(publisherCanPublishKind('article', ['post'])).toBe(true);
+    expect(publisherCanPublishKind('article', ['publish_image', 'publish_video'])).toBe(false);
+    expect(publisherCanPublishKind('text', ['publish_text'])).toBe(true);
+    expect(publisherCanPublishKind('text', ['publish_article'])).toBe(false);
+  });
+
+  it('accepts a text-only social publisher for text intents only', () => {
+    expect(publisherCanPublishKind('text', ['publish_text', 'schedule'])).toBe(true);
+    expect(publisherCanPublishKind('article', ['publish_text', 'schedule'])).toBe(false);
   });
 
   it('requires the exact token for image/video kinds', () => {
-    expect(publisherCanPublishContent('image', ['publish_image'])).toBe(true);
-    expect(publisherCanPublishContent('image', ['publish_article'])).toBe(false);
-    expect(publisherCanPublishContent('image', ['media'])).toBe(true);
-    expect(publisherCanPublishContent('video', ['publish_video'])).toBe(true);
-    expect(publisherCanPublishContent('video', ['publish_text'])).toBe(false);
+    expect(publisherCanPublishKind('image', ['publish_image'])).toBe(true);
+    expect(publisherCanPublishKind('image', ['publish_article'])).toBe(false);
+    expect(publisherCanPublishKind('image', ['media'])).toBe(true);
+    expect(publisherCanPublishKind('video', ['publish_video'])).toBe(true);
+    expect(publisherCanPublishKind('video', ['publish_text'])).toBe(false);
   });
 
   it('stays permissive for empty or unknown-only snapshots (legacy rows keep working)', () => {
-    expect(publisherCanPublishContent('article', [])).toBe(true);
-    expect(publisherCanPublishContent('article', undefined as unknown as string[])).toBe(true);
-    expect(publisherCanPublishContent('article', ['unknown_token'])).toBe(true);
+    expect(publisherCanPublishKind('article', [])).toBe(true);
+    expect(publisherCanPublishKind('text', undefined as unknown as string[])).toBe(true);
+    expect(publisherCanPublishKind('article', ['unknown_token'])).toBe(true);
+  });
+
+  it('lists the kinds a publisher can carry in a stable order', () => {
+    expect(publisherKindsFor(['publish_article', 'update', 'delete'])).toEqual(['article']);
+    expect(publisherKindsFor(['publish_text', 'schedule'])).toEqual(['text']);
+    expect(publisherKindsFor(['post'])).toEqual(['article']);
+    expect(publisherKindsFor(['media'])).toEqual(['image']);
+    expect(publisherKindsFor(['publish_article', 'publish_text'])).toEqual(['article', 'text']);
+    expect(publisherKindsFor([])).toEqual(['article', 'text', 'image', 'video']);
+    expect(publisherKindsFor(['unknown_token'])).toEqual(['article', 'text', 'image', 'video']);
   });
 });

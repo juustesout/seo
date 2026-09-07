@@ -19,6 +19,8 @@ schedulesRouter.use(requireAuth);
 const createScheduleSchema = z.object({
   content_id: z.string().uuid(),
   publisher_id: z.string().uuid(),
+  /** Publication intent; defaults to article. text lets article content go to a publish_text channel (e.g. X). */
+  publish_kind: z.enum(['article', 'text', 'image', 'video']).default('article'),
   scheduled_at: z.string().min(1).max(64),
 });
 

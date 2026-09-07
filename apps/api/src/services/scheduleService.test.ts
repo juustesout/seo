@@ -519,8 +519,8 @@ describe('ScheduleService isolation + status sync', () => {
   });
 });
 
-describe('ScheduleService capability gating (Content Studio Phase H5)', () => {
-  it('allows scheduling article content to a connected text-capable social publisher', async () => {
+describe('ScheduleService capability gating (Content Studio Phase H6.1)', () => {
+  it('allows scheduling a text intent to a connected publish_text-only social publisher', async () => {
     const stores = baseStores();
     stores.seo_publishers = [
       publisherRow('pb-social', 'p1', {
@@ -532,13 +532,51 @@ describe('ScheduleService capability gating (Content Studio Phase H5)', () => {
     const jobStore = new FakeJobStore();
     const svc = new ScheduleService(container(stores, jobStore));
 
-    const dto = await svc.create('p1', 'u1', { content_id: 'c1', publisher_id: 'pb-social', scheduled_at: inOneDay });
+    const dto = await svc.create('p1', 'u1', { content_id: 'c1', publisher_id: 'pb-social', publish_kind: 'text', scheduled_at: inOneDay });
 
     expect(dto.status).toBe('scheduled');
+    expect(dto.publish_kind).toBe('text');
     expect(jobStore.records).toHaveLength(1);
     expect(jobStore.records[0].provider).toBe('mock_social');
     expect(jobStore.records[0].job_type).toBe('publish');
     expect(stores.seo_publications).toHaveLength(1);
+    expect(stores.seo_publications[0].publish_kind).toBe('text');
+    expect(stores.seo_schedules[0].publish_kind).toBe('text');
+  });
+
+  it('rejects an article intent to a publish_text-only publisher (no implicit fallback)', async () => {
+    const stores = baseStores();
+    stores.seo_publishers = [
+      publisherRow('pb-social', 'p1', {
+        name: 'Social demo (mock)',
+        provider: 'mock_social',
+        capabilities: ['publish_text'],
+      }),
+    ];
+    const jobStore = new FakeJobStore();
+    const svc = new ScheduleService(container(stores, jobStore));
+
+    await expectErrorCode(
+      svc.create('p1', 'u1', { content_id: 'c1', publisher_id: 'pb-social', publish_kind: 'article', scheduled_at: inOneDay }),
+      'unsupported_capability',
+    );
+    expect(stores.seo_schedules).toHaveLength(0);
+    expect(stores.seo_publications).toHaveLength(0);
+    expect(jobStore.records).toHaveLength(0);
+  });
+
+  it('defaults to an article intent for an article-capable publisher (wordpress unchanged)', async () => {
+    const stores = baseStores();
+    stores.seo_publishers = [
+      publisherRow('pb-wp', 'p1', { name: 'WordPress site', capabilities: ['publish_article', 'update', 'delete'] }),
+    ];
+    const jobStore = new FakeJobStore();
+    const svc = new ScheduleService(container(stores, jobStore));
+
+    const dto = await svc.create('p1', 'u1', { content_id: 'c1', publisher_id: 'pb-wp', scheduled_at: inOneDay });
+    expect(dto.status).toBe('scheduled');
+    expect(dto.publish_kind).toBe('article');
+    expect(stores.seo_publications[0].publish_kind).toBe('article');
   });
 
   it('keeps legacy capability snapshots working (post -> publish_article)', async () => {
@@ -551,9 +589,10 @@ describe('ScheduleService capability gating (Content Studio Phase H5)', () => {
 
     const dto = await svc.create('p1', 'u1', { content_id: 'c1', publisher_id: 'pb-legacy', scheduled_at: inOneDay });
     expect(dto.status).toBe('scheduled');
+    expect(dto.publish_kind).toBe('article');
   });
 
-  it('rejects scheduling article content to a publisher without a matching capability', async () => {
+  it('rejects an article/image intent to a publisher without the exact capability', async () => {
     const stores = baseStores();
     stores.seo_publishers = [
       publisherRow('pb-video', 'p1', { name: 'Video only', provider: 'future_video', capabilities: ['publish_video'] }),
@@ -562,7 +601,30 @@ describe('ScheduleService capability gating (Content Studio Phase H5)', () => {
     const svc = new ScheduleService(container(stores, jobStore));
 
     await expectErrorCode(
-      svc.create('p1', 'u1', { content_id: 'c1', publisher_id: 'pb-video', scheduled_at: inOneDay }),
+      svc.create('p1', 'u1', { content_id: 'c1', publisher_id: 'pb-video', publish_kind: 'article', scheduled_at: inOneDay }),
+      'unsupported_capability',
+    );
+    await expectErrorCode(
+      svc.create('p1', 'u1', { content_id: 'c1', publisher_id: 'pb-video', publish_kind: 'image', scheduled_at: inOneDay }),
+      'unsupported_capability',
+    );
+    const dto = await svc.create('p1', 'u1', { content_id: 'c1', publisher_id: 'pb-video', publish_kind: 'video', scheduled_at: inOneDay });
+    expect(dto.status).toBe('scheduled');
+    expect(stores.seo_schedules).toHaveLength(1);
+    expect(stores.seo_publications[0].publish_kind).toBe('video');
+    expect(jobStore.records).toHaveLength(1);
+  });
+
+  it('rejects a video intent to an article-capable publisher', async () => {
+    const stores = baseStores();
+    stores.seo_publishers = [
+      publisherRow('pb-wp', 'p1', { name: 'WordPress site', capabilities: ['publish_article', 'update', 'delete'] }),
+    ];
+    const jobStore = new FakeJobStore();
+    const svc = new ScheduleService(container(stores, jobStore));
+
+    await expectErrorCode(
+      svc.create('p1', 'u1', { content_id: 'c1', publisher_id: 'pb-wp', publish_kind: 'video', scheduled_at: inOneDay }),
       'unsupported_capability',
     );
     expect(stores.seo_schedules).toHaveLength(0);

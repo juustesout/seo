@@ -15,8 +15,8 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import type { CreateScheduleInput, ScheduleDto, ScheduleStatus } from '@seo/contracts';
-import { asTipDoc, publisherCanPublishContent, renderDocHtml } from '@seo/contracts';
+import type { CreateScheduleInput, PublishContentKind, ScheduleDto, ScheduleStatus } from '@seo/contracts';
+import { asTipDoc, publisherCanPublishKind, renderDocHtml } from '@seo/contracts';
 import { ApiError } from '../apiErrors.js';
 import { logger } from '../logger.js';
 import type { ServiceContainer } from '../context.js';
@@ -37,6 +37,14 @@ const RESCHEDULABLE = ['scheduled'] as const;
 /** States from which a schedule can still be cancelled (not actively publishing). */
 const CANCELLABLE = ['scheduled', 'queued'] as const;
 
+/** Canonical publication intents (Phase H6.1); each maps to one publisher capability. */
+export const PUBLISH_KINDS: readonly PublishContentKind[] = ['article', 'text', 'image', 'video'];
+
+/** Normalize a caller-supplied kind to the canonical vocabulary (default article). */
+export function normalizePublishKind(value: unknown): PublishContentKind {
+  return PUBLISH_KINDS.includes(value as PublishContentKind) ? (value as PublishContentKind) : 'article';
+}
+
 /** Optional filters for the schedule read model (Content Studio Phase H4 MCP). */
 export interface ScheduleListOptions {
   status?: ScheduleStatus;
@@ -48,7 +56,7 @@ export interface ScheduleListOptions {
 }
 
 const SCHEDULE_COLUMNS =
-  'id, project_id, content_id, publisher_id, scheduled_at, status, job_id, created_by, created_at, updated_at, cancelled_at';
+  'id, project_id, content_id, publisher_id, publish_kind, scheduled_at, status, job_id, created_by, created_at, updated_at, cancelled_at';
 
 /** Deterministic, schedule-bound job idempotency key (see seo_sync_jobs). */
 export function scheduleIdempotencyKey(scheduleId: string): string {
@@ -133,7 +141,8 @@ export class ScheduleService {
 
     const content = await this.requireContent(projectId, input.content_id);
     const publisher = await this.requirePublisher(projectId, input.publisher_id);
-    this.requireContentCapability(publisher);
+    const publishKind = normalizePublishKind(input.publish_kind);
+    this.requirePublishKindCapability(publisher, publishKind);
 
     const scheduleId = randomUUID();
     const now = new Date().toISOString();
@@ -142,6 +151,7 @@ export class ScheduleService {
       project_id: projectId,
       content_id: input.content_id,
       publisher_id: input.publisher_id,
+      publish_kind: publishKind,
       scheduled_at: scheduledAt,
       status: 'scheduled',
       job_id: null,
@@ -171,6 +181,7 @@ export class ScheduleService {
           content_id: input.content_id,
           schedule_id: scheduleId,
           status: 'scheduled',
+          publish_kind: publishKind,
           title: String(content.title ?? 'Untitled'),
           slug: content.slug ? String(content.slug) : null,
           content: contentHtmlOf(content),
@@ -349,19 +360,19 @@ export class ScheduleService {
   }
 
   /**
-   * Capability gate (Content Studio Phase H5): scheduling article content to a
-   * publisher is only allowed when its declared capabilities can carry an
-   * article (publish_article or publish_text). Legacy/unknown snapshots stay
-   * permissive (see publisherCanPublishContent).
+   * Capability gate (Content Studio Phase H6.1): a publication intent is only
+   * allowed when the publisher declares the exact capability for its kind
+   * (article -> publish_article, text -> publish_text, ...). Legacy/unknown
+   * snapshots stay permissive (see publisherCanPublishKind).
    */
-  private requireContentCapability(publisher: Row): void {
+  private requirePublishKindCapability(publisher: Row, publishKind: PublishContentKind): void {
     const capabilities = Array.isArray(publisher.capabilities) ? (publisher.capabilities as string[]) : [];
-    if (!publisherCanPublishContent('article', capabilities)) {
+    if (!publisherCanPublishKind(publishKind, capabilities)) {
       const known = capabilities.length > 0 ? capabilities.join(', ') : 'none declared';
       throw new ApiError(
         400,
         'unsupported_capability',
-        `Publisher '${String(publisher.name)}' cannot publish article content (capabilities: ${known})`,
+        `Publisher '${String(publisher.name)}' cannot publish '${publishKind}' content (capabilities: ${known})`,
       );
     }
   }
@@ -431,6 +442,7 @@ export class ScheduleService {
       publisher_name: publisher.name ?? null,
       scheduled_at: iso(row.scheduled_at),
       status: (row.status as ScheduleStatus) ?? 'scheduled',
+      publish_kind: normalizePublishKind(row.publish_kind),
       job_id: jobId,
       created_by: row.created_by ? String(row.created_by) : null,
       created_at: iso(row.created_at),

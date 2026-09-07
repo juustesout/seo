@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react';
-import type { ScheduleDto } from '@seo/contracts';
+import type { PublishContentKind, ScheduleDto } from '@seo/contracts';
 import { api } from '../../lib/api';
 import { useAsync } from '../../lib/ui';
 import { fmtDateTime, fromLocalInput, parseDate, toLocalInput } from './scheduleMeta';
-import { canPublishContentKind } from '../../lib/publishers';
+import { defaultPublishKind, PUBLISH_KIND_LABELS, supportedPublishKinds } from '../../lib/publishers';
 
 interface ContentOption {
   id: string;
@@ -13,6 +13,18 @@ interface ContentOption {
 interface PublisherOption {
   publisher: { id: string; name: string; provider: string; status: string; capabilities?: string[] };
   descriptor: { name: string; capabilities?: string[] } | null;
+}
+
+/**
+ * Kinds a schedule can express today. The content picker offers article source
+ * rows, which can be published as a full article or as a text post; image and
+ * video intents need dedicated media sources that do not exist yet.
+ */
+const SOURCE_KINDS: PublishContentKind[] = ['article', 'text'];
+
+/** Kinds the selected content source can be published as to this publisher. */
+function usableKinds(p: PublisherOption): PublishContentKind[] {
+  return supportedPublishKinds(p.publisher, p.descriptor).filter((k) => SOURCE_KINDS.includes(k));
 }
 
 /** One hour from now, floored to a clean :00 for a sensible default. */
@@ -54,16 +66,28 @@ export function ScheduleModal({
   const pubs = useAsync<PublisherOption[]>(() => api(`/projects/${projectId}/publishers`), [projectId]);
 
   const connected = (pubs.data ?? []).filter(
-    (p) => p.publisher.status === 'connected' && canPublishContentKind('article', p.publisher, p.descriptor),
+    (p) => p.publisher.status === 'connected' && usableKinds(p).length > 0,
   );
 
   const [contentId, setContentId] = useState('');
   const [publisherId, setPublisherId] = useState('');
+  const [publishKind, setPublishKind] = useState<PublishContentKind>(SOURCE_KINDS[0] ?? 'article');
   const [whenLocal, setWhenLocal] = useState<string>(() =>
     schedule ? toLocalInput(parseDate(schedule.scheduled_at) ?? new Date()) : defaultWhen(),
   );
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+
+  /** Default the intent to the publisher's first supported kind (article first). */
+  const applyDefaultKind = (publisherIdValue: string) => {
+    const wrap = connected.find((p) => p.publisher.id === publisherIdValue);
+    if (!wrap) return;
+    const kinds = usableKinds(wrap);
+    if (kinds.length === 0) return;
+    const preferred = defaultPublishKind(wrap.publisher, wrap.descriptor);
+    const chosen = kinds.includes(preferred) ? preferred : kinds[0];
+    if (chosen) setPublishKind(chosen);
+  };
 
   useEffect(() => {
     if (!creating) return;
@@ -76,7 +100,10 @@ export function ScheduleModal({
   useEffect(() => {
     if (!creating) return;
     const first = connected[0];
-    if (first && !publisherId) setPublisherId(first.publisher.id);
+    if (first && !publisherId) {
+      setPublisherId(first.publisher.id);
+      applyDefaultKind(first.publisher.id);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pubs.data, creating]);
 
@@ -94,7 +121,7 @@ export function ScheduleModal({
         if (!publisherId) throw new Error('Pick a publisher.');
         await api(`/projects/${projectId}/schedules`, {
           method: 'POST',
-          body: { content_id: contentId, publisher_id: publisherId, scheduled_at: iso },
+          body: { content_id: contentId, publisher_id: publisherId, publish_kind: publishKind, scheduled_at: iso },
         });
       } else {
         await api(`/projects/${projectId}/schedules/${schedule!.id}`, {
@@ -111,6 +138,13 @@ export function ScheduleModal({
   };
 
   const contentRows = (content.data?.content ?? []).filter((c) => c.status !== 'archived');
+  const selectedWrap = connected.find((p) => p.publisher.id === publisherId);
+  const selectedKinds = selectedWrap ? usableKinds(selectedWrap) : [];
+
+  const selectPublisher = (idValue: string) => {
+    setPublisherId(idValue);
+    applyDefaultKind(idValue);
+  };
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
@@ -155,13 +189,37 @@ export function ScheduleModal({
               <p className="muted">No connected publisher. Connect and test one in Publishing first.</p>
             )}
             {connected.length > 0 && (
-              <select value={publisherId} onChange={(e) => setPublisherId(e.target.value)}>
+              <select value={publisherId} onChange={(e) => selectPublisher(e.target.value)}>
                 {connected.map((p) => (
                   <option key={p.publisher.id} value={p.publisher.id}>
                     {p.descriptor?.name ?? p.publisher.name}
                   </option>
                 ))}
               </select>
+            )}
+
+            {selectedKinds.length > 1 ? (
+              <>
+                <label className="fld">Publish as</label>
+                <div className="row" style={{ gap: 16, flexWrap: 'wrap' }}>
+                  {selectedKinds.map((k) => (
+                    <label key={k} style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+                      <input
+                        type="radio"
+                        name="publish-kind"
+                        value={k}
+                        checked={publishKind === k}
+                        onChange={() => setPublishKind(k)}
+                      />
+                      {PUBLISH_KIND_LABELS[k]}
+                    </label>
+                  ))}
+                </div>
+              </>
+            ) : (
+              <p className="muted" style={{ fontSize: 13, marginTop: 6 }}>
+                Will publish as {PUBLISH_KIND_LABELS[publishKind]} ({publishKind}).
+              </p>
             )}
           </>
         )}

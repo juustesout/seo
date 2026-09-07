@@ -204,7 +204,12 @@ describe('mcp scheduling tools delegate to ScheduleService', () => {
 
     expect(out.data).toMatchObject({ id: 's-new' });
     expect(spy).toHaveBeenCalledTimes(1);
-    expect(spy).toHaveBeenCalledWith('p1', 'u1', { content_id: CID, publisher_id: PID, scheduled_at: '2026-09-10T09:00:00+02:00' });
+    expect(spy).toHaveBeenCalledWith('p1', 'u1', {
+      content_id: CID,
+      publisher_id: PID,
+      scheduled_at: '2026-09-10T09:00:00+02:00',
+      publish_kind: 'article',
+    });
   });
 
   it('schedule_create rejects ambiguous/offset-less times before touching the service', async () => {

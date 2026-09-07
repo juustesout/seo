@@ -6,7 +6,7 @@
  * (PostgREST) under Row Level Security.
  */
 
-import type { JobType, MemberRole, PublicationStatus, ScheduleStatus } from './common.js';
+import type { JobType, MemberRole, PublicationStatus, PublishContentKind, ScheduleStatus } from './common.js';
 import type {
   DataSource,
   Integration,
@@ -342,6 +342,8 @@ export interface CreatePublisherRequest {
 export interface PublishRequest {
   publisher_id: string;
   content_id?: string;
+  /** Publication intent: which capability the publisher must satisfy. Defaults to 'article'. */
+  publish_kind?: PublishContentKind;
   title: string;
   content?: string;
   excerpt?: string;
@@ -373,6 +375,7 @@ export interface PublicationDto {
   publisher_name: string | null;
   schedule_id: string | null;
   status: PublicationStatus;
+  publish_kind: PublishContentKind;
   remote_id: string | null;
   target_url: string | null;
   scheduled_for: string | null;
@@ -395,6 +398,7 @@ export interface ScheduleDto {
   publisher_name: string | null;
   scheduled_at: string;
   status: ScheduleStatus;
+  publish_kind: PublishContentKind;
   job_id: string | null;
   created_by: string | null;
   created_at: string;
@@ -405,6 +409,13 @@ export interface ScheduleDto {
 export interface CreateScheduleInput {
   content_id: string;
   publisher_id: string;
+  /**
+   * Publication intent. Defaults to 'article' so existing callers keep working;
+   * each kind maps to exactly one publisher capability (see
+   * publisherCanPublishKind). Choosing text lets article content be scheduled
+   * as a text post to a publish_text-only channel (e.g. X).
+   */
+  publish_kind?: PublishContentKind;
   /** Absolute ISO-8601 timestamp (timestamptz); stored unambiguously in UTC. */
   scheduled_at: string;
 }

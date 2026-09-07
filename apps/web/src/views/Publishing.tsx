@@ -1,7 +1,8 @@
 import { useMemo, useState } from 'react';
 import { api } from '../lib/api';
 import { useAsync, fmtDate, useJobs, JobTable, StatusPill, Empty } from '../lib/ui';
-import { canPublishContentKind, categoryLabel, publisherCapabilityChips } from '../lib/publishers';
+import { defaultPublishKind, PUBLISH_KIND_LABELS, publisherCapabilityChips, supportedPublishKinds, categoryLabel } from '../lib/publishers';
+import type { PublishContentKind } from '@seo/contracts';
 
 interface SetupField {
   key: string;
@@ -47,6 +48,14 @@ interface Publication {
 
 const CATEGORY_ORDER = ['website', 'social'];
 
+/** Intents the direct composer can express today (article body or a text post). */
+const SOURCE_KINDS: PublishContentKind[] = ['article', 'text'];
+
+/** Kinds a publisher can carry that this composer can produce. */
+function usableKinds(wrap: PubWrap): PublishContentKind[] {
+  return supportedPublishKinds(wrap.publisher, wrap.descriptor).filter((k) => SOURCE_KINDS.includes(k));
+}
+
 export function Publishing({ projectId }: { projectId: string }) {
   const [refresh, setRefresh] = useState(0);
   const [err, setErr] = useState<string | null>(null);
@@ -88,7 +97,7 @@ export function Publishing({ projectId }: { projectId: string }) {
   }, [pubs.data]);
 
   const connectedCapable = (pubs.data ?? []).filter(
-    (p) => p.publisher.status === 'connected' && canPublishContentKind('article', p.publisher, p.descriptor),
+    (p) => p.publisher.status === 'connected' && usableKinds(p).length > 0,
   );
 
   return (
@@ -323,15 +332,44 @@ function NewPublication({
   const [content, setContent] = useState('');
   const [excerpt, setExcerpt] = useState('');
   const [publisherId, setPublisherId] = useState(publishers[0]?.publisher.id ?? '');
+  const [publishKind, setPublishKind] = useState<PublishContentKind>(() => {
+    const first = publishers[0];
+    if (!first) return 'article';
+    const kinds = usableKinds(first);
+    const preferred = defaultPublishKind(first.publisher, first.descriptor);
+    return kinds.includes(preferred) ? preferred : (kinds[0] ?? 'article');
+  });
   const [status, setStatus] = useState<'publish' | 'draft'>('publish');
   const [busy, setBusy] = useState(false);
+
+  const selected = publishers.find((p) => p.publisher.id === publisherId) ?? publishers[0];
+  const selectedKinds = selected ? usableKinds(selected) : [];
+
+  const selectPublisher = (idValue: string) => {
+    setPublisherId(idValue);
+    const wrap = publishers.find((p) => p.publisher.id === idValue);
+    if (!wrap) return;
+    const kinds = usableKinds(wrap);
+    if (kinds.length === 0) return;
+    const preferred = defaultPublishKind(wrap.publisher, wrap.descriptor);
+    const chosen = kinds.includes(preferred) ? preferred : kinds[0];
+    if (chosen) setPublishKind(chosen);
+  };
 
   const submit = async () => {
     setBusy(true);
     try {
+      const finalKind = selectedKinds.includes(publishKind) ? publishKind : selectedKinds[0];
       await api(`/projects/${projectId}/publications`, {
         method: 'POST',
-        body: { publisher_id: publisherId, title, content, excerpt: excerpt || undefined, remote_status: status },
+        body: {
+          publisher_id: publisherId,
+          publish_kind: finalKind,
+          title,
+          content,
+          excerpt: excerpt || undefined,
+          remote_status: status,
+        },
       });
       setTitle('');
       setContent('');
@@ -348,13 +386,32 @@ function NewPublication({
     <div className="card mt">
       <h2>New publication</h2>
       <label className="fld">Publisher</label>
-      <select value={publisherId} onChange={(e) => setPublisherId(e.target.value)}>
+      <select value={publisherId} onChange={(e) => selectPublisher(e.target.value)}>
         {publishers.map((p) => (
           <option key={p.publisher.id} value={p.publisher.id}>
             {p.descriptor?.name ?? p.publisher.name}
           </option>
         ))}
       </select>
+      {selectedKinds.length > 1 && (
+        <>
+          <label className="fld">Publish as</label>
+          <div className="row" style={{ gap: 16, flexWrap: 'wrap' }}>
+            {selectedKinds.map((k) => (
+              <label key={k} style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+                <input
+                  type="radio"
+                  name="publish-kind"
+                  value={k}
+                  checked={publishKind === k}
+                  onChange={() => setPublishKind(k)}
+                />
+                {PUBLISH_KIND_LABELS[k]}
+              </label>
+            ))}
+          </div>
+        </>
+      )}
       <label className="fld">Title</label>
       <input type="text" value={title} onChange={(e) => setTitle(e.target.value)} style={{ width: '100%' }} />
       <label className="fld">Content (markdown or plain text)</label>

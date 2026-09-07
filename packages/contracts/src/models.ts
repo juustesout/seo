@@ -14,6 +14,7 @@ import type {
   IsoDateTime,
   MemberRole,
   PublicationStatus,
+  PublishContentKind,
   ProviderId,
   ScheduleStatus,
 } from './common.js';
@@ -391,6 +392,8 @@ export interface Publication extends ProjectScopedRow {
   publisher_id: string;
   content_id: string | null;
   status: PublicationStatus;
+  /** Publication intent inherited from the schedule/request (default 'article'). */
+  publish_kind: PublishContentKind;
   title: string;
   slug: string | null;
   content: string | null;
@@ -413,6 +416,8 @@ export interface Schedule extends ProjectScopedRow {
   publisher_id: string;
   scheduled_at: IsoDateTime;
   status: ScheduleStatus;
+  /** Publication intent; the backing publication inherits the same kind. */
+  publish_kind: PublishContentKind;
   job_id: string | null;
   created_by: string;
   cancelled_at: IsoDateTime | null;

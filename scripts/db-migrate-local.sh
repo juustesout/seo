@@ -514,6 +514,66 @@ begin
 end $$;
 SQL
 
+echo "==> smoke test: publish kind intent (phase H6.1)"
+PSQL -d "${DB_NAME}" <<'SQL'
+set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-000000000001"}';
+do $$
+declare
+  v_project uuid;
+  v_content uuid;
+  v_publisher uuid;
+  v_schedule uuid;
+  v_publication uuid;
+begin
+  select id into v_project from public.seo_projects where slug = 'demo' limit 1;
+  select id into v_content from public.seo_content where slug = 'demo-article' and project_id = v_project limit 1;
+  select id into v_publisher from public.seo_publishers where name = 'Smoke WP' and project_id = v_project limit 1;
+  if v_publisher is null then raise exception 'smoke: h6 publisher missing'; end if;
+
+  -- Existing rows default to article (backwards compatible).
+  select id into v_schedule from public.seo_schedules
+  where project_id = v_project and content_id = v_content and publisher_id = v_publisher
+  order by created_at desc limit 1;
+  if v_schedule is null then raise exception 'smoke: h6 schedule row missing'; end if;
+  if not exists (
+    select 1 from public.seo_schedules where id = v_schedule and publish_kind = 'article'
+  ) then raise exception 'smoke: schedule publish_kind did not default to article'; end if;
+  select id into v_publication from public.seo_publications where schedule_id = v_schedule limit 1;
+  if not exists (
+    select 1 from public.seo_publications where id = v_publication and publish_kind = 'article'
+  ) then raise exception 'smoke: publication publish_kind did not default to article'; end if;
+
+  -- A text intent is accepted and stored (publish_text channels such as X).
+  insert into public.seo_publications (project_id, publisher_id, content_id, status, title, content, publish_kind, created_by)
+  values (v_project, v_publisher, v_content, 'queued', 'Text post demo', 'Short post', 'text',
+          '00000000-0000-0000-0000-000000000001')
+  returning id into v_publication;
+  if not exists (
+    select 1 from public.seo_publications where id = v_publication and publish_kind = 'text'
+  ) then raise exception 'smoke: text publish_kind was not stored'; end if;
+
+  -- Canonical vocabulary is enforced for schedules + publications.
+  begin
+    insert into public.seo_schedules (project_id, content_id, publisher_id, scheduled_at, status, publish_kind, created_by)
+    values (v_project, v_content, v_publisher, now() + interval '2 days', 'scheduled', 'audio',
+            '00000000-0000-0000-0000-000000000001');
+    raise exception 'smoke: invalid schedule publish_kind unexpectedly allowed';
+  exception when check_violation then
+    null;
+  end;
+
+  begin
+    insert into public.seo_publications (project_id, publisher_id, content_id, status, title, publish_kind)
+    values (v_project, v_publisher, v_content, 'queued', 'Bad kind', 'audio');
+    raise exception 'smoke: invalid publication publish_kind unexpectedly allowed';
+  exception when check_violation then
+    null;
+  end;
+
+  raise notice 'smoke: publish kind intent OK';
+end $$;
+SQL
+
 # RLS can only be exercised as a non-superuser role (superusers bypass RLS).
 H1_LEAK_COUNT="$(PSQL -d "${DB_NAME}" -t -A <<'SQL'
 grant usage on schema public to authenticated;

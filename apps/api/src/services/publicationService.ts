@@ -9,7 +9,7 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js';
-import type { PublicationDto, PublicationStatus } from '@seo/contracts';
+import type { PublicationDto, PublicationStatus, PublishContentKind } from '@seo/contracts';
 import { ApiError } from '../apiErrors.js';
 import { logger } from '../logger.js';
 
@@ -28,7 +28,7 @@ export const PUBLICATION_STATUSES = [
 
 /** All history-safe columns; never content/excerpt/slug/created_by. */
 const PUB_COLUMNS =
-  'id, project_id, content_id, publisher_id, schedule_id, status, remote_id, target_url, error, scheduled_for, published_at, title, created_at, updated_at';
+  'id, project_id, content_id, publisher_id, schedule_id, status, publish_kind, remote_id, target_url, error, scheduled_for, published_at, title, created_at, updated_at';
 
 export interface PublicationListInput {
   content_id?: string;
@@ -156,6 +156,7 @@ export class PublicationService {
         publisher_name: names.get(publisherId) ?? null,
         schedule_id: typeof r.schedule_id === 'string' ? String(r.schedule_id) : null,
         status: (r.status as PublicationStatus) ?? 'queued',
+        publish_kind: (r.publish_kind as PublishContentKind) ?? 'article',
         remote_id: str(r.remote_id),
         target_url: str(r.target_url),
         scheduled_for: iso(r.scheduled_for),

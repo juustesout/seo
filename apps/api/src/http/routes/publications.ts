@@ -2,7 +2,8 @@
 
 import { Router } from 'express';
 import { z } from 'zod';
-import { publisherCanPublishContent } from '@seo/contracts';
+import type { PublishContentKind } from '@seo/contracts';
+import { publisherCanPublishKind } from '@seo/contracts';
 import { requireAuth } from '../middleware.js';
 import { asyncHandler } from '../asyncHandler.js';
 import { ApiError } from '../../apiErrors.js';
@@ -24,12 +25,12 @@ async function loadPublisher(container: ReturnType<typeof import('../../context.
   return data as Record<string, unknown>;
 }
 
-/** Capability gate (Content Studio Phase H5): reject content the publisher cannot carry. */
-function requireContentCapability(publisher: Record<string, unknown>): void {
+/** Capability gate (Phase H6.1): reject intents the publisher cannot carry. */
+function requirePublishKindCapability(publisher: Record<string, unknown>, publishKind: PublishContentKind): void {
   const capabilities = Array.isArray(publisher.capabilities) ? (publisher.capabilities as string[]) : [];
-  if (!publisherCanPublishContent('article', capabilities)) {
+  if (!publisherCanPublishKind(publishKind, capabilities)) {
     const known = capabilities.length > 0 ? capabilities.join(', ') : 'none declared';
-    throw ApiError.badRequest(`Publisher '${String(publisher.name)}' cannot publish article content (capabilities: ${known})`);
+    throw ApiError.badRequest(`Publisher '${String(publisher.name)}' cannot publish '${publishKind}' content (capabilities: ${known})`);
   }
 }
 
@@ -87,6 +88,8 @@ publicationsRouter.post(
       .object({
         publisher_id: z.string().uuid(),
         content_id: z.string().uuid().optional().nullable(),
+        /** Publication intent; defaults to article. */
+        publish_kind: z.enum(['article', 'text', 'image', 'video']).default('article'),
         title: z.string().min(1).max(500),
         slug: z.string().max(300).optional(),
         content: z.string().optional().default(''),
@@ -100,7 +103,7 @@ publicationsRouter.post(
     if (publisher.status !== 'connected') {
       throw ApiError.badRequest(`Publisher '${publisher.name}' is not connected. Test the connection first.`);
     }
-    requireContentCapability(publisher);
+    requirePublishKindCapability(publisher, body.publish_kind);
 
     if (body.content_id) {
       const { data } = await container.sb
@@ -119,6 +122,7 @@ publicationsRouter.post(
         publisher_id: body.publisher_id,
         content_id: body.content_id ?? null,
         status: body.schedule_for ? 'scheduled' : 'queued',
+        publish_kind: body.publish_kind,
         title: body.title,
         slug: body.slug ?? null,
         content: body.content,

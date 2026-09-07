@@ -143,6 +143,7 @@ const pubColumns = [
   'content_title',
   'publisher_id',
   'publisher_name',
+  'publish_kind',
   'schedule_id',
   'status',
   'remote_id',

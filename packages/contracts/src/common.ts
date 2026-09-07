@@ -71,6 +71,9 @@ export const PUBLISHER_CAPABILITIES: readonly PublisherCapability[] = [
 /** The content kind a user is trying to send to a publisher. */
 export type PublishContentKind = 'article' | 'text' | 'image' | 'video';
 
+/** Publication intent kind; alias kept so field naming matches the write path. */
+export type PublishKind = PublishContentKind;
+
 const LEGACY_PUBLISHER_ALIASES: Record<string, PublisherCapability[]> = {
   post: ['publish_article'],
   media: ['publish_image'],
@@ -83,8 +86,8 @@ const KIND_TOKEN: Record<PublishContentKind, PublisherCapability> = {
   video: 'publish_video',
 };
 
-/** Capabilities that can carry article-style content (full article or text render). */
-const ARTICLE_ACCEPTANCE = new Set<PublisherCapability>(['publish_article', 'publish_text']);
+/** Stable order for kind lists surfaced to the UI (article first). */
+const KIND_ORDER: readonly PublishContentKind[] = ['article', 'text', 'image', 'video'];
 
 /**
  * Expand a publisher's declared capabilities into the canonical vocabulary.
@@ -106,19 +109,30 @@ export function normalizePublisherCapabilities(declared: readonly string[]): Pub
 }
 
 /**
- * True when the publisher's capabilities allow publishing content of the given
- * kind. Articles are accepted by publish_article and publish_text channels (a
- * text adapter renders the article into a post); image/video kinds require
- * their exact token. An empty or unknown capability set stays permissive so
- * legacy publisher rows without a snapshot never break scheduling.
+ * Canonical publish kinds a publisher's declared capabilities can carry, in a
+ * stable order (article first). Legacy aliases are expanded first; empty or
+ * unknown-only snapshots stay permissive (all kinds) so legacy publisher rows
+ * without a capability snapshot never disappear from the UI.
  */
-export function publisherCanPublishContent(kind: PublishContentKind, declared: readonly string[]): boolean {
+export function publisherKindsFor(declared: readonly string[]): PublishContentKind[] {
+  if (!declared || declared.length === 0) return [...KIND_ORDER];
+  const normalized = new Set(normalizePublisherCapabilities(declared));
+  if (normalized.size === 0) return [...KIND_ORDER];
+  return KIND_ORDER.filter((kind) => normalized.has(KIND_TOKEN[kind]));
+}
+
+/**
+ * True when the publisher's capabilities allow a publication intent of the
+ * given kind. Each kind maps to exactly one capability - article ->
+ * publish_article, text -> publish_text, image -> publish_image, video ->
+ * publish_video - with no implicit article-as-text fallback. An empty or
+ * unknown capability set stays permissive so legacy publisher rows without a
+ * snapshot never break scheduling.
+ */
+export function publisherCanPublishKind(kind: PublishContentKind, declared: readonly string[]): boolean {
   if (!declared || declared.length === 0) return true;
   const normalized = new Set(normalizePublisherCapabilities(declared));
   if (normalized.size === 0) return true;
-  if (kind === 'article') {
-    return [...normalized].some((c) => ARTICLE_ACCEPTANCE.has(c));
-  }
   return normalized.has(KIND_TOKEN[kind]);
 }
 

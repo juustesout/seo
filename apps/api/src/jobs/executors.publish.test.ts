@@ -187,4 +187,27 @@ describe('publish executor routing to a social publisher (Content Studio Phase H
     expect(sbStores.seo_publications[0].status).toBe('updated');
     expect(sbStores.seo_publications[0].remote_id).toBe('demo:abcdef123456');
   });
+
+  it('fails an X publish safely at the adapter and never marks the publication successful (Phase H6.1)', async () => {
+    const sbStores = stores();
+    sbStores.seo_publishers = [
+      { id: 'pb-x', project_id: 'p1', provider: 'x', name: 'X', status: 'connected', config: {}, capabilities: ['publish_text', 'schedule'] },
+    ];
+    sbStores.seo_publications[0].publisher_id = 'pb-x';
+    const reg = buildRegistry({ config: {}, logger: silentLogger() });
+    const c = container(reg, sbStores);
+
+    await expect(
+      executorFor('publish')({
+        container: c,
+        job: job({ provider: 'x', params: { publication_id: 'pub-1', remote_status: 'publish' } }),
+        writer: {} as SeoWriter,
+        report: async () => undefined,
+      }),
+    ).rejects.toMatchObject({ code: 'publisher_not_available' });
+
+    expect(sbStores.seo_publications[0].status).toBe('queued');
+    expect(sbStores.seo_publications[0].remote_id).toBeNull();
+    expect(sbStores.seo_publications[0].target_url).toBeNull();
+  });
 });
