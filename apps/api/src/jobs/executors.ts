@@ -458,6 +458,34 @@ const knowledgeSourceDelete: JobExecutor = async ({ container, job }) => {
 // Publishing
 // ---------------------------------------------------------------------------
 
+/**
+ * Execute one publication against a connected publisher adapter.
+ *
+ * This is the execution truth for the "one schedule -> one publication record
+ * -> one backing job" invariant: the job carries `params.publication_id`, the
+ * payload lives in seo_publications (content snapshot + publisher + kind) and
+ * the schedule row links to both. The worker has already flipped the schedule
+ * read-model to 'publishing' before this runs.
+ *
+ * Flow:
+ *   1. Load the publication + its publisher row, both project-scoped (RLS) -
+ *      a job can never touch another project's rows.
+ *   2. Resolve the adapter from the registry by the publisher's provider id
+ *      and build a ProviderContext whose credential reader is scoped to this
+ *      publisher row (encrypted store).
+ *   3. Dispatch on job.job_type over the SAME publication row:
+ *        publish         -> adapter.publish(...)    -> status 'published'
+ *        publish_update  -> adapter.update(remoteId,...) -> 'updated'
+ *        publish_delete  -> adapter.delete(remoteId)     -> 'deleted'
+ *      All three require the payload/remote id they need and fail fast
+ *      (validation_error) when it is missing.
+ *   4. On success the publication row is updated with the adapter-confirmed
+ *      remote_id + target_url and the real published_at; the row is only ever
+ *      'published' when the adapter returned a confirmed remote id (no fake
+ *      success). Any adapter failure (PublisherError or transport error)
+ *      propagates to the worker, which records seo_sync_jobs.error + a safe
+ *      message on the publication and syncs the schedule read-model.
+ */
 const publish: JobExecutor = async ({ container, job, report }) => {
   const publicationId = job.params.publication_id as string | undefined;
   if (!publicationId) throw new ApiError(400, 'bad_request', 'publish job requires a publication_id');
@@ -658,6 +686,11 @@ async function contentAnalyze(ctx: JobExecContext): Promise<Record<string, unkno
 // Registry
 // ---------------------------------------------------------------------------
 
+/**
+ * Every job_type -> executor mapping, plus the note that publish_update and
+ * publish_delete intentionally reuse the publish executor (one routine owns the
+ * whole publication lifecycle; the operation is chosen from job.job_type).
+ */
 export const EXECUTORS: Record<string, JobExecutor> = {
   gsc_sync: gscSync,
   dataforseo_rank_sync: dataForSeoRankSync,

@@ -38,6 +38,14 @@ const NOT_CONNECTED =
 const NO_UPDATE_DELETE =
   'Updating or deleting X posts is not supported yet. Nothing was changed on X.';
 
+/**
+ * X adapter. Wraps XOAuthClient (raw HTTP + token calls) and turns it into a
+ * PublisherProvider: it owns token lifecycle during publish (read -> possibly
+ * refresh-on-401 once), payload validation against the 280-char reality of X,
+ * error normalization onto PublisherError and identity-based connect checks.
+ * Deliberately stateless: every call builds a fresh XOAuthClient and reads the
+ * current tokens from ctx.credentials so no stale token ever sits in memory.
+ */
 export class XPublisher implements PublisherProvider {
   readonly id = 'x';
   readonly name = 'X';
@@ -46,15 +54,31 @@ export class XPublisher implements PublisherProvider {
 
   constructor(private readonly deps: ProviderDeps) {}
 
+  /** Fresh, stateless X API client bound to the server's OAuth client id. */
   private client(): XOAuthClient {
     return new XOAuthClient(this.deps.config.X_OAUTH_CLIENT_ID ?? '', this.deps.fetchFn);
   }
 
+  /** Terminal auth error: the user must reconnect the channel; retrying cannot help. */
   private authFailed(message: string, status = 401): PublisherError {
     return new PublisherError('publisher_auth_failed', message, { status, retryable: false });
   }
 
-  /** Normalize any error from the X client onto the shared PublisherError surface. */
+  /**
+   * Normalize any error from the X client onto the shared PublisherError surface.
+   *
+   * Classification rules (why each maps where):
+   *   429  -> rate_limited, retryable (X asks us to back off; same payload is fine later).
+   *   401  -> auth_failed, terminal (bad/expired token; handled upstream by refresh-once,
+   *          reaching here means the refresh also failed or the token was never present).
+   *   403  -> mostly a *content rule* (duplicate tweet, disallowed media), i.e. the token
+   *          is fine but X refuses this content: rejected_content when the problem text
+   *          signals that, otherwise auth_failed as a safe fallback. Never retryable.
+   *   other 4xx -> rejected_content (X refused the specific request).
+   *   5xx/network -> remote_error, retryable (transient server fault).
+   * Unknown/non-X errors become remote_error with the message truncated to 300 chars so a
+   * vendor error string can never blow up the persisted job error or leak internals.
+   */
   private mapError(err: unknown): PublisherError {
     if (err instanceof XApiError) {
       const detail = (err.problem?.detail ?? err.problem?.title ?? `X returned HTTP ${err.status}`).slice(0, 300);
@@ -81,7 +105,18 @@ export class XPublisher implements PublisherProvider {
     return new PublisherError('publisher_remote_error', String(message).slice(0, 300), { retryable: true });
   }
 
-  /** Rotate a stored refresh token; throws a terminal auth error when it fails. */
+  /**
+   * Rotate a stored refresh token; throws a terminal auth error when it fails.
+   *
+   * X *refresh tokens rotate*: the token endpoint returns a new refresh_token on
+   * every refresh, so the freshly returned pair must be persisted immediately.
+   * The rotation is written to the encrypted credential store before the caller
+   * retries with the new access token - if that retry then fails, the stored
+   * pair is still the newest one and a later publish can refresh again. A stale
+   * refresh token (already rotated by a concurrent publish) surfaces as
+   * 400/401/403 from the token endpoint and is mapped to a terminal auth error
+   * telling the user to reconnect - X never accepts an old refresh token twice.
+   */
   private async refreshOnce(ctx: ProviderContext): Promise<string> {
     const refresh = await ctx.credentials.get(X_CRED.refresh);
     if (!refresh) {
@@ -125,6 +160,12 @@ export class XPublisher implements PublisherProvider {
     }
   }
 
+  /**
+   * Resolve the connected X identity from the stored tokens. Any auth problem
+   * (no token stored, expired + refresh failed) is turned into a user-safe
+   * message instead of an exception so connect/test can report a clean
+   * `ok: false, message` rather than surfacing a raw provider error to the UI.
+   */
   private async verifiedIdentity(ctx: ProviderContext): Promise<{ ok: boolean; message: string; user?: { id: string; name: string; username: string } }> {
     const stored = await ctx.credentials.get(X_CRED.access);
     if (!stored) return { ok: false, message: NOT_CONNECTED };

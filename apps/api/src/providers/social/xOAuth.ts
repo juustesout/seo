@@ -73,13 +73,23 @@ export class XApiError extends Error {
   }
 }
 
-/** Parse a (possibly non-JSON) error response into a safe problem object. */
+/**
+ * Parse a (possibly non-JSON) error response into a safe problem object. Only
+ * title/detail/type are kept - never the raw body, so a vendor error payload
+ * cannot smuggle tokens or headers into our persisted job errors.
+ */
 function problemFromJson(json: unknown): XProblem {
   const obj = (json ?? {}) as { title?: string; detail?: string; type?: string };
   return { title: obj.title, detail: obj.detail, type: obj.type };
 }
 
-/** Normalized token result from the X token endpoint. */
+/**
+ * Normalized token result from the X token endpoint. Only resolves when the
+ * response is ok AND carries an access_token; anything else (including a
+ * "successful" HTTP status without a token) throws XApiError with a safe
+ * message. The refresh token is optional on purpose - X omits it on some
+ * grant/refresh responses, and a missing one simply means "no rotation".
+ */
 async function parseTokenResponse(res: Response): Promise<OAuthTokenResult> {
   const json = (await res.json().catch(() => ({}))) as Record<string, unknown>;
   if (!res.ok || typeof json.access_token !== 'string') {
@@ -175,6 +185,13 @@ export class XOAuthClient {
     return { id: data.id, text: typeof data.text === 'string' ? data.text : text };
   }
 
+  /**
+   * Authenticated JSON request to the X API v2 host. Attaches the Bearer token
+   * server-side and never echoes it into logs or errors. A non-ok response is
+   * converted to XApiError carrying the (safe) X problem object; a non-JSON
+   * body is tolerated as null so callers can detect "unexpected response"
+   * instead of crashing on a parse error.
+   */
   private async jsonRequest(
     method: 'GET' | 'POST',
     path: string,

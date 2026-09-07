@@ -44,10 +44,24 @@ export interface PublisherOAuthState {
   verifier: string;
 }
 
+/**
+ * The HMAC secret for OAuth states. It deliberately reuses
+ * CREDENTIALS_ENCRYPTION_KEY: state tokens must be verifiable from any
+ * API/worker process and survive deploys (they live only a few minutes, but a
+ * pod restart mid-flow must not invalidate them), and the platform already
+ * guarantees this key is set, stable and never shipped to the browser. An
+ * empty string here means "not configured" and blocks the whole flow.
+ */
 function stateSecret(container: ServiceContainer): string {
   return container.config.env.CREDENTIALS_ENCRYPTION_KEY ?? '';
 }
 
+/**
+ * Build the ProviderContext the connector sees during this flow. The
+ * credential reader is scoped to this publisher row + provider (so tokens land
+ * under the right encrypted scope), the logger is namespaced per project +
+ * provider, and userId is the acting user - or null for background flows.
+ */
 function publisherCtx(
   container: ServiceContainer,
   args: { projectId: string; userId: string; publisherId: string; provider: string; config: Record<string, unknown> },
@@ -68,6 +82,7 @@ function publisherCtx(
   };
 }
 
+/** Load a publisher row scoped to the project; null when it does not exist there. */
 async function loadPublisher(
   container: ServiceContainer,
   projectId: string,
@@ -82,6 +97,7 @@ async function loadPublisher(
   return (data as Record<string, unknown> | null) ?? null;
 }
 
+/** Human-readable provider name for error messages (falls back to the provider id). */
 function descriptorName(container: ServiceContainer, provider: string): string {
   return container.registry.listPublishers().find((p) => p.id === provider)?.name ?? provider;
 }
@@ -108,6 +124,11 @@ export async function publisherOAuthStart(
     throw ApiError.notConfigured(`${descriptorName(container, provider)} OAuth is not configured on the server`);
   }
 
+  // The PKCE verifier travels inside the signed state, not a server-side
+  // session: the flow is stateless across pods/restarts, and because the state
+  // is HMAC-signed with CREDENTIALS_ENCRYPTION_KEY, only this platform can read
+  // the verifier back. That binds the code exchange to the exact flow that
+  // started it (CSRF-proof) without persisting anything between start/callback.
   const pkce = createPkcePair();
   const state = signJsonPayload(
     {
@@ -185,6 +206,10 @@ export async function publisherOAuthComplete(
 
   try {
     const redirectUri = `${args.redirectBase}${PUBLISHER_OAUTH_CALLBACK_PATH}`;
+    // Exchange + persist the token pair server-side. The access/refresh tokens
+    // are written into the publisher's encrypted credential scope and NEVER
+    // appear in the callback redirect, the UI or any response body - the app
+    // only learns "connected" via the account identity written to config.
     const tokens = await connector.exchangeCode({ code, redirectUri, codeVerifier: parsed.verifier });
     await connector.saveTokens(ctx, tokens);
     const identity = await connector.fetchIdentity(ctx);

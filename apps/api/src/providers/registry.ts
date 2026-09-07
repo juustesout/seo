@@ -1,9 +1,30 @@
 /**
  * Provider registry - the platform's plugin surface.
  *
- * Built once at startup. New data sources / knowledge providers / publishers
- * are added here (or in future in a folder scanned for factories), never by
- * touching the SEO core or the UI.
+ * Built once at startup (buildRegistry) and handed to the rest of the app as
+ * the read-only ProviderRegistry contract. New data sources / knowledge
+ * providers / publishers / AI / media providers are added here (or in a future
+ * folder scanned for factories), never by touching the SEO core or the UI.
+ *
+ * Design decisions baked into this file:
+ *
+ * - Providers are *registered as factories*, not instances. Every `get*()` call
+ *   builds a fresh adapter. Adapters are therefore required to be stateless:
+ *   anything they need for one call (credentials, project config, logger) is
+ *   passed per call through ProviderContext, never cached across calls. This
+ *   keeps concurrent requests for different projects isolated.
+ * - All entries share one id-keyed map, so provider ids must be unique across
+ *   *all* kinds (a duplicate id anywhere is a startup error, even if the kinds
+ *   differ). The `kind` field lets getters filter and the catalog list by kind.
+ * - `order` preserves registration order so the UI catalog lists providers in a
+ *   deterministic, human-curated order rather than map-insertion of an
+ *   undefined variant.
+ * - Publisher OAuth connectors live in a *separate* map, not in `entries`: a
+ *   connector is not a PublisherProvider (it has no publish/update/delete and
+ *   no descriptor of its own). It is keyed by the providerId of the publisher
+ *   it belongs to and resolved through getPublisherOAuth().
+ * - The descriptor served to the UI (list*) carries capabilities and setup
+ *   hints, never secrets. Secrets only ever exist inside a credential store.
  */
 
 import type {
@@ -38,6 +59,7 @@ export interface RegistryBuildDeps {
 interface Entry {
   descriptor: ProviderDescriptor;
   kind: 'datasource' | 'knowledge' | 'publisher' | 'ai' | 'media';
+  /** Factory closure that produces a fresh adapter instance on every get. */
   build: () => unknown;
 }
 
@@ -48,6 +70,11 @@ class Registry implements ProviderRegistry {
 
   constructor(private readonly deps: RegistryBuildDeps) {}
 
+  /**
+   * Shared registration path: rejects duplicate ids (across all kinds) before
+   * anything else can observe an inconsistent catalog, then keeps insertion
+   * order for stable UI listing.
+   */
   private add(entry: Entry) {
     if (this.entries.has(entry.descriptor.id)) {
       throw new Error(`Duplicate provider id registered: ${entry.descriptor.id}`);
@@ -83,6 +110,14 @@ class Registry implements ProviderRegistry {
     this.add({ descriptor: { ...descriptor, kind: 'media' }, kind: 'media', build: () => factory(this.deps) });
   }
 
+  /**
+   * Resolve a provider by id. Each call constructs a fresh adapter from the
+   * stored factory; the returned instance carries no request state, so callers
+   * can safely hand it to a route handler or a worker executor without fear of
+   * cross-request leakage. Returns undefined when the id is unknown or was
+   * registered under a different kind (callers turn that into a 404-style
+   * "provider not configured" outcome, never a crash).
+   */
   getDataSource(id: string) {
     const e = this.entries.get(id);
     if (!e || e.kind !== 'datasource') return undefined;
@@ -95,12 +130,18 @@ class Registry implements ProviderRegistry {
     return e.build() as ReturnType<KnowledgeFactory>;
   }
 
+  /** Resolve a publisher adapter by id (same stateless-per-call contract as getDataSource). */
   getPublisher(id: string) {
     const e = this.entries.get(id);
     if (!e || e.kind !== 'publisher') return undefined;
     return e.build() as ReturnType<PublisherFactory>;
   }
 
+  /**
+   * Resolve the OAuth connector bound to a publisher provider id. Connectors
+   * are not catalog entries (no descriptor, no publish surface) - see the file
+   * header for why they are tracked in their own map.
+   */
   getPublisherOAuth(id: string): PublisherOAuthConnector | undefined {
     const factory = this.oauthConnectors.get(id);
     if (!factory) return undefined;
@@ -188,6 +229,25 @@ export function buildRegistry(deps: RegistryBuildDeps): ProviderRegistry {
   );
 
   // -- Publishers -----------------------------------------------------------
+  //
+  // Adapter contract applied to every publisher below:
+  //   - `capabilities` is the *truthful* declaration of what the adapter can do
+  //     with a real remote platform. It drives both the UI (only offered
+  //     actions show up) and server-side gating (publish_kind is authorized
+  //     only against the exact publish_* token, see publisherCanPublishKind).
+  //     Declaring a capability implies a live implementation, never a stub.
+  //   - publish() may resolve only after the remote platform confirmed the
+  //     post/object exists (it returns the platform's remoteId + url, or a
+  //     url of null for channels that expose none). It must never fabricate
+  //     success when the remote call failed - a failure surfaces as a
+  //     PublisherError so the job/publication history records the truth.
+  //   - Credentials are read per call from ctx.credentials (encrypted store),
+  //     never from config or environment, and never cross to the browser.
+  //
+  // WordPress: full article lifecycle via its REST API. Because it can create,
+  // update and delete remote posts it declares publish_article + update +
+  // delete. Setup is a form (username + application password over Basic auth),
+  // which is why the registry registers no OAuth connector for it.
   registry.registerPublisher(
     () => new WordPressPublisher({ config: deps.config, logger: deps.logger }),
     {
