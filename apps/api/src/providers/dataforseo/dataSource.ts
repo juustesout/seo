@@ -4,6 +4,12 @@
  * All DataForSEO access funnels through DataForSeoClient (auth, retries, rate
  * limits, task APIs). This adapter only decides *which* DataForSEO features map
  * to platform capabilities and normalizes results via normalize.ts.
+ *
+ * Credentials are resolved with a deliberate priority: an account-bound token
+ * stored in seo_credentials (set during connect) wins over a server env token
+ * (DATAFORSEO_BASE64 / LOGIN / PASSWORD), because a per-account credential is
+ * the more specific, revocable choice. Whatever path is taken, the adapter
+ * reports a clear "not configured" ApiError rather than guessing or faking.
  */
 
 import type {
@@ -26,6 +32,7 @@ import {
 } from './normalize.js';
 import { delay } from '../../util.js';
 
+/** One normalized organic-SERP fetch outcome, regardless of live vs task source. */
 export interface SerpFetchOutcome {
   keyword: string;
   engine: string;
@@ -33,6 +40,7 @@ export interface SerpFetchOutcome {
   items: SerpItem[];
 }
 
+/** Credential-vault keys for the two connect modes (raw login+password or pre-encoded Basic). */
 export const DATAFORSEO_CRED_KEYS = {
   login: 'dataforseo_login',
   password: 'dataforseo_password',
@@ -45,6 +53,13 @@ const TASK_BATCH_SIZE = 50;
 const POLL_INTERVAL_MS = 5000;
 const TASK_TIMEOUT_MS = 240_000;
 
+/**
+ * DataForSEO adapter. Capabilities are split along DataForSEO's own product
+ * lines: keyword research and SERP retrieval are synchronous-enough for
+ * interactive use (fetchLiveSerp) while bulk SERP runs go through the async
+ * task API (fetchTaskSerp) so a worker job can post 100s of keywords without
+ * holding an HTTP connection open.
+ */
 export class DataForSeoDataSource implements SeoDataSource {
   readonly id = 'dataforseo';
   readonly name = 'DataForSEO';
@@ -53,6 +68,12 @@ export class DataForSeoDataSource implements SeoDataSource {
 
   constructor(private readonly deps: ProviderDeps) {}
 
+  /**
+   * Resolve a client for this context. Stored account credentials take
+   * precedence over env credentials because they are project-owned and
+   * revocable; env credentials are the server default only when no account
+   * has connected yet. Missing both is an explicit notConfigured error.
+   */
   private async clientFor(ctx: ProviderContext): Promise<DataForSeoClient> {
     let login = await ctx.credentials.get(DATAFORSEO_CRED_KEYS.login);
     let password = await ctx.credentials.get(DATAFORSEO_CRED_KEYS.password);
@@ -78,6 +99,11 @@ export class DataForSeoDataSource implements SeoDataSource {
 
   // -- connection lifecycle --------------------------------------------------
 
+  /**
+   * Validate credentials by hitting the cheap tasks_ready endpoint rather
+   * than spending quota on a real query. Reports the owning login when known
+   * so the UI can label which account is connected.
+   */
   async connect(ctx: ProviderContext) {
     const client = await this.clientFor(ctx);
     await client.serpTasksReady(); // cheap authenticated call -> validates credentials
@@ -89,11 +115,13 @@ export class DataForSeoDataSource implements SeoDataSource {
     };
   }
 
+  /** Drop the stored login/password (the env fallback, if any, stays available). */
   async disconnect(ctx: ProviderContext): Promise<void> {
     await ctx.credentials.delete(DATAFORSEO_CRED_KEYS.login);
     await ctx.credentials.delete(DATAFORSEO_CRED_KEYS.password);
   }
 
+  /** Credentials probe without persisting anything. */
   async testConnection(ctx: ProviderContext): Promise<{ ok: boolean; message?: string }> {
     const client = await this.clientFor(ctx);
     await client.serpTasksReady();
@@ -102,6 +130,12 @@ export class DataForSeoDataSource implements SeoDataSource {
 
   // -- capability: keyword research ------------------------------------------
 
+  /**
+   * Expand a list of seed keywords into suggested keywords. Seeds are capped
+   * at 20 and suggestions at 25 each so a single research request stays
+   * inside a reasonable quota/time budget; callers wanting broader sweeps run
+   * a dataforseo_keyword_research job instead.
+   */
   async researchKeywords(ctx: ProviderContext, seeds: string[]): Promise<KeywordResearchResult[]> {
     const client = await this.clientFor(ctx);
     const results: KeywordResearchResult[] = [];
@@ -177,6 +211,12 @@ export class DataForSeoDataSource implements SeoDataSource {
     return [];
   }
 
+  /**
+   * Competitive landscape: run each keyword's live organic SERP and keep the
+   * domains that are NOT the project's own target_domain. Self-domain rows are
+   * excluded because the point of the list is who else ranks - the caller then
+   * gets ranked competitor snapshots they can persist or chart.
+   */
   async getCompetitors(ctx: ProviderContext, keywords: string[]): Promise<CompetitorItem[]> {
     const ownDomain = (ctx.config.target_domain as string | undefined) ?? null;
     const outcomes = await this.fetchLiveSerp(ctx, keywords, { depth: 20 });
@@ -216,6 +256,16 @@ export class DataForSeoDataSource implements SeoDataSource {
   }
 }
 
+/**
+ * Poll posted SERP tasks until every one has a result (or the deadline hits).
+ *
+ * DataForSEO task results appear asynchronously: we re-query tasks_ready on an
+ * interval, fetch whatever became ready, and track failures per task id. A
+ * task whose fetch fails permanently is recorded and dropped rather than
+ * retried forever; retryable failures are simply revisited on the next poll.
+ * The whole poll is bounded by TASK_TIMEOUT_MS so a stuck vendor never leaves
+ * a worker job hanging - it surfaces as a provider_timeout ApiError instead.
+ */
 async function pollUntilDone(
   client: DataForSeoClient,
   map: Map<string, { task: SerpTask }>,

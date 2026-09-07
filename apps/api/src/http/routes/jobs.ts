@@ -1,4 +1,14 @@
-/** Jobs API: enqueue + cancel background work. Job rows are durable and the UI reads their status through Supabase (RLS) for live progress. */
+/**
+ * Jobs API: enqueue + cancel background work. Job rows are durable and the UI
+ * reads their status through Supabase (RLS) for live progress.
+ *
+ * Mounted at /api/projects/:projectId/jobs. Session-authenticated with role
+ * gates: viewers list jobs, editors enqueue, admins cancel. Enqueuing is thin -
+ * the route validates the job_type against the platform's known vocabulary,
+ * checks the backing provider is honestly configured/connected (never silently
+ * queuing a job whose provider is absent), and delegates row creation to the
+ * container job store. Long provider work never blocks an HTTP handler here.
+ */
 
 import { Router } from 'express';
 import { z } from 'zod';
@@ -11,6 +21,7 @@ export const jobsRouter: Router = Router({ mergeParams: true });
 
 jobsRouter.use(requireAuth);
 
+/** Maps every platform job_type to its owning provider (drives gating + data source resolution). */
 const JOB_PROVIDER: Record<string, string> = {
   gsc_sync: 'gsc',
   dataforseo_rank_sync: 'dataforseo',
@@ -26,6 +37,7 @@ const JOB_PROVIDER: Record<string, string> = {
 
 const KNOWN_JOB_TYPES = Object.keys(JOB_PROVIDER);
 
+/** The most recently created data source of a provider for this project, if any. */
 async function resolveDataSource(container: ReturnType<typeof import('../../context.js').getContainer>, projectId: string, provider: string) {
   const { data } = await container.sb
     .from('seo_data_sources')
@@ -39,9 +51,9 @@ async function resolveDataSource(container: ReturnType<typeof import('../../cont
 }
 
 /**
- * Resolve the connected GSC integration behind a project's linked property.
- * Since Stage 4 the Google connection lives at the account level (integration
- * has project_id NULL) and the project's property references it; legacy rows
+ * The connected GSC integration behind a project's linked property. Since
+ * Stage 4 the Google connection lives at the account level (integration has
+ * project_id NULL) and the project's property references it; legacy rows
  * reference a project-scoped integration. Returns null when unresolved.
  */
 async function resolveGscIntegrationForProject(
@@ -79,6 +91,13 @@ async function resolveGscIntegrationForProject(
   return ownedByProject || ownedByProjectAccount ? integrationId : null;
 }
 
+/**
+ * Verify a provider has a connected integration before a job is enqueued, and
+ * return its id. GSC goes through the account/property link (resolveGsc...);
+ * every other provider needs a connected project-scoped integration row.
+ * Enqueuing without this check would produce jobs that fail at run time
+ * instead of telling the user what to connect.
+ */
 async function assertConnectedIntegration(
   container: ReturnType<typeof import('../../context.js').getContainer>,
   projectId: string,

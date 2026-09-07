@@ -5,6 +5,13 @@
  * returns the reusable report shape. The AI-assisted pass only runs inside the
  * content_analyze job and only appends extra recommendations - the score and
  * base checks always come from the canonical, deterministic evaluator.
+ *
+ * This is another SEO Core service shared by the one-brain rule: the editor
+ * route, REST v1 and the MCP analyze tool all construct it and call analyze()
+ * (pure, no network), while the worker's content_analyze job calls
+ * analyzeAndPersist() to also refresh the stored seo_score. Only the
+ * deterministic score is ever persisted - AI input is advisory and labelled as
+ * such, never written into seo_score.
  */
 
 import { asTipDoc, contentTextOf, evaluateSeo } from '@seo/contracts';

@@ -3,6 +3,13 @@
  * Routes are thin: authorization happens here, then the SEO Core ScheduleService
  * does the work (shared later by REST v1 + MCP). DELETE means cancel - a
  * schedule is a planning row and is never hard-deleted.
+ *
+ * Mounted at /api/projects/:projectId/schedules. Session-authenticated with
+ * role gates: viewers list, editors create/reschedule/cancel. A schedule pairs
+ * a content item with a publisher (kind defaults to article) and a future
+ * timestamp; when it fires, the worker turns it into a queued publication.
+ * Everything else - deduplication, ownership checks, honest errors - is in
+ * ScheduleService so REST and MCP behave identically.
  */
 
 import { Router } from 'express';
@@ -28,6 +35,7 @@ const updateScheduleSchema = z.object({
   scheduled_at: z.string().min(1).max(64),
 });
 
+/** List this project's upcoming schedules (viewers). */
 schedulesRouter.get(
   '/',
   asyncHandler(async (req, res) => {
@@ -39,6 +47,7 @@ schedulesRouter.get(
   }),
 );
 
+/** Create a schedule (editors). Fires through the worker when scheduled_at passes. */
 schedulesRouter.post(
   '/',
   asyncHandler(async (req, res) => {
@@ -52,6 +61,7 @@ schedulesRouter.post(
   }),
 );
 
+/** Move a schedule to a new time (editors). */
 schedulesRouter.patch(
   '/:scheduleId',
   asyncHandler(async (req, res) => {
@@ -65,6 +75,7 @@ schedulesRouter.patch(
   }),
 );
 
+/** Cancel a schedule (editors). The planning row stays - never hard-deleted. */
 schedulesRouter.delete(
   '/:scheduleId',
   asyncHandler(async (req, res) => {

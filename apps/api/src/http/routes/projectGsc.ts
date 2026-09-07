@@ -6,7 +6,12 @@
  * a project only links a registry property (seo_project_properties) and keeps a
  * project-scoped data source so jobs + the dashboard stay project-scoped.
  *
- * Mounted at /api/projects/:projectId/gsc.
+ * Mounted at /api/projects/:projectId/gsc. Session-authenticated: the state
+ * view is available to viewers (so the UI can decide what to show), attach and
+ * unlink are editor+ (they mutate the project's data source and link rows).
+ * Endpoints are thin - every decision (which integration backs the account,
+ * whether the property already exists, what the data source upsert must look
+ * like) is resolved here against the account registry, not hardcoded in the UI.
  */
 
 import { Router } from 'express';
@@ -26,12 +31,18 @@ type Container = ReturnType<typeof import('../../context.js').getContainer>;
 
 type Row = Record<string, unknown>;
 
+/** Read the project row itself; used to resolve which account owns it. */
 async function projectRow(container: Container, projectId: string) {
   const { data, error } = await container.sb.from('seo_projects').select('id, name, account_id').eq('id', projectId).maybeSingle();
   if (error) throw new ApiError(500, 'storage_error', 'Could not read the project');
   return data as Row | null;
 }
 
+/**
+ * The account's connected GSC integration (project_id NULL since Stage 4 moved
+ * the Google connection to account scope). Only this single row can back a
+ * project attach - there is no per-project Google credential anymore.
+ */
 async function connectedAccountIntegration(container: Container, accountId: string) {
   const { data, error } = await container.sb
     .from('seo_integrations')
@@ -49,6 +60,11 @@ async function connectedAccountIntegration(container: Container, accountId: stri
 // GET /state - connection state + current link + attach candidates
 // ---------------------------------------------------------------------------
 
+/**
+ * GET /state - aggregate the account connection state, this project's current
+ * linked property and the registry candidates not yet claimed by another
+ * project. Callers read a single payload instead of three tables.
+ */
 projectGscRouter.get(
   '/state',
   asyncHandler(async (req, res) => {
@@ -103,6 +119,14 @@ projectGscRouter.get(
 // discovered site) to this project.
 // ---------------------------------------------------------------------------
 
+/**
+ * POST /attach - point this project at a Search Console property. Attaching is
+ * idempotent per (project, site_url): it upserts the registry row when the
+ * caller only has a siteUrl, upserts the project-scoped data source bound to
+ * the account integration, marks the property primary on this project and
+ * clears the primary flag on any previous link. Fails loudly when there is no
+ * account or no connected account-level GSC integration.
+ */
 projectGscRouter.post(
   '/attach',
   asyncHandler(async (req, res) => {
@@ -211,6 +235,13 @@ projectGscRouter.post(
 // account connection stay intact; the data source is deactivated).
 // ---------------------------------------------------------------------------
 
+/**
+ * DELETE /attach - unlink the current (or a given) property from this project.
+ * The account registry row and connection deliberately stay intact so the same
+ * property can be re-attached later; only the project link is removed and the
+ * project-scoped data source is flipped to 'inactive' so sync jobs stop
+ * resolving a detached site.
+ */
 projectGscRouter.delete(
   '/attach',
   asyncHandler(async (req, res) => {

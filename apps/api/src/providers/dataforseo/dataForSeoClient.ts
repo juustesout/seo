@@ -12,12 +12,24 @@
  *
  * Everything above the wrapper consumes normalized SEO models (see
  * normalize.ts / dataSource.ts), never raw DataForSEO payloads.
+ *
+ * Error shape is the wrapper's contract: every failure is a DataForSeoError
+ * carrying a `retryable` flag (and the vendor status/code when known). Callers
+ * decide retry policy from that flag instead of re-classifying HTTP statuses,
+ * which keeps the quota/balance (permanent) vs 5xx/429 (retryable) split in
+ * one place.
  */
 
 import { delay } from '../../util.js';
 
 const BASE = 'https://api.dataforseo.com';
 
+/**
+ * Typed failure with an explicit retryability decision. `status` is the HTTP
+ * status (undefined for network-level failures); `code` is DataForSEO's
+ * application status_code when the HTTP layer looked fine but the vendor
+ * rejected the request.
+ */
 export class DataForSeoError extends Error {
   constructor(
     message: string,
@@ -30,6 +42,7 @@ export class DataForSeoError extends Error {
   }
 }
 
+/** Permanent 401/403 credential failure - retrying can never succeed. */
 export class AuthError extends DataForSeoError {
   constructor(message: string) {
     super(message, false, 401);
@@ -37,6 +50,7 @@ export class AuthError extends DataForSeoError {
   }
 }
 
+/** A raw organic-SERP result item exactly as the vendor returns it (indexed for tolerating unknown feature types). */
 export interface SerpItemRaw {
   type?: string;
   rank_group?: number;
@@ -50,6 +64,7 @@ export interface SerpItemRaw {
   [key: string]: unknown;
 }
 
+/** One task's result block (a task may carry several; we read the first). */
 export interface SerpTaskResult {
   keyword?: string;
   location_code?: number;
@@ -62,6 +77,7 @@ export interface SerpTaskResult {
   [key: string]: unknown;
 }
 
+/** A SERP task as returned by task_post / tasks_ready / task_get. */
 export interface SerpTask {
   id: string;
   keyword?: string;
@@ -72,6 +88,7 @@ export interface SerpTask {
   result?: SerpTaskResult[];
 }
 
+/** A keyword suggestion item from keyword_suggestions/live (tolerates both flat and nested shapes). */
 export interface KeywordSuggestion {
   /** keyword_suggestions/live returns a flat item; legacy shapes nest under keyword_data. */
   keyword?: string;
@@ -94,6 +111,7 @@ export interface KeywordSuggestion {
   [key: string]: unknown;
 }
 
+/** Keyword volume/competition metrics, nested under different parents across endpoints. */
 interface KeywordInfo {
   search_volume?: number;
   cpc?: number;
@@ -101,13 +119,21 @@ interface KeywordInfo {
   monthly_searches?: Array<{ year: number; month: number; search_volume: number }>;
 }
 
+/** Keyword difficulty item (keyword_difficulty/live). */
 export interface KeywordDifficultyItem {
   keyword_data?: { keyword?: string };
   keyword_properties?: { keyword_difficulty?: number; keyword_difficulty_info?: { level?: string } };
 }
 
+/** HTTP statuses where a retry (after backoff) has a real chance of succeeding. */
 const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
 
+/**
+ * One DataForSEO account's worth of HTTP. Shared across every data-source call
+ * for a given credential, so the token bucket (`pace`) serializes calls from
+ * concurrent job/request paths - DataForSEO rejects accounts that burst past
+ * their per-minute allowance with 429s.
+ */
 export class DataForSeoClient {
   private authHeader: string;
   /** Simple token-bucket pacing: at most `ratePerMinute` calls per minute. */
@@ -127,6 +153,11 @@ export class DataForSeoClient {
     this.minIntervalMs = rpm > 0 ? Math.ceil(60000 / rpm) : 0;
   }
 
+  /**
+   * Wait until the next rate-limit slot, then reserve it. Reservations are
+   * spaced minIntervalMs apart; the interval is derived from ratePerMinute so
+   * the same client honors whatever allowance the caller configured.
+   */
   private async pace() {
     if (this.minIntervalMs <= 0) return;
     const now = Date.now();
@@ -136,6 +167,13 @@ export class DataForSeoClient {
     this.nextSlotAt = Math.max(this.nextSlotAt, Date.now()) + this.minIntervalMs;
   }
 
+  /**
+   * Turn a vendor failure into a retryable/permanent decision. 401/403 are
+   * auth problems (permanent), known quota/balance codes are permanent (they
+   * will not clear in a retry window), and everything else follows the HTTP
+   * status map. Keeping this classification here means callers never re-parse
+   * vendor error text.
+   */
   private classify(message: string, status: number | undefined, code: number | undefined): DataForSeoError {
     if (status === 401 || status === 403) return new AuthError(`DataForSEO authentication failed (${status})`);
     if (code === 9001 || code === 9002 || code === 9003 || code === 90203 || code === 90206) {
@@ -145,6 +183,14 @@ export class DataForSeoClient {
     return new DataForSeoError(message, retryable, status, code);
   }
 
+  /**
+   * The one HTTP path every call goes through. Retries network failures and
+   * retryable vendor errors up to maxAttempts with exponential backoff (+
+   * jitter so a fleet of retrying jobs does not pile onto the vendor at the
+   * same instant); permanent errors and quota failures throw immediately.
+   * DataForSEO signals success via a status_code in the 20000-29999 window,
+   * so an HTTP-200 body still goes through that check before being returned.
+   */
   async request<T>(method: string, path: string, body?: unknown): Promise<T> {
     const fetchFn = this.opts.fetchFn ?? fetch;
     const maxAttempts = 4;
@@ -216,6 +262,12 @@ export class DataForSeoClient {
     return data.tasks ?? [];
   }
 
+  /**
+   * Fetch a single task's result once it is ready. A 40401 status_code means
+   * the task is not ready yet (or failed server-side) and is treated as
+   * retryable - the polling loop in dataSource.ts relies on this to keep
+   * polling rather than aborting on a not-yet-ready task.
+   */
   async serpTaskGet(taskId: string): Promise<SerpTask> {
     const data = await this.request<{ tasks?: SerpTask[] }>(
       'GET',
@@ -248,6 +300,11 @@ export class DataForSeoClient {
 
   // -- Keyword research (DataForSEO Labs) -----------------------------------
 
+  /**
+   * Keyword suggestions for one seed (DataForSEO Labs). include_serp_info is
+   * off because the platform only stores the suggestion metrics, not the SERP
+   * preview - keeping the response small and the quota spend low.
+   */
   async keywordSuggestions(keyword: string, opts: { locationCode?: number; languageCode?: string; limit?: number } = {}): Promise<KeywordSuggestion[]> {
     const data = await this.request<{ tasks?: Array<{ result?: Array<{ items?: KeywordSuggestion[] }> }> }>(
       'POST',
@@ -265,6 +322,12 @@ export class DataForSeoClient {
     return data.tasks?.[0]?.result?.[0]?.items ?? [];
   }
 
+  /**
+   * Difficulty scores for a batch of keywords, keyed by keyword for O(1)
+   * lookup. Rows the vendor skipped (no numeric difficulty) are simply absent
+   * from the map - a caller that needs every keyword answered checks length
+   * rather than trusting a positional array.
+   */
   async keywordDifficulties(keywords: string[], opts: { locationCode?: number; languageCode?: string } = {}): Promise<Map<string, number>> {
     const map = new Map<string, number>();
     if (keywords.length === 0) return map;

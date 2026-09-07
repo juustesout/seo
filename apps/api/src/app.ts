@@ -1,8 +1,23 @@
 /**
  * Express application assembly. Mounts the capability catalog, user + project
  * data, integrations, publishers/publications, knowledge, jobs and the SEO
- * data read API under /api. Auth is optional at the app level (the Google
- * OAuth callback has no bearer token); every route decides its own guard.
+ * data read API under a single /api namespace.
+ *
+ * Why everything sits under /api: the browser talks to the same origin through
+ * the Vite dev proxy and the deployed app terminates TLS in front of one
+ * port, so one namespace is the contract between web and API. Why mounting
+ * order matters: resolveContainer + optionalAuth run before every route so all
+ * handlers downstream can rely on req.container and req.user; unauthenticated
+ * paths (health, the Google OAuth callback which is a browser redirect) are
+ * mounted early and deliberately skip any guard; project-scoped routers hang
+ * off /api/projects/:projectId so the project id is a path parameter, and each
+ * of them authorizes per-route via container.access.requireRole. The media
+ * router parses only raw image bodies (never JSON) so the global 1mb JSON body
+ * limit does not constrain file uploads, which have their own 12mb raw limit.
+ *
+ * Auth is optional at the app level; every route decides its own guard. The
+ * terminal notFound + errorHandler run last so any unmatched /api path and any
+ * thrown error share one consistent wire shape.
  */
 
 import express from 'express';
@@ -33,6 +48,17 @@ import { projectGscRouter } from './http/routes/projectGsc.js';
 import { v1Router } from './http/routes/v1.js';
 import { createMcpHttpRouter } from './mcp/http.js';
 
+/**
+ * Assemble and return the configured Express app. Pure construction with no
+ * side effects - listening happens in index.ts so tests can mount the app
+ * in-process. trust proxy is enabled so req.ip/req.protocol reflect the real
+ * client behind the reverse proxy that terminates TLS; x-powered-by is
+ * stripped so responses do not advertise the framework. CORS is handled by an
+ * inline middleware that mirrors the request origin only when it is in the
+ * allow-list (the public app URL plus any CORS_ORIGINS), answers OPTIONS
+ * preflights with 204 and otherwise lets the request through (curl, server-to-
+ * server and same-origin traffic carry no Origin header).
+ */
 export function createApp(): Express {
   const app = express();
   app.disable('x-powered-by');

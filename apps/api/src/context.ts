@@ -1,6 +1,10 @@
 /**
  * Service container wiring the API together: config, Supabase service client,
  * access checks, credential store, job store and the provider registry.
+ *
+ * Everything request handlers and executors need is reached through this one
+ * object, so tests can substitute real services with doubles at the container
+ * boundary and no component ever constructs its own Supabase/registry.
  */
 
 import { loadConfig, type AppConfig } from './config.js';
@@ -19,10 +23,15 @@ import type { ProviderContext, ProviderRegistry } from '@seo/contracts';
 
 export interface ServiceContainer {
   config: AppConfig;
+  /** Supabase service-role client. RLS still applies (auth.uid = your user). */
   sb: ReturnType<typeof createAdminClient>;
+  /** Project membership + role authorization for every project-scoped op. */
   access: AccessService;
+  /** AES-encrypted credential store (seo_credentials), never exposed to the web. */
   credentials: CredentialStore;
+  /** Provider plugin surface (adapters by id). */
   registry: ProviderRegistry;
+  /** Durable job queue used by long operations. */
   jobStore: JobStore;
   /** Direct Postgres pool, present when SUPABASE_DB_URL is configured. */
   pgPool: Pool | null;
@@ -30,6 +39,17 @@ export interface ServiceContainer {
 
 let cached: ServiceContainer | null = null;
 
+/**
+ * Build (once) and return the process-wide service container. The container is
+ * a singleton per process so the registry, pools and clients are shared; it
+ * refuses to start when Supabase is not configured, because without it no
+ * request or job can make progress.
+ *
+ * Job-store selection is an environment decision: with SUPABASE_DB_URL a direct
+ * Postgres pool is used (atomic SKIP LOCKED claims + LISTEN/NOTIFY wake-ups);
+ * without it, the Supabase polling store is used so the platform still runs on
+ * a hosted Supabase where no direct DB connection exists.
+ */
 export function getContainer(): ServiceContainer {
   if (cached) return cached;
   const config = loadConfig();
@@ -90,7 +110,11 @@ export function getContainer(): ServiceContainer {
   return container;
 }
 
-/** ProviderContext for operations bound to a publisher (e.g. WordPress). */
+/**
+ * ProviderContext for an operation bound to a publisher row (WordPress, X,
+ * ...): the credential reader is scoped to that publisher so tokens read/write
+ * under the publisher's encrypted scope.
+ */
 export function buildPublisherProviderContext(
   container: ServiceContainer,
   args: { projectId: string; userId: string | null; publisherId: string; providerType: string; config?: Record<string, unknown> },
@@ -103,6 +127,12 @@ export function buildPublisherProviderContext(
   });
 }
 
+/**
+ * Build the ProviderContext passed into adapter calls. It namespaces the logger
+ * per project + provider and scopes the credential reader to the owning
+ * integration or publisher row, so an adapter can only ever see the secrets of
+ * the exact row it is operating on - never another project's or provider's.
+ */
 export function buildProviderContext(
   container: ServiceContainer,
   args: {

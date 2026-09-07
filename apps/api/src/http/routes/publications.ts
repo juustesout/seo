@@ -1,4 +1,15 @@
-/** Publications API: create publish targets from saved content and track attempts. */
+/**
+ * Publications API (Content Studio Phase H3): create publish targets from
+ * saved content and track every publish attempt against third-party outlets.
+ *
+ * Mounted at /api/projects/:projectId/publications. Session-authenticated with
+ * role gates: viewers read history + detail, editors enqueue and manage
+ * publications. Publication is always asynchronous work - POST only inserts a
+ * durable row and enqueues a worker job; HTTP never blocks on the publisher
+ * call. Publishers resolve through container (project-scoped, connected only),
+ * and capability checks use the shared contracts helper so a channel that
+ * cannot carry image/video intent is rejected up front.
+ */
 
 import { Router } from 'express';
 import { z } from 'zod';
@@ -14,6 +25,7 @@ export const publicationsRouter: Router = Router({ mergeParams: true });
 
 publicationsRouter.use(requireAuth);
 
+/** Load a publisher row, failing unless it belongs to this project. */
 async function loadPublisher(container: ReturnType<typeof import('../../context.js').getContainer>, projectId: string, publisherId: string) {
   const { data } = await container.sb
     .from('seo_publishers')
@@ -61,6 +73,7 @@ publicationsRouter.get(
   }),
 );
 
+/** One publication attempt, filtered/paginated server-side. */
 publicationsRouter.get(
   '/:publicationId',
   asyncHandler(async (req, res) => {

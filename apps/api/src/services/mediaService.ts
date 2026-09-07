@@ -14,7 +14,8 @@ import type { MediaObjectStore } from '../infra/mediaStorage.js';
 import { ApiError } from '../apiErrors.js';
 import type { MediaItemDto } from '@seo/contracts';
 
-/** Phase F upload cap (bytes). Request bodies are raw image bytes. */
+/** Phase F upload cap (bytes) for raw image bodies, plus metadata length caps
+ *  for alt text/caption so stored rows stay bounded. */
 export const MEDIA_MAX_BYTES = 8 * 1024 * 1024;
 export const MEDIA_ALT_MAX = 500;
 export const MEDIA_CAPTION_MAX = 2000;
@@ -74,6 +75,7 @@ export class MediaService {
     private readonly store: MediaObjectStore,
   ) {}
 
+  /** Load one project-scoped media row; 404 when missing or foreign. */
   private async mediaRow(projectId: string, id: string): Promise<Row> {
     const { data, error } = await this.sb
       .from('seo_media')
@@ -106,6 +108,9 @@ export class MediaService {
     return map;
   }
 
+  /** List this project's library, newest first, each row enriched with its
+   *  distinct-content usage count (surfaced so the UI can warn before a delete
+   *  is attempted). URLs are always derived from the storage key via the store. */
   async list(projectId: string): Promise<MediaItemDto[]> {
     const { data, error } = await this.sb
       .from('seo_media')

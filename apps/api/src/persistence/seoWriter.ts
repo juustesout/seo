@@ -3,6 +3,12 @@
  * into Supabase (besides user-content CRUD which the web client performs under
  * RLS). Handles upsert semantics that respect historical data (e.g. rankings
  * for a given date are never overwritten once written).
+ *
+ * Why a single writer: every executor (gsc_sync, serp_retrieval, rank_sync,
+ * audit, ...) funnels through here, so idempotency rules, onConflict keys and
+ * "what counts as the natural key" live in one place. Executors therefore
+ * produce typed payloads and never hand-craft inserts, and a new data source
+ * cannot accidentally invent a conflicting storage convention.
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js';
@@ -11,6 +17,7 @@ import { logger } from '../logger.js';
 import type { AuditFinding, IsoDate, IsoDateTime, KeywordResearchResult, SerpItem } from '@seo/contracts';
 import type { GscDailyRow, GscPageRowInput, GscQueryRowInput } from '../providers/gsc/gscDataSource.js';
 
+/** One gsc_sync job's full output: daily rollup + dimensioned query/page rows. */
 export interface GscSyncPayload {
   propertyId: string;
   daily: GscDailyRow[];
@@ -26,6 +33,11 @@ export interface PageInput {
   is_homepage?: boolean;
 }
 
+/**
+ * One ranking observation for a (source, keyword, url, date). Rows are
+ * append-only; `date` is the observation date the report described, not the
+ * write time, so re-syncing an old window must not touch newer data.
+ */
 export interface RankingInput {
   keyword_id?: string | null;
   keyword: string;
@@ -42,6 +54,10 @@ export interface RankingInput {
   meta?: Record<string, unknown>;
 }
 
+/**
+ * One SERP fetch, persisted as one row per ranked result (see persistSerpSnapshots).
+ * results are the ordered organic/paid items the fetch captured.
+ */
 export interface SerpSnapshotInput {
   keyword_id?: string | null;
   keyword: string;
@@ -54,11 +70,23 @@ export interface SerpSnapshotInput {
   results: SerpItem[];
 }
 
+/**
+ * The single persistence gateway for normalized provider SEO data. Takes the
+ * Supabase service-role client; RLS remains the boundary and every write is
+ * project-scoped by the caller-supplied projectId.
+ */
 export class SeoWriter {
   constructor(private readonly sb: SupabaseClient) {}
 
   // -- GSC ------------------------------------------------------------------
 
+  /**
+   * Persist one GSC sync in three upserts. Daily rollups key on
+   * (property_id, date); query/page tables add their dimension columns to the
+   * key. All use onConflict upsert (overwrite on re-sync), which is correct
+   * for GSC because Google returns the *authoritative* number for a date -
+   * unlike rankings, GSC metrics are mutable and a re-sync should update them.
+   */
   async persistGsc(projectId: string, payload: GscSyncPayload) {
     const { propertyId, daily, queries, pages } = payload;
     const gscProperty = { property_id: propertyId };
@@ -113,6 +141,12 @@ export class SeoWriter {
     logger.info({ projectId, propertyId, daily: daily.length, queries: queries.length, pages: pages.length }, 'gsc data persisted');
   }
 
+  /**
+   * Upsert GSC-seen keywords into the keyword registry. Duplicates within one
+   * sync are deduped first; the natural key (project, provider, source,
+   * keyword) makes repeated syncs additive, and the latest position is kept in
+   * meta so the keyword table shows a "last known position" without a join.
+   */
   async ingestGscKeywords(projectId: string, queries: GscQueryRowInput[]) {
     const seen = new Set<string>();
     const now = new Date().toISOString();
@@ -138,6 +172,11 @@ export class SeoWriter {
 
   // -- Pages / keywords / rankings / serp / audits ----------------------------
 
+  /**
+   * Upsert crawled/discovered pages. ignoreDuplicates keeps the first-seen
+   * row (a page's provider/source should not flip each crawl); last_seen_at is
+   * refreshed so the pages list reflects current crawl coverage.
+   */
   async persistPages(projectId: string, pages: PageInput[]) {
     const now = new Date().toISOString();
     await chunkedUpsert(
@@ -155,6 +194,11 @@ export class SeoWriter {
     );
   }
 
+  /**
+   * Persist keyword-research results. These rows overwrite on re-research
+   * (same natural key): unlike rankings, keyword metrics are a fresh snapshot,
+   * and keeping stale volume/difficulty around would mislead the keyword table.
+   */
   async persistKeywordResearch(projectId: string, results: KeywordResearchResult[]) {
     const now = new Date().toISOString();
     const rows = results.map((r) => ({
@@ -203,6 +247,12 @@ export class SeoWriter {
     );
   }
 
+  /**
+   * Persist SERP snapshots as one seo_serp_results row per ranked item (a
+   * snapshot = keyword x ranked URLs at fetched_at). Each item records its
+   * own url/domain/position/kind so the table doubles as a historical SERP
+   * record that can be diffed against the latest fetch per keyword.
+   */
   async persistSerpSnapshots(projectId: string, snapshots: SerpSnapshotInput[]) {
     for (const s of snapshots) {
       await chunkedUpsert(
@@ -229,12 +279,18 @@ export class SeoWriter {
     }
   }
 
+  /**
+   * Append audit findings produced by crawl/audit jobs. Findings carry their
+   * own natural keys from the provider; a fresh audit run is expected to
+   * replace findings for the URLs it re-crawled.
+   */
   async persistAuditFindings(projectId: string, findings: AuditFinding[]) {
     await chunkedUpsert(this.sb, 'seo_audits', findings.map((f) => ({ ...f, project_id: projectId })));
   }
 
   // -- Sync bookkeeping -------------------------------------------------------
 
+  /** Mark a data source successfully synced (drives the "last synced" UI state). */
   async markDataSourceSynced(projectId: string, dataSourceId: string, at = new Date().toISOString()) {
     await this.sb
       .from('seo_data_sources')
@@ -243,6 +299,7 @@ export class SeoWriter {
       .eq('id', dataSourceId);
   }
 
+  /** Flag a data source as failed so the UI shows the error instead of stale silence. */
   async markDataSourceError(projectId: string, dataSourceId: string, message: string) {
     await this.sb
       .from('seo_data_sources')

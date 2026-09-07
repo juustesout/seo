@@ -5,13 +5,25 @@
  * pluggable dependency resolved from server env (EMBEDDINGS_*). If no embedder
  * is configured the KnowledgeProvider refuses to run with a clear
  * "not configured" error - it never falls back to fake vectors.
+ *
+ * Vector dimensionality is a hard invariant: a collection's vector size is
+ * fixed at creation, so the embedder's `dimensions` must be resolved before
+ * the first collection creation and stay stable afterwards. dimensionsForModel
+ * encodes the known model sizes so misconfiguration surfaces as a Qdrant
+ * mismatch error instead of silently truncated vectors.
  */
 
+/**
+ * Something that turns text into equal-length vectors. The dimension must be
+ * known ahead of time (Qdrant collections are dimension-locked) and every
+ * returned vector must match it.
+ */
 export interface Embedder {
   readonly dimensions: number;
   embed(texts: string[]): Promise<number[][]>;
 }
 
+/** OpenAI-compatible embeddings endpoint settings (baseUrl optional -> OpenAI default). */
 export interface EmbedderConfig {
   baseUrl?: string;
   apiKey?: string;
@@ -27,6 +39,12 @@ export function dimensionsForModel(model: string | undefined, fallback = 1536): 
   return fallback;
 }
 
+/**
+ * OpenAI-compatible /embeddings client. Inputs are sent in batches of 8 to
+ * stay well under vendor request limits; a short response (fewer vectors than
+ * texts) is a hard error because a partial index would poison future searches
+ * with silently missing chunks.
+ */
 export class OpenAiCompatibleEmbedder implements Embedder {
   readonly dimensions: number;
 

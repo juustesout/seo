@@ -1,8 +1,19 @@
 /**
  * Supabase admin (service-role) data access + membership authorization used by
- * the API server. Server-side operations re-verify project membership before
- * touching any project-scoped resource (defense in depth on top of RLS, which
- * still protects direct PostgREST browser traffic).
+ * the API server.
+ *
+ * The service-role client (createAdminClient) authenticates the whole server
+ * and bypasses row-level security, so authorization can never be delegated to
+ * PostgREST policies for this client. That is why AccessService re-derives
+ * every caller's project membership from seo_project_members on each request
+ * before any project-scoped row is touched - defense in depth, and the reason
+ * RLS can stay the boundary for direct browser/anon traffic without being the
+ * server's only line of defense. In RLS terms `auth.uid()` still identifies the
+ * end user for anything that talks to PostgREST with a user session; the code
+ * in this module always identifies the user explicitly by `user.sub`.
+ *
+ * chunkedUpsert keeps bulk sync writes inside single-request size limits so a
+ * large payload cannot exceed PostgREST/body constraints or time out.
  */
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
@@ -10,12 +21,23 @@ import { ApiError } from './apiErrors.js';
 import { logger } from './logger.js';
 import type { MemberRole } from '@seo/contracts';
 
+/** Max rows per upsert request - keeps requests under PostgREST/body limits. */
 export const MAX_BATCH_ROWS = 800;
 
+/** Loose row shape for generic bulk writes (values are untyped by design). */
 export interface RowLike {
   [key: string]: unknown;
 }
 
+/**
+ * Build the service-role (admin) Supabase client. persistSession and
+ * autoRefreshToken are disabled because this is a long-lived server process,
+ * not a browser: there is no storage to persist a session into and no user
+ * session to refresh - the service key itself authenticates every request.
+ * Because that key bypasses RLS, AccessService must re-check membership for
+ * every project-scoped operation (see module header). x-application-name tags
+ * each request for Supabase-side observability.
+ */
 export function createAdminClient(url: string, serviceRoleKey: string): SupabaseClient {
   return createClient(url, serviceRoleKey, {
     auth: { persistSession: false, autoRefreshToken: false },
@@ -25,6 +47,15 @@ export function createAdminClient(url: string, serviceRoleKey: string): Supabase
   });
 }
 
+/**
+ * Batch upsert that never sends more than MAX_BATCH_ROWS rows per request, so
+ * large sync payloads stay within single-request limits and a storage failure
+ * can be attributed to the chunk that caused it. `inserted` counts every row
+ * handed to upsert (an ignored duplicate still counts); options pass through to
+ * the underlying PostgREST upsert (onConflict column and ignoreDuplicates).
+ * Throws a 500 storage_error with the failing chunk offset rather than
+ * swallowing partial failures.
+ */
 export async function chunkedUpsert(
   sb: SupabaseClient,
   table: string,
@@ -49,6 +80,7 @@ export async function chunkedUpsert(
   return { inserted };
 }
 
+/** Role a user holds on a project (read from the seo_project_members join). */
 export interface ProjectRole {
   project_id: string;
   role: MemberRole;
@@ -65,9 +97,23 @@ export interface ProjectBrief {
   role: MemberRole | null;
 }
 
+/**
+ * Project/account membership authorization (defense in depth). The service-role
+ * client bypasses RLS, so every project-scoped entry point must re-derive the
+ * caller's role from seo_project_members through this class before any
+ * project-scoped row is read or written. Keeping all membership/role logic here
+ * (instead of in route handlers) means authorization has exactly one
+ * implementation and one error vocabulary across REST, worker and MCP surfaces.
+ */
 export class AccessService {
   constructor(private readonly sb: SupabaseClient) {}
 
+  /**
+   * One-row role lookup scoped to both user_id and project_id - null when the
+   * user is not a member at all. Storage errors surface as 500, never as
+   * "forbidden": reporting "you lack access" when the database is merely
+   * failing would hide a real outage behind an auth error.
+   */
   private async membership(userId: string, projectId: string): Promise<{ role: MemberRole } | null> {
     const { data, error } = await this.sb
       .from('seo_project_members')
@@ -82,6 +128,7 @@ export class AccessService {
     return data ? { role: data.role as MemberRole } : null;
   }
 
+  /** Public role read for callers that need the role but no authorization side effect. */
   async getRole(userId: string, projectId: string): Promise<MemberRole | null> {
     const m = await this.membership(userId, projectId);
     return m?.role ?? null;
@@ -105,6 +152,10 @@ export class AccessService {
     return { project_id: projectId, role };
   }
 
+  /**
+   * True when the project row exists. Lets a route distinguish "the project is
+   * unknown" from "the user is not a member" so it can answer 404 vs 403.
+   */
   async projectExists(projectId: string): Promise<boolean> {
     const { data, error } = await this.sb.from('seo_projects').select('id').eq('id', projectId).maybeSingle();
     if (error) {
@@ -130,7 +181,13 @@ export class AccessService {
     return { account_id: accountId };
   }
 
-  /** Every project a user is a member of, with their role (for account keys). */
+  /**
+   * Every project a user is a member of, with their role - the reach of an
+   * account (master) API key. Two queries by design: roles are read from
+   * seo_project_members, then project metadata is fetched in one batched in()
+   * instead of a cross-table join, keeping this cheap for users with many
+   * memberships.
+   */
   async listMembershipProjects(userId: string): Promise<ProjectBrief[]> {
     const { data: members, error } = await this.sb
       .from('seo_project_members')

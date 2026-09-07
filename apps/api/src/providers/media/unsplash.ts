@@ -3,6 +3,13 @@
  *
  * Requires UNSPLASH_ACCESS_KEY (server-side env). Results point to Unsplash
  * URLs and are meant to be hotlinked with attribution in the article metadata.
+ *
+ * The provider deliberately returns remote Unsplash URLs instead of proxying
+ * or re-uploading bytes: Unsplash's license terms allow hotlinking with
+ * attribution, and storing derived copies would create a second source of
+ * truth for the same asset. If the key is absent the provider reports "not
+ * configured" (isConfigured false / search throws) - no placeholder image is
+ * ever fabricated.
  */
 
 import type {
@@ -19,6 +26,10 @@ export interface UnsplashProviderDeps {
   fetchFn?: typeof fetch;
 }
 
+/**
+ * Search-only Unsplash adapter. Stateless apart from config + injected fetch,
+ * so a single registry instance safely serves concurrent content-image jobs.
+ */
 export class UnsplashMediaProvider implements MediaProvider {
   readonly id = 'unsplash';
   readonly name = 'Unsplash';
@@ -31,10 +42,18 @@ export class UnsplashMediaProvider implements MediaProvider {
     this.fetchFn = deps.fetchFn ?? fetch;
   }
 
+  /** True only when a server key exists; the UI mirrors this for the "not configured" state. */
   isConfigured(): boolean {
     return Boolean(this.deps.config.UNSPLASH_ACCESS_KEY);
   }
 
+  /**
+   * Search photos. The API is called with the Client-ID header (not Bearer) -
+   * the only auth shape Unsplash accepts. Each result maps to MediaResult with
+   * the regular-size image as the primary url and the small crop as thumbnail;
+   * descriptions fall back from `description` to `alt_description` so a search
+   * card always has alt text.
+   */
   async search(opts: MediaSearchOptions): Promise<MediaResult[]> {
     const key = this.deps.config.UNSPLASH_ACCESS_KEY;
     if (!key) {

@@ -1,6 +1,13 @@
 /**
  * Project API key management (session-authenticated UI routes).
  * Owners/admins create, list and revoke keys; the plaintext key is shown once.
+ *
+ * Mounted at /api/projects/:projectId/api-keys. These keys are the bearer
+ * credentials for the REST v1 and MCP surfaces, so management is deliberately
+ * admin-only (container.access.requireRole ... 'admin'): whoever can mint a key
+ * can act as the project over those interfaces. The ApiKeyStore scopes every
+ * operation to the project, and the plaintext token is returned exactly once -
+ * it is stored only as a hash, so revoke is the only way to invalidate it.
  */
 
 import { Router } from 'express';
@@ -21,6 +28,7 @@ const createSchema = z
   })
   .passthrough();
 
+/** List this project's API keys (non-secret records; admins only). */
 projectApiKeysRouter.get(
   '/',
   asyncHandler(async (req, res) => {
@@ -32,6 +40,7 @@ projectApiKeysRouter.get(
   }),
 );
 
+/** Create a project API key (scopes default to read). The plaintext is shown once. */
 projectApiKeysRouter.post(
   '/',
   asyncHandler(async (req, res) => {
@@ -55,6 +64,7 @@ projectApiKeysRouter.post(
   }),
 );
 
+/** Revoke one key (POST variant used by the UI action button). */
 projectApiKeysRouter.post(
   '/:keyId/revoke',
   asyncHandler(async (req, res) => {
@@ -67,6 +77,7 @@ projectApiKeysRouter.post(
   }),
 );
 
+/** Revoke one key (DELETE variant). */
 projectApiKeysRouter.delete(
   '/:keyId',
   asyncHandler(async (req, res) => {

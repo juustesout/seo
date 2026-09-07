@@ -21,6 +21,7 @@ import type { ApiKeyRecord } from '../infra/apiKeys.js';
 import { ApiError } from '../apiErrors.js';
 import { depsFromApiKey, createSeoMcpServer } from './session.js';
 
+/** A live MCP session: the tool server plus its streamable-HTTP transport, keyed by mcp-session-id. */
 interface McpHttpSession {
   server: McpServer;
   transport: StreamableHTTPServerTransport;
@@ -34,12 +35,17 @@ export interface McpHttpRouterOptions {
   authenticate?: (token: string, container: ServiceContainer) => Promise<ApiKeyRecord | null>;
 }
 
+/** Pulls the bare token out of an `Authorization: Bearer ...` header (case-insensitive). */
 function bearerToken(req: Request): string | null {
   const header = req.header('authorization');
   const match = /^Bearer\s+(.+)$/i.exec(header ?? '');
   return match ? match[1].trim() : null;
 }
 
+/**
+ * JSON-RPC error body helper. -32001 is the SDK-level server error range and
+ * lets clients distinguish "the server rejected this" from a real response.
+ */
 function respondMpcError(res: Response, status: number, message: string): void {
   res.status(status).json({ jsonrpc: '2.0', id: null, error: { code: -32001, message } });
 }
@@ -50,6 +56,12 @@ function sessionIdOf(req: Request): string | null {
   return id && id.length > 0 ? id : null;
 }
 
+/**
+ * Build the /api/mcp router. Sessions are held in-memory per transport; the
+ * router only performs authentication + session bookkeeping, never business
+ * logic - every tool call goes through the same SEO Core services as REST and
+ * stdio, with the project resolved from the session's API key per request.
+ */
 export function createMcpHttpRouter(options: McpHttpRouterOptions = {}): Router {
   const router = Router();
   const sessions = new Map<string, McpHttpSession>();
@@ -57,6 +69,7 @@ export function createMcpHttpRouter(options: McpHttpRouterOptions = {}): Router 
     options.authenticate ??
     ((token: string, container: ServiceContainer) => new ApiKeyStore(container.sb).authenticate(token));
 
+  /** Map any thrown error to a JSON-RPC error response (ApiError status preserved). */
   function handleErr(res: Response, err: unknown): void {
     const message = err instanceof ApiError ? err.message : err instanceof Error ? err.message : 'Internal error';
     const status = err instanceof ApiError && err.status >= 400 && err.status < 600 ? err.status : 500;

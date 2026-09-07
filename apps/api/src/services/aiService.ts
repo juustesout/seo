@@ -13,6 +13,12 @@
  * The account owns the AI key and every project under it can use it; projects
  * may still override with their own key. Nothing here ever sends a stored key
  * (or any credential) to the browser.
+ *
+ * This is the single AI resolution gate shared by the UI/REST routes, the
+ * content agent, the analysis/intelligence AI passes and (for project-bound
+ * embeddings) EmbeddingService. All AI work therefore flows through one
+ * provider interface from the registry and reports 'not configured' honestly
+ * instead of pretending a provider exists when no key is effective.
  */
 
 import type {
@@ -55,6 +61,8 @@ export class AIService {
   // Project settings
   // -------------------------------------------------------------------------
 
+  /** Loads account_id + non-secret settings for a project - the anchor every
+   *  account-vs-project credential decision below starts from. */
   private async readProjectRow(projectId: string): Promise<ProjectAiRow> {
     const { data, error } = await this.container.sb
       .from('seo_projects')
@@ -196,6 +204,12 @@ export class AIService {
     };
   }
 
+  /**
+   * Merge non-secret AI settings (provider + model choices) into the project's
+   * seo_projects.settings.ai. Only registered providers (or the built-in
+   * default) are accepted; secrets are managed separately via setApiKey /
+   * setAccountKey. Returns the refreshed status so the caller can re-render.
+   */
   async updateSettings(projectId: string, input: ProjectAiSettingsInput): Promise<ProjectAiStatusDto> {
     const current = await this.readSettings(projectId);
     const providerId = input.provider ?? current.provider;
@@ -236,6 +250,8 @@ export class AIService {
   // Account-level AI configuration (Stage-4 style seo_integrations vault)
   // -------------------------------------------------------------------------
 
+  /** Friendly, secret-free message for a failed encrypted-credential read
+   *  (never echo storage or decryption internals to the client). */
   private friendlyCredentialError(err: unknown): string {
     if (err instanceof ApiError && err.code === 'not_configured') {
       return 'Credential storage is not configured on the server';
@@ -275,6 +291,8 @@ export class AIService {
     return { providers };
   }
 
+  /** Registry descriptor for a provider id, or a clean 400 - the gate that
+   *  keeps provider ids canonical before any row or credential is touched. */
   private requireAiDescriptor(providerId: string): AiDescriptor {
     const descriptor = this.container.registry.listAI().find((d) => d.id === providerId);
     if (!descriptor) throw ApiError.badRequest(`Unknown AI provider: ${providerId}`);

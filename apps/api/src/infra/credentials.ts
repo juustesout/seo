@@ -14,31 +14,49 @@ import { logger } from '../logger.js';
 
 type Owner = { integrationId: string } | { publisherId: string } | { projectId: string; scope: 'ai' };
 
-/** Column/value pair that identifies the owner row for a credential. */
+/**
+ * The DB column that owns a credential row. Integrations and publishers have
+ * their own owner column + unique constraint so a key name is only unique
+ * within one owner, never globally.
+ */
 function ownerColumn(owner: Owner): string {
   if ('integrationId' in owner) return 'integration_id';
   if ('publisherId' in owner) return 'publisher_id';
   return 'project_id';
 }
 
+/** The { owner_column: owner_id } pair used to match rows in WHERE clauses. */
 function ownerMatch(owner: Owner): Record<string, string> {
   if ('integrationId' in owner) return { integration_id: owner.integrationId };
   if ('publisherId' in owner) return { publisher_id: owner.publisherId };
   return { project_id: owner.projectId };
 }
 
+/** Column pair the per-owner unique constraint spans (for upsert onConflict). */
 function ownerConflict(owner: Owner): string {
   if ('integrationId' in owner) return 'integration_id,key_name';
   if ('publisherId' in owner) return 'publisher_id,key_name';
   return 'project_id,key_name';
 }
 
+/**
+ * AES-encrypted credential store over seo_credentials. All writes go through
+ * Supabase as the service-role user, so RLS still applies; rows are scoped by
+ * owner column and never fetched across owners. A null key means the store is
+ * unusable and every operation fails with a "not configured" ApiError rather
+ * than silently storing plaintext.
+ */
 export class CredentialStore {
   constructor(
     private readonly sb: SupabaseClient,
     private readonly key: Buffer | null,
   ) {}
 
+  /**
+   * Fail fast when CREDENTIALS_ENCRYPTION_KEY is absent. This guard is the
+   * reason a misconfigured server can never degrade into writing secrets in
+   * the clear.
+   */
   private requireKey(): Buffer {
     if (!this.key) {
       throw ApiError.notConfigured(
@@ -48,6 +66,11 @@ export class CredentialStore {
     return this.key;
   }
 
+  /**
+   * The CredentialReader surface providers receive (via ProviderContext /
+   * publisher context). Each reader is bound to exactly one owner + provider
+   * type, so provider code cannot read across owners even if it tried.
+   */
   reader(owner: Owner, providerType: string): CredentialReader {
     return {
       get: (key) => this.get(owner, providerType, key),
@@ -56,6 +79,12 @@ export class CredentialStore {
     };
   }
 
+  /**
+   * Read + decrypt one credential. Ciphertext columns are fetched for the
+   * exact owner row; a missing row yields null (callers treat that as "not
+   * connected"), a decryption failure is a hard error because tampered or
+   * wrongly-keyed ciphertext must never surface as a plausible secret.
+   */
   private async get(owner: Owner, providerType: string, keyName: string): Promise<string | null> {
     const query = this.sb
       .from('seo_credentials')
@@ -82,6 +111,11 @@ export class CredentialStore {
     }
   }
 
+  /**
+   * Encrypt + upsert one credential under its owner's unique (owner, key_name)
+   * constraint. meta carries non-secret context (e.g. OAuth scope) that the UI
+   * may read; the value itself only ever exists server-side in ciphertext.
+   */
   private async set(
     owner: Owner,
     providerType: string,
@@ -108,6 +142,7 @@ export class CredentialStore {
     }
   }
 
+  /** Remove a single credential (used when a token is rotated away or a scope dropped). */
   private async delete(owner: Owner, providerType: string, keyName: string): Promise<void> {
     const { error } = await this.sb
       .from('seo_credentials')

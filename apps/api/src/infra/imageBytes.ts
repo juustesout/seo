@@ -1,10 +1,16 @@
 /**
  * Byte-level image detection (Content Studio Phase F).
  *
- * Uploaded files are never trusted by their content-type header or extension:
- * the first bytes are sniffed and the pixel dimensions are read directly from
- * the container/header. Only the Phase F formats are recognized - anything else
- * (SVG included) is reported as unsupported rather than guessed at.
+ * Uploaded files are never trusted by their content-type header or filename
+ * extension: the first bytes are sniffed and the pixel dimensions are read
+ * directly from the container/header, so a mislabeled or malicious file cannot
+ * smuggle itself through as a different format. Only the Phase F raster formats
+ * (PNG/JPEG/WebP) are recognized - SVG is deliberately rejected (it can carry
+ * scripts and has no raster dimensions) and anything else is reported as
+ * unsupported rather than guessed at. Parsing is bounded and never decodes the
+ * full image, so it is safe to run on untrusted uploads within the route body
+ * limit; dimension sanity caps (MAX_EDGE) stop a crafted header from feeding an
+ * absurd width/height into resize or cost decisions downstream.
  */
 
 export type SniffedImageMime = 'image/png' | 'image/jpeg' | 'image/webp';
@@ -17,8 +23,18 @@ export interface SniffedImage {
   height: number | null;
 }
 
+/**
+ * Upper bound for an accepted pixel edge. Rejects headers claiming absurd
+ * dimensions (decompression-bomb style) before they reach any resize or
+ * storage decision, keeping downstream work bounded.
+ */
 const MAX_EDGE = 20000;
 
+/**
+ * Bounds-checked byte compare of `buf[offset..]` against a fixed signature.
+ * The length guard matters: every caller uses this on a buffer that may be
+ * shorter than the signature it is looking for.
+ */
 function matches(buf: Buffer, sig: readonly number[], offset: number): boolean {
   if (offset + sig.length > buf.length) return false;
   for (let i = 0; i < sig.length; i += 1) {
@@ -27,10 +43,20 @@ function matches(buf: Buffer, sig: readonly number[], offset: number): boolean {
   return true;
 }
 
+/**
+ * Sanity gate for parsed dimensions: rejects zero, negative, non-finite and
+ * over-MAX_EDGE values. Every format parser funnels its result through this so
+ * the guards are defined once, not re-derived per format.
+ */
 function sane(w: number, h: number): boolean {
   return Number.isFinite(w) && Number.isFinite(h) && w > 0 && h > 0 && w <= MAX_EDGE && h <= MAX_EDGE;
 }
 
+/**
+ * Parse PNG dimensions from the IHDR chunk (the width/height at fixed offsets
+ * 16/20 after the 8-byte signature). Returns null for anything that is not a
+ * well-formed-enough PNG to read those bytes from.
+ */
 function png(buf: Buffer): SniffedImage | null {
   if (buf.length < 24) return null;
   // IHDR chunk: length(4) 'IHDR'(4) width(4) height(4)
@@ -41,6 +67,12 @@ function png(buf: Buffer): SniffedImage | null {
   return { mime: 'image/png', ext: 'png', width, height };
 }
 
+/**
+ * Parse JPEG dimensions. JPEG stores dimensions in an SOF marker that can sit
+ * anywhere in the segment table, so the parser walks markers until it finds
+ * one; the walk is bounded (guard) so a truncated or garbage stream cannot
+ * spin forever. Returns null when no SOF is reached before the scan data.
+ */
 function jpeg(buf: Buffer): SniffedImage | null {
   // Walk the segment table until an SOF marker yields dimensions (bounded, so a
   // truncated/garbage file cannot spin forever).
@@ -78,6 +110,13 @@ function jpeg(buf: Buffer): SniffedImage | null {
   return null;
 }
 
+/**
+ * Parse WebP dimensions. WebP has three containers with different layouts, so
+ * the fourcc after the RIFF header picks the branch: VP8X (extended, 24-bit
+ * little-endian dims at fixed offset), VP8L (lossless, dims packed in a 32-bit
+ * header word) and VP8 (lossy, dims in the frame tag after the 9d 01 2a start
+ * code). Each branch is individually bounds-checked and sanity-capped.
+ */
 function webp(buf: Buffer): SniffedImage | null {
   if (buf.length < 30) return null;
   if (!matches(buf, [0x52, 0x49, 0x46, 0x46], 0)) return null;
@@ -117,7 +156,10 @@ function webp(buf: Buffer): SniffedImage | null {
 
 /**
  * Sniff a buffer and report the detected Phase F image format + dimensions.
- * Returns null when the bytes are not a supported image (or are truncated).
+ * Dispatch order matches the signatures (PNG, JPEG, WebP); anything else -
+ * including SVG, GIF and truncated files - returns null. Purely header-level
+ * and bounded, so it is safe on untrusted bytes; width/height may be null only
+ * when a format reports no usable dimensions.
  */
 export function sniffImage(buf: Buffer): SniffedImage | null {
   if (!buf || buf.length < 12) return null;

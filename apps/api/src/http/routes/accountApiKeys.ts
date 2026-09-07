@@ -8,6 +8,12 @@
  * v1 / MCP boundary). Management is strictly owner-scoped: a user can only
  * see, create and revoke their own account keys. The plaintext key is shown
  * exactly once at creation.
+ *
+ * Unlike project resources there is no editor/admin role gate here - holding
+ * the account is the gate. Authorization is the session user resolving their
+ * own account via container.access.requireAccount; the key store (infra/
+ * apiKeys.ts) enforces ownership on every read/revoke by filtering on
+ * created_by, so one user can never list or revoke another user's keys.
  */
 
 import { Router } from 'express';
@@ -28,6 +34,7 @@ const createSchema = z
   })
   .passthrough();
 
+/** List the caller's own account keys (non-secret records only). */
 accountApiKeysRouter.get(
   '/',
   asyncHandler(async (req, res) => {
@@ -44,6 +51,7 @@ accountApiKeysRouter.get(
   }),
 );
 
+/** Create an account key (project_id NULL). The plaintext key is returned once. */
 accountApiKeysRouter.post(
   '/',
   asyncHandler(async (req, res) => {
@@ -66,6 +74,7 @@ accountApiKeysRouter.post(
   }),
 );
 
+/** Revoke one of the caller's account keys (POST variant for the UI action). */
 accountApiKeysRouter.post(
   '/:keyId/revoke',
   asyncHandler(async (req, res) => {
@@ -77,6 +86,7 @@ accountApiKeysRouter.post(
   }),
 );
 
+/** Revoke one of the caller's account keys (DELETE variant). */
 accountApiKeysRouter.delete(
   '/:keyId',
   asyncHandler(async (req, res) => {

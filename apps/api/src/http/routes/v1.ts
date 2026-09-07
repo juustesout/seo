@@ -13,6 +13,10 @@
  *    never acts stronger than the creator's membership role in that project
  *    (writes additionally require the editor role), so an owner/admin can hand
  *    a master key to an agent without ever granting more than their own reach.
+ *
+ * Keys also carry scopes: reads need the 'read' scope, mutations need 'write'.
+ * There is no session cookie here - every request is authenticated purely by
+ * the Bearer key (seo_live_...), so these routes work for programmatic agents.
  */
 
 import { Router } from 'express';
@@ -35,6 +39,11 @@ declare global {
 
 export const v1Router: Router = Router({ mergeParams: true });
 
+/**
+ * Bearer API-key authentication middleware: resolves seo_live_... tokens to a
+ * stored record (rejecting revoked/unknown ones) and attaches it to the
+ * request. Pure auth - project authorization happens per route afterwards.
+ */
 async function requireApiKey(req: Request, _res: Response, next: NextFunction): Promise<void> {
   try {
     const header = req.header('authorization') ?? '';
@@ -82,10 +91,12 @@ export async function authorizeKeyProject(
   return requested;
 }
 
+/** Role-gated helper over authorizeKeyProject using the already-auth'd request key. */
 async function authorizeProject(req: Request, minRole: 'viewer' | 'editor'): Promise<string> {
   return authorizeKeyProject(req.container.access, req.apiKey!, req.params.projectId, minRole);
 }
 
+/** Reject the request unless the authenticated key carries the given scope. */
 function requireScope(req: Request, scope: ApiKeyScope): void {
   if (!req.apiKey!.scopes.includes(scope)) {
     throw new ApiError(403, 'forbidden', `API key lacks the "${scope}" scope`);
@@ -94,6 +105,7 @@ function requireScope(req: Request, scope: ApiKeyScope): void {
 
 const asContainer = (req: Request) => req.container;
 
+/** GET /content - list content items (read scope, viewer role). */
 v1Router.get('/projects/:projectId/content', requireApiKey, asyncHandler(async (req, res) => {
   requireScope(req, 'read');
   const projectId = await authorizeProject(req, 'viewer');
@@ -107,6 +119,7 @@ v1Router.get('/projects/:projectId/content', requireApiKey, asyncHandler(async (
   res.json({ data: result });
 }));
 
+/** GET /content/:id - one content item (read scope, viewer role). */
 v1Router.get('/projects/:projectId/content/:id', requireApiKey, asyncHandler(async (req, res) => {
   requireScope(req, 'read');
   const projectId = await authorizeProject(req, 'viewer');
@@ -114,6 +127,7 @@ v1Router.get('/projects/:projectId/content/:id', requireApiKey, asyncHandler(asy
   res.json({ data: await svc.get(projectId, req.params.id) });
 }));
 
+/** GET /content/:id/analysis - the saved SEO/AI analysis for one item (read scope, viewer). */
 v1Router.get('/projects/:projectId/content/:id/analysis', requireApiKey, asyncHandler(async (req, res) => {
   requireScope(req, 'read');
   const projectId = await authorizeProject(req, 'viewer');
@@ -133,6 +147,7 @@ const contentPatchSchema = z
   })
   .passthrough();
 
+/** PATCH /content/:id - update fields on one content item (write scope, editor role). */
 v1Router.patch('/projects/:projectId/content/:id', requireApiKey, asyncHandler(async (req, res) => {
   requireScope(req, 'write');
   const projectId = await authorizeProject(req, 'editor');
@@ -150,6 +165,7 @@ v1Router.patch('/projects/:projectId/content/:id', requireApiKey, asyncHandler(a
   res.json({ data: row });
 }));
 
+/** POST /content/:id/analyze - enqueue an analysis job (write scope, editor role). */
 v1Router.post('/projects/:projectId/content/:id/analyze', requireApiKey, asyncHandler(async (req, res) => {
   requireScope(req, 'write');
   const projectId = await authorizeProject(req, 'editor');

@@ -51,6 +51,9 @@ const TEXT_RELEVANT_CHECKS = new Set([
   'excessive_repetition',
 ]);
 
+/** Per-action output budget (tokens): generation-heavy actions (expand,
+ *  generate_section) get more room than surgical edits so latency per request
+ *  stays bounded and predictable. */
 const MAX_TOKENS: Record<ContentAiAction, number> = {
   rewrite: 1200,
   improve: 1200,
@@ -64,6 +67,7 @@ const MAX_TOKENS: Record<ContentAiAction, number> = {
 const REQUEST_TIMEOUT_MS = 60_000;
 const MAX_OUTPUT_CHARS = 12000;
 
+/** Strip a markdown ```json fence some models add around JSON output. */
 function stripCodeFence(text: string): string {
   return text
     .trim()
@@ -71,6 +75,11 @@ function stripCodeFence(text: string): string {
     .replace(/```\s*$/, '');
 }
 
+/** The single mapping from a client action id to its editing directive.
+ *  'improve_seo' is the only one that references the deterministic failing
+ *  checks (so AI fixes what the engine flags); 'generate_section' asks for
+ *  blank-line-separated paragraphs with optional "## " subheads that the client
+ *  parses back into heading blocks. */
 function actionDirective(input: ContentAiActionInput): string {
   switch (input.action) {
     case 'rewrite':
@@ -92,10 +101,16 @@ function actionDirective(input: ContentAiActionInput): string {
   }
 }
 
+/** The fixed, strict output contract every action must satisfy. Centralizing it
+ *  (instead of repeating it in each directive) is what lets
+ *  parseContentAiOutput validate strictly while keeping the model honest about
+ *  facts - no invented statistics, quotes, links or sources. */
 function outputRule(): string {
   return 'Reply with ONLY a JSON object of the exact shape {"text": string, "reason": string}. "text" is the new copy as plain text with paragraphs separated by a single blank line - no markdown, no HTML, no code fences, no surrounding quotes. "reason" is a short one-line explanation of what changed. Never invent statistics, quotes, links, sources or citations; preserve the author\u2019s meaning and factual claims.';
 }
 
+/** system + user halves of one action prompt. system always carries the strict
+ *  output contract; user carries the action-specific context. */
 export interface ContentAiPrompt {
   system: string;
   user: string;
@@ -236,6 +251,9 @@ export function mapContentAiError(err: unknown): ApiError {
   return new ApiError(502, 'ai_provider_error', 'The AI provider returned an unexpected error. Please try again.');
 }
 
+/** Bound one AI request so an HTTP handler can never hang on a provider. On
+ *  expiry the promise rejects with the sentinel message 'AI_TIMEOUT', which
+ *  mapContentAiError translates into a clean 504 for the client. */
 function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('AI_TIMEOUT')), ms);
@@ -252,6 +270,8 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   });
 }
 
+/** One-shot strict-JSON chat call for an action; parseContentAiOutput throws a
+ *  422 on malformed/empty/oversized output so raw model text never surfaces. */
 async function chatJsonOnce(provider: AIProvider, system: string, user: string, maxTokens: number): Promise<ParsedAiOutput> {
   const result = await provider.chat({
     messages: [

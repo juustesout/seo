@@ -6,6 +6,14 @@
  * tolerate the legacy block array). content_html + outline are always derived
  * with the shared contracts renderer so the UI, REST, MCP and the content agent
  * agree on the same output.
+ *
+ * This is part of the one SEO Core brain: the UI routes, REST v1, the MCP
+ * server, the worker jobs (content_analyze, content_images) and the content
+ * agent all construct this same service and never query seo_content from
+ * Postgres directly. The write path also enforces platform rules centrally:
+ * image nodes are re-verified against this project's media library, and
+ * seo_score is always recomputed by the deterministic evaluator rather than
+ * trusted from a client.
  */
 
 import { z } from 'zod';
@@ -30,6 +38,7 @@ import {
 import { ApiError } from '../apiErrors.js';
 import { SupabaseStorageStore } from '../infra/mediaStorage.js';
 
+/** Canonical content lifecycle states (draft -> in_review -> published / archived). */
 export const CONTENT_STATUSES = ['draft', 'in_review', 'published', 'archived'] as const;
 
 export type ContentStatusValue = (typeof CONTENT_STATUSES)[number];
@@ -90,6 +99,10 @@ type Row = Record<string, unknown>;
 export class ContentService {
   constructor(private readonly sb: SupabaseClient) {}
 
+  /** Project-scoped content list, newest first, with optional title search
+   *  (ilike) and status filter. Rows are kept light (no content_json body) and
+   *  the limit is hard-capped at 500 so a huge library cannot blow up a list
+   *  call; full documents go through get(). total reflects this page only. */
   async list(projectId: string, opts: { search?: string; status?: string; limit?: number } = {}) {
     const limit = Math.min(opts.limit ?? 200, 500);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -109,6 +122,9 @@ export class ContentService {
     return { content: rows, total: rows.length };
   }
 
+  /** Authoritative full-document read (includes content_json/content_html/
+   *  outline + audit user ids). Used by analysis, intelligence and AI actions,
+   *  so it 404s cleanly when the row is not in this project. */
   async get(projectId: string, id: string): Promise<Row> {
     const { data, error } = await this.sb
       .from('seo_content')
@@ -120,6 +136,9 @@ export class ContentService {
     return data as Row;
   }
 
+  /** First slug free under this project for the title (preferring an explicit
+   *  one), appending -2, -3, ... on collision so paths stay unique and stable
+   *  across saves of sibling documents. */
   private async uniqueSlug(projectId: string, title: string, prefer?: string | null, excludeId?: string): Promise<string> {
     const base = slugifyTitle(prefer?.trim() ? prefer : title) || 'untitled';
     let candidate = base;
@@ -135,6 +154,22 @@ export class ContentService {
     }
   }
 
+  /**
+   * Shared create/update core. Merges the patch over the existing row, then
+   * normalizes so the storage invariants hold no matter which caller writes
+   * (UI, REST/MCP, content agent, worker):
+   *   - image nodes are re-verified + re-pointed at this project's storage
+   *     (resolveDocMedia), so a forged mediaId from another project can never
+   *     be persisted and stale src is corrected on every save;
+   *   - content_html + outline are derived from the same canonical source in
+   *     the same way every time;
+   *   - seo_score is recomputed by the deterministic evaluator (a
+   *     client-supplied value is never trusted);
+   *   - published_at is stamped once on the transition to 'published' and then
+   *     preserved, so re-saving a live article does not rewrite its publish
+   *     date. The content<->media index is kept in sync afterwards so library
+   *     deletion can refuse in-use assets.
+   */
   private async write(
     projectId: string,
     userId: string | null,
@@ -287,14 +322,18 @@ export class ContentService {
     if (ins) throw ApiError.badRequest('Could not record media references');
   }
 
+  /** Insert a new content row (defaults to draft when no status is given). */
   create(projectId: string, userId: string | null, input: ContentInput) {
     return this.write(projectId, userId, 'create', undefined, input);
   }
 
+  /** Patch an existing content row in this project. */
   update(projectId: string, userId: string | null, id: string, input: ContentPatch) {
     return this.write(projectId, userId, 'update', id, input);
   }
 
+  /** Delete the content row (project-scoped). Media assets are not removed
+   *  here; the media library refuses deletion of items still referenced. */
   async remove(projectId: string, id: string): Promise<void> {
     const { error } = await this.sb.from('seo_content').delete().eq('project_id', projectId).eq('id', id);
     if (error) throw ApiError.badRequest('Could not delete content');

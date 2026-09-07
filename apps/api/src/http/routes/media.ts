@@ -6,6 +6,12 @@
  * edits and deletion go through MediaService, which owns the object store and
  * the "no deletion while referenced" rule. Routes are thin: authorization and
  * then service calls, mirroring the other Content Studio routers.
+ *
+ * Mounted at /api/projects/:projectId/media. Session-authenticated with role
+ * gates: viewers list, editors upload and edit metadata, admins delete.
+ * Objects are stored via Supabase Storage through infra/mediaStorage.ts; the
+ * route itself only enforces the raw-body upload contract and size cap, then
+ * hands bytes to MediaService which verifies the real image type from content.
  */
 
 import { Router } from 'express';

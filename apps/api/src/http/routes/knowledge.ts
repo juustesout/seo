@@ -5,6 +5,12 @@
  * user-managed knowledge *sources* model introduced in Phase E. Routes are
  * thin: authorization happens here, then KnowledgeService does the work and
  * background ingest/delete runs in the worker (never blocking HTTP).
+ *
+ * Mounted at /api/projects/:projectId/knowledge. Session-authenticated with
+ * role gates: viewers search and read source lists/status, editors add,
+ * reindex and delete sources. "Not configured" states are reported honestly -
+ * if Qdrant or an embedding key is absent the API says so instead of returning
+ * empty/fake results.
  */
 
 import { Router } from 'express';
@@ -19,6 +25,7 @@ export const knowledgeRouter: Router = Router({ mergeParams: true });
 
 knowledgeRouter.use(requireAuth);
 
+/** True when the server could embed (either the dedicated key or the shared OpenAI key is set). */
 const hasEmbeddingKey = () => Boolean(process.env.EMBEDDINGS_API_KEY || process.env.OPENAI_API_KEY);
 
 /**
@@ -50,6 +57,7 @@ knowledgeRouter.post(
   }),
 );
 
+/** Server-side capability status: which provider is registered and whether indexing/search can run. */
 knowledgeRouter.get(
   '/status',
   asyncHandler(async (req, res) => {

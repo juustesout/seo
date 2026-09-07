@@ -2,6 +2,13 @@
  * Project AI settings API (BYOK). All secrets stay server-side; the browser
  * reads only non-secret status (provider, models, configured flag, key source)
  * and submits new keys that are stored encrypted per project.
+ *
+ * Mounted under /api/projects/:projectId/ai (mergeParams). Session-authenticated
+ * with role gates per operation - viewer may read settings, editor may change
+ * model/provider preferences, admin alone may set or delete the project's API
+ * key. Setting a key is admin-only because a BYOK key is shared infrastructure
+ * for the whole project (jobs + editors consume it); letting an editor rotate
+ * it would break running AI features without warning.
  */
 
 import { Router } from 'express';
@@ -25,6 +32,7 @@ const keySchema = z.object({
   apiKey: z.string().min(8).max(500).nullable(),
 });
 
+/** Read non-secret AI status (provider, models, configured, key source). */
 aiSettingsRouter.get(
   '/',
   asyncHandler(async (req, res) => {
@@ -36,6 +44,7 @@ aiSettingsRouter.get(
   }),
 );
 
+/** Update provider/model preferences (editor+). No key is accepted here. */
 aiSettingsRouter.put(
   '/settings',
   asyncHandler(async (req, res) => {
@@ -48,6 +57,7 @@ aiSettingsRouter.put(
   }),
 );
 
+/** Set (or remove) the project's BYOK key (admin only). apiKey null deletes it. */
 aiSettingsRouter.put(
   '/key',
   asyncHandler(async (req, res) => {
@@ -60,6 +70,7 @@ aiSettingsRouter.put(
   }),
 );
 
+/** Remove the project's BYOK key entirely (admin only). */
 aiSettingsRouter.delete(
   '/key',
   asyncHandler(async (req, res) => {

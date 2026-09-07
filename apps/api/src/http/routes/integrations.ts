@@ -2,6 +2,13 @@
  * Integrations API (project-scoped). All provider secrets stay server-side:
  * OAuth codes are exchanged here, tokens are stored encrypted, and the browser
  * only ever sees provider *capability* state.
+ *
+ * Mounted at /api/projects/:projectId/integrations. Session-authenticated with
+ * role gates: viewers list/inspect, editors create/test/disconnect and store
+ * credentials, admins delete. The routes dispatch onto data-source adapters via
+ * the registry and read/write tokens through the scoped credential reader -
+ * the response shape ({ data } / { error }) and error mapping live here, while
+ * all provider behavior stays behind the SeoDataSource adapter interfaces.
  */
 
 import { Router } from 'express';
@@ -23,6 +30,7 @@ integrationsRouter.use(requireAuth);
 // helpers
 // ---------------------------------------------------------------------------
 
+/** Load one integration row strictly scoped to this project (never by id alone). */
 async function loadIntegration(container: ReturnType<typeof import('../../context.js').getContainer>, projectId: string, integrationId: string) {
   const { data } = await container.sb
     .from('seo_integrations')
@@ -34,11 +42,17 @@ async function loadIntegration(container: ReturnType<typeof import('../../contex
   return data as Record<string, unknown>;
 }
 
+/** Registry descriptor for a data-source provider id (null when not registered). */
 function descriptorFor(container: ReturnType<typeof import('../../context.js').getContainer>, id: string) {
   const d = container.registry.listDataSources().find((ds) => ds.id === id);
   return d ?? null;
 }
 
+/**
+ * The subset of an integration row that is safe for the browser. config may
+ * hold only non-secret values (property ids etc.), but keeping it out of this
+ * envelope means a future config change can never accidentally leak.
+ */
 function nonSecretConfig(integration: Record<string, unknown>): Record<string, unknown> {
   return {
     provider_type: integration.provider_type,
@@ -111,6 +125,7 @@ integrationsRouter.get(
   }),
 );
 
+/** Single integration row + its descriptor merged in (viewer+). */
 integrationsRouter.get(
   '/:integrationId',
   asyncHandler(async (req, res) => {
@@ -375,10 +390,17 @@ integrationsRouter.post(
 // helpers used above
 // ---------------------------------------------------------------------------
 
+/** Fail fast when a server capability (Google OAuth, encryption) is unconfigured. */
 function requireConfigured(flag: boolean, label: string) {
   if (!flag) throw ApiError.notConfigured(`${label} is not configured on the server`);
 }
 
+/**
+ * Lazy-create the project's account-level data source for a provider. GSC is
+ * property-bound (its data source is created at property attach); every other
+ * adapter has no property picker, so the data source is created here on first
+ * successful test so jobs + the dashboard have a row to reference.
+ */
 async function ensureAccountDataSource(
   container: ReturnType<typeof import('../../context.js').getContainer>,
   projectId: string,
@@ -410,6 +432,7 @@ async function ensureAccountDataSource(
   } as never);
 }
 
+/** The HMAC secret for OAuth state signing; missing means the flow cannot run safely. */
 function requireKey(container: ReturnType<typeof import('../../context.js').getContainer>): string {
   const key = container.config.env.CREDENTIALS_ENCRYPTION_KEY;
   if (!key) throw ApiError.notConfigured('Credential storage key is missing');

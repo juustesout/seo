@@ -69,6 +69,14 @@ export class ContentIntelligenceService {
     this.knowledge = new KnowledgeService(container);
   }
 
+  /**
+   * Build the read-only intelligence report for one content row. Never writes
+   * and never calls providers: each configured source contributes deterministic
+   * signals computed from rows the platform already stores, and an unavailable
+   * source is reported with its own source state instead of zeroes. The
+   * optional AI pass is requested explicitly and its output is merged last and
+   * labelled source 'ai' so it can never be mistaken for stored evidence.
+   */
   async report(
     projectId: string,
     contentId: string,
@@ -223,6 +231,11 @@ export class ContentIntelligenceService {
   // Signal readers (each degrades gracefully and never throws)
   // -------------------------------------------------------------------------
 
+  /** Per-page GSC signals for this content: 56 days of page rows matched to the
+   *  content url/slug (falling back to a topic-only note when no URL exists),
+   *  plus property-level query rows from the last 28 days whose terms the
+   *  document does not cover yet. Any read problem degrades to a 'no_data'
+   *  source entry instead of failing the report. */
   private async gscSignals(
     projectId: string,
     row: Row,
@@ -344,6 +357,9 @@ export class ContentIntelligenceService {
     return { sources, recommendations };
   }
 
+  /** DataForSEO demand signals for the exact target keyword: volume/difficulty
+   *  evidence when a tracked row exists, otherwise an honest 'research gap'
+   *  insight that no demand data has been tracked - never a fabricated number. */
   private async dataforseoSignals(
     projectId: string,
     row: Row,
@@ -427,6 +443,10 @@ export class ContentIntelligenceService {
     };
   }
 
+  /** Knowledge health from project-scoped source rows only - never raw vectors.
+   *  Surfaces whether the project has indexed/errored/pending sources and
+   *  reports the server-side configuration reason when Qdrant/embeddings are
+   *  not set up. */
   private async knowledgeSignals(
     projectId: string,
   ): Promise<{ sources: ContentIntelligenceReport['sources']; recommendations: ContentIntelligenceReport['recommendations'] }> {
@@ -474,6 +494,11 @@ export class ContentIntelligenceService {
   // Optional, clearly-labelled AI assistant (never a second scoring engine)
   // -------------------------------------------------------------------------
 
+  /** Optional AI pass. It only reasons over the deterministic signals already
+   *  computed and the article text - the model cannot see (or invent) external
+   *  data. Its suggestions are tagged source 'ai' and low priority, and every
+   *  failure path returns an explicit unavailable state so the deterministic
+   *  report above stays trustworthy. */
   private async aiAssistant(
     projectId: string,
     input: {

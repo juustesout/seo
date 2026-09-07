@@ -27,11 +27,15 @@ import { logger } from '../logger.js';
 import { ApiError } from '../apiErrors.js';
 import type { ServiceContainer } from '../context.js';
 
-/** Largest single source body we accept for indexing. */
+/** Largest single source body accepted for indexing (bytes/chars). Bounding it
+ *  keeps chunking latency and Qdrant payloads sane for a UI/managed item. */
 export const KNOWLEDGE_MAX_CHARS = 100_000;
 
 export type SourceRow = Record<string, unknown>;
 
+/** Credential reader the Qdrant provider never touches: knowledge indexing is
+ *  configured from server env (QDRANT_* and EMBEDDINGS_* variables), not from
+ *  stored per-project credentials, so we hand it a no-op to make that explicit. */
 const NOOP_CREDENTIALS: ProviderContext['credentials'] = {
   get: async () => null,
   set: async () => {},
@@ -68,6 +72,9 @@ export function buildSourceDocument(row: SourceRow): KnowledgeDocumentInput | nu
   };
 }
 
+/** Safe row -> DTO mapping: exposes status/error for honest reporting but
+ *  never the raw body content, so source text is only reachable through the
+ *  provider, never through this API. */
 export function mapSourceRow(row: SourceRow): KnowledgeSourceDto {
   return {
     id: String(row.id),
@@ -100,6 +107,8 @@ export class KnowledgeService {
     this.sb = container.sb;
   }
 
+  /** The registered Qdrant provider, or null when it is not on this server
+   *  (reported as not configured rather than assumed present). */
   private knowledgeProvider(): KnowledgeProvider | null {
     return this.container.registry.getKnowledge('qdrant') ?? null;
   }
@@ -124,6 +133,8 @@ export class KnowledgeService {
     return null;
   }
 
+  /** Load one source row strictly inside this project (404 otherwise) - the
+   *  project_id filter is what keeps every later operation project-scoped. */
   private async sourceRow(projectId: string, sourceId: string): Promise<SourceRow> {
     const { data, error } = await this.sb
       .from('seo_knowledge_sources')
@@ -135,6 +146,7 @@ export class KnowledgeService {
     return data as SourceRow;
   }
 
+  /** Patch one project-scoped source row (status/last_indexed_at/...). */
   private async setRow(projectId: string, sourceId: string, patch: Record<string, unknown>): Promise<void> {
     const { error } = await this.sb
       .from('seo_knowledge_sources')
@@ -144,6 +156,8 @@ export class KnowledgeService {
     if (error) throw ApiError.badRequest('Could not update the knowledge source');
   }
 
+  /** Flip a row to status 'error' with a bounded, secret-free message so the UI
+   *  reflects reality (the source is not searchable) instead of staying stuck. */
   private async setRowError(projectId: string, sourceId: string, err: unknown): Promise<void> {
     await this.setRow(projectId, sourceId, { status: 'error', error: KnowledgeService.safeError(err) });
   }
@@ -167,6 +181,9 @@ export class KnowledgeService {
     return new ApiError(502, 'knowledge_provider_error', 'The knowledge provider failed. Please try again later.');
   }
 
+  /** ProviderContext handed to the Qdrant provider. Credentials are a no-op on
+   *  purpose (see NOOP_CREDENTIALS) and the logger is namespaced per project so
+   *  provider-side noise is attributable. */
   private context(projectId: string): ProviderContext {
     const child = logger.child({ projectId, provider: 'qdrant' });
     return {

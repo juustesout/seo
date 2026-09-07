@@ -7,6 +7,12 @@
  * Metrics are aggregated from the project-scoped seo_gsc_performance rows, so
  * an account overview never fabricates numbers: when no project has data the
  * overview is reported as not ready, not as zeroes.
+ *
+ * Membership note: seo_projects rows belong to the account, but who may act in
+ * a project is governed by seo_project_members. This module only reads that
+ * membership to decorate the account home (default role viewer) and to scope
+ * overviews; actual authorization stays in the route layer
+ * (container.access.requireRole) so REST and MCP enforce the same roles.
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js';
@@ -72,6 +78,12 @@ export async function accountGscIntegration(
   return data ? (data as unknown as GoogleConnectionRow) : null;
 }
 
+/**
+ * Build the account's Google connection state for the UI. 'connecting' counts
+ * as connected so a flow still in progress never flickers to disconnected.
+ * last_sync_at is the newest non-null sync stamp across the integration's
+ * seo_data_sources - the honest signal that a background GSC sync has run.
+ */
 export async function googleConnectionState(sb: SupabaseClient, accountId: string): Promise<GscConnectionDto> {
   const integration = await accountGscIntegration(sb, accountId);
   if (!integration) {
@@ -115,6 +127,9 @@ export interface AccountProjectRow {
   created_by: string;
 }
 
+/** Head-count a project-scoped table (used by the account-home cards). The
+ *  count is requested head-only so large tables are never shipped to the API;
+ *  the optional eq filter narrows it (e.g. only 'connected' integrations). */
 async function countRows(
   sb: SupabaseClient,
   table: string,
@@ -132,6 +147,14 @@ async function countRows(
 // Project summaries (account home)
 // ---------------------------------------------------------------------------
 
+/**
+ * Build the account-home project cards. The acting user's role is taken from
+ * seo_project_members (default 'viewer' so shared/read-only projects still
+ * render); card counts are cheap head-counts; the optional GSC property link
+ * is joined via seo_project_properties -> seo_gsc_properties so a card can
+ * surface one attached site. Performance numbers are deliberately NOT summed
+ * here - cross-project metrics belong to aggregateAccountMetrics.
+ */
 export async function buildAccountProjects(
   sb: SupabaseClient,
   userId: string,
@@ -223,6 +246,12 @@ export async function buildAccountProjects(
   return summaries;
 }
 
+/**
+ * Newest audit-log rows across the given projects (account home "recent
+ * activity"). Read-only convenience surface: a read failure returns [] instead
+ * of breaking the whole overview, and rows only expose meta that is already
+ * safe to show.
+ */
 export async function recentAccountActivity(
   sb: SupabaseClient,
   projectIds: string[],
@@ -255,6 +284,11 @@ export async function recentAccountActivity(
 // Registry properties
 // ---------------------------------------------------------------------------
 
+/**
+ * The account's GSC property registry (account-scoped seo_gsc_properties),
+ * each resolved to the project it is currently linked to, if any, so the UI
+ * can show where a property is attached without leaking other data.
+ */
 export async function registryProperties(
   sb: SupabaseClient,
   accountId: string,
@@ -302,6 +336,8 @@ export async function registryProperties(
 // Overview aggregation (Overall Dashboard)
 // ---------------------------------------------------------------------------
 
+/** Percent change with one decimal; null when there is no positive previous
+ *  baseline, so the overview never shows a division-by-zero or infinite trend. */
 function pctChange(current: number, previous: number): number | null {
   if (previous > 0) return Math.round(((current - previous) / previous) * 1000) / 10;
   return null;

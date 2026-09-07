@@ -1,4 +1,14 @@
-/** GET /api/me - current user + the projects they belong to (with live counts). */
+/**
+ * GET /api/me - the current session user plus the projects they belong to,
+ * each annotated with the caller's membership role and live aggregate counts.
+ *
+ * Session-authenticated (Supabase JWT). This is the bootstrap endpoint the UI
+ * calls after login to build the project switcher: it reads memberships from
+ * seo_project_members, joins project rows, and enriches each with small count
+ * queries. Route is read-only and deliberately thin - the heavy lifting is a
+ * handful of scoped Supabase reads under RLS, and counts keep the project list
+ * informative (member/integration/job counts) without a second round trip.
+ */
 
 import { Router } from 'express';
 import { requireAuth } from '../middleware.js';
@@ -9,6 +19,7 @@ export const meRouter: Router = Router();
 
 meRouter.use(requireAuth);
 
+/** Exact head-count of rows for one project (optional extra equality filter). */
 async function countRows(
   container: { sb: import('@supabase/supabase-js').SupabaseClient },
   table: string,
@@ -21,6 +32,7 @@ async function countRows(
   return count ?? 0;
 }
 
+/** Current user + enriched membership list. */
 meRouter.get(
   '/',
   asyncHandler(async (req, res) => {

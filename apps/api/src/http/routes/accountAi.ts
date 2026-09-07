@@ -4,7 +4,11 @@
  * under the account's seo_integrations vault row - the browser only ever sees
  * non-secret status (configured / not configured), never the key itself.
  *
- * Mounted at /api/account/ai.
+ * Mounted at /api/account/ai. Session-authenticated; the account is derived
+ * from the caller. Routes are thin: they parse the key body and delegate to
+ * AIService (services/aiService.ts), which owns where the encrypted key row
+ * lives and how status is derived. The API key arrives over TLS once and is
+ * never echoed back or logged.
  */
 
 import { Router } from 'express';
@@ -35,7 +39,10 @@ accountAiRouter.get(
   }),
 );
 
-/** Set (or with apiKey null, remove) the encrypted account key for a provider. */
+/**
+ * Set (or with apiKey null, remove) the encrypted account key for a provider.
+ * Only the presence of a key is ever reported back - never the value.
+ */
 accountAiRouter.put(
   '/key',
   asyncHandler(async (req, res) => {
@@ -48,7 +55,7 @@ accountAiRouter.put(
   }),
 );
 
-/** Remove the account key for a provider. */
+/** Remove the account key for a provider (resets that provider to "not configured"). */
 accountAiRouter.delete(
   '/key',
   asyncHandler(async (req, res) => {

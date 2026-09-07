@@ -3,6 +3,11 @@
  *
  * Uses the server-side OPENAI_API_KEY to produce an image via the images API.
  * Not configured when the key is missing.
+ *
+ * Note on media rules: OpenAI's images endpoint answers with a URL OR a
+ * base64 payload (b64_json), never both reliably. A b64 payload is only ever
+ * used as a fallback when no URL comes back - the caller stores it in the
+ * media library, which never treats inline data-URLs as a primary asset path.
  */
 
 import type {
@@ -19,6 +24,10 @@ export interface OpenAiMediaProviderDeps {
   fetchFn?: typeof fetch;
 }
 
+/**
+ * Generation-only OpenAI media adapter. Stateless apart from config; the key
+ * is read server-side per call and never exposed to the browser.
+ */
 export class OpenAiMediaProvider implements MediaProvider {
   readonly id = 'openai_media';
   readonly name = 'OpenAI images';
@@ -39,6 +48,12 @@ export class OpenAiMediaProvider implements MediaProvider {
     return this.deps.config.OPENAI_BASE_URL ?? 'https://api.openai.com/v1';
   }
 
+  /**
+   * Generate one image. The prompt doubles as the description (truncated) so
+   * the media library has meaningful alt/caption text without an extra call.
+   * A response with neither URL nor b64_json is treated as a failure - an
+   * empty image must never be stored as a successful generation.
+   */
   async generate(opts: MediaGenerateOptions): Promise<MediaResult> {
     if (!this.isConfigured()) {
       throw new Error('OpenAI images are not configured: set OPENAI_API_KEY');

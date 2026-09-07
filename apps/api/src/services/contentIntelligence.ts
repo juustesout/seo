@@ -14,24 +14,34 @@ import type { ContentRecommendation, SeoResult } from '@seo/contracts';
 // Small numeric helpers
 // ---------------------------------------------------------------------------
 
+/** Coerce an unknown DB value (may be null or numeric string) to a finite
+ *  number; garbage becomes 0 so downstream math never NaNs. */
 export function num(v: unknown): number {
   const n = Number(v ?? 0);
   return Number.isFinite(n) ? n : 0;
 }
 
+/** Round + thousands-group for display; pure so reports render identically. */
 export function fmtInt(v: number): string {
   return Math.round(v).toLocaleString('en-US');
 }
 
+/** Format a ratio (0..1) as a percentage string for display. */
 export function fmtPct(v: number): string {
   return `${(v * 100).toFixed(1)}%`;
 }
 
+/** Format an average position; null (no data) renders as an em dash, never 0 -
+ *  position 0 would falsely imply the top of page one. */
 export function fmtPosition(v: number | null): string {
   if (v === null) return '—';
   return v.toFixed(1);
 }
 
+/** Stable, non-cryptographic short hash used to build reproducible
+ *  recommendation ids (e.g. gsc:low_ctr_query:<hash>). Determinism matters:
+ *  the same query must always yield the same id so the UI can dismiss/merge
+ *  recommendations across recomputes. */
 export function shortHash(input: string): string {
   let h = 0;
   for (const ch of input) {
@@ -124,6 +134,8 @@ export function pageUrlCandidates(input: {
 // Query relevance + coverage (deterministic, term-based)
 // ---------------------------------------------------------------------------
 
+/** English function-word stoplist (and tiny tokens) excluded from term
+ *  matching so relevance checks compare content words only. */
 const STOPWORDS = new Set(
   `a an the and or but for nor so yet with without of in on at to from by over under up down is are was were be been being
    am do does did have has had having can could should would will shall may might must not no yes if then than else when while
@@ -142,6 +154,8 @@ export function significantTokens(phrase: string): string[] {
     .filter((t) => t.length >= 3 && !STOPWORDS.has(t));
 }
 
+/** True when a query shares at least two significant tokens with the topic -
+ *  the bar for "topically related" used before a query is offered to a page. */
 export function hasAnyToken(query: string, topicTokens: string[]): boolean {
   const qTokens = significantTokens(query);
   let shared = 0;
@@ -155,6 +169,8 @@ export function hasAnyToken(query: string, topicTokens: string[]): boolean {
   return shared >= 2;
 }
 
+/** Exact textual coverage in either direction (query contains the topic phrase
+ *  or vice versa); used to prefer clearly-on-topic queries over fuzzy matches. */
 export function queryCoversTopic(query: string, topic: string): boolean {
   const q = query.trim().toLowerCase();
   const t = topic.trim().toLowerCase();
@@ -168,6 +184,9 @@ export function missingTerms(query: string, docText: string): string[] {
   return significantTokens(query).filter((t) => !haystack.includes(t));
 }
 
+/** A query is "related" when it textually covers the topic or shares enough
+ *  significant tokens; word sense is deliberately not judged here - this is a
+ *  cheap deterministic pre-filter, not semantic search. */
 export function relatedQuery(query: string, topic: string, topicTokens: string[]): boolean {
   if (!topic.trim()) return false;
   if (queryCoversTopic(query, topic)) return true;
@@ -186,6 +205,10 @@ export interface GscAgg {
   position: number | null;
 }
 
+/** Total clicks/impressions/CTR over stored GSC rows. Position is the
+ *  impression-weighted mean when there are impressions; if a row set has
+ *  positions but zero impressions, the plain average is returned as a bounded
+ *  stand-in rather than dropping the only position signal we have. */
 export function aggregateGsc(rows: Array<Record<string, unknown>>): GscAgg {
   let clicks = 0;
   let impressions = 0;

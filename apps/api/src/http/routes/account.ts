@@ -4,6 +4,12 @@
  *
  * Mounted at /api/account. Everything here resolves under the caller's own
  * account (one user = one account); provider secrets never leave the server.
+ *
+ * Authorization is session-based (Supabase JWT via requireAuth), not API-key
+ * based: an account is derived from the caller via
+ * container.access.requireAccount(user.sub). Routes stay thin - they authorize
+ * and assemble payloads; account aggregation and Google token logic live in
+ * services/accountService.ts and the GSC data-source adapter respectively.
  */
 
 import { Router } from 'express';
@@ -35,6 +41,7 @@ accountRouter.use(requireAuth);
 
 type Container = ReturnType<typeof import('../../context.js').getContainer>;
 
+/** Load the account row, or throw notFound - the account is the root of every account-scoped query. */
 async function accountRow(container: Container, accountId: string) {
   const { data, error } = await container.sb.from('seo_accounts').select('id, name, created_at').eq('id', accountId).maybeSingle();
   if (error) throw new ApiError(500, 'storage_error', 'Could not read account');
@@ -42,20 +49,32 @@ async function accountRow(container: Container, accountId: string) {
   return data as unknown as { id: string; name: string; created_at: string };
 }
 
+/**
+ * Resolve the caller's account id. requireAccount enforces the one-user-one-
+ * account invariant at the service layer; routes never guess an account from
+ * request params (an id in the URL could belong to someone else).
+ */
 async function requireAccount(container: Container, userId: string) {
   return container.access.requireAccount(userId);
 }
 
+/** Fail fast when a server capability the flow depends on is not configured. */
 function requireConfigured(flag: boolean, label: string) {
   if (!flag) throw ApiError.notConfigured(`${label} is not configured on the server`);
 }
 
+/** The state-signing secret; refusing to sign without it keeps callbacks un-forgeable. */
 function requireKey(container: Container): string {
   const key = container.config.env.CREDENTIALS_ENCRYPTION_KEY;
   if (!key) throw ApiError.notConfigured('Credential storage key is missing');
   return key;
 }
 
+/**
+ * The account's active account-level GSC integration. Since Stage 4 the Google
+ * connection lives once per account (project_id NULL); per-project endpoints
+ * reference it through the property registry instead of owning their own OAuth.
+ */
 async function requireConnectedGscIntegration(container: Container, accountId: string) {
   const { data, error } = await container.sb
     .from('seo_integrations')
@@ -70,6 +89,7 @@ async function requireConnectedGscIntegration(container: Container, accountId: s
   return data as Record<string, unknown>;
 }
 
+/** Build the provider context scoped to the account's GSC integration (tokens resolve under it). */
 function gscContext(container: Container, integration: Record<string, unknown>, userId: string) {
   return buildProviderContext(container, {
     projectId: String(integration.project_id ?? ''),
@@ -79,6 +99,7 @@ function gscContext(container: Container, integration: Record<string, unknown>, 
   });
 }
 
+/** Count registry properties attached to any of the account's projects. */
 async function attachedProjectCount(container: Container, accountId: string): Promise<number> {
   const projectIds = await accountProjectIds(container.sb, accountId);
   if (projectIds.length === 0) return 0;
@@ -93,6 +114,7 @@ async function attachedProjectCount(container: Container, accountId: string): Pr
 // Account home
 // ---------------------------------------------------------------------------
 
+/** Account home: account row, Google state, project list and recent cross-project activity. */
 accountRouter.get(
   '/',
   asyncHandler(async (req, res) => {
@@ -126,6 +148,12 @@ accountRouter.get(
 // Google Search Console connect (account level)
 // ---------------------------------------------------------------------------
 
+/**
+ * Build the Google consent URL for an account-level connect. An existing
+ * account integration (any status) is reused as the token owner so re-connects
+ * keep registry links; the signed state carries the account/integration ids so
+ * the callback cannot be replayed against another account.
+ */
 accountRouter.get(
   '/gsc/connect-url',
   asyncHandler(async (req, res) => {

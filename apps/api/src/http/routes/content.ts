@@ -2,6 +2,12 @@
  * Content API (project-scoped): structured content CRUD for the Content
  * Studio. Routes are thin: authorization happens here, then the SEO Core
  * ContentService does the work (shared later by REST v1 + MCP).
+ *
+ * Mounted at /api/projects/:projectId/content. Session-authenticated with role
+ * gates (container.access.requireRole): viewers read/list/analyze, editors
+ * create/update and queue AI work, admins delete. Slow provider-driven work
+ * (staged generation, media resolution, full analysis) is enqueued as a job and
+ * returns 202 - HTTP handlers never block on AI/provider calls.
  */
 
 import { Router } from 'express';
@@ -192,6 +198,7 @@ contentRouter.get(
   }),
 );
 
+/** List project content (viewer+), with optional search and status filters. */
 contentRouter.get(
   '/',
   asyncHandler(async (req, res) => {
@@ -210,6 +217,7 @@ contentRouter.get(
   }),
 );
 
+/** Fetch one content item with its structured blocks and rendered HTML (viewer+). */
 contentRouter.get(
   '/:id',
   asyncHandler(async (req, res) => {
@@ -221,6 +229,7 @@ contentRouter.get(
   }),
 );
 
+/** Create a content item (editor+). Structured content_json is the source of truth. */
 contentRouter.post(
   '/',
   asyncHandler(async (req, res) => {
@@ -234,6 +243,7 @@ contentRouter.post(
   }),
 );
 
+/** Update metadata/blocks/status of one item (editor+). */
 contentRouter.patch(
   '/:id',
   asyncHandler(async (req, res) => {
@@ -247,6 +257,7 @@ contentRouter.patch(
   }),
 );
 
+/** Delete one content item (admin only - destructive, so not available to editors). */
 contentRouter.delete(
   '/:id',
   asyncHandler(async (req, res) => {
@@ -259,6 +270,11 @@ contentRouter.delete(
   }),
 );
 
+/**
+ * Map the snake_case API body onto the service layer's camelCase input,
+ * dropping keys the caller omitted so partial patches do not null out fields
+ * they did not mean to touch.
+ */
 function toService(body: Record<string, unknown>) {
   const out: Record<string, unknown> = {
     title: body.title,

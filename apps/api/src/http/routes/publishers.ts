@@ -1,4 +1,16 @@
-/** Publishers API: connect output channels (e.g. WordPress) and test them. */
+/**
+ * Publishers API: manage output channels (e.g. WordPress) for a project -
+ * create entries, store non-secret config and encrypted credentials, test
+ * connections, drive OAuth connects, disconnect and delete.
+ *
+ * Mounted at /api/projects/:projectId/publishers. Session-authenticated with
+ * role gates: viewers list/read, editors configure credentials and test,
+ * admins create and delete. "Provider via descriptor" is enforced here, not in
+ * the UI: every write key must be declared by the registry descriptor for that
+ * provider, and only secrets declared as credentials reach the encrypted
+ * CredentialStore. Connection results are persisted to the row so the UI shows
+ * real state (honest "error"/"disconnected"), never optimistic status.
+ */
 
 import { Router } from 'express';
 import { z } from 'zod';
@@ -20,6 +32,7 @@ function declaredKeys(container: ReturnType<typeof import('../../context.js').ge
   return fields.map((f) => f.key);
 }
 
+/** Load a publisher row, failing unless it belongs to this project. */
 async function loadPublisher(container: ReturnType<typeof import('../../context.js').getContainer>, projectId: string, publisherId: string) {
   const { data } = await container.sb
     .from('seo_publishers')
@@ -66,6 +79,7 @@ publishersRouter.post(
   }),
 );
 
+/** List this project's publishers, each paired with its catalog descriptor. */
 publishersRouter.get(
   '/',
   asyncHandler(async (req, res) => {
@@ -79,6 +93,7 @@ publishersRouter.get(
   }),
 );
 
+/** One publisher plus its descriptor (never returns stored credential values). */
 publishersRouter.get(
   '/:publisherId',
   asyncHandler(async (req, res) => {
@@ -211,6 +226,7 @@ publishersRouter.post(
   }),
 );
 
+/** Delete a publisher: first purge its encrypted credentials, then the row. */
 publishersRouter.delete(
   '/:publisherId',
   asyncHandler(async (req, res) => {

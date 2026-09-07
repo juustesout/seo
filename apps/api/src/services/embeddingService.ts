@@ -12,8 +12,12 @@ import type { AIProvider } from '@seo/contracts';
 import { AIService } from './aiService.js';
 import { dimensionsForModel, type Embedder } from '../providers/knowledge/embedding.js';
 
-/** OpenAI-compatible model embedding dimension table (unknown -> 1536). */
-
+/**
+ * Embedder bound to one resolved project AI provider + model. Model names are
+ * OpenAI-compatible; the vector dimension is resolved up front from the shared
+ * table (dimensionsForModel) so a Qdrant collection can be created with the
+ * correct size before any vector is written. Unknown models fall back to 1536.
+ */
 export class ProjectEmbedder implements Embedder {
   readonly dimensions: number;
 
@@ -24,12 +28,15 @@ export class ProjectEmbedder implements Embedder {
     this.dimensions = dimensionsForModel(model);
   }
 
+  /** Embed the given texts through the bound provider; vectors come back in
+   *  input order with the fixed dimension above. */
   async embed(texts: string[]): Promise<number[][]> {
     const result = await this.provider.embed({ input: texts, model: this.model });
     return result.vectors;
   }
 }
 
+/** Builds project-bound embedders from the project's effective AI setup. */
 export class EmbeddingService {
   constructor(private readonly ai: AIService) {}
 

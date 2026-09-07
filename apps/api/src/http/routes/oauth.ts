@@ -1,4 +1,21 @@
-/** Google OAuth callback: exchanges the auth code, stores tokens, redirects back to the app. */
+/**
+ * OAuth callbacks - the browser lands here after a vendor consent screen, so
+ * unlike every other router these routes are NOT session-authenticated and
+ * always redirect rather than return JSON. Two flows share this router:
+ *
+ *  - GET /gsc/callback   - Google Search Console connect (project- or
+ *    account-scoped). The signed `state` decides the scope; it is verified
+ *    with CREDENTIALS_ENCRYPTION_KEY before the code is exchanged, so a forged
+ *    or tampered callback cannot attach tokens to an integration/project the
+ *    user never authorized. Tokens are stored encrypted under the integration
+ *    and the flow redirects back into the app.
+ *  - GET /publisher/callback - generic publisher connect-by-consent (e.g. X);
+ *    all flow logic lives in publisherOAuthService so no vendor logic is here.
+ *
+ * Error handling differs from the JSON API on purpose: a callback failure must
+ * still navigate the browser somewhere meaningful, so errors become a short
+ * oauth_error code on the app URL instead of a thrown 4xx JSON body.
+ */
 
 import { Router } from 'express';
 import { z } from 'zod';
@@ -11,12 +28,14 @@ import { logger } from '../../logger.js';
 
 export const oauthRouter: Router = Router();
 
+/** Encrypted-credential keys under which the GSC token pair is stored. */
 const TOKEN_KEYS = {
   access: 'google_access_token',
   refresh: 'google_refresh_token',
   scope: 'google_token_scope',
 } as const;
 
+/** Google Search Console consent callback (project- and account-scoped connects). */
 oauthRouter.get(
   '/gsc/callback',
   asyncHandler(async (req, res) => {

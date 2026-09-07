@@ -1,10 +1,31 @@
 /**
- * Central environment configuration. All application secrets come from the
- * environment - never from code or from client requests.
+ * Central environment configuration - the only module that reads process env
+ * vars, and therefore the only place secrets enter the API process.
+ *
+ * Secrets vs non-secrets: values such as SUPABASE_SERVICE_ROLE_KEY,
+ * GOOGLE_CLIENT_SECRET, DATAFORSEO_BASE64 and CREDENTIALS_ENCRYPTION_KEY are
+ * read here and handed to services by reference; they are never logged, echoed
+ * or sent to the browser. Only the derived *Configured presence flags below are
+ * safe to expose (the /api/health endpoint and catalog reflect them), and they
+ * mean "the server holds credentials" - never that an upstream is reachable.
+ *
+ * Every variable is optional in the zod schema (barring defaults) so a bare
+ * deploy boots and reports each capability as "not configured" (honesty rule)
+ * instead of crashing. loadConfig() runs once at process start and throws on
+ * an *invalid* value (malformed URL, non-numeric PORT, unknown NODE_ENV), so a
+ * typo fails fast at boot rather than misbehaving halfway through a run.
+ * Defaults: NODE_ENV=development, PORT=3001, LOG_LEVEL=info,
+ * ENABLE_TEST_PUBLISHERS=false.
  */
 
 import { z } from 'zod';
 
+/**
+ * zod schema - the source of truth for every env var name, format and default.
+ * New configuration belongs here first; AppEnv and loadConfig then follow it.
+ * Grouped by concern (Supabase, OAuth providers, AI/BYOK, ...) to mirror how a
+ * feature is wired up. `z.coerce` on PORT lets a stringified port pass through.
+ */
 const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   PORT: z.coerce.number().int().positive().default(3001),
@@ -61,8 +82,15 @@ const envSchema = z.object({
   LOG_LEVEL: z.enum(['trace', 'debug', 'info', 'warn', 'error']).default('info'),
 });
 
+/** Parsed + validated environment (zod output; every non-optional key has a default). */
 export type AppEnv = z.infer<typeof envSchema>;
 
+/**
+ * Resolved runtime config handed to services. `env` carries the raw validated
+ * values; the booleans are cheap "is this integration wired up?" answers
+ * derived from presence of the required env vars, so feature code can branch on
+ * a flag instead of re-checking partial env state in dozens of places.
+ */
 export interface AppConfig {
   env: AppEnv;
   isProduction: boolean;
@@ -79,6 +107,12 @@ export interface AppConfig {
   publicAppUrl: string | null;
 }
 
+/**
+ * Validate process.env against envSchema and derive the capability flags. Kept
+ * a pure function of its input so tests can pass a synthetic env. Throws
+ * ZodError on malformed values (fail fast at boot); absent-but-valid values
+ * simply yield the schema defaults and a *Configured flag of false.
+ */
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const parsed = envSchema.parse(env);
   return {

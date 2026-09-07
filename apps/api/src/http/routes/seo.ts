@@ -2,6 +2,13 @@
  * SEO Core data API (reads over the normalized store + feature presence).
  * Everything here reads provider-normalized rows; nothing talks to providers.
  * Jobs/dashboard/features drive the UI from real state, never fabricated.
+ *
+ * Mounted at /api/projects/:projectId/seo. Session-authenticated, viewer+ for
+ * every endpoint: this router is pure read over the project's own normalized
+ * data (seo_gsc_performance / seo_keywords / seo_pages / seo_rankings /
+ * seo_audits). The dashboard additionally computes feature presence from what
+ * is actually connected/registered server-side - e.g. site_audit is hard false
+ * while no crawler provider exists, so the UI never offers dead features.
  */
 
 import { Router } from 'express';
@@ -15,12 +22,17 @@ export const seoRouter: Router = Router({ mergeParams: true });
 
 seoRouter.use(requireAuth);
 
+/** ISO date string n days in the past (yyyy-mm-dd), for range filters. */
 function daysAgo(n: number): string {
   const d = new Date(Date.now() - n * 864e5);
   return d.toISOString().slice(0, 10);
 }
 
-/** Sum a numeric column over a filtered set. */
+/**
+ * Sum a numeric column over a filtered set, plus how many distinct days the
+ * rows span. Reads are deliberately client-side sums because these rollups
+ * stay small; the shape is what the dashboard needs in one call.
+ */
 async function sumColumn(container: ReturnType<typeof import('../../context.js').getContainer>, table: string, column: string, projectId: string, since: string) {
   const { data, error } = await container.sb
     .from(table)
@@ -34,6 +46,7 @@ async function sumColumn(container: ReturnType<typeof import('../../context.js')
   return { total, days: new Set(rows.map((r) => r.date as string)).size };
 }
 
+/** Exact row count for a project-scoped table (optionally gated by date). */
 async function countTable(container: ReturnType<typeof import('../../context.js').getContainer>, table: string, projectId: string, since?: string) {
   let q = container.sb.from(table).select('id', { count: 'exact', head: true }).eq('project_id', projectId);
   if (since) q = q.gte('date', since);

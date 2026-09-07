@@ -18,6 +18,12 @@ import { ApiKeyStore } from '../infra/apiKeys.js';
 import { depsFromApiKey, createSeoMcpServer } from './session.js';
 import { logger } from '../logger.js';
 
+/**
+ * Boot: resolve + validate MCP_API_KEY first (fail fast with a clear message),
+ * then build the same session deps a project/account key maps to and serve over
+ * stdio. Tools are shared with REST and HTTP MCP, so an agent on stdio can do
+ * exactly what a browser session can - nothing more, nothing less.
+ */
 async function main(): Promise<void> {
   const token = process.env.MCP_API_KEY?.trim();
   if (!token) {

@@ -10,6 +10,12 @@
  * handler. Knowledge base hits are only injected as context when the project
  * has a working Qdrant + embedding setup; otherwise the stage degrades to the
  * topic alone (never to invented facts).
+ *
+ * The pipeline only ever *proposes* a body; persistence goes through
+ * ContentService, which recomputes content_html/outline and the deterministic
+ * seo_score, and the writing prompt forbids inventing statistics/sources. AI
+ * output is thus always stored as a draft that the canonical engine still
+ * audits.
  */
 
 import type { ContentBlock } from '@seo/contracts';
@@ -48,12 +54,18 @@ interface AgentBrief {
   outline: OutlineItem[];
 }
 
+/** Deterministic copy-length vocabulary per requested bucket
+ *  (short/medium/long). Defined in one place so any prompt builder (here or in
+ *  MCP) can phrase the writer stage with the same word targets instead of
+ *  inventing per-call numbers. */
 const WORD_TARGETS: Record<ContentLengthValue, string> = {
   short: 'aim for roughly 300 words of body copy',
   medium: 'aim for roughly 600 words of body copy',
   long: 'aim for roughly 1000 words of body copy',
 };
 
+/** Strip a single markdown code fence (```json ... ```) that models add around
+ *  JSON even when told not to, so parsing only ever sees the raw object. */
 function stripCodeFence(text: string): string {
   return text
     .trim()
@@ -93,6 +105,12 @@ export class ContentAgentService {
     this.content = new ContentService(container.sb);
   }
 
+  /**
+   * One strict-JSON chat call with a single corrective retry. LLM output is
+   * fickle about JSON; when the first parse fails the retry appends an explicit
+   * "JSON only, no fences" instruction instead of silently dropping the stage.
+   * Persisting a malformed reply is never allowed - a 422 surfaces instead.
+   */
   private async chatJson(
     provider: Awaited<ReturnType<AIService['resolve']>>['provider'],
     stage: string,
