@@ -2,17 +2,18 @@
  * MCP server entry point (stdio).
  *
  * Start with a project API key bound in the environment:
- *   MCP_API_KEY=seo_live_... node apps/api/dist/mcp.js
+ *   MCP_API_KEY=seo_live_... node apps/api/dist/mcp/index.js
  *
  * The key's project and scopes are loaded from seo_api_keys at startup and
- * never come from the client.
+ * never come from the client. The HTTP twin of this entry point lives in
+ * http.ts and shares the same registry + context builder (see session.ts).
  */
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { getContainer } from '../context.js';
 import { ApiKeyStore } from '../infra/apiKeys.js';
-import { registerTools } from './server.js';
+import { depsFromApiKey, createSeoMcpServer } from './session.js';
 import { logger } from '../logger.js';
 
 async function main(): Promise<void> {
@@ -29,24 +30,11 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  const deps = {
-    sb: container.sb,
-    jobStore: container.jobStore,
-    projectId: key.project_id,
-    userId: key.created_by,
-    canRead: key.scopes.includes('read'),
-    canWrite: key.scopes.includes('write'),
-  };
-
-  const server = new McpServer({
-    name: 'seo-mcp',
-    version: '1.0.0',
-  });
-  registerTools(server as never, deps);
+  const server: McpServer = createSeoMcpServer(depsFromApiKey(container.sb, container.jobStore, key));
 
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  logger.info(`MCP server started for project ${key.project_id} (read=${deps.canRead} write=${deps.canWrite})`);
+  logger.info(`MCP server started for project ${key.project_id} (read=${key.scopes.includes('read')} write=${key.scopes.includes('write')})`);
 }
 
 main().catch((err) => {

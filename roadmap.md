@@ -61,7 +61,7 @@ Two hard consequences of this picture:
 | Projects | `seo_projects` + membership roles (owner/admin/editor/viewer), project selector in UI, project-scoped routes |
 | Content | Structured `seo_content` (blocks source of truth + HTML render, metadata, keyword, statuses, `seo_score`), block studio, staged content agent (brief/outline/article) into drafts, deterministic SEO audit with optional AI pass |
 | REST v1 | `/api/v1/projects/:projectId/content` (+ analysis) behind project-scoped, SHA-256-hashed, revocable API keys with `read`/`write` scopes; shares the SEO Core services |
-| MCP | Stdio MCP server bound to a project API key (read/write scopes); tools `content_list/get/analyze`, `jobs_list`, `content_generate`, `content_resolve_images`, `content_update`; publish/archive demand explicit `confirm`, delete is not exposed; no direct Postgres/provider access |
+| MCP | Stdio + streamable-HTTP (`/api/mcp`) servers bound to a project API key (read/write scopes), sharing one tool registry; tools `content_list/get/analyze/update/generate/resolve_images`, `jobs_list`, `schedule_list/create/reschedule/cancel`, `publication_list/get`; publish/archive demand explicit `confirm`, delete is not exposed; no direct Postgres/provider access |
 | DataForSEO | Working adapter; live keyword research + SERP retrieval through background jobs (verified end-to-end) |
 | GSC | OAuth flow + property attach implemented; needs Google OAuth env + public URL to activate |
 | Qdrant | Knowledge provider with per-project isolated collections; blocked on embedding key |

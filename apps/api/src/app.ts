@@ -30,6 +30,7 @@ import { seoRouter } from './http/routes/seo.js';
 import { projectApiKeysRouter } from './http/routes/projectApiKeys.js';
 import { projectGscRouter } from './http/routes/projectGsc.js';
 import { v1Router } from './http/routes/v1.js';
+import { createMcpHttpRouter } from './mcp/http.js';
 
 export function createApp(): Express {
   const app = express();
@@ -110,6 +111,10 @@ export function createApp(): Express {
   app.use('/api/projects/:projectId/gsc', projectGscRouter);
   app.use('/api/v1', v1Router);
   app.use('/api/projects/:projectId', seoRouter);
+
+  // MCP over streamable HTTP (project API key auth). Routed here, after
+  // resolveContainer so the per-session builder can reach Supabase + jobStore.
+  app.use('/api/mcp', createMcpHttpRouter());
 
   // -- terminal handlers -----------------------------------------------------
   app.use('/api', notFoundHandler);
