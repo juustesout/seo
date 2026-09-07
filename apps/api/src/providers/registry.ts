@@ -10,6 +10,8 @@ import type {
   ProviderDescriptor,
   ProviderLogger,
   ProviderRegistry,
+  ProviderDeps,
+  PublisherOAuthConnector,
   DataSourceFactory,
   KnowledgeFactory,
   PublisherFactory,
@@ -22,6 +24,7 @@ import { QdrantKnowledgeProvider } from './qdrantKnowledge.js';
 import { WordPressPublisher } from './wordpress.js';
 import { MockSocialPublisher } from './social/mockSocial.js';
 import { XPublisher } from './social/xPublisher.js';
+import { XOAuthConnector } from './social/xOAuth.js';
 import { OpenAIProvider } from './ai/openai.js';
 import { OpenAiMediaProvider } from './media/openaiMedia.js';
 import { UnsplashMediaProvider } from './media/unsplash.js';
@@ -41,6 +44,7 @@ interface Entry {
 class Registry implements ProviderRegistry {
   private entries = new Map<string, Entry>();
   private order: string[] = [];
+  private oauthConnectors = new Map<string, (deps: ProviderDeps) => PublisherOAuthConnector>();
 
   constructor(private readonly deps: RegistryBuildDeps) {}
 
@@ -62,6 +66,13 @@ class Registry implements ProviderRegistry {
 
   registerPublisher(factory: PublisherFactory, descriptor: Omit<ProviderDescriptor, 'kind'>): void {
     this.add({ descriptor: { ...descriptor, kind: 'publisher' }, kind: 'publisher', build: () => factory(this.deps) });
+  }
+
+  registerPublisherOAuth(factory: (deps: ProviderDeps) => PublisherOAuthConnector, providerId: string): void {
+    if (this.oauthConnectors.has(providerId)) {
+      throw new Error(`Duplicate publisher OAuth connector registered: ${providerId}`);
+    }
+    this.oauthConnectors.set(providerId, factory);
   }
 
   registerAI(factory: AIFactory, descriptor: Omit<ProviderDescriptor, 'kind'>): void {
@@ -88,6 +99,12 @@ class Registry implements ProviderRegistry {
     const e = this.entries.get(id);
     if (!e || e.kind !== 'publisher') return undefined;
     return e.build() as ReturnType<PublisherFactory>;
+  }
+
+  getPublisherOAuth(id: string): PublisherOAuthConnector | undefined {
+    const factory = this.oauthConnectors.get(id);
+    if (!factory) return undefined;
+    return factory(this.deps);
   }
 
   getAI(id: string) {
@@ -190,23 +207,28 @@ export function buildRegistry(deps: RegistryBuildDeps): ProviderRegistry {
     },
   );
 
-  // X social channel (Phase H6.1 foundation). Real publisher registration with
-  // publish_text + schedule so gates/flows treat it as a genuine text channel;
-  // the adapter itself fails safely because live auth + posting are not part of
-  // this phase.
+  // X social channel (Content Studio Phase H6.2): real OAuth connect + live
+  // text posting. The UI shows a "Connect with X" consent button (auth: oauth)
+  // and the adapter posts through the real X API; update/delete stay honest
+  // "not available" because they are out of scope.
   registry.registerPublisher(
     () => new XPublisher({ config: deps.config, logger: deps.logger }),
     {
       id: 'x',
       name: 'X',
-      description: 'Publish short text posts to X (foundation: live posting arrives in a later phase)',
+      description: 'Publish short text posts to X via its OAuth-connected API',
       capabilities: ['publish_text', 'schedule'],
       ui: { icon: 'share', color: '#000000' },
       setup: {
         category: 'social',
-        note: 'Foundation-only: X is registered as a text channel but live authentication and posting are not implemented yet.',
+        auth: 'oauth',
+        note: 'Connects through X OAuth (read + write). Live posting requires the server to be configured with X_OAUTH_CLIENT_ID.',
       },
     },
+  );
+  registry.registerPublisherOAuth(
+    (deps2) => new XOAuthConnector({ config: deps2.config, logger: deps2.logger, fetchFn: deps2.fetchFn }),
+    'x',
   );
 
   // Demo/test social channel. Registered only when the server explicitly opts

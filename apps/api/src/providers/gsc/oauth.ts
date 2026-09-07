@@ -4,7 +4,7 @@
  * provider. Kept out of the UI entirely.
  */
 
-import { createHmac, timingSafeEqual } from 'node:crypto';
+import { signJsonPayload, verifyJsonPayload } from '../../infra/signedPayload.js';
 
 export const GSC_SCOPES = [
   'https://www.googleapis.com/auth/webmasters.readonly',
@@ -118,19 +118,9 @@ export interface OAuthState {
 }
 
 export function signState(state: OAuthState, secret: string): string {
-  const payload = Buffer.from(JSON.stringify(state)).toString('base64url');
-  const sig = createHmac('sha256', secret).update(payload).digest('base64url');
-  return `${payload}.${sig}`;
+  return signJsonPayload(state, secret);
 }
 
 export function verifyState(token: string, secret: string): OAuthState {
-  const [payload, sig] = token.split('.');
-  if (!payload || !sig) throw new Error('Invalid OAuth state');
-  const expected = createHmac('sha256', secret).update(payload).digest('base64url');
-  const a = Buffer.from(sig);
-  const b = Buffer.from(expected);
-  if (a.length !== b.length || !timingSafeEqual(a, b)) {
-    throw new Error('Invalid OAuth state signature');
-  }
-  return JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as OAuthState;
+  return verifyJsonPayload<OAuthState>(token, secret);
 }

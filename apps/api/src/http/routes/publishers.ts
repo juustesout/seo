@@ -6,7 +6,8 @@ import { requireAuth } from '../middleware.js';
 import { asyncHandler } from '../asyncHandler.js';
 import { ApiError } from '../../apiErrors.js';
 import { buildPublisherProviderContext } from '../../context.js';
-import { parseId, parseProjectId } from './utils.js';
+import { publisherOAuthStart } from '../../services/publisherOAuthService.js';
+import { parseId, parseProjectId, redirectBase } from './utils.js';
 
 export const publishersRouter: Router = Router({ mergeParams: true });
 
@@ -168,6 +169,24 @@ publishersRouter.post(
   }),
 );
 
+/** Begin an OAuth connect for a publisher declared setup.auth = 'oauth'. */
+publishersRouter.post(
+  '/:publisherId/oauth-url',
+  asyncHandler(async (req, res) => {
+    const projectId = parseProjectId(req);
+    const publisherId = parseId(req, 'publisherId');
+    const { container, user } = req;
+    await container.access.requireRole(user!.sub, projectId, 'editor');
+    const result = await publisherOAuthStart(container, {
+      projectId,
+      publisherId,
+      userId: user!.sub,
+      redirectBase: redirectBase(req),
+    });
+    res.json({ data: result });
+  }),
+);
+
 /** Disconnect: clear credentials and mark the publisher disconnected. */
 publishersRouter.post(
   '/:publisherId/disconnect',
@@ -176,9 +195,18 @@ publishersRouter.post(
     const publisherId = parseId(req, 'publisherId');
     const { container, user } = req;
     await container.access.requireRole(user!.sub, projectId, 'admin');
-    await loadPublisher(container, projectId, publisherId);
+    const publisher = await loadPublisher(container, projectId, publisherId);
     await container.credentials.clearForOwner({ publisherId });
-    await container.sb.from('seo_publishers').update({ status: 'disconnected' }).eq('id', publisherId);
+    const current = (publisher.config as Record<string, unknown> | null) ?? {};
+    const remaining: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(current)) {
+      if (key === 'remote_account_id' || key === 'remote_account_name' || key === 'remote_account_username') continue;
+      remaining[key] = value;
+    }
+    await container.sb
+      .from('seo_publishers')
+      .update({ status: 'disconnected', config: remaining, last_error: null })
+      .eq('id', publisherId);
     res.json({ data: { ok: true } });
   }),
 );

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { api } from '../lib/api';
 import { useAsync, fmtDate, useJobs, JobTable, StatusPill, Empty } from '../lib/ui';
 import { defaultPublishKind, PUBLISH_KIND_LABELS, publisherCapabilityChips, supportedPublishKinds, categoryLabel } from '../lib/publishers';
@@ -17,6 +17,7 @@ interface Descriptor {
   capabilities: string[];
   setup?: {
     category?: string;
+    auth?: 'form' | 'oauth';
     config?: SetupField[];
     credentials?: SetupField[];
     note?: string;
@@ -59,11 +60,29 @@ function usableKinds(wrap: PubWrap): PublishContentKind[] {
 export function Publishing({ projectId }: { projectId: string }) {
   const [refresh, setRefresh] = useState(0);
   const [err, setErr] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const reload = () => setRefresh((x) => x + 1);
   const pubs = useAsync<PubWrap[]>(() => api(`/projects/${projectId}/publishers`), [projectId, refresh]);
   const catalog = useAsync<{ publishers: { id: string; name: string }[] }>(() => api('/providers'), []);
   const list = useAsync<Publication[]>(() => api(`/projects/${projectId}/publications?limit=200`), [projectId, refresh]);
   const { jobs } = useJobs(projectId, true);
+
+  // A full-tab OAuth connect bounces through the vendor consent screen and back
+  // to this view; surface the outcome and clear the query params.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const connected = params.get('x');
+    const oauthError = params.get('oauth_error');
+    if (connected === 'connected') {
+      setNotice('X connected successfully.');
+      window.history.replaceState({}, '', window.location.pathname + window.location.search.replace(/[?&](x|oauth_error)=[^&]*/g, '').replace(/^&/, '?'));
+      reload();
+    } else if (oauthError) {
+      setErr(`X connect failed (${oauthError}).`);
+      window.history.replaceState({}, '', window.location.pathname + window.location.search.replace(/[?&](x|oauth_error)=[^&]*/g, '').replace(/^&/, '?'));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const catalogProviders = catalog.data?.publishers ?? [];
 
@@ -105,6 +124,7 @@ export function Publishing({ projectId }: { projectId: string }) {
       <h1>Publishing</h1>
       <p className="sub">Connect output channels (websites and social) and publish project content to them.</p>
       {err && <div className="banner error">{err}</div>}
+      {notice && <div className="banner">{notice}</div>}
 
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 16 }}>
         {catalogProviders.map((d) => (
@@ -195,7 +215,15 @@ function PublisherCard({
   const setup = descriptor?.setup;
   const configFields = setup?.config ?? [];
   const credFields = setup?.credentials ?? [];
+  const oauthMode = setup?.auth === 'oauth';
   const chips = publisherCapabilityChips(publisher.capabilities.length > 0 ? publisher.capabilities : descriptor?.capabilities);
+
+  const connectedLabel = (() => {
+    const cfg = publisher.config ?? {};
+    const handle = typeof cfg['remote_account_username'] === 'string' ? cfg['remote_account_username'] : '';
+    if (handle) return `@${handle}`;
+    return typeof cfg['remote_account_name'] === 'string' ? (cfg['remote_account_name'] as string) : null;
+  })();
 
   const [values, setValues] = useState<Record<string, string>>(() => {
     const init: Record<string, string> = {};
@@ -232,6 +260,17 @@ function PublisherCard({
       if (v) await api(`/projects/${projectId}/publishers/${id}/credentials`, { method: 'POST', body: { key: f.key, value: v } });
     }
     setCreds({});
+  };
+
+  const connectOauth = async () => {
+    const r = await api<{ url: string }>(`/projects/${projectId}/publishers/${id}/oauth-url`, { method: 'POST' });
+    // Full-tab navigation to the consent screen; the callback returns here with
+    // ?x=connected (or ?oauth_error=...) and Publishing reloads.
+    window.location.href = r.url;
+  };
+
+  const disconnect = async () => {
+    await api(`/projects/${projectId}/publishers/${id}/disconnect`, { method: 'POST' });
   };
 
   return (
@@ -305,8 +344,31 @@ function PublisherCard({
         </>
       )}
 
+      {oauthMode && (
+        <div className="row" style={{ marginTop: 8, flexWrap: 'wrap' }}>
+          {connected ? (
+            <>
+              <span className="muted" style={{ fontSize: 13, marginRight: 8 }}>
+                {connectedLabel ? `Connected as ${connectedLabel}` : 'Connected'}
+              </span>
+              <button className="btn sm" disabled={busy !== null} onClick={() => void action('disconnect', disconnect)}>
+                Disconnect
+              </button>
+            </>
+          ) : (
+            <button className="btn primary" disabled={busy !== null} onClick={() => void action('connect', connectOauth)}>
+              Connect with {descriptor?.name ?? publisher.name}
+            </button>
+          )}
+        </div>
+      )}
+
       <div className="row" style={{ marginTop: 8 }}>
-        <button className="btn primary" disabled={busy !== null} onClick={() => void action('test', () => api(`/projects/${projectId}/publishers/${id}/test`, { method: 'POST' }))}>
+        <button
+          className="btn primary"
+          disabled={busy !== null || (oauthMode && !connected)}
+          onClick={() => void action('test', () => api(`/projects/${projectId}/publishers/${id}/test`, { method: 'POST' }))}
+        >
           {connected ? 'Re-test connection' : 'Test connection'}
         </button>
         <button className="btn sm danger" disabled={busy !== null} onClick={() => void action('del', () => api(`/projects/${projectId}/publishers/${id}`, { method: 'DELETE' }))}>

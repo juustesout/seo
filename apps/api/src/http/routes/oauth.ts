@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { asyncHandler } from '../asyncHandler.js';
 import { ApiError } from '../../apiErrors.js';
 import { exchangeCode, verifyState, GSC_SCOPES } from '../../providers/gsc/oauth.js';
+import { publisherOAuthComplete } from '../../services/publisherOAuthService.js';
 import { redirectBase } from './utils.js';
 import { logger } from '../../logger.js';
 
@@ -87,5 +88,28 @@ oauthRouter.get(
     } else {
       res.redirect(`${base}/overview`);
     }
+  }),
+);
+
+/**
+ * Generic publisher OAuth callback (e.g. X connect-by-consent). Unauthenticated
+ * by design - the browser lands here from the vendor consent screen. Every
+ * outcome redirects back into the app with a short oauth_error code when the
+ * connect did not succeed; the flow logic lives in publisherOAuthService.
+ */
+oauthRouter.get(
+  '/publisher/callback',
+  asyncHandler(async (req, res) => {
+    const container = req.container;
+    const parsed = z
+      .object({ code: z.string().optional(), state: z.string().optional(), error: z.string().optional() })
+      .parse(req.query);
+    const redirect = await publisherOAuthComplete(container, {
+      code: parsed.code,
+      state: parsed.state,
+      error: parsed.error,
+      redirectBase: redirectBase(req),
+    });
+    res.redirect(redirect);
   }),
 );

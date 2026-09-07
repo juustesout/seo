@@ -78,6 +78,7 @@ export function getContainer(): ServiceContainer {
         EMBEDDINGS_MODEL: process.env.EMBEDDINGS_MODEL,
         EMBEDDINGS_DIMENSIONS: process.env.EMBEDDINGS_DIMENSIONS,
         PUBLIC_APP_URL: config.env.PUBLIC_APP_URL,
+        X_OAUTH_CLIENT_ID: config.env.X_OAUTH_CLIENT_ID,
         ENABLE_TEST_PUBLISHERS: config.env.ENABLE_TEST_PUBLISHERS,
       },
       logger,

@@ -36,14 +36,28 @@ describe('provider registry publisher surface (Content Studio Phase H5)', () => 
     expect(wp!.setup?.credentials?.map((f) => f.key)).toEqual(['wordpress_username', 'wordpress_application_password']);
   });
 
-  it('registers the X publisher as a real text-only social channel (Phase H6.1 foundation)', () => {
-    const r = registry();
+  it('registers the X publisher as a real text-only social channel with OAuth connect (Phase H6.2)', () => {
+    const r = registry({ X_OAUTH_CLIENT_ID: 'x-client' });
     const x = r.listPublishers().find((p) => p.id === 'x');
     expect(x).toBeDefined();
     expect(x!.capabilities).toEqual(['publish_text', 'schedule']);
     expect(x!.setup?.category).toBe('social');
+    expect(x!.setup?.auth).toBe('oauth');
     expect(r.getPublisher('x')?.id).toBe('x');
     expect(r.getPublisher('x')?.name).toBe('X');
+  });
+
+  it('registers an X OAuth connector that reports configured only when a client id exists', () => {
+    const without = registry({});
+    expect(without.getPublisherOAuth('x')?.providerId).toBe('x');
+    expect(without.getPublisherOAuth('x')?.configured).toBe(false);
+    const withId = registry({ X_OAUTH_CLIENT_ID: 'x-client' });
+    const connector = withId.getPublisherOAuth('x');
+    expect(connector?.configured).toBe(true);
+    expect(connector?.scopes).toContain('tweet.write');
+    // No OAuth connector is ever claimed by a form-based publisher.
+    expect(withId.getPublisherOAuth('wordpress')).toBeUndefined();
+    expect(withId.getPublisherOAuth('linkedin')).toBeUndefined();
   });
 
   it('does not let X claim article/image/video or update/delete capability', () => {

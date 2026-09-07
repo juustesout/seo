@@ -180,6 +180,47 @@ export interface PublisherProvider {
 }
 
 // ---------------------------------------------------------------------------
+// Publisher OAuth connect (authorization-code with PKCE)
+// ---------------------------------------------------------------------------
+//
+// Some publishers (e.g. X) connect by sending the user through the provider's
+// consent screen instead of typing credentials into a form. The generic
+// publisher routes own the flow (state, callback, encrypted token storage);
+// each provider implements this connector so no X-specific logic lives in the
+// generic routes or the UI.
+
+/** Raw token response from an OAuth 2.0 token endpoint (provider-agnostic). */
+export interface OAuthTokenResult {
+  access_token: string;
+  refresh_token?: string;
+  expires_in?: number;
+  scope?: string;
+}
+
+/** Account identity discovered after a successful OAuth connect. */
+export interface OAuthAccountIdentity {
+  id: string;
+  name?: string;
+  username?: string;
+}
+
+export interface PublisherOAuthConnector {
+  readonly providerId: string;
+  /** False when the server is missing the env this connector needs (e.g. client id). */
+  readonly configured: boolean;
+  /** Scopes requested on the consent screen (provider-specific). */
+  readonly scopes: string;
+  /** Consent URL the browser is sent to (PKCE code flow). */
+  authorizeUrl(opts: { redirectUri: string; state: string; codeChallenge: string }): string;
+  /** Exchange the callback authorization code at the token endpoint. */
+  exchangeCode(opts: { code: string; redirectUri: string; codeVerifier: string }): Promise<OAuthTokenResult>;
+  /** Persist the fresh token pair into the publisher's encrypted credential scope. */
+  saveTokens(ctx: ProviderContext, tokens: OAuthTokenResult): Promise<void>;
+  /** Read + describe the connected account using stored tokens (provider users/me). */
+  fetchIdentity(ctx: ProviderContext): Promise<OAuthAccountIdentity>;
+}
+
+// ---------------------------------------------------------------------------
 // AI providers (chat/generation + embeddings)
 // ---------------------------------------------------------------------------
 //
@@ -324,6 +365,12 @@ export interface PublisherSetupField {
  */
 export interface PublisherSetupHint {
   category?: string;
+  /**
+   * How the user connects this publisher: 'form' (typed credential fields,
+   * default) or 'oauth' (the UI shows a "Connect with <name>" button that runs
+   * the generic OAuth flow registered for the provider).
+   */
+  auth?: 'form' | 'oauth';
   /** Non-secret persisted settings stored on seo_publishers.config. */
   config?: PublisherSetupField[];
   /** Credential fields stored encrypted server-side via the credentials API. */
@@ -348,12 +395,15 @@ export interface ProviderRegistry {
   registerDataSource(factory: DataSourceFactory, descriptor: Omit<ProviderDescriptor, 'kind'>): void;
   registerKnowledge(factory: KnowledgeFactory, descriptor: Omit<ProviderDescriptor, 'kind'>): void;
   registerPublisher(factory: PublisherFactory, descriptor: Omit<ProviderDescriptor, 'kind'>): void;
+  /** Register the OAuth connector for a publisher provider (connect-by-consent). */
+  registerPublisherOAuth(factory: (deps: ProviderDeps) => PublisherOAuthConnector, providerId: string): void;
   registerAI(factory: AIFactory, descriptor: Omit<ProviderDescriptor, 'kind'>): void;
   registerMedia(factory: MediaFactory, descriptor: Omit<ProviderDescriptor, 'kind'>): void;
 
   getDataSource(id: string): SeoDataSource | undefined;
   getKnowledge(id: string): KnowledgeProvider | undefined;
   getPublisher(id: string): PublisherProvider | undefined;
+  getPublisherOAuth(id: string): PublisherOAuthConnector | undefined;
   getAI(id: string): AIProvider | undefined;
   getMedia(id: string): MediaProvider | undefined;
 

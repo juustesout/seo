@@ -28,6 +28,9 @@ const envSchema = z.object({
   GOOGLE_CLIENT_ID: z.string().optional(),
   GOOGLE_CLIENT_SECRET: z.string().optional(),
 
+  // X (publisher OAuth, public PKCE client - client id only, no secret).
+  X_OAUTH_CLIENT_ID: z.string().optional(),
+
   // DataForSEO. Prefer DATAFORSEO_BASE64 (base64 of "login:password"); the raw
   // login/password pair is accepted as a fallback.
   DATAFORSEO_BASE64: z.string().optional(),
@@ -65,6 +68,8 @@ export interface AppConfig {
   isProduction: boolean;
   supabaseConfigured: boolean;
   googleConfigured: boolean;
+  /** True when an X OAuth client id is present (X publisher connect usable). */
+  xConfigured: boolean;
   dataforseoConfigured: boolean;
   qdrantConfigured: boolean;
   /** True when an OpenAI key is present server-side (AI + embeddings usable). */
@@ -81,6 +86,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     isProduction: parsed.NODE_ENV === 'production',
     supabaseConfigured: Boolean(parsed.SUPABASE_URL && parsed.SUPABASE_SERVICE_ROLE_KEY),
     googleConfigured: Boolean(parsed.GOOGLE_CLIENT_ID && parsed.GOOGLE_CLIENT_SECRET),
+    xConfigured: Boolean(parsed.X_OAUTH_CLIENT_ID),
     dataforseoConfigured: Boolean(
       parsed.DATAFORSEO_BASE64 || (parsed.DATAFORSEO_LOGIN && parsed.DATAFORSEO_PASSWORD),
     ),
