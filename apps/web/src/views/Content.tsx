@@ -50,10 +50,12 @@ export function Content({
   projectId,
   role = 'viewer',
   onOpenCalendar,
+  onOpenPublications,
 }: {
   projectId: string;
   role?: string;
   onOpenCalendar?: () => void;
+  onOpenPublications?: (contentId: string) => void;
 }) {
   const rank = ROLE_RANK[role] ?? 0;
   const canEdit = rank >= 1;
@@ -537,6 +539,7 @@ export function Content({
         busy={auto.status === 'saving'}
         onSaveNow={auto.saveNow}
         onDelete={() => void remove(editingId)}
+        onViewPublications={editingId && onOpenPublications ? () => onOpenPublications(editingId) : undefined}
       />
 
       {auto.status === 'failed' && (

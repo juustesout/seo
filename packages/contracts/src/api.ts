@@ -6,7 +6,7 @@
  * (PostgREST) under Row Level Security.
  */
 
-import type { JobType, MemberRole, ScheduleStatus } from './common.js';
+import type { JobType, MemberRole, PublicationStatus, ScheduleStatus } from './common.js';
 import type {
   DataSource,
   Integration,
@@ -348,6 +348,31 @@ export interface PublishRequest {
 export interface PublishResultDto {
   job: SyncJob;
   publication?: Publication;
+}
+
+/**
+ * Publication as seen by the API (Content Studio Phase H3). Safe read-only
+ * metadata for history/detail surfaces - no credentials, no raw publisher
+ * config, and no article body. The canonical article stays in seo_content.
+ * content_title resolves from the linked content row when it still exists and
+ * otherwise falls back to the title snapshot stored on the publication.
+ */
+export interface PublicationDto {
+  id: string;
+  project_id: string;
+  content_id: string | null;
+  content_title: string | null;
+  publisher_id: string;
+  publisher_name: string | null;
+  schedule_id: string | null;
+  status: PublicationStatus;
+  remote_id: string | null;
+  target_url: string | null;
+  scheduled_for: string | null;
+  published_at: string | null;
+  error: string | null;
+  created_at: string;
+  updated_at: string;
 }
 
 /**

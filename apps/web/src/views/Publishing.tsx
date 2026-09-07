@@ -15,10 +15,13 @@ interface PubWrap {
 }
 interface Publication {
   id: string;
-  title: string;
+  content_title: string | null;
+  publisher_name: string | null;
+  schedule_id: string | null;
   status: string;
   target_url: string | null;
   error: string | null;
+  published_at: string | null;
   created_at: string;
 }
 
@@ -31,7 +34,7 @@ export function Publishing({ projectId }: { projectId: string }) {
     () => api('/providers'),
     [],
   );
-  const list = useAsync<Publication[]>(() => api(`/projects/${projectId}/publications`), [projectId, refresh]);
+  const list = useAsync<Publication[]>(() => api(`/projects/${projectId}/publications?limit=200`), [projectId, refresh]);
   const { jobs } = useJobs(projectId, true);
 
   const catalogProviders = catalog.data?.publishers ?? [];
@@ -86,12 +89,12 @@ export function Publishing({ projectId }: { projectId: string }) {
             <tbody>
               {list.data!.map((p) => (
                 <tr key={p.id}>
-                  <td>{p.title}</td>
+                  <td>{p.content_title ?? 'Untitled'}</td>
                   <td>
                     <StatusPill status={p.status} />
                   </td>
                   <td className="mono muted">{p.target_url || '—'}</td>
-                  <td className="muted">{fmtDate(p.created_at)}</td>
+                  <td className="muted">{p.published_at ? fmtDate(p.published_at) : fmtDate(p.created_at)}</td>
                   <td>
                     <button
                       className="btn sm"

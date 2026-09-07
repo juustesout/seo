@@ -8,6 +8,8 @@ import { Knowledge } from './views/Knowledge';
 import { Publishing } from './views/Publishing';
 import { Content } from './views/Content';
 import { ContentSchedule } from './views/ContentSchedule';
+import { Publications } from './views/Publications';
+import { openProjectView } from './lib/nav';
 import { Overview } from './views/Overview';
 import { AccountIntegrations } from './views/AccountIntegrations';
 import { ProjectsPage } from './views/ProjectsPage';
@@ -60,6 +62,7 @@ const PROJECT_NAV = [
   { id: 'knowledge', label: 'Knowledge Base', dot: false },
   { id: 'content', label: 'Content Studio', dot: false },
   { id: 'calendar', label: 'Calendar', dot: false },
+  { id: 'publications', label: 'Publications', dot: false },
   { id: 'publishing', label: 'Publishing', dot: false },
   { id: 'settings', label: 'Settings', dot: false },
 ];
@@ -198,8 +201,9 @@ export function App() {
             {view === 'data' && <DataViews projectId={pid} />}
             {view === 'integrations' && <Integrations projectId={pid} />}
             {view === 'knowledge' && <Knowledge projectId={pid} />}
-            {view === 'content' && <Content projectId={pid} role={project.role} onOpenCalendar={() => goProject(pid, 'calendar')} />}
-            {view === 'calendar' && <ContentSchedule projectId={pid} role={project.role} />}
+            {view === 'content' && <Content projectId={pid} role={project.role} onOpenCalendar={() => goProject(pid, 'calendar')} onOpenPublications={(contentId) => openProjectView(pid, 'publications', { content_id: contentId })} />}
+            {view === 'calendar' && <ContentSchedule projectId={pid} role={project.role} onViewPublication={(scheduleId) => openProjectView(pid, 'publications', { schedule_id: scheduleId })} />}
+            {view === 'publications' && <Publications projectId={pid} />}
             {view === 'publishing' && <Publishing projectId={pid} />}
             {view === 'settings' && <ProjectSettings projectId={pid} />}
           </main>

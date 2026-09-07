@@ -6,6 +6,7 @@ import { requireAuth } from '../middleware.js';
 import { asyncHandler } from '../asyncHandler.js';
 import { ApiError } from '../../apiErrors.js';
 import { parseId, parseProjectId } from './utils.js';
+import { PublicationService, PUBLICATION_STATUSES } from '../../services/publicationService.js';
 
 export const publicationsRouter: Router = Router({ mergeParams: true });
 
@@ -22,19 +23,30 @@ async function loadPublisher(container: ReturnType<typeof import('../../context.
   return data as Record<string, unknown>;
 }
 
+/**
+ * Publication history list (Content Studio Phase H3). Project-scoped read that
+ * returns safe PublicationDto metadata only - never article bodies, publisher
+ * credentials or worker internals. Filters + pagination are enforced by the
+ * API so clients never pull whole tables.
+ */
+const listQuerySchema = z.object({
+  content_id: z.string().uuid().optional(),
+  publisher_id: z.string().uuid().optional(),
+  schedule_id: z.string().uuid().optional(),
+  status: z.enum(PUBLICATION_STATUSES).optional(),
+  limit: z.coerce.number().int().min(1).max(200).default(50),
+  offset: z.coerce.number().int().min(0).default(0),
+});
+
 publicationsRouter.get(
   '/',
   asyncHandler(async (req, res) => {
     const projectId = parseProjectId(req);
     const { container, user } = req;
     await container.access.requireRole(user!.sub, projectId, 'viewer');
-    const { data } = await container.sb
-      .from('seo_publications')
-      .select('id, status, title, slug, excerpt, target_url, remote_id, error, created_at, updated_at, published_at, publisher_id, content_id')
-      .eq('project_id', projectId)
-      .order('created_at', { ascending: false })
-      .limit(200);
-    res.json({ data: data ?? [] });
+    const filters = listQuerySchema.parse(req.query);
+    const svc = new PublicationService(container.sb);
+    res.json({ data: await svc.list(projectId, filters) });
   }),
 );
 
@@ -45,14 +57,8 @@ publicationsRouter.get(
     const publicationId = parseId(req, 'publicationId');
     const { container, user } = req;
     await container.access.requireRole(user!.sub, projectId, 'viewer');
-    const { data } = await container.sb
-      .from('seo_publications')
-      .select('*')
-      .eq('project_id', projectId)
-      .eq('id', publicationId)
-      .maybeSingle();
-    if (!data) throw ApiError.notFound('Publication not found');
-    res.json({ data });
+    const svc = new PublicationService(container.sb);
+    res.json({ data: await svc.get(projectId, publicationId) });
   }),
 );
 

@@ -28,7 +28,15 @@ function startOfWeek(d: Date): Date {
  * cancel flows. Mutations always round-trip through the API and then refetch;
  * nothing here is optimistic.
  */
-export function ContentSchedule({ projectId, role = 'viewer' }: { projectId: string; role?: string }) {
+export function ContentSchedule({
+  projectId,
+  role = 'viewer',
+  onViewPublication,
+}: {
+  projectId: string;
+  role?: string;
+  onViewPublication?: (scheduleId: string) => void;
+}) {
   const manage = canManage(role);
 
   const [refresh, setRefresh] = useState(0);
@@ -204,6 +212,11 @@ export function ContentSchedule({ projectId, role = 'viewer' }: { projectId: str
             setRescheduling(s);
           }}
           onCancel={cancelSchedule}
+          onViewPublication={
+            (selected.status === 'published' || selected.status === 'failed') && onViewPublication
+              ? () => onViewPublication(selected.id)
+              : undefined
+          }
         />
       )}
       {creating && (

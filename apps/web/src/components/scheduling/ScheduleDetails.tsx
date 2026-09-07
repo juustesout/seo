@@ -8,10 +8,11 @@ interface ScheduleDetailsProps {
   onClose: () => void;
   onReschedule: (s: ScheduleDto) => void;
   onCancel: (s: ScheduleDto) => void;
+  onViewPublication?: () => void;
 }
 
 /** Overlay with full details of one schedule and the actions its state allows. */
-export function ScheduleDetails({ schedule, canManage, onClose, onReschedule, onCancel }: ScheduleDetailsProps) {
+export function ScheduleDetails({ schedule, canManage, onClose, onReschedule, onCancel, onViewPublication }: ScheduleDetailsProps) {
   const when = parseDate(schedule.scheduled_at);
   const cancelledAt = parseDate(schedule.cancelled_at);
   const createdAt = parseDate(schedule.created_at);
@@ -53,6 +54,11 @@ export function ScheduleDetails({ schedule, canManage, onClose, onReschedule, on
         </dl>
 
         <div className="modal-actions">
+          {onViewPublication && (
+            <button type="button" className="btn primary" onClick={onViewPublication} title="Open the resulting publication in the history page">
+              View publication
+            </button>
+          )}
           {canManage && isReschedulable(schedule) && (
             <button type="button" className="btn" onClick={() => onReschedule(schedule)}>
               Reschedule…

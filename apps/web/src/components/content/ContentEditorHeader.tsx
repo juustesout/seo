@@ -22,6 +22,7 @@ interface ContentEditorHeaderProps {
   busy: boolean;
   onSaveNow: () => void;
   onDelete: () => void;
+  onViewPublications?: () => void;
 }
 
 export function ContentEditorHeader({
@@ -38,6 +39,7 @@ export function ContentEditorHeader({
   busy,
   onSaveNow,
   onDelete,
+  onViewPublications,
 }: ContentEditorHeaderProps) {
   const pillClass =
     saveState === 'saving' ? 'busy' : saveState === 'failed' ? 'err' : saveState === 'saved' ? 'ok' : '';
@@ -62,6 +64,11 @@ export function ContentEditorHeader({
           <span className={`pill ${pillClass}`}>{savedLabel}</span>
         </div>
         <div className="ce-actions">
+          {onViewPublications && (
+            <button type="button" className="btn" onClick={onViewPublications} title="See every publish attempt of this article">
+              History
+            </button>
+          )}
           <button type="button" className="btn" disabled={!canEdit || busy} onClick={onSaveNow}>
             Save
           </button>
