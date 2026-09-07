@@ -155,9 +155,10 @@ describe('mcp http session lifecycle + tools', () => {
     const listed = await client.post('tools/list', {});
     expect(listed.status).toBe(200);
     const names = toolsOf(listed.body);
-    expect(names).toHaveLength(13);
+    expect(names).toHaveLength(14);
     expect(names).toContain('schedule_create');
     expect(names).toContain('content_update');
+    expect(names).toContain('project_list');
 
     const ran = await client.post('tools/call', { name: 'content_list', arguments: {} });
     const result = (ran.body as { result?: { content?: { text?: string }[]; isError?: boolean } }).result;
@@ -172,8 +173,9 @@ describe('mcp http session lifecycle + tools', () => {
 
     const listed = await client.post('tools/list', {});
     const names = toolsOf(listed.body);
-    expect(names).toHaveLength(7);
+    expect(names).toHaveLength(8);
     expect(names).toContain('content_list');
+    expect(names).toContain('project_list');
     expect(names).toContain('schedule_list');
     expect(names).not.toContain('schedule_create');
     expect(names).not.toContain('schedule_reschedule');

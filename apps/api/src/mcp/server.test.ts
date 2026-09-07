@@ -72,6 +72,7 @@ describe('mcp tool registry', () => {
         'content_resolve_images',
         'content_update',
         'jobs_list',
+        'project_list',
         'publication_get',
         'publication_list',
         'schedule_cancel',
@@ -84,7 +85,7 @@ describe('mcp tool registry', () => {
       expect(tool.description).toContain('schema v1');
       expect(tool.inputSchema).toBeTruthy();
     }
-    expect(tools.filter((t) => t.readOnly)).toHaveLength(7);
+    expect(tools.filter((t) => t.readOnly)).toHaveLength(8);
     expect(tools.filter((t) => !t.readOnly)).toHaveLength(6);
   });
 
@@ -95,6 +96,7 @@ describe('mcp tool registry', () => {
     expect(registered).toContain('schedule_list');
     expect(registered).toContain('publication_list');
     expect(registered).toContain('content_get');
+    expect(registered).toContain('project_list');
     expect(registered).not.toContain('schedule_create');
     expect(registered).not.toContain('schedule_reschedule');
     expect(registered).not.toContain('schedule_cancel');
@@ -375,6 +377,16 @@ describe('mcp account (master) key sessions resolve project per call', () => {
         }
         return { project_id: projectId, role };
       },
+      projectInfo: async (projectId: string) => ({
+        id: projectId,
+        name: 'Bound project',
+        slug: null,
+        website_url: null,
+        created_at: '2026-01-01T00:00:00.000Z',
+        role: null,
+      }),
+      listMembershipProjects: async () =>
+        role ? [{ id: 'p2', name: 'Second project', slug: null, website_url: null, created_at: '2026-01-01T00:00:00.000Z', role }] : [],
     } as unknown as AccessService;
   }
 
@@ -438,5 +450,28 @@ describe('mcp account (master) key sessions resolve project per call', () => {
   it('an account key without an owner identity is refused everywhere', async () => {
     const d = deps({ scope: 'account', projectId: null, userId: null, access: access('editor') });
     await expectsDenied(byName('content_list').handler(d, { project_id: 'p2' }));
+  });
+
+  it('project_list is available to read-only keys', async () => {
+    const tool = byName('project_list');
+    expect(tool.readOnly).toBe(true);
+  });
+
+  it('project_list lets a project key discover its single bound project', async () => {
+    const d = deps({ access: access('admin') });
+    const out = await byName('project_list').handler(d, {});
+    expect(out.data).toMatchObject({ projects: [{ id: 'p1', name: 'Bound project' }] });
+  });
+
+  it('project_list lets an account key discover every member project with its role', async () => {
+    const d = accountDeps('editor');
+    const out = await byName('project_list').handler(d, {});
+    expect(out.data).toMatchObject({ projects: [{ id: 'p2', role: 'editor' }] });
+  });
+
+  it('project_list returns no projects for an account key with no memberships', async () => {
+    const d = accountDeps(null);
+    const out = await byName('project_list').handler(d, {});
+    expect(out.data).toEqual({ projects: [] });
   });
 });

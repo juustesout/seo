@@ -30,7 +30,7 @@ import { ContentAnalysisService } from '../services/contentAnalysisService.js';
 import { ScheduleService, SCHEDULE_STATUSES } from '../services/scheduleService.js';
 import { PublicationService, PUBLICATION_STATUSES } from '../services/publicationService.js';
 import { ApiError } from '../apiErrors.js';
-import type { AccessService } from '../supabase.js';
+import { AccessService } from '../supabase.js';
 
 const asContainer = (sb: SupabaseClient): ServiceContainer => ({ sb } as unknown as ServiceContainer);
 
@@ -161,10 +161,33 @@ export function buildTools(): ToolDef[] {
   const tools: ToolDef[] = [];
 
   tools.push({
+    name: 'project_list',
+    title: 'List accessible projects',
+    description:
+      'Discover the projects this API key can reach before calling any project-scoped tool (schema v1, read). A project key returns its single bound project; an account/master key returns every project you are a member of with your role there. Use the returned project id as the project_id argument of the other tools.',
+    readOnly: true,
+    inputSchema: {},
+    handler: async (deps, _args) => {
+      requireRead(deps);
+      const access = deps.access ?? new AccessService(deps.sb);
+      if (deps.scope === 'account') {
+        if (!deps.userId) {
+          throw new ApiError(403, 'forbidden', 'No user identity is bound to this account API key');
+        }
+        const projects = await access.listMembershipProjects(deps.userId);
+        return { data: { projects } };
+      }
+      const bound = deps.projectId as string;
+      const info = await access.projectInfo(bound);
+      return { data: { projects: info ? [info] : [] } };
+    },
+  });
+
+  tools.push({
     name: 'content_list',
     title: 'List content',
     description:
-      'List project content items (schema v1, read). For account/master keys project_id is required and must be a project you are a member of.',
+      'List project content items (schema v1, read). For account/master keys project_id is required and must be a project you are a member of - call project_list first to discover project ids.',
     readOnly: true,
     inputSchema: {
       project_id: z.string().uuid().optional().describe('Project to operate on (required for account keys; must match the bound project otherwise)'),

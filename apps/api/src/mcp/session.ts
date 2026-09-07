@@ -19,7 +19,8 @@ import { registerTools } from './server.js';
  * Project keys bind the session to one project. Account (master) keys bind it
  * to their owning user: every tool resolves the target project per request and
  * the AccessService authorizes that the user is a member (never stronger than
- * their membership role in that project).
+ * their membership role in that project). The same AccessService answers
+ * project discovery (project_list) for both key kinds.
  */
 export function depsFromApiKey(sb: SupabaseClient, jobStore: JobStore, key: ApiKeyRecord): MpcDeps {
   const accountKey = key.project_id === null;
@@ -31,7 +32,7 @@ export function depsFromApiKey(sb: SupabaseClient, jobStore: JobStore, key: ApiK
     userId: key.created_by,
     canRead: key.scopes.includes('read'),
     canWrite: key.scopes.includes('write'),
-    ...(accountKey ? { access: new AccessService(sb) } : {}),
+    access: new AccessService(sb),
   };
 }
 

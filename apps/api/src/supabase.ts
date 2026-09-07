@@ -55,6 +55,16 @@ export interface ProjectRole {
   name: string;
 }
 
+/** Minimal project row surfaced to API-key holders (no secrets). */
+export interface ProjectBrief {
+  id: string;
+  name: string;
+  slug: string | null;
+  website_url: string | null;
+  created_at: string;
+  role: MemberRole | null;
+}
+
 export class AccessService {
   constructor(private readonly sb: SupabaseClient) {}
 
@@ -118,5 +128,47 @@ export class AccessService {
     const accountId = Array.isArray(data) ? (data[0] as { id?: string } | null)?.id : (data as string | null);
     if (!accountId) throw new ApiError(500, 'storage_error', 'Could not resolve your account');
     return { account_id: accountId };
+  }
+
+  /** Every project a user is a member of, with their role (for account keys). */
+  async listMembershipProjects(userId: string): Promise<ProjectBrief[]> {
+    const { data: members, error } = await this.sb
+      .from('seo_project_members')
+      .select('project_id, role')
+      .eq('user_id', userId);
+    if (error) {
+      logger.error({ error }, 'membership project list failed');
+      throw new ApiError(500, 'storage_error', 'Could not list your projects');
+    }
+    const roles = new Map((members ?? []).map((m) => [String(m.project_id), m.role as MemberRole]));
+    const ids = [...roles.keys()];
+    if (ids.length === 0) return [];
+    const { data: projects, error: perr } = await this.sb
+      .from('seo_projects')
+      .select('id, name, slug, website_url, created_at')
+      .in('id', ids);
+    if (perr) {
+      logger.error({ error: perr }, 'membership project info failed');
+      throw new ApiError(500, 'storage_error', 'Could not list your projects');
+    }
+    return ((projects ?? []) as Array<{ id: string; name: string; slug: string | null; website_url: string | null; created_at: string }>)
+      .filter((p) => roles.has(p.id))
+      .map((p) => ({ ...p, role: roles.get(p.id) ?? null }));
+  }
+
+  /** Minimal metadata for one project (used to describe a bound project key). */
+  async projectInfo(projectId: string): Promise<ProjectBrief | null> {
+    const { data, error } = await this.sb
+      .from('seo_projects')
+      .select('id, name, slug, website_url, created_at')
+      .eq('id', projectId)
+      .maybeSingle();
+    if (error) {
+      logger.error({ error }, 'project info lookup failed');
+      throw new ApiError(500, 'storage_error', 'Could not read the project');
+    }
+    if (!data) return null;
+    const row = data as { id: string; name: string; slug: string | null; website_url: string | null; created_at: string };
+    return { ...row, role: null };
   }
 }
