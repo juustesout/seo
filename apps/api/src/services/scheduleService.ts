@@ -37,6 +37,16 @@ const RESCHEDULABLE = ['scheduled'] as const;
 /** States from which a schedule can still be cancelled (not actively publishing). */
 const CANCELLABLE = ['scheduled', 'queued'] as const;
 
+/** Optional filters for the schedule read model (Content Studio Phase H4 MCP). */
+export interface ScheduleListOptions {
+  status?: ScheduleStatus;
+  /** Only schedules at or after this timestamp (inclusive, ISO). */
+  from?: string;
+  /** Only schedules at or before this timestamp (inclusive, ISO). */
+  to?: string;
+  limit?: number;
+}
+
 const SCHEDULE_COLUMNS =
   'id, project_id, content_id, publisher_id, scheduled_at, status, job_id, created_by, created_at, updated_at, cancelled_at';
 
@@ -82,13 +92,14 @@ export class ScheduleService {
   // Reads
   // -------------------------------------------------------------------------
 
-  async list(projectId: string): Promise<ScheduleDto[]> {
-    const { data, error } = await this.sb
-      .from('seo_schedules')
-      .select(SCHEDULE_COLUMNS)
-      .eq('project_id', projectId)
+  async list(projectId: string, options: ScheduleListOptions = {}): Promise<ScheduleDto[]> {
+    let q = this.sb.from('seo_schedules').select(SCHEDULE_COLUMNS).eq('project_id', projectId);
+    if (options.status) q = q.eq('status', options.status);
+    if (options.from) q = q.gte('scheduled_at', options.from);
+    if (options.to) q = q.lte('scheduled_at', options.to);
+    const { data, error } = await q
       .order('created_at', { ascending: false })
-      .limit(200);
+      .limit(options.limit ?? 200);
     if (error) {
       logger.error({ error }, 'schedule list failed');
       throw ApiError.badRequest('Could not list schedules');

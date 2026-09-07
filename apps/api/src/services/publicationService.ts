@@ -115,7 +115,7 @@ export class PublicationService {
       logger.error({ error }, 'publication detail failed');
       throw ApiError.badRequest('Could not load the publication');
     }
-    if (!data) throw ApiError.notFound('Publication not found in this project');
+    if (!data) throw new ApiError(404, 'publication_not_found', 'Publication not found in this project');
     return data as Row;
   }
 

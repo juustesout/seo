@@ -1,15 +1,21 @@
 /**
- * SEO MCP server (Milestone 9).
+ * SEO MCP server.
  *
- * Exposes the same SEO Core services (ContentService, ContentAnalysisService)
- * that REST v1 and the UI use. Invariants:
+ * Exposes the same SEO Core services (ContentService, ContentAnalysisService,
+ * ScheduleService, PublicationService) that REST and the UI use. Invariants:
  *  - Identity is a project API key bound at startup (MCP_API_KEY env). The
- *    caller can only ever reach that key's project - a project id supplied by
- *    the client is never trusted (write tools take no project field at all).
- *  - Read tools require the key's "read" scope; write tools require "write".
- *  - Destructive/state transitions (publish/archive) demand an explicit
- *    confirmation argument. Deletion is intentionally not exposed.
+ *    caller can only ever reach that key's project; scheduling/publishing tools
+ *    accept a project_id that must match the bound project, and it is never
+ *    trusted beyond that equality check.
+ *  - Read tools require the key's "read" scope; write tools require "write"
+ *    (this mirrors the effective project role: viewers read schedules and
+ *    publications, editors and above manage them).
+ *  - Destructive/state transitions demand an explicit confirmation argument.
+ *    Deletion is intentionally not exposed (cancelling a schedule preserves
+ *    its history, never deletes the row).
  *  - Long operations enqueue durable jobs and return a job id to poll.
+ *  - Scheduling/publishing tools call the shared services; no MCP tool talks
+ *    to Postgres or enqueues jobs directly.
  *  - Tool schemas are versioned in each description (schema vN).
  */
 
@@ -19,9 +25,15 @@ import type { JobStore } from '../jobs/types.js';
 import type { ServiceContainer } from '../context.js';
 import { ContentService } from '../services/contentService.js';
 import { ContentAnalysisService } from '../services/contentAnalysisService.js';
+import { ScheduleService, SCHEDULE_STATUSES } from '../services/scheduleService.js';
+import { PublicationService, PUBLICATION_STATUSES } from '../services/publicationService.js';
 import { ApiError } from '../apiErrors.js';
 
 const asContainer = (sb: SupabaseClient): ServiceContainer => ({ sb } as unknown as ServiceContainer);
+
+/** Container carrying the job store for services that enqueue work (schedules). */
+const fullContainer = (deps: MpcDeps): ServiceContainer =>
+  ({ sb: deps.sb, jobStore: deps.jobStore }) as unknown as ServiceContainer;
 
 export interface MpcDeps {
   sb: SupabaseClient;
@@ -54,6 +66,61 @@ function requireWrite(deps: MpcDeps): void {
   if (!deps.canWrite) throw new ApiError(403, 'forbidden', 'The bound API key lacks the write scope');
 }
 
+/**
+ * Resolve + authorize a project_id. The MCP server is bound to one project;
+ * any other id is refused so a client can never address another project.
+ */
+function projectOf(deps: MpcDeps, args: Record<string, unknown>): string {
+  const pid = args.project_id;
+  if (typeof pid !== 'string' || pid.length === 0) {
+    throw new ApiError(400, 'invalid_input', 'project_id is required');
+  }
+  if (pid !== deps.projectId) {
+    throw new ApiError(403, 'forbidden', 'project_id does not match the project this API key is bound to');
+  }
+  return pid;
+}
+
+// ISO-8601 datetime with a mandatory timezone offset (Z or +hh:mm / -hh:mm).
+// "2026-09-10 09:00" and other zone-less forms are rejected here.
+const OFFSET_ISO_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,9})?)?(?:Z|[+-]\d{2}:\d{2})$/;
+
+function requireOffsetIso(value: unknown, field: string): string | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== 'string' || !OFFSET_ISO_RE.test(value) || !Number.isFinite(Date.parse(value))) {
+    throw new ApiError(
+      400,
+      'invalid_datetime',
+      `${field} must be an ISO-8601 datetime with a timezone offset (e.g. 2026-09-10T09:00:00+02:00 or 2026-09-10T09:00:00Z)`,
+    );
+  }
+  return value;
+}
+
+function requireOffsetIsoValue(value: unknown, field: string): string {
+  const out = requireOffsetIso(value, field);
+  if (out === undefined) throw new ApiError(400, 'invalid_datetime', `${field} is required`);
+  return out;
+}
+
+function strArg(v: unknown): string | undefined {
+  return typeof v === 'string' && v.length > 0 ? v : undefined;
+}
+
+function intArg(value: unknown, fallback: number, min: number, max: number): number {
+  const n = typeof value === 'number' ? value : typeof value === 'string' && /^\d+$/.test(value) ? Number(value) : NaN;
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(max, Math.max(min, Math.floor(n)));
+}
+
+function enumArg<T extends string>(value: unknown, allowed: readonly T[], field: string): T | undefined {
+  const s = strArg(value) as T | undefined;
+  if (s !== undefined && !(allowed as readonly string[]).includes(s)) {
+    throw new ApiError(400, 'invalid_input', `${field} must be one of: ${allowed.join(', ')}`);
+  }
+  return s;
+}
+
 function okText(payload: unknown): string {
   return JSON.stringify(payload, null, 2);
 }
@@ -75,9 +142,9 @@ export function buildTools(): ToolDef[] {
       requireRead(deps);
       const svc = new ContentService(deps.sb);
       const result = await svc.list(deps.projectId, {
-        status: typeof args.status === 'string' ? args.status : undefined,
-        search: typeof args.search === 'string' ? args.search : undefined,
-        limit: typeof args.limit === 'number' ? args.limit : 200,
+        status: strArg(args.status),
+        search: strArg(args.search),
+        limit: intArg(args.limit, 200, 1, 200),
       });
       return { data: result };
     },
@@ -118,10 +185,14 @@ export function buildTools(): ToolDef[] {
     inputSchema: { limit: z.number().int().min(1).max(100).optional().describe('Max rows') },
     handler: async (deps, args) => {
       requireRead(deps);
-      const limit = typeof args.limit === 'number' ? args.limit : 50;
+      const limit = intArg(args.limit, 50, 1, 100);
       return { data: await deps.jobStore.list(deps.projectId, limit) };
     },
   });
+
+  // ---------------------------------------------------------------------------
+  // Content generation / editing (write)
+  // ---------------------------------------------------------------------------
 
   tools.push({
     name: 'content_generate',
@@ -176,7 +247,7 @@ export function buildTools(): ToolDef[] {
         project_id: deps.projectId,
         provider: 'content',
         job_type: 'content_images',
-        params: { content_id: args.id, image_provider: args.image_provider, limit: args.limit },
+        params: { content_id: args.id, image_provider: args.image_provider, limit: intArg(args.limit, 3, 1, 6) },
         created_by: deps.userId,
       });
       return { data: { job, note: 'Job queued - poll jobs_list for progress.' } };
@@ -219,20 +290,191 @@ export function buildTools(): ToolDef[] {
     },
   });
 
+  // ---------------------------------------------------------------------------
+  // Scheduling (read + write over ScheduleService)
+  // ---------------------------------------------------------------------------
+
+  tools.push({
+    name: 'schedule_list',
+    title: 'List schedules',
+    description:
+      'List publication schedules for a project. Read-only: inspect what is planned, queued, publishing, published, failed or cancelled. Optionally filter by status or a from/to window on scheduled_at. Times are ISO-8601 with a timezone offset (schema v1, read).',
+    readOnly: true,
+    inputSchema: {
+      project_id: z.string().uuid().describe('Must match the project this API key is bound to'),
+      status: z.enum(SCHEDULE_STATUSES).optional().describe('Filter by schedule status'),
+      from: z.string().optional().describe('Only schedules at or after this ISO datetime (inclusive)'),
+      to: z.string().optional().describe('Only schedules at or before this ISO datetime (inclusive)'),
+      limit: z.number().int().min(1).max(200).optional().describe('Max rows'),
+    },
+    handler: async (deps, args) => {
+      requireRead(deps);
+      const projectId = projectOf(deps, args);
+      const svc = new ScheduleService(fullContainer(deps));
+      const data = await svc.list(projectId, {
+        status: enumArg(args.status, SCHEDULE_STATUSES, 'status'),
+        from: requireOffsetIso(args.from, 'from'),
+        to: requireOffsetIso(args.to, 'to'),
+        limit: intArg(args.limit, 50, 1, 200),
+      });
+      return { data };
+    },
+  });
+
+  tools.push({
+    name: 'schedule_create',
+    title: 'Create a publication schedule',
+    description:
+      'Schedule an existing content item for publication through a connected publisher. The publication executes at scheduled_at (ISO-8601 with timezone offset, must be in the future). This creates a schedule, prepares the publication, and enqueues a single durable job - one schedule maps to one backing job (schema v1, write).',
+    readOnly: false,
+    inputSchema: {
+      project_id: z.string().uuid().describe('Must match the project this API key is bound to'),
+      content_id: z.string().uuid().describe('Content item to publish'),
+      publisher_id: z.string().uuid().describe('Connected publisher to publish through'),
+      scheduled_at: z.string().describe('When to publish (ISO-8601 datetime with timezone offset, e.g. 2026-09-10T09:00:00+02:00)'),
+    },
+    handler: async (deps, args) => {
+      requireWrite(deps);
+      const projectId = projectOf(deps, args);
+      const userId = deps.userId;
+      if (!userId) {
+        throw new ApiError(403, 'forbidden', 'No user identity is bound to this API key; cannot create schedules');
+      }
+      const contentId = requireUuid(args.content_id, 'content_id');
+      const publisherId = requireUuid(args.publisher_id, 'publisher_id');
+      const scheduledAt = requireOffsetIsoValue(args.scheduled_at, 'scheduled_at');
+      const svc = new ScheduleService(fullContainer(deps));
+      return { data: await svc.create(projectId, userId, { content_id: contentId, publisher_id: publisherId, scheduled_at: scheduledAt }) };
+    },
+  });
+
+  tools.push({
+    name: 'schedule_reschedule',
+    title: 'Move a pending schedule to a new time',
+    description:
+      'Move a not-yet-started schedule to a new scheduled_at (ISO-8601 with timezone offset, must be in the future). The existing backing job is moved to the new time - it is never cancelled and no second job is created (schema v1, write).',
+    readOnly: false,
+    inputSchema: {
+      project_id: z.string().uuid().describe('Must match the project this API key is bound to'),
+      schedule_id: z.string().uuid().describe('Schedule to move'),
+      scheduled_at: z.string().describe('New publish time (ISO-8601 datetime with timezone offset, e.g. 2026-09-10T09:00:00+02:00)'),
+    },
+    handler: async (deps, args) => {
+      requireWrite(deps);
+      const projectId = projectOf(deps, args);
+      const scheduleId = requireUuid(args.schedule_id, 'schedule_id');
+      const scheduledAt = requireOffsetIsoValue(args.scheduled_at, 'scheduled_at');
+      const svc = new ScheduleService(fullContainer(deps));
+      return { data: await svc.reschedule(projectId, scheduleId, scheduledAt) };
+    },
+  });
+
+  tools.push({
+    name: 'schedule_cancel',
+    title: 'Cancel a pending publication schedule',
+    description:
+      'Cancel a pending content publication schedule. The backing job is cancelled and the schedule will not publish. Scheduling and publication history are preserved (the row is never deleted) and cancelling twice is a harmless no-op (schema v1, write).',
+    readOnly: false,
+    inputSchema: {
+      project_id: z.string().uuid().describe('Must match the project this API key is bound to'),
+      schedule_id: z.string().uuid().describe('Schedule to cancel'),
+    },
+    handler: async (deps, args) => {
+      requireWrite(deps);
+      const projectId = projectOf(deps, args);
+      const scheduleId = requireUuid(args.schedule_id, 'schedule_id');
+      const svc = new ScheduleService(fullContainer(deps));
+      return { data: await svc.cancel(projectId, scheduleId) };
+    },
+  });
+
+  // ---------------------------------------------------------------------------
+  // Publication history (read over PublicationService)
+  // ---------------------------------------------------------------------------
+
+  tools.push({
+    name: 'publication_list',
+    title: 'List publication attempts',
+    description:
+      'List publication attempts and outcomes for a project - what was published, failed, or is currently publishing, newest first. Optionally filter by content, publisher, schedule or status. Returns safe metadata only; never article bodies or credentials (schema v1, read).',
+    readOnly: true,
+    inputSchema: {
+      project_id: z.string().uuid().describe('Must match the project this API key is bound to'),
+      content_id: z.string().uuid().optional().describe('Only attempts of this content item'),
+      publisher_id: z.string().uuid().optional().describe('Only attempts through this publisher'),
+      schedule_id: z.string().uuid().optional().describe('Only attempts created by this schedule'),
+      status: z.enum(PUBLICATION_STATUSES).optional().describe('Filter by publication status'),
+      limit: z.number().int().min(1).max(200).optional().describe('Max rows'),
+      offset: z.number().int().min(0).optional().describe('Skip N rows for paging'),
+    },
+    handler: async (deps, args) => {
+      requireRead(deps);
+      const projectId = projectOf(deps, args);
+      const svc = new PublicationService(deps.sb);
+      const data = await svc.list(projectId, {
+        content_id: uuidArg(args.content_id, 'content_id'),
+        publisher_id: uuidArg(args.publisher_id, 'publisher_id'),
+        schedule_id: uuidArg(args.schedule_id, 'schedule_id'),
+        status: enumArg(args.status, PUBLICATION_STATUSES, 'status'),
+        limit: intArg(args.limit, 50, 1, 200),
+        offset: intArg(args.offset, 0, 0, 100000),
+      });
+      return { data };
+    },
+  });
+
+  tools.push({
+    name: 'publication_get',
+    title: 'Get a publication attempt',
+    description:
+      'Fetch one publication attempt by id - its status, target URL, publish time and any failure message. Safe metadata only; never article bodies or credentials (schema v1, read).',
+    readOnly: true,
+    inputSchema: {
+      project_id: z.string().uuid().describe('Must match the project this API key is bound to'),
+      publication_id: z.string().uuid().describe('Publication attempt id'),
+    },
+    handler: async (deps, args) => {
+      requireRead(deps);
+      const projectId = projectOf(deps, args);
+      const publicationId = requireUuid(args.publication_id, 'publication_id');
+      const svc = new PublicationService(deps.sb);
+      return { data: await svc.get(projectId, publicationId) };
+    },
+  });
+
   return tools;
 }
 
-/** Registers every tool on an MCP server instance. */
+/** Validate a required UUID-shaped argument, returning it as a string. */
+function requireUuid(value: unknown, field: string): string {
+  const s = uuidArg(value, field);
+  if (!s) throw new ApiError(400, 'invalid_input', `${field} is required`);
+  return s;
+}
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Accept an optional UUID filter (absent -> undefined, present -> validated). */
+function uuidArg(value: unknown, field: string): string | undefined {
+  if (value === undefined || value === null || value === '') return undefined;
+  const s = String(value);
+  if (!UUID_RE.test(s)) throw new ApiError(400, 'invalid_input', `${field} must be a valid UUID`);
+  return s;
+}
+
+/** Registers every tool the bound key's scopes allow on an MCP server instance. */
 export function registerTools(
   server: { registerTool: (...args: unknown[]) => unknown },
   deps: MpcDeps,
 ): void {
   for (const tool of buildTools()) {
+    if (tool.readOnly ? !deps.canRead : !deps.canWrite) continue;
     const handler = async (args: Record<string, unknown>) => {
       try {
         return ok(okText(await tool.handler(deps, args)));
       } catch (err) {
-        const message = err instanceof ApiError ? err.message : err instanceof Error ? err.message : 'Unknown tool error';
+        const message =
+          err instanceof ApiError ? `${err.code}: ${err.message}` : err instanceof Error ? err.message : 'Unknown tool error';
         return fail(message);
       }
     };

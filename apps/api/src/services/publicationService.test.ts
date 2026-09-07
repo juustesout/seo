@@ -318,11 +318,11 @@ describe('PublicationService.get', () => {
     const stores = storesWith([publicationRow({ id: 'p2-row', project_id: 'p2' })]);
     const svc = svcOf(stores);
 
-    await expectErrorCode(svc.get('p1', 'p2-row'), 'not_found');
+    await expectErrorCode(svc.get('p1', 'p2-row'), 'publication_not_found');
   });
 
   it('cannot read a publication id that does not exist', async () => {
     const svc = svcOf(storesWith([]));
-    await expectErrorCode(svc.get('p1', 'missing'), 'not_found');
+    await expectErrorCode(svc.get('p1', 'missing'), 'publication_not_found');
   });
 });
