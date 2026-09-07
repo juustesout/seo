@@ -1,3 +1,17 @@
+/**
+ * Root application shell: session bootstrap, history-based routing and layout.
+ *
+ * Routes are plain URLs - account areas (`/`, `/projects`, `/integrations`,
+ * `/keys`) and the project workspace (`/p/:projectId/:view`). Everything under
+ * a project is project-scoped: children receive `projectId` plus the current
+ * user's `role` in that project so they can gate edits/actions themselves. The
+ * client holds no provider credentials; the only secret-ish thing it ever
+ * sends is the Supabase session token attached by lib/api.ts.
+ *
+ * Bootstrap is staged: Supabase must be configured, then a session/user must
+ * exist, then `/me` (account + project memberships) must resolve before any
+ * workspace renders - children assume `me.projects` is already loaded.
+ */
 import { useEffect, useState } from 'react';
 import { supabase, configured as supabaseConfigured, currentUser, sessionToken } from './lib/supabase';
 import { api } from './lib/api';
@@ -38,6 +52,7 @@ type Route =
   | { area: TopArea }
   | { area: 'project'; projectId: string; view: string };
 
+/** Derive the current Route from window.location.pathname. */
 function parseRoute(): Route {
   const seg = window.location.pathname.split('/').filter(Boolean);
   if (seg[0] === 'p' && seg[1]) return { area: 'project', projectId: seg[1], view: seg[2] || 'dashboard' };
@@ -45,6 +60,7 @@ function parseRoute(): Route {
   return { area };
 }
 
+/** Render a Route back to its canonical URL path. */
 function routePath(r: Route): string {
   if (r.area === 'project') return `/p/${r.projectId}/${r.view}`;
   return `/${r.area === 'overview' ? 'overview' : r.area}`;
@@ -69,6 +85,15 @@ const PROJECT_NAV = [
   { id: 'settings', label: 'Settings', dot: false },
 ];
 
+/**
+ * Top-level component.
+ *
+ * Keeps route + identity state, subscribes to Supabase auth changes, and
+ * renders one of: a boot error (Supabase not configured), the auth screen, a
+ * loading card, first-project creation, the project workspace, or an
+ * account-level area. Project membership comes from `/me`; the role of the
+ * active project is passed down so views can gate capabilities per route.
+ */
 export function App() {
   const [route, setRoute] = useState<Route>(() => parseRoute());
   const [me, setMe] = useState<Me | null>(null);
@@ -82,6 +107,8 @@ export function App() {
     return () => window.removeEventListener('popstate', onLoc);
   }, []);
 
+  // Re-runs whenever `authed` flips so a freshly signed-in user is loaded into
+  // /me without a page reload; guards against stale state after sign-out.
   useEffect(() => {
     (async () => {
       if (!supabaseConfigured) {
@@ -103,6 +130,8 @@ export function App() {
     })();
   }, [authed]);
 
+  // Keep the UI's auth state in sync with Supabase token refresh/session
+  // changes (e.g. sign-out elsewhere), rather than only at boot.
   useEffect(() => {
     if (!supabase) return;
     const { data: sub } = supabase.auth.onAuthStateChange((_e, s) => {
@@ -227,11 +256,17 @@ export function App() {
   );
 }
 
+/** Sign out of Supabase and hard-reload to the unauthenticated screen. */
 async function signOut() {
   await supabase?.auth.signOut();
   window.location.href = '/';
 }
 
+/**
+ * Account-level navigation bar shown above every screen. Switches between
+ * account areas, shows the current user, and offers a project switcher that
+ * routes straight into any project the user belongs to (via onOpenProject).
+ */
 function TopBar({
   meEmail,
   onSignOut,
@@ -293,6 +328,13 @@ function TopBar({
   );
 }
 
+/**
+ * First-run flow shown when the signed-in user has no project yet. Creates a
+ * project through the `seo_create_project` RPC (RLS-scoped to the user) and
+ * hands the new id to `onCreated` so the app opens its dashboard. Project
+ * creation is a Supabase RPC, not an /api call, because it must mint the
+ * membership row for the caller in the same transaction.
+ */
 function CreateProject({ email, onCreated }: { email: string | null; onCreated: (id: string) => void }) {
   const [name, setName] = useState('');
   const [url, setUrl] = useState('');
@@ -355,6 +397,12 @@ function CreateProject({ email, onCreated }: { email: string | null; onCreated: 
   );
 }
 
+/**
+ * Supabase email/password auth screen, with magic-link / one-time-code and
+ * sign-up flows. Only rendered while `authed === false`; once a session exists
+ * App re-bootstraps and loads /me. No provider or service credentials are ever
+ * involved here - this is purely identity for the anon-key client.
+ */
 function AuthScreen() {
   const [mode, setMode] = useState<'login' | 'signup' | 'code'>('login');
   const [email, setEmail] = useState('');

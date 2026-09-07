@@ -1,3 +1,13 @@
+/**
+ * Tiptap editor wrapper for structured article editing.
+ *
+ * The editor edits a JSON document (`TipDoc`) and reports every update up as
+ * JSON - there is no raw-HTML editing path in the app. Media is handled by the
+ * custom ImageBlock node (stable mediaId references). The parent keys the
+ * component by `editingId`/load sequence so opening another article fully
+ * re-initializes the editor instead of reusing stale state; the imperative
+ * handle exists so sibling panels (the outline) can drive selection.
+ */
 import { forwardRef, useImperativeHandle } from 'react';
 import { useEditor, EditorContent, type Editor } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
@@ -16,6 +26,12 @@ interface RichTextEditorProps {
   onEditor?: (editor: Editor | null) => void;
 }
 
+/**
+ * Creates the Tiptap editor for one article. Props: `initialDoc` seeds the
+ * content, `onDocChange` lifts every JSON update to the parent workspace, and
+ * `onEditor` hands the live instance up once created so the toolbar/outline can
+ * act on it. The imperative handle exposes `selectHeading` for outline clicks.
+ */
 export const RichTextEditor = forwardRef<RichTextEditorHandle, RichTextEditorProps>(function RichTextEditor(
   { initialDoc, onDocChange, onEditor },
   ref,

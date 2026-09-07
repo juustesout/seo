@@ -1,3 +1,12 @@
+/**
+ * Media library for the Content Studio (Phase F).
+ *
+ * Images live in a per-project media library; the editor document only ever
+ * references them by `mediaId`, never as a data-URL blob. Uploads stream raw
+ * bytes through apiRaw (server sniffs the real format; the size cap here is a
+ * courtesy guard, the server enforces it too). Deletion is admin-gated and the
+ * API refuses to delete an item still referenced by a document.
+ */
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
 import type { Editor } from '@tiptap/react';
 import type { MediaItemDto, MediaListResponse, MediaMimeType } from '@seo/contracts';

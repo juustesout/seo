@@ -1,7 +1,12 @@
 /**
  * Navigate within a project to another view, optionally carrying URL filters
- * (e.g. /p/<id>/publications?content_id=…). App listens to popstate, so we
- * push the history entry and dispatch popstate to trigger the route update.
+ * (e.g. `/p/<id>/publications?content_id=…`).
+ *
+ * The app uses plain history-based routing instead of a router library: routes
+ * are real URLs (`/p/:projectId/:view`), so deep links and back/forward work
+ * for free. App listens to `popstate`, so this helper pushes the new history
+ * entry and then dispatches a synthetic `popstate` to make App re-parse the
+ * route - exactly as if the user had pressed back/forward.
  */
 export function openProjectView(projectId: string, view: string, params?: Record<string, string | null>): void {
   const search = new URLSearchParams();

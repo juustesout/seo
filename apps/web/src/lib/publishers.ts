@@ -6,15 +6,24 @@
  * that the catalog already exposes. Since Phase H6.1 each publication intent
  * (article / text / image / video) maps to exactly one capability, and the UI
  * only offers the kinds a selected publisher can actually carry.
+ *
+ * The provider catalog's `setup` descriptor also drives *how* the UI connects
+ * a publisher: `auth: 'form'` renders credential fields that post through the
+ * encrypted credentials endpoint, while `auth: 'oauth'` renders a
+ * "Connect with <name>" button (see views/Publishing) that redirects through
+ * the vendor consent screen. Consumers pick names/labels from the descriptor -
+ * never from a hardcoded vendor table.
  */
 
 import type { PublishContentKind } from '@seo/contracts';
 import { normalizePublisherCapabilities, publisherCanPublishKind, publisherKindsFor } from '@seo/contracts';
 
+/** Something that carries an optional stored capabilities snapshot (a publisher row). */
 export interface CapabilitySource {
   capabilities?: string[];
 }
 
+/** Something that carries an optional registry/descriptor capabilities list. */
 export interface DescriptorSource {
   capabilities?: string[];
 }

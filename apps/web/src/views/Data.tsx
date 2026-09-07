@@ -1,3 +1,12 @@
+/**
+ * Keywords & Rankings view (project nav "Data").
+ *
+ * A thin front over the job system: keyword research and SERP rank tracking
+ * are enqueued as background jobs - never run in the browser - and their
+ * results land in this project's own tables (all reads are project-scoped).
+ * Results therefore never show a fake "done"; the tab states it is loading and
+ * the job list below reports progress and failures honestly.
+ */
 import { useEffect, useState } from 'react';
 import { api } from '../lib/api';
 import { useAsync, num, fmtNum, fmtDate, useJobs, JobTable, Empty } from '../lib/ui';
@@ -28,6 +37,12 @@ interface Rk {
   date?: string | null;
 }
 
+/**
+ * Three-tab explorer over keywords / pages / rankings. Reads are project-scoped
+ * lists fetched through lib/api.ts; the only writes are "enqueue job" calls, so
+ * heavy provider work stays on the worker and the tab auto-refreshes while a
+ * job is running.
+ */
 export function DataViews({ projectId }: { projectId: string }) {
   const [tab, setTab] = useState<Tab>('keywords');
   const [refresh, setRefresh] = useState(0);
@@ -49,6 +64,8 @@ export function DataViews({ projectId }: { projectId: string }) {
   );
   const { jobs, busy } = useJobs(projectId, true);
 
+  // While any background job is busy, keep polling so fresh rows and job
+  // progress appear without a manual refresh.
   useEffect(() => {
     if (!busy) return;
     const id = setInterval(() => reload(), 4000);

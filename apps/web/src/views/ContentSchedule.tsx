@@ -1,3 +1,14 @@
+/**
+ * Content Calendar (project nav "Calendar", Content Studio Phase H2).
+ *
+ * The planning surface over the project's schedules API: month/week/list
+ * views with status and free-text filters, plus create / reschedule / cancel
+ * flows. Scheduled instants are absolute and rendered in the user's local
+ * timezone. Cancelled schedules are kept (flagged cancelled) rather than
+ * deleted so the history stays auditable, and publishing/scheduling shows real
+ * status only - no optimistic successes. Mutations are restricted to editor+
+ * roles (`canManage`) and always round-trip through the API then refetch.
+ */
 import { useEffect, useMemo, useState } from 'react';
 import type { ScheduleDto } from '@seo/contracts';
 import { api } from '../lib/api';
@@ -52,6 +63,7 @@ export function ContentSchedule({
 
   const state = useAsync<ScheduleDto[]>(() => api(`/projects/${projectId}/schedules`), [projectId, refresh]);
 
+  // Auto-clear transient success notices so stale confirmations do not linger.
   useEffect(() => {
     if (!notice) return;
     const id = window.setTimeout(() => setNotice(null), 5000);

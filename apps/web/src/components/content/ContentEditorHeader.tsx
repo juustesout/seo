@@ -1,3 +1,11 @@
+/**
+ * Header of the Content Studio editor: title, status pill + selector, autosave
+ * state, word count, slug, and the primary actions (Save / Publish / Delete /
+ * publication History). Save state comes from the parent's autosave hook and is
+ * shown honestly (saving / saved / failed). Role gates: read-only users cannot
+ * edit the title or status, and Delete is only offered when the parent allows
+ * it (admin/owner).
+ */
 import type { AutosaveStatus } from './useAutosave';
 import { fmtDate } from '../../lib/ui';
 

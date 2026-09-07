@@ -1,3 +1,18 @@
+/**
+ * Content Studio workspace (project nav "Content").
+ *
+ * Structured content is the source of truth: the editor works on a Tiptap
+ * `content_json` document plus metadata (title, status, target keyword, meta
+ * title/description). `content_html` is only ever a server-side render of that
+ * JSON and is never hand-edited. Autosave freezes whole-document snapshots
+ * (see useAutosave) and PATCHes the row; media is referenced by a stable
+ * `mediaId` pointing at the project library - never embedded as a data URL.
+ *
+ * Role handling is explicit: viewers get a read-only render of `content_html`
+ * (no editable Tiptap hidden behind a flag), editors can edit/save/autosave
+ * and flip status, admins/owners can additionally delete. In-editor AI is
+ * review-before-apply and never auto-applies to the document.
+ */
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Editor } from '@tiptap/react';
 import {
@@ -46,6 +61,17 @@ type DetailRow = ContentRow & { content_json: unknown; content_html: string | nu
 
 const ROLE_RANK: Record<string, number> = { viewer: 0, editor: 1, admin: 2, owner: 3 };
 
+/**
+ * Orchestrates the Content Studio list, the editor workspace and the read-only
+ * viewer render.
+ *
+ * Props: `projectId` scopes every API call; `role` is the current user's role
+ * in this project (viewer/editor/admin/owner) and drives canEdit/canDelete;
+ * `onOpenCalendar` and `onOpenPublications` deep-link to the Calendar and to
+ * this article's publication history. Workspace state lives here so the list,
+ * viewer and editor share one load/refresh path, and the current
+ * document/metadata is mirrored into a ref for autosave.
+ */
 export function Content({
   projectId,
   role = 'viewer',
@@ -134,9 +160,15 @@ export function Content({
 
   const workspaceReady = creating || (editingId !== null && detail.data?.id === editingId);
 
+  // Snapshots are canonical JSON strings rather than objects on purpose:
+  // useAutosave needs a cheap equality check (baseline vs current) and exactly
+  // one immutable payload to persist, so the whole workspace is frozen into a
+  // string instead of compared by reference.
   const snapshotOf = (t: string, s: string, d: TipDoc, k: string, mt: string, md: string) =>
     JSON.stringify({ t, s, d, k, mt, md });
 
+  // Persist one snapshot: PATCH the row being edited or POST a brand-new row,
+  // then adopt the server id (first save of a new document) and nudge the list.
   const commit = async (snapshot: string) => {
     const parsed = JSON.parse(snapshot) as { t: string; s: string; d: TipDoc; k: string; mt: string; md: string };
     const body = {

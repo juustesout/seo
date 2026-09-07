@@ -39,10 +39,14 @@ export function useAutosave({ enabled, delayMs = 1600, makeSnapshot, persist }: 
   const doSave = async () => {
     clearTimer();
     const payload = makeRef.current();
+    // Unchanged since the last successful save: mark clean and skip a redundant request.
     if (baselineRef.current === payload) {
       setStatus('saved');
       return;
     }
+    // A save is in flight: remember newer edits exist and re-run immediately
+    // after it completes, so an older save never overwrites newer edits and two
+    // requests never overlap.
     if (busyRef.current) {
       rerunRef.current = true;
       return;

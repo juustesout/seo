@@ -19,10 +19,16 @@ import type {
   SyncJob,
 } from './models.js';
 
+/**
+ * Success envelope: the shared error handler wraps every 2xx payload as
+ * `{ data: T }`.
+ */
 export interface ApiEnvelope<T> {
   data: T;
 }
 
+/** Error envelope: machine `code` plus a human `message`, with optional
+ *  `details` for validation/context. Returned on every non-2xx response. */
 export interface ApiErrorBody {
   error: {
     code: string;
@@ -31,12 +37,19 @@ export interface ApiErrorBody {
   };
 }
 
+/** Any API response is either a `{ data }` success or an `{ error }` failure. */
 export type ApiResult<T> = ApiEnvelope<T> | ApiErrorBody;
 
 // ---------------------------------------------------------------------------
 // Providers / capabilities discovery
 // ---------------------------------------------------------------------------
 
+/**
+ * Wire shape of a provider's public descriptor (mirrors ProviderDescriptor in
+ * providers.ts). The UI discovers providers through the catalog and renders
+ * their connect form from `setup` - it never hardcodes a provider id or vendor
+ * and never sees secrets.
+ */
 export interface ProviderDescriptorDto {
   id: string;
   name: string;
@@ -53,6 +66,7 @@ export interface ProviderDescriptorDto {
   };
 }
 
+/** Catalog of every registered provider, grouped by capability kind. */
 export interface ProvidersCatalogDto {
   dataSources: ProviderDescriptorDto[];
   knowledge: ProviderDescriptorDto[];
@@ -71,6 +85,13 @@ export interface ProvidersCatalogDto {
  */
 export type AiKeySource = 'account' | 'project' | 'env' | 'none';
 
+/**
+ * Server-computed AI configuration state for a project. `providerConfigured`
+ * reports whether the resolved credential exists for the provider, `configured`
+ * is the aggregate readiness, `keySource` says which BYOK scope wins, and
+ * `models`/`capabilities` enumerate what the UI can offer. Never exposes key
+ * values.
+ */
 export interface ProjectAiStatusDto {
   provider: string;
   providerConfigured: boolean;
@@ -82,6 +103,7 @@ export interface ProjectAiStatusDto {
   capabilities: string[];
 }
 
+/** User-editable AI settings for a project (model selection, provider choice). */
 export interface ProjectAiSettingsInput {
   provider?: string;
   chatModel?: string;
@@ -92,6 +114,7 @@ export interface ProjectAiSettingsInput {
 // Account-level AI providers (BYOK shared across an account's projects)
 // ---------------------------------------------------------------------------
 
+/** One model a provider can serve, tagged by its purpose (chat vs embedding). */
 export interface AiModelInfoDto {
   id: string;
   kind: 'chat' | 'embedding';
@@ -111,6 +134,7 @@ export interface AccountAiProviderDto {
   error: string | null;
 }
 
+/** Account-level AI readiness: every AI provider the account has configured. */
 export interface AccountAiStatusDto {
   providers: AccountAiProviderDto[];
 }
@@ -119,6 +143,8 @@ export interface AccountAiStatusDto {
 // Content Studio AI actions (in-editor, review-before-apply)
 // ---------------------------------------------------------------------------
 
+/** In-editor AI actions the Content Studio can perform on a selection or the
+ *  whole document (review-before-apply). */
 export const CONTENT_AI_ACTIONS = [
   'rewrite',
   'improve',
@@ -196,12 +222,15 @@ export interface MediaListResponse {
   media: MediaItemDto[];
 }
 
+/** Media upload intent. The file bytes are sent separately to project object
+ *  storage; this carries display metadata. */
 export interface MediaUploadRequest {
   /** Original file name; sanitized server-side for storage/display. */
   filename?: string;
   alt?: string;
 }
 
+/** Editable display metadata on an existing media-library item. */
 export interface MediaPatchRequest {
   alt_text?: string;
   caption?: string;
@@ -211,40 +240,48 @@ export interface MediaPatchRequest {
 // Integrations
 // ---------------------------------------------------------------------------
 
+/** Start creating an integration of a given provider type (name optional). */
 export interface CreateIntegrationRequest {
   provider_type: string;
   name?: string;
 }
 
+/** An integration enriched with its provider descriptor for the UI. */
 export interface IntegrationDetailDto extends Integration {
   descriptor: ProviderDescriptorDto | null;
 }
 
+/** OAuth-style connect response: the URL to send the browser to. */
 export interface ConnectUrlDto {
   url: string;
 }
 
+/** A GSC property the user can pick during connect (id-less catalog item). */
 export interface GscPropertyOption {
   siteUrl: string;
   permissionLevel: string;
 }
 
+/** Attach an existing GSC property to a project data source. */
 export interface GscAttachRequest {
   siteUrl: string;
   name?: string;
 }
 
+/** Write one encrypted credential under a key (server-side only). */
 export interface CredentialPutRequest {
   key: string;
   value: string;
   meta?: Record<string, unknown>;
 }
 
+/** Outcome of a connection/credential test. */
 export interface TestConnectionResult {
   ok: boolean;
   message?: string;
 }
 
+/** Result of attaching a data source: the new row plus the linked property. */
 export interface AttachResult {
   dataSource: DataSource;
   property?: { id: string; site_url: string };
@@ -254,11 +291,13 @@ export interface AttachResult {
 // Jobs
 // ---------------------------------------------------------------------------
 
+/** Enqueue a background job of a given type with optional typed params. */
 export interface EnqueueJobRequest {
   job_type: JobType | string;
   params?: Record<string, unknown>;
 }
 
+/** The durable SyncJob row created for the enqueued work. */
 export interface EnqueueJobResult {
   job: SyncJob;
 }
@@ -267,16 +306,19 @@ export interface EnqueueJobResult {
 // Knowledge
 // ---------------------------------------------------------------------------
 
+/** Vector search over the project knowledge base. */
 export interface KnowledgeSearchRequest {
   query: string;
   limit?: number;
 }
 
+/** Ranked knowledge hits for the query, scoped to one project. */
 export interface KnowledgeSearchResponse {
   results: Array<{ id: string; score: number; payload: Record<string, unknown> }>;
   project_id: string;
 }
 
+/** Whether the project knowledge base is ready and which kinds are indexed. */
 export interface KnowledgeStatusResponse {
   project_id: string;
   ready: boolean;
@@ -333,12 +375,21 @@ export interface KnowledgeSourceCreateInput {
 // Publishing
 // ---------------------------------------------------------------------------
 
+/** Configure a new publisher destination under the project. `config` holds
+ *  non-secret settings; secrets are stored separately through the credentials
+ *  API or the OAuth flow. */
 export interface CreatePublisherRequest {
   provider: string;
   name: string;
   config?: Record<string, unknown>;
 }
 
+/**
+ * Publish a piece of content to a publisher now (Phase H). `publish_kind`
+ * selects the content kind; the publisher's declared capabilities are checked
+ * before enqueueing. Content may be supplied inline (`content`) or referenced
+ * by `content_id`.
+ */
 export interface PublishRequest {
   publisher_id: string;
   content_id?: string;
@@ -354,6 +405,7 @@ export interface PublishRequest {
   schedule_at?: string;
 }
 
+/** Enqueued publish job plus the publication attempt row it will drive. */
 export interface PublishResultDto {
   job: SyncJob;
   publication?: Publication;
@@ -373,6 +425,7 @@ export interface PublicationDto {
   content_title: string | null;
   publisher_id: string;
   publisher_name: string | null;
+  /** The schedule that triggered this publication, when it came from one. */
   schedule_id: string | null;
   status: PublicationStatus;
   publish_kind: PublishContentKind;
@@ -406,6 +459,11 @@ export interface ScheduleDto {
   cancelled_at: string | null;
 }
 
+/**
+ * Create a scheduling plan (intention only - execution happens on the publish
+ * job the schedule backs, so the plan row never becomes a second source of
+ * truth).
+ */
 export interface CreateScheduleInput {
   content_id: string;
   publisher_id: string;
@@ -420,6 +478,7 @@ export interface CreateScheduleInput {
   scheduled_at: string;
 }
 
+/** Reschedule an existing plan to a new absolute timestamp. */
 export interface UpdateScheduleInput {
   scheduled_at: string;
 }
@@ -428,6 +487,11 @@ export interface UpdateScheduleInput {
 // Dashboard
 // ---------------------------------------------------------------------------
 
+/**
+ * Project dashboard read model. `overview` and `keywordStats` are null until
+ * the project has synced real data - an unconnected project reports absence,
+ * never fabricated zeros. `sync` reflects the job queue state.
+ */
 export interface DashboardSummaryDto {
   overview: {
     clicks: number;
@@ -451,6 +515,7 @@ export interface DashboardSummaryDto {
 // Meta
 // ---------------------------------------------------------------------------
 
+/** The authenticated user's identity plus the projects they belong to. */
 export interface MeDto {
   user_id: string;
   email: string | null;
@@ -463,6 +528,7 @@ export interface MeDto {
 // property registry; projects optionally link a property via seo_project_properties.
 // ---------------------------------------------------------------------------
 
+/** Account-level Google connection state (single shared Google integration). */
 export interface GscConnectionDto {
   connected: boolean;
   integration_id: string | null;
@@ -471,6 +537,7 @@ export interface GscConnectionDto {
   error: string | null;
 }
 
+/** The GSC property currently linked to a project, with its primary flag. */
 export interface AccountPropertyLinkDto {
   property_id: string;
   site_url: string;
@@ -483,6 +550,7 @@ export interface AccountProjectSummaryDto extends ProjectSummary {
   content_count: number;
 }
 
+/** One recent activity entry across the account, denormalized with project name. */
 export interface AccountRecentActivityDto {
   id: string;
   project_id: string | null;
@@ -494,6 +562,7 @@ export interface AccountRecentActivityDto {
   meta: Record<string, unknown>;
 }
 
+/** Account-level overview: identity, Google connection, and linked projects. */
 export interface AccountDto {
   account: { id: string; name: string; created_at: string };
   google: GscConnectionDto;
@@ -516,6 +585,7 @@ export interface GscRegistryPropertyDto {
   linked_project: { id: string; name: string } | null;
 }
 
+/** One row of the overview time series (a day of observed performance). */
 export interface OverviewMetricRow {
   date: string;
   clicks: number;
@@ -561,6 +631,8 @@ export interface ProjectGscStateDto {
   candidates: GscRegistryPropertyDto[];
 }
 
+/** Attach a GSC property to the project: reference an existing account
+ *  registry property or register a newly discovered site under the account. */
 export interface ProjectGscAttachRequest {
   /** Existing account registry property to attach. */
   property_id?: string;

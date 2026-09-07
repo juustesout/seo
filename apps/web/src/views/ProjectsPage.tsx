@@ -1,3 +1,11 @@
+/**
+ * Projects page (top nav "Projects").
+ *
+ * Lists the projects the signed-in user belongs to (with their role) and hosts
+ * the create-project flow. Each project is an isolated SEO workspace; opening
+ * one routes to `/p/:id/dashboard`. Creation goes through the Supabase RPC
+ * `seo_create_project` so the membership row is minted RLS-side for the caller.
+ */
 import { useState } from 'react';
 import { useAsync, fmtNum, fmtDate } from '../lib/ui';
 import { api } from '../lib/api';
@@ -16,6 +24,11 @@ interface AccountProject {
   property: { property_id: string; site_url: string; is_primary: boolean } | null;
 }
 
+/**
+ * Renders the project cards and the "New project" form. `onOpenProject`
+ * navigates into a chosen project; a fresh project is created through the RPC
+ * and opened immediately.
+ */
 export function ProjectsPage({ onOpenProject }: { onOpenProject: (id: string, view: string) => void }) {
   const { data, error, loading, reload } = useAsync<{ projects: AccountProject[] }>(() => api('/account'), []);
   const [showForm, setShowForm] = useState(false);

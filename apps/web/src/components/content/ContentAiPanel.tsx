@@ -1,3 +1,12 @@
+/**
+ * Review-before-apply panel for a Content Studio AI suggestion.
+ *
+ * Content AI never edits the document on its own: the API returns a structured
+ * suggestion (model, optional knowledge sources used as context, reason, and
+ * the proposed text) and this panel previews it. Applying is an explicit user
+ * action that goes through the parent, so the editor's undo history still
+ * works after an apply.
+ */
 import type { ContentAiSuggestionDto } from '@seo/contracts';
 import { AI_ACTION_LABELS } from './contentAi';
 

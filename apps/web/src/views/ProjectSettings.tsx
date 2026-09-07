@@ -1,3 +1,13 @@
+/**
+ * Project settings (project nav "Settings").
+ *
+ * Owns the per-project Google Search Console property: which property this
+ * project pulls data from. The GSC *connection* is account-level (see the
+ * account Integrations/Overview views); this screen only attaches or unlinks a
+ * property from the account registry, or discovers fresh Google properties to
+ * register. Status is always the real server state - connecting/connected/
+ * error are rendered from the API, not optimistically.
+ */
 import { useState } from 'react';
 import { useAsync, StatusPill } from '../lib/ui';
 import { api } from '../lib/api';
@@ -30,6 +40,11 @@ interface Discovered {
   already_registered: boolean;
 }
 
+/**
+ * GSC property attach/unlink screen for one project. `projectId` scopes all
+ * reads/mutations; if the account is not connected yet it offers the
+ * account-level OAuth connect instead.
+ */
 export function ProjectSettings({ projectId }: { projectId: string }) {
   const state = useAsync<StateDto>(() => api(`/projects/${projectId}/gsc/state`), [projectId]);
   const [discovered, setDiscovered] = useState<Discovered[] | null>(null);

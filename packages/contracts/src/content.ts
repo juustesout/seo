@@ -6,10 +6,19 @@
  * the API and the content agent share one implementation.
  */
 
+/** Heading levels a block can carry, mirroring HTML h1..h6. */
 export type ContentHeadingLevel = 1 | 2 | 3 | 4 | 5 | 6;
 
+/** Kind of media a media block refers to; `placeholder` marks an unfilled slot. */
 export type MediaKind = 'image' | 'video' | 'audio' | 'placeholder';
 
+/**
+ * The legacy ordered-block content model (pre-Phase B). Superseded by the
+ * Tiptap document model in contentDoc.ts but still tolerated on older records,
+ * which consumers normalize through `asTipDoc`. Each block is a discriminated
+ * union on `type`; `id` is an optional client-stable key, and text content is
+ * always authored, never markup. Block text is escaped when rendered to HTML.
+ */
 export type ContentBlock =
   | { id?: string; type: 'heading'; attrs: { level: ContentHeadingLevel; text: string } }
   | { id?: string; type: 'paragraph'; attrs: { text: string } }
@@ -23,6 +32,7 @@ export type ContentBlock =
     }
   | { id?: string; type: 'link'; attrs: { text: string; href: string } };
 
+/** One heading entry in a derived outline (level + trimmed text). */
 export interface ContentOutlineItem {
   level: ContentHeadingLevel;
   text: string;

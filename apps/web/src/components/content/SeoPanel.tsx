@@ -1,3 +1,12 @@
+/**
+ * On-page SEO panel for the Content Studio.
+ *
+ * The score/checks are deterministic client-side evaluations shared with the
+ * server (evaluateSeo in @seo/contracts), not an invented or vendor metric.
+ * When `editable` the panel is bound to the workspace's target keyword and
+ * meta fields so the score updates live as you type; read-only variants (viewer
+ * screen) just render the stored row's assessment.
+ */
 import type { SeoCategory, SeoCheck, SeoResult } from '@seo/contracts';
 import { seoScoreLabel } from '@seo/contracts';
 
@@ -39,7 +48,12 @@ function CheckRow({ check }: { check: SeoCheck }) {
   );
 }
 
-/** Live deterministic SEO panel for the Content Studio workspace. */
+/**
+ * Live deterministic SEO panel for the Content Studio workspace. Props: the
+ * evaluated `result`, an `editable` flag (viewers get a locked form), the
+ * current keyword/meta values, and optional change handlers that feed the
+ * parent workspace state.
+ */
 export function SeoPanel({
   result,
   editable = false,

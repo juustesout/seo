@@ -1,3 +1,11 @@
+/**
+ * Compact schedule chip used inside Month/Week calendar cells.
+ *
+ * A single visual element, but it is deliberately never color-only: cancelled
+ * schedules render an explicit "cancelled" label (and failed ones a distinct
+ * CSS class) so calendar status stays readable without relying on color. Click
+ * opens the schedule's detail overlay via onOpen.
+ */
 import type { ScheduleDto } from '@seo/contracts';
 import { fmtTime, parseDate } from './scheduleMeta';
 

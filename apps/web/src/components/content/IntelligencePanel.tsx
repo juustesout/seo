@@ -1,3 +1,10 @@
+/**
+ * Content Intelligence panel (Phase G). Renders deterministic, read-only
+ * signals (SEO / GSC / DataForSEO / Knowledge) for a saved document plus an
+ * optional, explicitly requested AI assistant pass - the AI is never run
+ * automatically. Sources that are not configured are labeled "off" rather than
+ * hidden, so the panel explains why certain recommendations cannot exist.
+ */
 import { useState } from 'react';
 import type {
   ContentIntelligenceReport,
@@ -20,6 +27,7 @@ function sourcePill(source: ContentIntelligenceSource) {
   );
 }
 
+/** One recommendation card: type/priority/source header, evidence links, suggested action, optional session dismiss. */
 function RecommendationCard({ rec, onDismiss }: { rec: ContentRecommendation; onDismiss: (id: string) => void }) {
   return (
     <div className={`intel-rec intel-rec-${rec.priority}`}>

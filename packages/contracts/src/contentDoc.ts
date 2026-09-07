@@ -16,11 +16,15 @@ import type { ContentBlock, ContentHeadingLevel, ContentOutlineItem } from './co
 // Types
 // ---------------------------------------------------------------------------
 
+/** An inline mark on a text node (bold, italic, strike, code, link). `attrs`
+ *  carries mark-specific data (e.g. `href` for links). */
 export interface TipMark {
   type: string;
   attrs?: Record<string, unknown>;
 }
 
+/** A ProseMirror node: a leaf `text` node, a typed block with optional
+ *  `content` children and inline `marks`, or a container holding children. */
 export interface TipNode {
   type: string;
   text?: string;
@@ -29,6 +33,9 @@ export interface TipNode {
   content?: TipNode[];
 }
 
+/** A valid Tiptap/ProseMirror document root: always `{type:'doc'}` with an
+ *  optional top-level `content` array. This is the canonical shape stored in
+ *  seo_content.content_json for Phase B content. */
 export interface TipDoc {
   type: 'doc';
   content?: TipNode[];
@@ -63,6 +70,7 @@ export const TIPTAP_BLOCK_TYPES = new Set([
   'horizontalRule',
 ]);
 
+/** Mark types the Phase B editor emits (StarterKit + link); used for validation. */
 export const TIPTAP_MARK_TYPES = new Set(['bold', 'italic', 'strike', 'code', 'link']);
 
 // ---------------------------------------------------------------------------
@@ -322,6 +330,7 @@ export function docImages(doc: TipDoc): DocImageRef[] {
   return out;
 }
 
+/** Word count of the whole document (whitespace tokenization on plain text). */
 export function docWordCount(doc: TipDoc): number {
   return docPlainText(doc).split(/\s+/).filter(Boolean).length;
 }

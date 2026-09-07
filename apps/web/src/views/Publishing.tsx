@@ -1,3 +1,16 @@
+/**
+ * Publishing view (project nav "Publishing", Phase H5/H6.1).
+ *
+ * Connect output channels (websites and social) and publish project content to
+ * them. Everything is capability/catalog driven: connected publishers are
+ * grouped by descriptor category, capability chips come from normalized tokens,
+ * and the composer only offers intents (article/text) the selected publisher
+ * can actually carry - no hardcoded vendors or capabilities in the view.
+ * Status is honest end-to-end: a queued job stays queued, a failure stays a
+ * failure on the row and in job history. OAuth publishers render a
+ * "Connect with <name>" button that does a full-tab consent redirect and lands
+ * back on this view with `?x=connected` / `?oauth_error=...` query params.
+ */
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '../lib/api';
 import { useAsync, fmtDate, useJobs, JobTable, StatusPill, Empty } from '../lib/ui';
@@ -57,6 +70,11 @@ function usableKinds(wrap: PubWrap): PublishContentKind[] {
   return supportedPublishKinds(wrap.publisher, wrap.descriptor).filter((k) => SOURCE_KINDS.includes(k));
 }
 
+/**
+ * Orchestrates the Publishing view: provider add buttons, grouped publisher
+ * cards, the direct-composer for connected publishers, and a publication +
+ * publish-job history. Props: `projectId` scopes every API call.
+ */
 export function Publishing({ projectId }: { projectId: string }) {
   const [refresh, setRefresh] = useState(0);
   const [err, setErr] = useState<string | null>(null);
@@ -195,6 +213,13 @@ export function Publishing({ projectId }: { projectId: string }) {
   );
 }
 
+/**
+ * One publisher card. Renders descriptor-driven setup: config fields ("site
+ * settings"), encrypted credential fields, an OAuth "Connect with <name>"
+ * button when the descriptor says `auth: 'oauth'`, capability chips and
+ * test/disconnect/delete actions. Credentials and config are posted to the
+ * project-scoped publisher endpoints and never rendered back.
+ */
 function PublisherCard({
   projectId,
   publisher,
@@ -379,6 +404,12 @@ function PublisherCard({
   );
 }
 
+/**
+ * Direct publication composer (article body or text post). Only lists
+ * connected publishers that can carry at least one of this composer's kinds,
+ * and only offers intents the selected publisher supports; submitting enqueues
+ * a publication job through the API rather than claiming an instant success.
+ */
 function NewPublication({
   projectId,
   publishers,

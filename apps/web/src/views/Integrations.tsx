@@ -1,3 +1,13 @@
+/**
+ * Project Integrations view (project nav "Integrations").
+ *
+ * Catalog-driven: the connectable providers come from the `/providers`
+ * catalog endpoint and the UI never hardcodes a vendor. Two setup kinds exist:
+ * DataForSEO posts project credentials through the encrypted credentials
+ * endpoint (or uses server env when none are given), while GSC runs an OAuth
+ * flow and then lets the user pick which property to attach. Secrets leave the
+ * browser once during setup and are never returned to it afterwards.
+ */
 import { useState } from 'react';
 import { api, ApiRequestError } from '../lib/api';
 import { useAsync, StatusPill, Empty } from '../lib/ui';
@@ -19,6 +29,12 @@ interface IntegrationRow {
   descriptor: Descriptor | null;
 }
 
+/**
+ * Lists catalog providers to add and renders each existing integration as an
+ * IntegrationCard. Props: `projectId` scopes everything; capabilities come
+ * from descriptor + stored integration rows. Errors surface through the
+ * shared banner pattern with ApiRequestError messages.
+ */
 export function Integrations({ projectId }: { projectId: string }) {
   const [refresh, setRefresh] = useState(0);
   const reload = () => setRefresh((x) => x + 1);
@@ -96,6 +112,13 @@ export function Integrations({ projectId }: { projectId: string }) {
   );
 }
 
+/**
+ * One project integration card. Renders actions by provider kind: DataForSEO
+ * gets credential fields + test, GSC gets the OAuth connect / property picker;
+ * everyone gets disconnect/delete. Deletes are destructive and are only
+ * performed after the API accepts them - the card shows real status pills and
+ * never fabricates a connected state.
+ */
 function IntegrationCard({
   projectId,
   integration,

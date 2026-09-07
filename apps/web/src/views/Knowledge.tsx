@@ -1,3 +1,12 @@
+/**
+ * Knowledge Base view (project nav "Knowledge").
+ *
+ * Semantic search over the content and data this project has collected, backed
+ * by a per-project Qdrant collection - searches and indexing never cross
+ * project boundaries (see CLAUDE.md). The view reports honestly whether the
+ * embedding provider is configured, and indexing is a background job whose
+ * progress and failures are visible below.
+ */
 import { useState } from 'react';
 import { api } from '../lib/api';
 import { useAsync, num, useJobs, JobTable, Empty } from '../lib/ui';
@@ -13,6 +22,11 @@ interface Hit {
   payload?: Record<string, unknown>;
 }
 
+/**
+ * Shows knowledge status, a semantic search box (only when configured) and the
+ * project's indexing jobs. All reads go through project-scoped endpoints;
+ * search posts the query to the API, never to Qdrant directly.
+ */
 export function Knowledge({ projectId }: { projectId: string }) {
   const [refresh, setRefresh] = useState(0);
   const [err, setErr] = useState<string | null>(null);

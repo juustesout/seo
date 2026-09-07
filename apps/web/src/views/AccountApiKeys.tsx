@@ -1,3 +1,14 @@
+/**
+ * Account API keys view (top nav "API keys").
+ *
+ * Master keys let an external agent (REST or MCP) reach every project the
+ * signed-in user is a member of, but a key is never stronger than the user's
+ * role in the project it touches. The browser only ever sees a freshly created
+ * key once - the server stores only its SHA-256 hash - so after creation the UI
+ * just lists the prefix and revoke state. The view is account-scoped and talks
+ * only to the `/account/api-keys` endpoints; key material never touches
+ * localStorage or logs.
+ */
 import { useState } from 'react';
 import { useAsync, StatusPill, fmtDate, Empty } from '../lib/ui';
 import { api } from '../lib/api';
@@ -27,6 +38,11 @@ interface CreatedKey {
 
 type Scope = 'read' | 'write';
 
+/**
+ * Create/revoke master keys and explain where they work. Reads the list via
+ * useAsync, posts create/revoke mutations through lib/api.ts and reflects
+ * failures as ApiRequestError messages in inline banners.
+ */
 export function AccountApiKeys() {
   const state = useAsync<ListDto>(() => api('/account/api-keys'), []);
   const [name, setName] = useState('');

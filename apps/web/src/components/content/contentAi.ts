@@ -1,3 +1,12 @@
+/**
+ * Shared constants + pure helpers for Content Studio AI actions.
+ *
+ * Action labels and the ordered selection-action list drive both the toolbar
+ * dropdown and the AI suggestion panel, so a new action is declared in exactly
+ * one place. The HTML helpers exist because the API returns plain text copy
+ * that must be converted into safe, escapable block HTML before it can be
+ * inserted into the structured Tiptap document.
+ */
 import type { ContentAiAction, ContentAiSuggestionDto } from '@seo/contracts';
 
 export const AI_ACTION_LABELS: Record<ContentAiAction, string> = {
@@ -19,6 +28,7 @@ export const SELECTION_ACTIONS: ContentAiAction[] = [
   'improve_seo',
 ];
 
+/** HTML-escape text before it is embedded in generated markup (AI copy is untrusted). */
 export function escapeHtml(text: string): string {
   return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
@@ -44,6 +54,7 @@ export function textToBlocksHtml(text: string): string {
     .join('');
 }
 
+/** Non-empty document selection, or null when the caret is collapsed (AI needs a target). */
 export function firstBlock(editor: { state: { selection: { from: number; to: number; empty: boolean } } }) {
   const { empty, from, to } = editor.state.selection;
   return empty || from >= to ? null : { from, to };

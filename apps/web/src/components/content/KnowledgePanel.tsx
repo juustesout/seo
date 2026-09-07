@@ -1,3 +1,12 @@
+/**
+ * Project knowledge sources manager used inside the Content Studio editor.
+ *
+ * User-managed reference notes/documents are indexed per project into the
+ * isolated vector store and are offered as *optional* context to AI actions -
+ * never treated as the source of truth for content. Editors (canEdit) can add
+ * and remove sources; the panel polls only while a source is busy indexing or
+ * deleting so statuses stay live without a permanent interval.
+ */
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
 import type { KnowledgeSourcesResponse } from '@seo/contracts';
 import { api } from '../../lib/api';

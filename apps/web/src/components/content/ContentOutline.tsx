@@ -6,7 +6,13 @@ interface ContentOutlineProps {
   onSelect: (index: number) => void;
 }
 
-/** Live document outline (headings in document order); click to navigate. */
+/**
+ * Live document outline: the headings of the current Tiptap document in order,
+ * derived on the fly (there is no separate outline state). Props: `items` from
+ * the parent's `docHeadings(doc)` memo, `onSelect(index)` scrolls the editor to
+ * that heading via the RichTextEditor handle. Purely presentational - it reads
+ * structured content and never edits it.
+ */
 export function ContentOutline({ items, onSelect }: ContentOutlineProps) {
   if (items.length === 0) {
     return (

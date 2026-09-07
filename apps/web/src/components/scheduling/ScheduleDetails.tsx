@@ -1,3 +1,12 @@
+/**
+ * Schedule detail overlay (Content Calendar, Phase H2).
+ *
+ * Shows one schedule's full state and offers only the actions its status
+ * allows: reschedule only while still `scheduled`, cancel only before it has
+ * started publishing, and "view publication" once published/failed. All gating
+ * comes from scheduleMeta guards plus the `canManage` role flag the parent
+ * derives - a read-only project member sees details but no mutation buttons.
+ */
 import type { ScheduleDto } from '@seo/contracts';
 import { StatusPill } from '../../lib/ui';
 import { fmtDateTime, isCancellable, isReschedulable, parseDate } from './scheduleMeta';

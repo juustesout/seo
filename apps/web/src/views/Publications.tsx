@@ -56,6 +56,17 @@ function listUrl(projectId: string, f: Filters, offset: number): string {
   return `/projects/${projectId}/publications?${p.toString()}`;
 }
 
+/**
+ * Publication history list ("what happened", project nav "Publications").
+ *
+ * Props: `projectId` scopes every read. Filters may be seeded from the URL
+ * (content_id / schedule_id / publisher_id / status) so the Calendar and
+ * Content Studio can deep-link to the relevant attempt; the effect re-runs on
+ * URL change so back/forward navigation re-filters. Rows are paginated
+ * server-side (never a full-table client pull) and opening one fetches the
+ * safe PublicationDto only - no article bodies and no credentials, and every
+ * status (including failures) is shown as-is.
+ */
 export function Publications({ projectId }: { projectId: string }) {
   const search = typeof window === 'undefined' ? '' : window.location.search;
   const [filters, setFilters] = useState<Filters>(() => fromQuery());
@@ -226,12 +237,14 @@ export function Publications({ projectId }: { projectId: string }) {
   );
 }
 
+/** Human "when" for a publication: published time, else planned time, else created. */
 function fmtWhen(p: PublicationDto): string {
   if (p.published_at) return fmtDateTime(parseDate(p.published_at) ?? new Date());
   if (p.scheduled_for) return `Planned ${fmtDateTime(parseDate(p.scheduled_for) ?? new Date())}`;
   return fmtDateTime(parseDate(p.created_at) ?? new Date());
 }
 
+/** Detail modal for one publication attempt; surfaces remote ids, live URL and the real failure message. */
 function PublicationDetail({ projectId, publicationId, onClose }: { projectId: string; publicationId: string; onClose: () => void }) {
   const detail = useAsync<PublicationDto>(
     () => api(`/projects/${projectId}/publications/${publicationId}`),

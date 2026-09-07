@@ -1,3 +1,10 @@
+/**
+ * Status + free-text filters for the Content Calendar.
+ *
+ * Controlled inputs: the parent owns the values and applies the filtering, so
+ * this component is a pure presentational control. Cancelled is a status just
+ * like any other and stays visible/filterable by default rather than vanishing.
+ */
 import { SCHEDULE_STATUSES } from './scheduleMeta';
 
 interface ScheduleFiltersProps {

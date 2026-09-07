@@ -1,3 +1,11 @@
+/**
+ * Content Studio editor toolbar. Bound directly to the live Tiptap instance the
+ * parent hands in - it reads active marks and runs chain commands, so it has no
+ * document state of its own and works identically for every article. The AI
+ * dropdown only enables actions the project can actually perform (configured
+ * account key + a real text selection), otherwise it explains why it is
+ * disabled instead of offering a dead action.
+ */
 import type { ReactNode } from 'react';
 import type { Editor } from '@tiptap/react';
 import type { ContentAiAction } from '@seo/contracts';
@@ -26,6 +34,7 @@ export interface ContentAiToolbar {
   onAction: (action: ContentAiAction) => void;
 }
 
+/** Dropdown listing the AI actions; disabled items explain why (config/selection). */
 function AiMenu({ ai }: { ai: ContentAiToolbar }) {
   const disabledReason = ai.configured
     ? ai.busy
@@ -73,7 +82,11 @@ function AiMenu({ ai }: { ai: ContentAiToolbar }) {
   );
 }
 
-/** Markdown-style content controls bound to the Tiptap editor instance. */
+/**
+ * Markdown-style content controls bound to the Tiptap editor instance. Props:
+ * `editor` (nullable while the editor initializes) and an optional `ai`
+ * descriptor that, when present, adds the AI dropdown.
+ */
 export function ContentToolbar({ editor, ai }: { editor: Editor | null; ai?: ContentAiToolbar }) {
   if (!editor) return <div className="etoolbar muted">Loading editor…</div>;
 

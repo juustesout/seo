@@ -1,3 +1,13 @@
+/**
+ * Create/reschedule modal for the Content Calendar (Phase H2).
+ *
+ * Data-driven picks: it loads the project's (non-archived) content and its
+ * connected publishers from the API and only offers article/text intents that
+ * the chosen publisher can actually carry - the content model has no
+ * image/video source yet. Mutations go exclusively through the schedules API
+ * and the parent refetches on success; the modal is never optimistic and
+ * validates that the chosen instant is in the future.
+ */
 import { useEffect, useState } from 'react';
 import type { PublishContentKind, ScheduleDto } from '@seo/contracts';
 import { api } from '../../lib/api';

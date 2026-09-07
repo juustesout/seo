@@ -1,3 +1,14 @@
+/**
+ * Account-level Integrations view (top nav "Integrations").
+ *
+ * Provider connections live on the account, not inside a project: Google
+ * Search Console is authorized once here (full-tab OAuth, credentials kept
+ * server-side and encrypted) and any project can then attach one of the
+ * resulting properties; AI/BYOK keys for writing features are also stored here
+ * per account, encrypted, and are never sent back to the browser after setup.
+ * This view also lists the property registry the account can attach to
+ * projects.
+ */
 import { useState } from 'react';
 import { useAsync, fmtDate, StatusPill } from '../lib/ui';
 import { api } from '../lib/api';
@@ -37,6 +48,12 @@ interface AiProviderStatus {
   error: string | null;
 }
 
+/**
+ * Manages the account's GSC connection, the account-scoped AI BYOK keys and
+ * the property registry. Prop `onOpenProject` deep-links an unattached
+ * property into a project's Settings view so it can be attached. "Not
+ * configured" AI providers are reported as such rather than hidden or faked.
+ */
 export function AccountIntegrations({ onOpenProject }: { onOpenProject: (id: string, view: string) => void }) {
   const account = useAsync<AccountDto>(() => api('/account'), []);
   const registry = useAsync<{ properties: RegistryProperty[] }>(() => api('/account/gsc/registry'), [account.data?.google.connected]);

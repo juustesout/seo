@@ -1,3 +1,12 @@
+/**
+ * Month/Week grid for the Content Calendar (Phase H2).
+ *
+ * Pure layout over schedules: given a `cursor` month or week it computes the
+ * local calendar cells (42 for month, 7 for week) and buckets the passed
+ * schedules by their local day. Out-of-month cells are dimmed, today is
+ * highlighted, and each cell shows up to four ScheduleEvents plus an overflow
+ * count. No data fetching or mutation here - the parent owns both.
+ */
 import type { ScheduleDto } from '@seo/contracts';
 import { addDays, parseDate, sameLocalDay, sameLocalMonth, startOfMonth } from './scheduleMeta';
 import { ScheduleEvent } from './ScheduleEvent';
@@ -80,6 +89,12 @@ function WeekGrid({ cursor, schedules, onOpen }: { cursor: Date; schedules: Sche
   );
 }
 
+/**
+ * Switches between week and month grids for the calendar. Props: `mode`,
+ * `cursor` (the visible month/week anchor), the `schedules` to lay out and
+ * `onOpen` (open a schedule's detail). Presentational - authorization lives in
+ * the parent view.
+ */
 export function ScheduleCalendar({
   mode,
   cursor,

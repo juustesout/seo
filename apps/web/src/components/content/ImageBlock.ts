@@ -11,6 +11,11 @@ import type { Transaction } from '@tiptap/pm/state';
  *
  * The node only round-trips images that carry a `data-media-id` - a plain
  * pasted <img> has no library reference and is dropped rather than imported.
+ *
+ * Raw bytes never live in the document: no data-URL payloads. A mediaId without
+ * a resolvable `src` renders as a placeholder ("image — upload again or
+ * remove"), which keeps the JSON small and the document honest about missing
+ * assets.
  */
 
 interface ImageAttrs {

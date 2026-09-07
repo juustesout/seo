@@ -21,9 +21,23 @@ import {
   type TipNode,
 } from './contentDoc.js';
 
+/**
+ * Result of one named check. `pass` earns full points, `warn` partial
+ * (60%), `fail` none, and `not_applicable` means the check could not be
+ * evaluated (e.g. no title to measure) and therefore does not penalize the
+ * score.
+ */
 export type SeoCheckStatus = 'pass' | 'warn' | 'fail' | 'not_applicable';
+
+/** The on-page dimension a check belongs to; categories partition the score. */
 export type SeoCategory = 'Metadata' | 'Keyword' | 'Content' | 'Structure' | 'Readability';
 
+/**
+ * One named, explainable check produced by `evaluateSeo`. `code` is the stable
+ * machine-readable identifier, `label` the human surface name, and `status` /
+ * `points` / `maxPoints` the outcome. `detail` explains the result in one line
+ * and `suggestion` offers a fix when the check is not a clean pass.
+ */
 export interface SeoCheck {
   code: string;
   category: SeoCategory;
@@ -38,6 +52,12 @@ export interface SeoCheck {
   suggestion?: string;
 }
 
+/**
+ * Metadata inputs to the evaluation. `title` is the working/editor title,
+ * `targetKeyword` the phrase the piece is optimized for, and `metaTitle` /
+ * `metaDescription` the search-result fields. All are optional: absent values
+ * simply make the related checks not_applicable instead of inventing defaults.
+ */
 export interface SeoMeta {
   title?: string | null;
   targetKeyword?: string | null;
@@ -45,11 +65,17 @@ export interface SeoMeta {
   metaDescription?: string | null;
 }
 
+/** Input to `evaluateSeo`: the Tiptap document plus optional metadata. */
 export interface SeoEvalInput {
   doc: TipDoc;
   meta?: SeoMeta;
 }
 
+/**
+ * Structural counters extracted from the document. These are honest measured
+ * numbers (not targets): `longParagraphs` counts paragraphs over a word
+ * threshold and `imagesMissingAlt` images without meaningful alt text.
+ */
 export interface SeoStats {
   words: number;
   headings: number;
@@ -62,6 +88,12 @@ export interface SeoStats {
   imagesMissingAlt: number;
 }
 
+/**
+ * The full evaluation outcome. `score` is 0..100 derived solely from the
+ * checks' earned points over their maximums, so it is always explainable via
+ * `checks`; `stats` reports the measured document numbers. A score is an
+ * editorial/on-page assessment, never a ranking prediction.
+ */
 export interface SeoResult {
   /** 0..100 integer. */
   score: number;
@@ -71,6 +103,7 @@ export interface SeoResult {
   stats: SeoStats;
 }
 
+/** Human label for a 0..100 score band (used for badges in the UI). */
 export function seoScoreLabel(score: number): string {
   if (score >= 90) return 'Excellent';
   if (score >= 80) return 'Good';
@@ -82,6 +115,11 @@ export function seoScoreLabel(score: number): string {
 // Keyword normalization (trim / collapse whitespace / case-insensitive)
 // ---------------------------------------------------------------------------
 
+/**
+ * Canonical keyword form for all comparisons: trimmed, whitespace collapsed,
+ * lower-cased. Returns null for empty/whitespace-only input so callers can
+ * branch on "no keyword".
+ */
 export function normalizeKeyword(keyword: string | null | undefined): string | null {
   if (!keyword) return null;
   const normalized = String(keyword).trim().replace(/\s+/g, ' ').toLowerCase();

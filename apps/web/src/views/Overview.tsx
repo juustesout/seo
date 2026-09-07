@@ -1,3 +1,14 @@
+/**
+ * Account overview (top nav "Overview").
+ *
+ * When at least one project has a Search Console property attached this becomes
+ * an aggregate performance dashboard across attached projects; otherwise it is
+ * a welcome + connect screen that walks the user through the account-level
+ * Google OAuth and lists their projects and recent account activity. All
+ * numbers come from the `/account` and `/account/overview` endpoints - the view
+ * renders what the server measured and shows explicit empty states instead of
+ * zeros when nothing is connected.
+ */
 import { useState } from 'react';
 import { useAsync, fmtNum, fmtDate, StatusPill } from '../lib/ui';
 import { api } from '../lib/api';
@@ -66,6 +77,7 @@ interface AccountOverviewDto {
   }> | null;
 }
 
+/** Tiny pure bar sparkline; bar heights are normalized to the max value. */
 function Sparkline({ values, height = 44 }: { values: number[]; height?: number }) {
   const max = Math.max(...values, 1);
   return (
@@ -77,6 +89,11 @@ function Sparkline({ values, height = 44 }: { values: number[]; height?: number 
   );
 }
 
+/**
+ * Switches between the aggregate performance dashboard and the account welcome
+ * / project grid depending on whether any property is attached. Props navigate
+ * to a project (`onOpenProject`) or to the Projects list (`onGoProjects`).
+ */
 export function Overview({
   onOpenProject,
   onGoProjects,
@@ -86,6 +103,9 @@ export function Overview({
 }) {
   const { data, error, loading, reload } = useAsync<AccountOverviewDto>(() => api('/account/overview'), []);
   const account = useAsync<AccountDto>(() => api('/account'), []);
+  // The GSC OAuth callback redirects back here with ?gsc=connected; surface a
+  // one-time confirmation banner. Reading it also implies this screen is the
+  // OAuth return target, so it must be reachable while signed in.
   const justConnected = typeof window !== 'undefined' && window.location.search.includes('gsc=connected');
 
   if (loading || account.loading) return <p className="muted">Loading…</p>;
@@ -161,6 +181,7 @@ function EmptyState() {
   return <p className="muted">You have no projects yet. Create one to start tracking keywords, rankings and content.</p>;
 }
 
+/** CTA card that starts the account-level Google OAuth flow in a new tab. */
 function GoogleNotConnected() {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -191,6 +212,7 @@ function GoogleNotConnected() {
   );
 }
 
+/** Card grid of the account's projects with connect/sync state and open actions. */
 function ProjectGrid({
   projects,
   onOpenProject,
@@ -232,6 +254,7 @@ function ProjectGrid({
   );
 }
 
+/** Aggregate GSC performance across every attached project/property on the account. */
 function OverallDashboard({
   data,
   account,

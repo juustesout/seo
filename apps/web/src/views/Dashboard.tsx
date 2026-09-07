@@ -1,3 +1,13 @@
+/**
+ * Project dashboard (default project view at `/p/:id/dashboard`).
+ *
+ * Aggregates real provider data - Search Console clicks/impressions, tracked
+ * keywords, pages, ranking rows - and is honest about configuration: the
+ * "active capabilities" list only shows capabilities that are actually on, the
+ * feature pills come from the server payload (no invented metrics), and a CTA
+ * appears when no GSC property is attached yet. Background jobs are listed and
+ * polled while busy via lib/ui useJobs.
+ */
 import { api } from '../lib/api';
 import { useAsync, num, fmtNum, str, fmtDate, useJobs, JobTable, StatusPill, Empty } from '../lib/ui';
 
@@ -34,6 +44,7 @@ function GscAttachCta({ projectId, onOpenSettings }: { projectId: string; onOpen
   );
 }
 
+/** Tiny pure bar sparkline; bar heights are normalized to the max value. */
 function Sparkline({ values, height = 40 }: { values: number[]; height?: number }) {
   const max = Math.max(...values, 1);
   return (
@@ -45,6 +56,11 @@ function Sparkline({ values, height = 40 }: { values: number[]; height?: number 
   );
 }
 
+/**
+ * Renders the dashboard payload from `/projects/:projectId/dashboard`.
+ * `onOpenSettings` deep-links the "attach GSC property / set up Search
+ * Console" CTA into the project's Settings view.
+ */
 export function Dashboard({ projectId, onOpenSettings }: { projectId: string; onOpenSettings: () => void }) {
   const { data, error, loading, reload } = useAsync<Dash>(
     () => api(`/projects/${projectId}/dashboard`),

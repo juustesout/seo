@@ -1,3 +1,11 @@
+/**
+ * Chronological list view of schedules for the Content Calendar (Phase H2).
+ *
+ * Rows are sorted by scheduled instant and cancelled rows stay visible with a
+ * "cancelled" note (never hidden). Action buttons only appear when the caller
+ * has manage rights and the row's status still permits them - the guards live
+ * in scheduleMeta so list and detail agree on what can be changed.
+ */
 import type { ScheduleDto } from '@seo/contracts';
 import { StatusPill } from '../../lib/ui';
 import { fmtDateTime, isCancellable, isReschedulable, parseDate } from './scheduleMeta';
