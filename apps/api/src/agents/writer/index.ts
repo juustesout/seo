@@ -1,12 +1,13 @@
 /**
- * Writer Agent public surface (W0 + W1).
+ * Writer Agent public surface (W0-W2).
  *
  * runWriterOnce is the only supported way to start a writer run in this
  * phase. It validates run identifiers and the writer brief at the boundary
  * (invalid input is rejected before the graph is touched), builds a fresh
- * compiled graph with the injected read-only context adapters and returns the
- * terminal state of the run, including the bounded, source-labelled context
- * that gatherContext produced.
+ * compiled graph with the injected read-only context adapters and AI planner
+ * and returns the resting state of the run: the bounded, source-labelled
+ * context gatherContext produced and, when planning succeeded, the proposed
+ * structural article plan resting on awaiting_approval.
  *
  * A run is identified by a writer run id (wr_<uuid>) that is unique per run
  * and doubles as the correlation handle callers store next to a run; when
@@ -19,15 +20,21 @@ import { randomUUID } from 'node:crypto';
 import { ApiError } from '../../apiErrors.js';
 import { emptyWriterContext, type WriterContext, type WriterContextDependencies } from './context.js';
 import { createWriterGraph } from './graph.js';
-import type { WriterState, WriterStatus } from './state.js';
+import type { WriterPlannerDependencies } from './planner.js';
+import type { WriterPlan, WriterPlanStatus, WriterState, WriterStatus } from './state.js';
 
-export { createWriterGraph, WRITER_INITIALIZE_NODE, WRITER_GATHER_NODE, WRITER_FINALIZE_NODE } from './graph.js';
+export { createWriterGraph, WRITER_INITIALIZE_NODE, WRITER_GATHER_NODE, WRITER_PLAN_NODE } from './graph.js';
 export * from './context.js';
+export * from './planner.js';
 export {
   STATUS_TRANSITIONS,
   WRITER_STATUSES,
   WriterStateAnnotation,
   assertStatusTransition,
+  type WriterPlan,
+  type WriterPlanStatus,
+  type WriterRelatedContent,
+  type WriterSection,
   type WriterState,
   type WriterStateUpdate,
   type WriterStatus,
@@ -70,8 +77,18 @@ export interface WriterRunRequest {
   targetKeyword?: string;
 }
 
-/** Outcome of a completed writer run: the run id plus the terminal state
- *  (identity, brief and the bounded context gatherContext produced). */
+/** Injectable seams for a writer run: the read-only context adapters and the
+ *  AI planner. Each is optional; without one the matching capability reports
+ *  itself not wired and the run degrades honestly. */
+export interface WriterRunDependencies {
+  context?: WriterContextDependencies;
+  planner?: WriterPlannerDependencies;
+}
+
+/** Outcome of a writer run: the run id plus the resting state (identity,
+ *  brief, the bounded context gatherContext produced and the planning
+ *  outcome). A proposed plan rests on awaiting_approval; a run that could not
+ *  plan rests on failed with planStatus "failed" and no fabricated plan. */
 export interface WriterRunResult {
   runId: WriterRunId;
   projectId: string;
@@ -80,6 +97,9 @@ export interface WriterRunResult {
   targetKeyword: string | null;
   status: WriterStatus;
   context: WriterContext;
+  plan: WriterPlan | null;
+  planStatus: WriterPlanStatus;
+  planNote: string | null;
 }
 
 /**
@@ -127,22 +147,27 @@ export function parseWriterRunRequest(input: WriterRunRequest): WriterState {
     targetKeyword: normalizedKeyword,
     status: 'idle',
     context: emptyWriterContext(),
+    planStatus: 'none',
+    plan: null,
+    planNote: null,
   };
 }
 
 /**
- * Runs the writer graph once for a validated request and returns the terminal
- * state. Context adapters are optional: without them every source reports not
- * configured and the run still completes. Throws ApiError.badRequest for
- * malformed input; genuine run failures surface from the graph.
+ * Runs the writer graph once for a validated request and returns the resting
+ * state. Context adapters and the AI planner are optional: without them every
+ * source reports not configured and planning reports "no AI planner wired",
+ * ending the run failed instead of fabricating a plan. Throws
+ * ApiError.badRequest for malformed input; genuine run failures surface from
+ * the graph.
  */
 export async function runWriterOnce(
   input: WriterRunRequest,
-  context?: WriterContextDependencies,
+  deps: WriterRunDependencies = {},
 ): Promise<WriterRunResult> {
   const start = parseWriterRunRequest(input);
   const runId = input.runId ?? createWriterRunId();
-  const graph = createWriterGraph({ context });
+  const graph = createWriterGraph(deps);
   const finalState = await graph.invoke(start);
   return {
     runId,
@@ -152,5 +177,8 @@ export async function runWriterOnce(
     targetKeyword: finalState.targetKeyword,
     status: finalState.status,
     context: finalState.context,
+    plan: finalState.plan,
+    planStatus: finalState.planStatus,
+    planNote: finalState.planNote,
   };
 }
