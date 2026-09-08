@@ -1,10 +1,11 @@
 /**
- * Writer Agent graph (W0-W4).
+ * Writer Agent graph (W0-W5).
  *
  * A linear LangGraph that walks the run lifecycle, gathers read-only,
  * project-scoped context for the writer's topic, turns it into a structural
  * article plan, pauses for explicit human approval and - only after an
- * explicit approval - writes the approved sections one AI call per section:
+ * explicit approval - writes the approved sections one AI call per section and
+ * deterministically reviews the assembled article:
  *
  *   START -> initialize (idle -> running)
  *         -> gatherContext (fills bounded context; running -> planning)
@@ -12,7 +13,8 @@
  *         -> awaitApproval (interrupt)
  *              - reject -> rejected -> END
  *              - approve -> approved -> beginWriting (writing)
- *                          -> writeSections (review_ready | failed) -> END
+ *                          -> writeSections (review_ready | failed)
+ *                          -> reviewContent (completed | failed) -> END
  *
  * gatherContext is the only node that touches the outside world before
  * planning and it does so exclusively through the dependency-injected
@@ -52,9 +54,22 @@
  * deterministic plan index - no added/reordered sections, no model-chosen
  * structure, no AI routing. Any honest section failure (not_configured /
  * ai_error / invalid_output) ends the run failed, preserving whatever was
- * already written for debugging; success rests on review_ready. There are no
- * AI tools, no autonomous research/publish decisions, and no AI-produced SEO
- * score anywhere in the workflow.
+ * already written for debugging. There are no AI tools, no autonomous
+ * research/publish decisions, and no AI-produced SEO score anywhere in the
+ * workflow.
+ *
+ * reviewContent is the W5 deterministic review + assembly phase, reached only
+ * from a fully written run (review_ready). It is a pure local conveyor (see
+ * review.ts): it reassembles the written sections into one canonical Content
+ * Studio TipTap document strictly in the approved plan order, renders
+ * content_html through the existing canonical renderer and scores it with the
+ * existing Phase C SEO evaluator - no AI call, no provider call, no database
+ * write, no job, no publication, no new SEO rules. Success rests on
+ * `completed` with the WriterReview artifact stored; the writer has produced a
+ * canonical review artifact, not a saved article. Any honest review failure
+ * (missing/extra section, invalid content, render/evaluate error) ends the run
+ * failed. reviewContent never trusts writtenSections order and never invents
+ * content.
  *
  * The compiled graph owns a MemorySaver checkpointer (the run id doubles as
  * the thread id, see runtime.ts), so runs pause and resume on the exact same
@@ -84,6 +99,12 @@ import {
 } from './planner.js';
 import { parseWriterApprovalDecision } from './approval.js';
 import {
+  DEFAULT_WRITER_REVIEW_DEPENDENCIES,
+  reviewWriterContent,
+  type WriterReviewDependencies,
+  type WriterReviewInput,
+} from './review.js';
+import {
   NO_SECTION_WRITER_DEPENDENCIES,
   isValidSectionContent,
   WRITER_SECTION_MAX_PREVIOUS_CHARS,
@@ -99,6 +120,7 @@ export const WRITER_PLAN_NODE = 'planOutline';
 export const WRITER_APPROVAL_NODE = 'awaitApproval';
 export const WRITER_BEGIN_WRITING_NODE = 'beginWriting';
 export const WRITER_WRITE_SECTIONS_NODE = 'writeSections';
+export const WRITER_REVIEW_NODE = 'reviewContent';
 
 /** Marks the run as started; later phases assemble per-project context here. */
 function initializeNode(_state: WriterState): WriterStateUpdate {
@@ -308,12 +330,46 @@ async function writeSectionsNode(
   return { status: 'review_ready', writtenSections: written, writeNote: null };
 }
 
+/**
+ * The W5 deterministic review and content-assembly node. It runs only after a
+ * fully written run (review_ready) and is a pure local pipeline over the
+ * immutable approved plan and the written sections: it never talks to AI,
+ * providers, the database or the scheduler. The conditional edge guarantees
+ * the node only ever sees a review_ready run; the defensive guard still fails
+ * honestly instead of trusting an inconsistent state.
+ */
+function reviewContentNode(
+  deps: WriterReviewDependencies,
+  state: WriterState,
+): WriterStateUpdate {
+  if (state.status !== 'review_ready') {
+    return { status: 'failed', reviewStatus: 'failed', reviewNote: 'Review ran outside the writing phase.' };
+  }
+  const plan = state.plan;
+  if (!plan) {
+    return { status: 'failed', reviewStatus: 'failed', reviewNote: 'No approved plan to review.' };
+  }
+  const input: WriterReviewInput = {
+    plan,
+    writtenSections: state.writtenSections,
+    targetKeyword: state.targetKeyword ?? null,
+  };
+  const outcome = reviewWriterContent(deps, input);
+  if (!outcome.ok) {
+    return { status: 'failed', reviewStatus: 'failed', reviewNote: outcome.note };
+  }
+  return { status: 'completed', review: outcome.review, reviewStatus: 'completed', reviewNote: null };
+}
+
 /** Builds a fresh compiled writer graph. Options.context injects the read-only
- *  adapter allowlist, options.planner the AI planning allowlist and
- *  options.sectionWriter the section-writing allowlist; without them every
- *  source reports not configured, planning reports "no AI planner wired" and
- *  an approved run's writing reports "no section writer wired", ending the run
- *  failed instead of fabricating a plan or a section.
+ *  adapter allowlist, options.planner the AI planning allowlist,
+ *  options.sectionWriter the section-writing allowlist and options.review the
+ *  deterministic review allowlist; without the former three every source
+ *  reports not configured, planning reports "no AI planner wired" and an
+ *  approved run's writing reports "no section writer wired", ending the run
+ *  failed instead of fabricating a plan or a section. The review allowlist
+ *  defaults to the canonical @seo/contracts evaluator and renderer, so a
+ *  successful write always flows through the deterministic W5 review.
  *
  * The compiled graph owns a MemorySaver checkpointer, which the interrupt
  * pause requires. It is in-memory and process-local: a restart loses every
@@ -324,10 +380,12 @@ export function createWriterGraph(options: {
   context?: WriterContextDependencies;
   planner?: WriterPlannerDependencies;
   sectionWriter?: WriterSectionDependencies;
+  review?: WriterReviewDependencies;
 } = {}) {
   const contextDeps = options.context ?? NO_ADAPTER_DEPENDENCIES;
   const plannerDeps = options.planner ?? NO_PLANNER_DEPENDENCIES;
   const sectionWriterDeps = options.sectionWriter ?? NO_SECTION_WRITER_DEPENDENCIES;
+  const reviewDeps = options.review ?? DEFAULT_WRITER_REVIEW_DEPENDENCIES;
   return new StateGraph(WriterStateAnnotation)
     .addNode(WRITER_INITIALIZE_NODE, initializeNode)
     .addNode(WRITER_GATHER_NODE, (state: WriterState) => gatherContextNode(contextDeps, state))
@@ -335,6 +393,7 @@ export function createWriterGraph(options: {
     .addNode(WRITER_APPROVAL_NODE, (state: WriterState, config) => awaitApprovalNode(state, config))
     .addNode(WRITER_BEGIN_WRITING_NODE, beginWritingNode)
     .addNode(WRITER_WRITE_SECTIONS_NODE, (state: WriterState) => writeSectionsNode(sectionWriterDeps, state))
+    .addNode(WRITER_REVIEW_NODE, (state: WriterState) => reviewContentNode(reviewDeps, state))
     .addEdge(START, WRITER_INITIALIZE_NODE)
     .addEdge(WRITER_INITIALIZE_NODE, WRITER_GATHER_NODE)
     .addEdge(WRITER_GATHER_NODE, WRITER_PLAN_NODE)
@@ -343,7 +402,10 @@ export function createWriterGraph(options: {
       state.status === 'approved' ? WRITER_BEGIN_WRITING_NODE : END,
     )
     .addEdge(WRITER_BEGIN_WRITING_NODE, WRITER_WRITE_SECTIONS_NODE)
-    .addEdge(WRITER_WRITE_SECTIONS_NODE, END)
+    .addConditionalEdges(WRITER_WRITE_SECTIONS_NODE, (state: WriterState) =>
+      state.status === 'review_ready' ? WRITER_REVIEW_NODE : END,
+    )
+    .addEdge(WRITER_REVIEW_NODE, END)
     .compile({ checkpointer: new MemorySaver() });
 }
 

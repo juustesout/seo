@@ -1,32 +1,35 @@
 /**
- * Writer Agent public surface (W0-W4).
+ * Writer Agent public surface (W0-W5).
  *
  * runWriterOnce is the only supported way to start a writer run. It validates
  * run identifiers and the writer brief at the boundary (invalid input is
  * rejected before the graph is touched), builds a fresh compiled graph with
- * the injected read-only context adapters, AI planner and section writer, and
- * runs it on a thread identified by the writer run id (wr_<uuid>). When
- * planning proposes a plan the graph pauses on the W3 human-approval
- * interrupt; the returned result rests on awaiting_approval with approval
- * "pending". No section is ever written before that approval.
+ * the injected read-only context adapters, AI planner, section writer and
+ * deterministic review allowlist, and runs it on a thread identified by the
+ * writer run id (wr_<uuid>). When planning proposes a plan the graph pauses
+ * on the W3 human-approval interrupt; the returned result rests on
+ * awaiting_approval with approval "pending". No section is ever written before
+ * that approval.
  *
  * resumeWriterRun is the only supported way to continue a paused run. It
  * looks the run up in the same in-memory WriterRunRegistry (runId ->
  * compiled graph owning that run's MemorySaver checkpoint), strictly
  * validates the approve/reject decision and resumes the exact same thread. An
  * approve continues through the W4 writing phase (one AI call per approved
- * section) and rests on review_ready with writtenSections filled; a reject
- * ends the run rejected with no writing. Runs are process-local: a restart
- * loses the registry, and resuming a lost run then fails honestly with
- * writer_run_not_found - never a silent restart from START. W8 replaces the
- * registry/checkpointer with durable storage behind this same runId -> resume
- * surface.
+ * section) and the W5 deterministic review, resting on `completed` with a
+ * canonical WriterReview artifact (content_json / content_html / full SeoResult
+ * from the existing pipeline); a reject ends the run rejected with no writing.
+ * Runs are process-local: a restart loses the registry, and resuming a lost
+ * run then fails honestly with writer_run_not_found - never a silent restart
+ * from START. W8 replaces the registry/checkpointer with durable storage
+ * behind this same runId -> resume surface.
  */
 
 import { ApiError } from '../../apiErrors.js';
 import { emptyWriterContext, type WriterContextDependencies } from './context.js';
 import { createWriterGraph } from './graph.js';
 import type { WriterPlannerDependencies } from './planner.js';
+import type { WriterReviewDependencies } from './review.js';
 import type { WriterSectionDependencies } from './sectionWriter.js';
 import {
   createWriterRunId,
@@ -46,11 +49,13 @@ export {
   WRITER_GATHER_NODE,
   WRITER_INITIALIZE_NODE,
   WRITER_PLAN_NODE,
+  WRITER_REVIEW_NODE,
   WRITER_WRITE_SECTIONS_NODE,
 } from './graph.js';
 export * from './approval.js';
 export * from './context.js';
 export * from './planner.js';
+export * from './review.js';
 export * from './sectionWriter.js';
 export {
   createWriterRunId,
@@ -66,6 +71,7 @@ export {
 export {
   STATUS_TRANSITIONS,
   WRITER_APPROVAL_STATUSES,
+  WRITER_REVIEW_STATUSES,
   WRITER_STATUSES,
   WriterStateAnnotation,
   assertStatusTransition,
@@ -74,6 +80,8 @@ export {
   type WriterPlan,
   type WriterPlanStatus,
   type WriterRelatedContent,
+  type WriterReview,
+  type WriterReviewStatus,
   type WriterSection,
   type WriterState,
   type WriterStateUpdate,
@@ -105,12 +113,15 @@ export interface WriterRunRequest {
 }
 
 /** Injectable seams for a writer run: the read-only context adapters, the AI
- *  planner and the section writer. Each is optional; without one the matching
- *  capability reports itself not wired and the run degrades honestly. */
+ *  planner, the section writer and the deterministic review allowlist. Each is
+ *  optional; without one the matching capability reports itself not wired and
+ *  the run degrades honestly (the review allowlist defaults to the canonical
+ *  @seo/contracts evaluator + renderer). */
 export interface WriterRunDependencies {
   context?: WriterContextDependencies;
   planner?: WriterPlannerDependencies;
   sectionWriter?: WriterSectionDependencies;
+  review?: WriterReviewDependencies;
 }
 
 /**
@@ -165,6 +176,9 @@ export function parseWriterRunRequest(input: WriterRunRequest): WriterState {
     approvalReason: null,
     writtenSections: [],
     writeNote: null,
+    review: null,
+    reviewStatus: 'pending',
+    reviewNote: null,
   };
 }
 
@@ -174,8 +188,10 @@ export function parseWriterRunRequest(input: WriterRunRequest): WriterState {
  * without them every source reports not configured, planning reports "no AI
  * planner wired" and an approved run's writing reports "no section writer
  * wired", ending the run failed instead of fabricating a plan or a section.
- * Throws ApiError.badRequest for malformed input; genuine run failures surface
- * from the graph.
+ * The deterministic review allowlist defaults to the canonical pipeline, so a
+ * fully written run flows into W5 review and rests on `completed`. Throws
+ * ApiError.badRequest for malformed input; genuine run failures surface from
+ * the graph.
  *
  * When the run proposes a plan it pauses on the human approval interrupt and
  * is registered under its runId in the supplied (or a fresh) in-memory run

@@ -1,28 +1,29 @@
 /**
- * Writer Agent state model (W0-W4).
+ * Writer Agent state model (W0-W5).
  *
  * A writer run is a small typed state machine that flows through the
  * LangGraph writer graph. The state carries run identity, the writer's brief
  * (topic / optional target keyword), the bounded, source-labelled context
- * gathered for it, the proposed article plan and, once writing has run, the
- * approved section contents. It never carries secrets, credentials,
- * service-role handles or raw database rows - everything a phase needs is
- * resolved inside a node through explicit dependency boundaries and either
- * ends up here as plain serializable data or never enters the checkpoint at
- * all.
+ * gathered for it, the proposed article plan, the approved section contents
+ * written against it and, once W5 review has run, the canonical review
+ * artifact. It never carries secrets, credentials, service-role handles or raw
+ * database rows - everything a phase needs is resolved inside a node through
+ * explicit dependency boundaries and either ends up here as plain serializable
+ * data or never enters the checkpoint at all.
  *
  * The identity channels (projectId, requestId) are protected by a reducer
  * that rejects any change after the run has been initialised, so a run can
  * never silently migrate to another project or request while in flight. The
  * status channel is guarded by an explicit transition table
  * (idle -> running -> planning -> awaiting_approval -> approved -> writing ->
- * review_ready, with honest failed exits at each step). That table is the
- * deny-by-default gatekeeper of the lifecycle: an illegal transition fails
- * the run instead of letting the state drift into a combination the rest of
- * the platform cannot read. context is bounded and labelled by the boundary
- * helpers in context.ts before it is written, and the plan that planOutline
- * produces is Zod-validated at the planner boundary before it is stored, so
- * no retrieval source or model reply can grow state without limit.
+ * review_ready -> completed, with honest failed exits at each step). That
+ * table is the deny-by-default gatekeeper of the lifecycle: an illegal
+ * transition fails the run instead of letting the state drift into a
+ * combination the rest of the platform cannot read. context is bounded and
+ * labelled by the boundary helpers in context.ts before it is written, and the
+ * plan that planOutline produces is Zod-validated at the planner boundary
+ * before it is stored, so no retrieval source or model reply can grow state
+ * without limit.
  *
  * The plan channels (planStatus / plan / planNote) keep the plan artifact
  * separate from the run lifecycle: a run that proposed a plan rests on
@@ -46,21 +47,33 @@
  * graph. Each written section (WriterWrittenSection) stores its deterministic
  * section id (a zero-based index into the approved plan) plus the AI content;
  * the code guarantees every written section maps to exactly one approved
- * section and that no section is written twice. Success rests on
- * review_ready; any honest section failure ends the run failed, keeping the
- * sections already written for debugging. `completed` stays reserved for the
- * later full workflow (assembly, SEO review, persistence); a failed run keeps
- * whatever plan it honestly produced (planStatus is about the plan artifact,
- * not the run).
+ * section and that no section is written twice. Success then flows into W5.
+ *
+ * W5 adds the deterministic review and content-assembly phase. reviewContent
+ * is a pure, local pipeline: it reassembles the written sections into one
+ * canonical Content Studio document (in approved plan order, from the approved
+ * plan title/headings and the written bodies only), renders the canonical
+ * content_html through the existing renderer and scores it with the existing
+ * Phase C SEO evaluator. It makes no AI call, writes nothing and stores the
+ * result as a WriterReview artifact under the review channel with
+ * reviewStatus "completed". The run then rests on `completed` - the writer has
+ * produced a review-ready canonical artifact, not a saved article. `completed`
+ * is only reached through a successful review; any honest review failure
+ * (missing/extra section, invalid content, render/evaluate error) ends the run
+ * failed with reviewStatus "failed" and a bounded note. A failed run keeps
+ * whatever plan and written sections it honestly produced.
  */
 
 import { Annotation } from '@langchain/langgraph';
+import type { SeoResult, TipDoc } from '@seo/contracts';
 import { emptyWriterContext, type WriterContext } from './context.js';
 
 /** All statuses a writer run can ever be in; empty transition lists mean the
- *  run rests there (review_ready is the W4 terminal state for writing).
- *  awaiting_approval pauses on the human approval interrupt and is left only
- *  through an explicit approve/reject resume. */
+ *  run rests there (completed / rejected / failed are terminal). completed is
+ *  reached only through the W5 review phase: the writer produced one canonical
+ *  review artifact, not a saved article. awaiting_approval pauses on the human
+ *  approval interrupt and is left only through an explicit approve/reject
+ *  resume. */
 export const WRITER_STATUSES = [
   'idle',
   'running',
@@ -81,13 +94,20 @@ export type WriterStatus = (typeof WRITER_STATUSES)[number];
 export const WRITER_APPROVAL_STATUSES = ['pending', 'approved', 'rejected'] as const;
 export type WriterApprovalStatus = (typeof WRITER_APPROVAL_STATUSES)[number];
 
+/** Where the W5 deterministic review stands. pending until reviewContent runs;
+ *  completed only after it produced a canonical review artifact; failed on any
+ *  honest review failure. Independent of the run lifecycle status. */
+export const WRITER_REVIEW_STATUSES = ['pending', 'completed', 'failed'] as const;
+export type WriterReviewStatus = (typeof WRITER_REVIEW_STATUSES)[number];
+
 /** Legal one-step transitions between writer statuses; empty means the run
- *  rests there (review_ready / rejected are terminal). approved -> writing ->
- *  review_ready is the code-owned W4 writing path that starts only after an
- *  explicit approval; awaiting_approval -> failed exists so a run whose resume
- *  input cannot be validated degrades honestly instead of hanging; writing ->
- *  failed lets an honest section failure stop the run. `completed` becomes
- *  reachable again when the later full workflow lands. */
+ *  rests there (completed / rejected / failed are terminal). approved -> writing
+ *  -> review_ready -> completed is the code-owned W4+W5 path that starts only
+ *  after an explicit approval: writing fills the approved sections and the
+ *  deterministic review phase assembles the canonical document. awaiting_approval
+ *  -> failed exists so a run whose resume input cannot be validated degrades
+ *  honestly instead of hanging; writing/review_ready -> failed let an honest
+ *  section or review failure stop the run. */
 export const STATUS_TRANSITIONS: Record<WriterStatus, readonly WriterStatus[]> = {
   idle: ['running'],
   running: ['planning'],
@@ -95,7 +115,7 @@ export const STATUS_TRANSITIONS: Record<WriterStatus, readonly WriterStatus[]> =
   awaiting_approval: ['approved', 'rejected', 'failed'],
   approved: ['writing'],
   writing: ['review_ready', 'failed'],
-  review_ready: [],
+  review_ready: ['completed', 'failed'],
   rejected: [],
   completed: [],
   failed: [],
@@ -189,6 +209,28 @@ export interface WriterWrittenSection {
   content: string;
 }
 
+// --- review artifact (W5) ----------------------------------------------------
+//
+// The W5 review phase is a deterministic, local conveyor: it reassembles the
+// written sections into ONE canonical Content Studio document (from the
+// approved plan title/headings and the written bodies, strictly in plan
+// order), renders content_html through the existing canonical renderer and
+// scores it with the existing Phase C SEO evaluator. The artifact reuses the
+// canonical contracts shapes (TipDoc for content_json, SeoResult for the full
+// evaluator output) - no parallel writer model and no AI-produced score.
+
+/** The canonical review artifact the W5 phase produces: the assembled
+ *  Content Studio document, its rendered HTML and the full deterministic
+ *  evaluator result. All types are the canonical @seo/contracts shapes. */
+export interface WriterReview {
+  /** Canonical Tiptap content document (the Content Studio content_json). */
+  contentJson: TipDoc;
+  /** Canonical render of the document via the existing renderer. */
+  contentHtml: string;
+  /** Full output of the existing Phase C evaluateSeo evaluator. */
+  seo: SeoResult;
+}
+
 /** The single state definition for every writer graph. Reducers run on every
  *  write (including the initial invoke input), so channel construction already
  *  encodes the identity + lifecycle invariants; graph nodes cannot bypass
@@ -211,6 +253,9 @@ export const WriterStateAnnotation = Annotation.Root({
     default: () => [],
   }),
   writeNote: Annotation<string | null>({ reducer: replaceReducer, default: () => null }),
+  review: Annotation<WriterReview | null>({ reducer: replaceReducer, default: () => null }),
+  reviewStatus: Annotation<WriterReviewStatus>({ reducer: replaceReducer, default: () => 'pending' }),
+  reviewNote: Annotation<string | null>({ reducer: replaceReducer, default: () => null }),
 });
 
 /** Full typed state a node receives. */

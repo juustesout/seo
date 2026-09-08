@@ -28,8 +28,11 @@
  *   - decision outside the strict vocabulary          -> 400 invalid_approval_decision
  *   - no run registered for the runId (or no thread checkpoint for it) -> 404 writer_run_not_found
  *   - run exists but is not resting on awaiting_approval (already approved,
- *     rejected, failed, ...)                          -> 409 writer_run_not_awaiting_approval
- * Resuming never re-runs from START and never calls the planner again.
+ *     rejected, failed, completed, ...)               -> 409 writer_run_not_awaiting_approval
+ * Resuming never re-runs from START and never calls the planner again. An
+ * approve resume continues the same run through the W4 writing phase and the
+ * W5 deterministic review, resting on completed with the WriterReview
+ * artifact; a reject ends the run rejected.
  */
 
 import { randomUUID } from 'node:crypto';
@@ -42,6 +45,8 @@ import type {
   WriterApprovalStatus,
   WriterPlan,
   WriterPlanStatus,
+  WriterReview,
+  WriterReviewStatus,
   WriterState,
   WriterStatus,
   WriterWrittenSection,
@@ -81,10 +86,11 @@ function channel<T>(value: T | undefined, fallback: T): T {
 
 /** Outcome of a writer run: the run id plus the resting state (identity,
  *  brief, the bounded context gatherContext produced, the planning outcome,
- *  the human approval state and - after approval - the written sections).
- *  A proposed plan rests on awaiting_approval with approval "pending"; an
- *  approved run writes its sections and rests on review_ready; rejection and
- *  honest failures are terminal. */
+ *  the human approval state, the written sections and - after the W5 review -
+ *  the canonical review artifact). A proposed plan rests on awaiting_approval
+ *  with approval "pending"; an approved run writes its sections, runs the
+ *  deterministic review and rests on `completed` with a WriterReview; rejection
+ *  and honest failures are terminal. */
 export interface WriterRunResult {
   runId: WriterRunId;
   projectId: string;
@@ -100,6 +106,10 @@ export interface WriterRunResult {
   approvalReason: string | null;
   writtenSections: WriterWrittenSection[];
   writeNote: string | null;
+  /** Canonical review artifact, present only after a completed W5 review. */
+  review: WriterReview | null;
+  reviewStatus: WriterReviewStatus;
+  reviewNote: string | null;
 }
 
 /** Maps raw graph state onto the public run result, tolerating channels the
@@ -121,6 +131,9 @@ export function writerRunResultFromState(runId: WriterRunId, state: WriterState)
     approvalReason: channel(state.approvalReason, null),
     writtenSections: channel(state.writtenSections, []),
     writeNote: channel(state.writeNote, null),
+    review: channel(state.review, null),
+    reviewStatus: channel(state.reviewStatus, 'pending'),
+    reviewNote: channel(state.reviewNote, null),
   };
 }
 

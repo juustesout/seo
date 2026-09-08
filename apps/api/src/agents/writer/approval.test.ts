@@ -6,14 +6,15 @@
  * validated approve/reject decision - delivered through resumeWriterRun on
  * the exact same thread/checkpoint - moves the run on. Since W4, an approve
  * continues the same run into the writing phase (approval is the hard gate
- * before any writing); with a wired section writer the run lands on
- * review_ready with one written section per approved plan section. These
- * tests pin the vocabulary validation, the deny-by-default resume rules (bad
- * decision, unknown run, wrong lifecycle state, cross-run isolation), the
- * no-replanning guarantee (resume never calls the planner or the context
- * adapters again) and the restart honesty of the in-memory run registry (a
- * registry without the run fails with writer_run_not_found instead of
- * silently re-running from START).
+ * before any writing) and, since W5, through the deterministic review into a
+ * terminal `completed` state: with a wired section writer the run lands on
+ * completed carrying one written section per approved plan section plus the
+ * canonical WriterReview artifact. These tests pin the vocabulary validation,
+ * the deny-by-default resume rules (bad decision, unknown run, wrong lifecycle
+ * state, cross-run isolation), the no-replanning guarantee (resume never calls
+ * the planner or the context adapters again) and the restart honesty of the
+ * in-memory run registry (a registry without the run fails with
+ * writer_run_not_found instead of silently re-running from START).
  */
 
 import { describe, expect, it } from 'vitest';
@@ -182,7 +183,8 @@ describe('writer resume happy paths', () => {
     const resumed = await resumeWriterRun({ runId: run.runId, decision: { decision: 'approve' } }, registry);
 
     expect(resumed.runId).toBe(run.runId);
-    expect(resumed.status).toBe('review_ready');
+    expect(resumed.status).toBe('completed');
+    expect(resumed.reviewStatus).toBe('completed');
     expect(resumed.approval).toBe('approved');
     expect(resumed.approvalReason).toBeNull();
     expect(resumed.plan?.title).toBe(planFixture().title);
@@ -223,7 +225,7 @@ describe('writer resume happy paths', () => {
     expect(run.runId).toBe(runId);
     const resumed = await resumeWriterRun({ runId, decision: { decision: 'approve' } }, registry);
     expect(resumed.runId).toBe(runId);
-    expect(resumed.status).toBe('review_ready');
+    expect(resumed.status).toBe('completed');
   });
 
   it('the graph pauses with a bounded, human-readable interrupt request', async () => {
@@ -370,7 +372,8 @@ describe('writer resume isolation and honesty', () => {
     );
 
     const resumedA = await resumeWriterRun({ runId: runA.runId, decision: { decision: 'approve' } }, registry);
-    expect(resumedA.status).toBe('review_ready');
+    expect(resumedA.status).toBe('completed');
+    expect(resumedA.reviewStatus).toBe('completed');
     expect(resumedA.approval).toBe('approved');
     expect(resumedA.plan?.title).toBe('Plan A');
 
@@ -397,7 +400,7 @@ describe('writer resume isolation and honesty', () => {
     expect(planner.inputs).toHaveLength(1);
 
     const resumed = await resumeWriterRun({ runId: run.runId, decision: { decision: 'approve' } }, registry);
-    expect(resumed.status).toBe('review_ready');
+    expect(resumed.status).toBe('completed');
     expect(planner.inputs).toHaveLength(1);
     expect(context.tally.count).toBe(1);
     expect(writer.calls).toHaveLength(1);
@@ -429,6 +432,6 @@ describe('writer default registry plumbing', () => {
     expect(isWriterRunId(run.runId)).toBe(true);
 
     const resumed = await resumeWriterRun({ runId: run.runId, decision: { decision: 'approve' } });
-    expect(resumed.status).toBe('review_ready');
+    expect(resumed.status).toBe('completed');
   });
 });
