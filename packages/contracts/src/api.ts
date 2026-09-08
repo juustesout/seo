@@ -18,6 +18,8 @@ import type {
   SeoOpportunity,
   SyncJob,
 } from './models.js';
+import type { TipDoc } from './contentDoc.js';
+import type { SeoResult } from './seo.js';
 
 /**
  * Success envelope: the shared error handler wraps every 2xx payload as
@@ -184,6 +186,88 @@ export interface ContentAiSuggestionDto {
    * requested and any existed. Absent/empty means no knowledge was supplied.
    */
   knowledge?: ContentAiKnowledgeDto[];
+}
+
+// ---------------------------------------------------------------------------
+// Writer Agent integration (Content Studio) - project/content-scoped runs
+// ---------------------------------------------------------------------------
+
+/**
+ * Lifecycle of one writer run as seen by the API/UI. Only statuses the writer
+ * graph genuinely reports are emitted: `awaiting_approval` (proposed plan,
+ * paused on the human gate), `writing` (an approved run is actively writing),
+ * `completed` (the W5 review produced a canonical artifact), `rejected` and
+ * `failed`. The transient vocabulary (starting/gathering_context/planning/
+ * review_ready) is kept for forward compatibility but is never fabricated:
+ * the graph reports `completed` only after its deterministic review ran.
+ */
+export type WriterRunStatus =
+  | 'starting'
+  | 'gathering_context'
+  | 'planning'
+  | 'awaiting_approval'
+  | 'writing'
+  | 'review_ready'
+  | 'completed'
+  | 'rejected'
+  | 'failed';
+
+/** One planned section of a writer proposal: heading + content targets. */
+export interface WriterRunPlanSectionDto {
+  heading: string;
+  keyPoints: string[];
+  suggestedKeywords: string[];
+}
+
+/**
+ * The structural article plan the writer proposes (the W2 output). Plain,
+ * bounded and UI-safe: never article body text and never related-content
+ * internals.
+ */
+export interface WriterRunPlanDto {
+  title: string;
+  metaDescription: string | null;
+  introductionPurpose: string;
+  sections: WriterRunPlanSectionDto[];
+}
+
+/**
+ * The canonical review artifact the W5 phase produces for a completed run.
+ * Reuses the canonical contracts shapes (TipDoc content_json, rendered
+ * content_html, full evaluateSeo result) - no parallel writer model.
+ */
+export interface WriterRunReviewDto {
+  /** Canonical Tiptap document (a future explicit Apply would save this as
+   *  seo_content.content_json; W6 never saves it automatically). */
+  contentJson: TipDoc;
+  /** Canonical render of the document via the existing renderer. */
+  contentHtml: string;
+  /** Full output of the existing Phase C evaluateSeo evaluator. */
+  seo: SeoResult;
+}
+
+/**
+ * A safe writer-run snapshot for the UI: identity bound to exactly one
+ * project+content pair, the proposed plan, an optional human note (rejection
+ * reason / honest failure message) and - once the run completed - the W5
+ * canonical review artifact. It never carries prompts, internal graph state,
+ * checkpoint data or credentials.
+ */
+export interface WriterRunDto {
+  runId: string;
+  projectId: string;
+  contentId: string;
+  status: WriterRunStatus;
+  plan: WriterRunPlanDto | null;
+  note: string | null;
+  review: WriterRunReviewDto | null;
+  createdAt: string;
+}
+
+/** Start a writer run for one content item. `instruction` (optional) becomes
+ *  the run's topic; without one the content title is used. */
+export interface WriterStartRequest {
+  instruction?: string;
 }
 
 // ---------------------------------------------------------------------------

@@ -37,6 +37,7 @@ import { ContentEditorHeader } from '../components/content/ContentEditorHeader';
 import { SeoPanel } from '../components/content/SeoPanel';
 import { MediaPanel } from '../components/content/MediaPanel';
 import { ContentAiPanel } from '../components/content/ContentAiPanel';
+import { WriterPanel } from '../components/content/WriterPanel';
 import { KnowledgePanel } from '../components/content/KnowledgePanel';
 import { IntelligencePanel } from '../components/content/IntelligencePanel';
 import { textToBlocksHtml } from '../components/content/contentAi';
@@ -120,6 +121,11 @@ export function Content({
   const [aiSelRange, setAiSelRange] = useState<{ from: number; to: number } | null>(null);
   const [hasSelection, setHasSelection] = useState(false);
   const [useKnowledge, setUseKnowledge] = useState(true);
+
+  // Writer panel (W6): a separate, explicit writer flow for the open article.
+  // Kept as its own open/close flag so the panel survives parent re-renders
+  // and only ever targets the persisted row being edited (never a new draft).
+  const [writerOpen, setWriterOpen] = useState(false);
 
   const detail = useAsync<DetailRow>(() => api(`/projects/${projectId}/content/${editingId}`), [projectId, editingId]);
 
@@ -299,6 +305,7 @@ export function Content({
     setAiError(null);
     setAiSuggestion(null);
     setAiSelRange(null);
+    setWriterOpen(false);
   };
 
   const changeStatus = (next: string) => {
@@ -591,6 +598,27 @@ export function Content({
           <input type="checkbox" checked={useKnowledge} onChange={(e) => setUseKnowledge(e.target.checked)} />
           <span>Include this project's knowledge as context when available</span>
         </label>
+      )}
+
+      <div className="row" style={{ marginTop: 8, gap: 8, alignItems: 'center' }}>
+        <button className="btn sm" disabled={!editingId} onClick={() => setWriterOpen((v) => !v)}>
+          {writerOpen ? 'Close writer' : 'Writer'}
+        </button>
+        {!editingId && <span className="muted" style={{ fontSize: 12 }}>Save this draft first to run the writer on it.</span>}
+        {writerOpen && editingId && (
+          <span className="muted" style={{ fontSize: 12 }}>
+            Runs the approved writer flow against this article's saved context; results are previewed, never saved automatically.
+          </span>
+        )}
+      </div>
+
+      {writerOpen && editingId && (
+        <WriterPanel
+          projectId={projectId}
+          contentId={editingId}
+          defaultTopic={title}
+          defaultKeyword={targetKeyword.trim() || undefined}
+        />
       )}
 
       <div className="ce-grid">

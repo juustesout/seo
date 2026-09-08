@@ -611,3 +611,28 @@ input.ce-title:focus { border-color: var(--accent); background: var(--panel-2); 
 .sch-detail-grid dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
 
 
+
+/* Writer panel (W6): starts an approved writer run and previews the
+   review-ready result. Mirrors the AI-panel accent but full-width in the
+   editor flow, never auto-saving or publishing. */
+.writer-panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent, #4f7cff);
+  border-radius: 10px;
+  padding: 12px 14px;
+  margin: 12px 0;
+}
+.writer-proposal {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.writer-section {
+  border-top: 1px solid var(--border);
+  margin-top: 8px;
+  padding-top: 8px;
+}
+.writer-section h3 { margin: 0 0 4px; font-size: 14px; }
+.writer-section ul { margin: 4px 0; padding-left: 20px; }
