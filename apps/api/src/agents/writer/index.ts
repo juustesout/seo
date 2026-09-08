@@ -1,28 +1,33 @@
 /**
- * Writer Agent public surface (W0-W3).
+ * Writer Agent public surface (W0-W4).
  *
  * runWriterOnce is the only supported way to start a writer run. It validates
  * run identifiers and the writer brief at the boundary (invalid input is
  * rejected before the graph is touched), builds a fresh compiled graph with
- * the injected read-only context adapters and AI planner and runs it on a
- * thread identified by the writer run id (wr_<uuid>). When planning proposes
- * a plan the graph now pauses on the W3 human-approval interrupt; the
- * returned result rests on awaiting_approval with approval "pending".
+ * the injected read-only context adapters, AI planner and section writer, and
+ * runs it on a thread identified by the writer run id (wr_<uuid>). When
+ * planning proposes a plan the graph pauses on the W3 human-approval
+ * interrupt; the returned result rests on awaiting_approval with approval
+ * "pending". No section is ever written before that approval.
  *
  * resumeWriterRun is the only supported way to continue a paused run. It
  * looks the run up in the same in-memory WriterRunRegistry (runId ->
  * compiled graph owning that run's MemorySaver checkpoint), strictly
- * validates the approve/reject decision and resumes the exact same thread.
- * Runs are process-local: a restart loses the registry, and resuming a lost
- * run then fails honestly with writer_run_not_found - never a silent restart
- * from START. W8 replaces the registry/checkpointer with durable storage
- * behind this same runId -> resume surface.
+ * validates the approve/reject decision and resumes the exact same thread. An
+ * approve continues through the W4 writing phase (one AI call per approved
+ * section) and rests on review_ready with writtenSections filled; a reject
+ * ends the run rejected with no writing. Runs are process-local: a restart
+ * loses the registry, and resuming a lost run then fails honestly with
+ * writer_run_not_found - never a silent restart from START. W8 replaces the
+ * registry/checkpointer with durable storage behind this same runId -> resume
+ * surface.
  */
 
 import { ApiError } from '../../apiErrors.js';
 import { emptyWriterContext, type WriterContextDependencies } from './context.js';
 import { createWriterGraph } from './graph.js';
 import type { WriterPlannerDependencies } from './planner.js';
+import type { WriterSectionDependencies } from './sectionWriter.js';
 import {
   createWriterRunId,
   defaultWriterRunRegistry,
@@ -34,10 +39,19 @@ import {
 } from './runtime.js';
 import type { WriterState } from './state.js';
 
-export { createWriterGraph, WRITER_APPROVAL_NODE, WRITER_GATHER_NODE, WRITER_INITIALIZE_NODE, WRITER_PLAN_NODE } from './graph.js';
+export {
+  createWriterGraph,
+  WRITER_APPROVAL_NODE,
+  WRITER_BEGIN_WRITING_NODE,
+  WRITER_GATHER_NODE,
+  WRITER_INITIALIZE_NODE,
+  WRITER_PLAN_NODE,
+  WRITER_WRITE_SECTIONS_NODE,
+} from './graph.js';
 export * from './approval.js';
 export * from './context.js';
 export * from './planner.js';
+export * from './sectionWriter.js';
 export {
   createWriterRunId,
   createWriterRunRegistry,
@@ -55,6 +69,7 @@ export {
   WRITER_STATUSES,
   WriterStateAnnotation,
   assertStatusTransition,
+  writerSectionIdFor,
   type WriterApprovalStatus,
   type WriterPlan,
   type WriterPlanStatus,
@@ -63,6 +78,7 @@ export {
   type WriterState,
   type WriterStateUpdate,
   type WriterStatus,
+  type WriterWrittenSection,
 } from './state.js';
 
 /** Longest accepted topic for a writer run. */
@@ -88,12 +104,13 @@ export interface WriterRunRequest {
   targetKeyword?: string;
 }
 
-/** Injectable seams for a writer run: the read-only context adapters and the
- *  AI planner. Each is optional; without one the matching capability reports
- *  itself not wired and the run degrades honestly. */
+/** Injectable seams for a writer run: the read-only context adapters, the AI
+ *  planner and the section writer. Each is optional; without one the matching
+ *  capability reports itself not wired and the run degrades honestly. */
 export interface WriterRunDependencies {
   context?: WriterContextDependencies;
   planner?: WriterPlannerDependencies;
+  sectionWriter?: WriterSectionDependencies;
 }
 
 /**
@@ -146,21 +163,25 @@ export function parseWriterRunRequest(input: WriterRunRequest): WriterState {
     planNote: null,
     approval: 'pending',
     approvalReason: null,
+    writtenSections: [],
+    writeNote: null,
   };
 }
 
 /**
  * Runs the writer graph once for a validated request and returns the resting
- * state. Context adapters and the AI planner are optional: without them every
- * source reports not configured and planning reports "no AI planner wired",
- * ending the run failed instead of fabricating a plan. Throws
- * ApiError.badRequest for malformed input; genuine run failures surface from
- * the graph.
+ * state. Context adapters, the AI planner and the section writer are optional:
+ * without them every source reports not configured, planning reports "no AI
+ * planner wired" and an approved run's writing reports "no section writer
+ * wired", ending the run failed instead of fabricating a plan or a section.
+ * Throws ApiError.badRequest for malformed input; genuine run failures surface
+ * from the graph.
  *
  * When the run proposes a plan it pauses on the human approval interrupt and
  * is registered under its runId in the supplied (or a fresh) in-memory run
  * registry so resumeWriterRun can continue the exact same thread later. Pass
- * one explicit registry to scope runs per service instance / test.
+ * one explicit registry to scope runs per service instance / test. Nothing is
+ * written before an explicit approve resume.
  */
 export async function runWriterOnce(
   input: WriterRunRequest,

@@ -1,16 +1,19 @@
 /**
- * Writer Agent W3 tests: the human approval gate.
+ * Writer Agent W3/W4 approval-resume tests.
  *
  * A proposed plan pauses the graph at the awaitApproval interrupt
  * (awaiting_approval / approval "pending"); only an explicit, strictly
  * validated approve/reject decision - delivered through resumeWriterRun on
- * the exact same thread/checkpoint - moves the run to a terminal approved or
- * rejected state. These tests pin the vocabulary validation, the
- * deny-by-default resume rules (bad decision, unknown run, wrong lifecycle
- * state, cross-run isolation), the no-replanning guarantee (resume never
- * calls the planner or the context adapters again) and the restart honesty of
- * the in-memory run registry (a registry without the run fails with
- * writer_run_not_found instead of silently re-running from START).
+ * the exact same thread/checkpoint - moves the run on. Since W4, an approve
+ * continues the same run into the writing phase (approval is the hard gate
+ * before any writing); with a wired section writer the run lands on
+ * review_ready with one written section per approved plan section. These
+ * tests pin the vocabulary validation, the deny-by-default resume rules (bad
+ * decision, unknown run, wrong lifecycle state, cross-run isolation), the
+ * no-replanning guarantee (resume never calls the planner or the context
+ * adapters again) and the restart honesty of the in-memory run registry (a
+ * registry without the run fails with writer_run_not_found instead of
+ * silently re-running from START).
  */
 
 import { describe, expect, it } from 'vitest';
@@ -33,6 +36,7 @@ import {
   type WriterRunRequest,
 } from './index.js';
 import type { WriterPlanInput, WriterPlannerDependencies, WriterPlanOutcome } from './planner.js';
+import type { WriterSectionDependencies, WriterSectionInput } from './sectionWriter.js';
 import type { WriterContextDependencies, WriterKnowledgeResult } from './context.js';
 
 const projectId = 'c00162dd-d23e-4904-85ca-76cccc6d8c90';
@@ -87,6 +91,21 @@ function recordingContext(knowledge: WriterKnowledgeResult): {
       },
       getExistingContent: async () => ({ status: 'not_configured' as const, note: null, items: [] }),
       getIntelligence: async () => ({ status: 'not_configured' as const, note: null, keywords: [] }),
+    },
+  };
+}
+
+/** A recording section writer that returns valid content per approved section,
+ *  so an approve resume can run through the whole writing phase. */
+function okSectionWriter(): { deps: WriterSectionDependencies; calls: WriterSectionInput[] } {
+  const calls: WriterSectionInput[] = [];
+  return {
+    calls,
+    deps: {
+      async writeSection(input: WriterSectionInput) {
+        calls.push(input);
+        return { ok: true, content: `Body content for ${input.section.heading}.` };
+      },
     },
   };
 }
@@ -146,11 +165,12 @@ describe('writer approval decision validation', () => {
 });
 
 describe('writer resume happy paths', () => {
-  it('approves a paused run on the same thread and preserves plan and context', async () => {
+  it('approves a paused run on the same thread and writes the approved sections', async () => {
     const registry = createWriterRunRegistry();
+    const writer = okSectionWriter();
     const run = await runWriterOnce(
       startRequest(),
-      { context: recordingContext(AVAILABLE_KNOWLEDGE).deps, planner: okPlanner() },
+      { context: recordingContext(AVAILABLE_KNOWLEDGE).deps, planner: okPlanner(), sectionWriter: writer.deps },
       registry,
     );
 
@@ -162,10 +182,14 @@ describe('writer resume happy paths', () => {
     const resumed = await resumeWriterRun({ runId: run.runId, decision: { decision: 'approve' } }, registry);
 
     expect(resumed.runId).toBe(run.runId);
-    expect(resumed.status).toBe('approved');
+    expect(resumed.status).toBe('review_ready');
     expect(resumed.approval).toBe('approved');
     expect(resumed.approvalReason).toBeNull();
     expect(resumed.plan?.title).toBe(planFixture().title);
+    expect(resumed.writtenSections).toHaveLength(1);
+    expect(resumed.writtenSections[0].sectionId).toBe('section_0');
+    expect(resumed.writtenSections[0].content).toContain('Why LangGraph');
+    expect(writer.calls).toHaveLength(1);
     expect(resumed.context.knowledge.status).toBe('available');
     expect(resumed.context.knowledge.chunks[0].sourceId).toBe('k1');
     expect(resumed.projectId).toBe(projectId);
@@ -190,12 +214,16 @@ describe('writer resume happy paths', () => {
   it('an explicit runId is kept and resumes on that exact thread', async () => {
     const registry = createWriterRunRegistry();
     const runId = createWriterRunId();
-    const run = await runWriterOnce(startRequest(runId), { planner: okPlanner() }, registry);
+    const run = await runWriterOnce(
+      startRequest(runId),
+      { planner: okPlanner(), sectionWriter: okSectionWriter().deps },
+      registry,
+    );
 
     expect(run.runId).toBe(runId);
     const resumed = await resumeWriterRun({ runId, decision: { decision: 'approve' } }, registry);
     expect(resumed.runId).toBe(runId);
-    expect(resumed.status).toBe('approved');
+    expect(resumed.status).toBe('review_ready');
   });
 
   it('the graph pauses with a bounded, human-readable interrupt request', async () => {
@@ -332,7 +360,7 @@ describe('writer resume isolation and honesty', () => {
     const registry = createWriterRunRegistry();
     const runA = await runWriterOnce(
       { projectId, requestId: 'req-A', topic: 'Topic A' },
-      { planner: okPlanner(planFixture('Plan A')) },
+      { planner: okPlanner(planFixture('Plan A')), sectionWriter: okSectionWriter().deps },
       registry,
     );
     const runB = await runWriterOnce(
@@ -342,7 +370,8 @@ describe('writer resume isolation and honesty', () => {
     );
 
     const resumedA = await resumeWriterRun({ runId: runA.runId, decision: { decision: 'approve' } }, registry);
-    expect(resumedA.status).toBe('approved');
+    expect(resumedA.status).toBe('review_ready');
+    expect(resumedA.approval).toBe('approved');
     expect(resumedA.plan?.title).toBe('Plan A');
 
     const resumedB = await resumeWriterRun(
@@ -358,18 +387,20 @@ describe('writer resume isolation and honesty', () => {
     const registry = createWriterRunRegistry();
     const context = recordingContext(AVAILABLE_KNOWLEDGE);
     const planner = recordingPlanner(() => ({ ok: true, plan: planFixture() }));
+    const writer = okSectionWriter();
 
     const run = await runWriterOnce(
       startRequest(),
-      { context: context.deps, planner: planner.deps },
+      { context: context.deps, planner: planner.deps, sectionWriter: writer.deps },
       registry,
     );
     expect(planner.inputs).toHaveLength(1);
 
     const resumed = await resumeWriterRun({ runId: run.runId, decision: { decision: 'approve' } }, registry);
-    expect(resumed.status).toBe('approved');
+    expect(resumed.status).toBe('review_ready');
     expect(planner.inputs).toHaveLength(1);
     expect(context.tally.count).toBe(1);
+    expect(writer.calls).toHaveLength(1);
   });
 
   it('a graph registered for a runId without a checkpoint for it cannot resume', async () => {
@@ -390,11 +421,14 @@ describe('writer resume isolation and honesty', () => {
 
 describe('writer default registry plumbing', () => {
   it('runWriterOnce and resumeWriterRun share the default in-memory registry', async () => {
-    const run = await runWriterOnce(startRequest(), { planner: okPlanner() });
+    const run = await runWriterOnce(
+      startRequest(),
+      { planner: okPlanner(), sectionWriter: okSectionWriter().deps },
+    );
     expect(run.status).toBe('awaiting_approval');
     expect(isWriterRunId(run.runId)).toBe(true);
 
     const resumed = await resumeWriterRun({ runId: run.runId, decision: { decision: 'approve' } });
-    expect(resumed.status).toBe('approved');
+    expect(resumed.status).toBe('review_ready');
   });
 });

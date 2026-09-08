@@ -1,15 +1,18 @@
 /**
- * Writer Agent graph (W0-W3).
+ * Writer Agent graph (W0-W4).
  *
  * A linear LangGraph that walks the run lifecycle, gathers read-only,
  * project-scoped context for the writer's topic, turns it into a structural
- * article plan and pauses for explicit human approval before anything could
- * be written:
+ * article plan, pauses for explicit human approval and - only after an
+ * explicit approval - writes the approved sections one AI call per section:
  *
  *   START -> initialize (idle -> running)
  *         -> gatherContext (fills bounded context; running -> planning)
  *         -> planOutline (planning -> awaiting_approval | failed)
- *         -> awaitApproval (interrupt) -> resume: approved | rejected -> END
+ *         -> awaitApproval (interrupt)
+ *              - reject -> rejected -> END
+ *              - approve -> approved -> beginWriting (writing)
+ *                          -> writeSections (review_ready | failed) -> END
  *
  * gatherContext is the only node that touches the outside world before
  * planning and it does so exclusively through the dependency-injected
@@ -35,8 +38,23 @@
  * when the same thread is resumed through resumeWriterRun with a strictly
  * validated approve/reject decision (see approval.ts); the node itself
  * re-validates that resume value and degrades an out-of-band, invalid resume
- * to a failed run rather than trusting it. Approve ends approved, reject ends
- * rejected - both terminal, neither invents a dummy writing node.
+ * to a failed run rather than trusting it. Rejection is terminal (rejected ->
+ * END). Approval is the hard gate: nothing below ever runs without it.
+ *
+ * beginWriting + writeSections are the W4 controlled writing phase, reached
+ * only from an approved run. beginWriting records the writing status; then a
+ * single writeSections node iterates the approved outline in plan order and
+ * calls the injected section writer allowlist (WriterSectionDependencies)
+ * once per approved section (each call may internally retry once on invalid
+ * output, mirroring planning). The outline itself is code-owned and
+ * immutable: the AI receives the fixed heading/key points/keywords and returns
+ * ONLY body content, which the node re-validates and stores under the section's
+ * deterministic plan index - no added/reordered sections, no model-chosen
+ * structure, no AI routing. Any honest section failure (not_configured /
+ * ai_error / invalid_output) ends the run failed, preserving whatever was
+ * already written for debugging; success rests on review_ready. There are no
+ * AI tools, no autonomous research/publish decisions, and no AI-produced SEO
+ * score anywhere in the workflow.
  *
  * The compiled graph owns a MemorySaver checkpointer (the run id doubles as
  * the thread id, see runtime.ts), so runs pause and resume on the exact same
@@ -65,13 +83,22 @@ import {
   type WriterPlanOutcome,
 } from './planner.js';
 import { parseWriterApprovalDecision } from './approval.js';
-import { WriterStateAnnotation } from './state.js';
-import type { WriterState, WriterStateUpdate } from './state.js';
+import {
+  NO_SECTION_WRITER_DEPENDENCIES,
+  isValidSectionContent,
+  WRITER_SECTION_MAX_PREVIOUS_CHARS,
+  type WriterSectionDependencies,
+  type WriterSectionInput,
+} from './sectionWriter.js';
+import { WriterStateAnnotation, writerSectionIdFor } from './state.js';
+import type { WriterState, WriterStateUpdate, WriterWrittenSection } from './state.js';
 
 export const WRITER_INITIALIZE_NODE = 'initialize';
 export const WRITER_GATHER_NODE = 'gatherContext';
 export const WRITER_PLAN_NODE = 'planOutline';
 export const WRITER_APPROVAL_NODE = 'awaitApproval';
+export const WRITER_BEGIN_WRITING_NODE = 'beginWriting';
+export const WRITER_WRITE_SECTIONS_NODE = 'writeSections';
 
 /** Marks the run as started; later phases assemble per-project context here. */
 function initializeNode(_state: WriterState): WriterStateUpdate {
@@ -208,10 +235,85 @@ function awaitApprovalNode(
   }
 }
 
+/** Bounded tail of the previous written section for continuity (at most one
+ *  section, truncated): keeps coherence without a token snowball. */
+function previousSectionContext(written: WriterWrittenSection[]): string | null {
+  const last = written[written.length - 1];
+  if (!last) return null;
+  return last.content.slice(0, WRITER_SECTION_MAX_PREVIOUS_CHARS);
+}
+
+/** Marks the run as writing once approval has passed (approved -> writing). */
+function beginWritingNode(): WriterStateUpdate {
+  return { status: 'writing' };
+}
+
+/**
+ * The W4 controlled writing loop (runs only after explicit approval). It
+ * iterates the approved outline strictly in plan order and calls the injected
+ * section writer once per approved section; each section is stored under its
+ * deterministic plan index, so no section can be added, reordered or written
+ * twice. The approved outline is never passed back to the model as
+ * mutable structure and no AI output ever routes the graph. An honest failure
+ * (unwired writer, provider error, invalid output, an unexpected throw)
+ * stops the run failed and keeps whatever was already written for debugging.
+ */
+async function writeSectionsNode(
+  deps: WriterSectionDependencies,
+  state: WriterState,
+): Promise<WriterStateUpdate> {
+  const plan = state.plan;
+  if (!plan) {
+    return { status: 'failed', writeNote: 'No approved plan to write.' };
+  }
+  const written: WriterWrittenSection[] = [];
+  try {
+    for (let index = 0; index < plan.sections.length; index += 1) {
+      const sectionId = writerSectionIdFor(index);
+      const section = plan.sections[index];
+      const input: WriterSectionInput = {
+        projectId: state.projectId,
+        topic: state.topic,
+        targetKeyword: state.targetKeyword ?? null,
+        articleTitle: plan.title,
+        sectionIndex: index,
+        section,
+        context: state.context,
+        previousSectionContent: previousSectionContext(written),
+      };
+      const outcome = await deps.writeSection(input);
+      if (!outcome.ok) {
+        return { status: 'failed', writtenSections: written, writeNote: outcome.note };
+      }
+      if (!isValidSectionContent(outcome.content)) {
+        return {
+          status: 'failed',
+          writtenSections: written,
+          writeNote: `Section ${sectionId} produced invalid content and was not stored.`,
+        };
+      }
+      if (written.some((entry) => entry.sectionId === sectionId)) {
+        return {
+          status: 'failed',
+          writtenSections: written,
+          writeNote: `Section ${sectionId} was already written; aborting to prevent duplicates.`,
+        };
+      }
+      written.push({ sectionId, content: outcome.content });
+    }
+  } catch (err) {
+    logger.error({ err, projectId: state.projectId }, 'writer section writer threw unexpectedly');
+    return { status: 'failed', writtenSections: written, writeNote: contextNoteFromError(err) };
+  }
+  return { status: 'review_ready', writtenSections: written, writeNote: null };
+}
+
 /** Builds a fresh compiled writer graph. Options.context injects the read-only
- *  adapter allowlist and options.planner the AI planning allowlist; without
- *  them every source reports not configured and planning reports "no AI
- *  planner wired", ending the run failed instead of fabricating a plan.
+ *  adapter allowlist, options.planner the AI planning allowlist and
+ *  options.sectionWriter the section-writing allowlist; without them every
+ *  source reports not configured, planning reports "no AI planner wired" and
+ *  an approved run's writing reports "no section writer wired", ending the run
+ *  failed instead of fabricating a plan or a section.
  *
  * The compiled graph owns a MemorySaver checkpointer, which the interrupt
  * pause requires. It is in-memory and process-local: a restart loses every
@@ -221,19 +323,27 @@ function awaitApprovalNode(
 export function createWriterGraph(options: {
   context?: WriterContextDependencies;
   planner?: WriterPlannerDependencies;
+  sectionWriter?: WriterSectionDependencies;
 } = {}) {
   const contextDeps = options.context ?? NO_ADAPTER_DEPENDENCIES;
   const plannerDeps = options.planner ?? NO_PLANNER_DEPENDENCIES;
+  const sectionWriterDeps = options.sectionWriter ?? NO_SECTION_WRITER_DEPENDENCIES;
   return new StateGraph(WriterStateAnnotation)
     .addNode(WRITER_INITIALIZE_NODE, initializeNode)
     .addNode(WRITER_GATHER_NODE, (state: WriterState) => gatherContextNode(contextDeps, state))
     .addNode(WRITER_PLAN_NODE, (state: WriterState) => planOutlineNode(plannerDeps, state))
     .addNode(WRITER_APPROVAL_NODE, (state: WriterState, config) => awaitApprovalNode(state, config))
+    .addNode(WRITER_BEGIN_WRITING_NODE, beginWritingNode)
+    .addNode(WRITER_WRITE_SECTIONS_NODE, (state: WriterState) => writeSectionsNode(sectionWriterDeps, state))
     .addEdge(START, WRITER_INITIALIZE_NODE)
     .addEdge(WRITER_INITIALIZE_NODE, WRITER_GATHER_NODE)
     .addEdge(WRITER_GATHER_NODE, WRITER_PLAN_NODE)
     .addEdge(WRITER_PLAN_NODE, WRITER_APPROVAL_NODE)
-    .addEdge(WRITER_APPROVAL_NODE, END)
+    .addConditionalEdges(WRITER_APPROVAL_NODE, (state: WriterState) =>
+      state.status === 'approved' ? WRITER_BEGIN_WRITING_NODE : END,
+    )
+    .addEdge(WRITER_BEGIN_WRITING_NODE, WRITER_WRITE_SECTIONS_NODE)
+    .addEdge(WRITER_WRITE_SECTIONS_NODE, END)
     .compile({ checkpointer: new MemorySaver() });
 }
 

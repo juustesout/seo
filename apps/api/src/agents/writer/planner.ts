@@ -35,6 +35,7 @@ import { z } from 'zod';
 import { logger } from '../../logger.js';
 import type { WriterContentContextItem, WriterContext } from './context.js';
 import { contextNoteFromError } from './context.js';
+import { parseJsonObject } from './json.js';
 import type { WriterPlan, WriterRelatedContent } from './state.js';
 
 // --- hard bounds for a plan -------------------------------------------------
@@ -274,25 +275,6 @@ export function buildPlannerPrompt(input: WriterPlanInput): { system: string; us
   };
 }
 
-// --- strict-JSON call with one corrective retry -----------------------------
-
-/** Strip a single markdown code fence (```json ... ```) some models add
- *  around JSON even when told not to, so parsing only ever sees the object. */
-function stripCodeFence(text: string): string {
-  return text
-    .trim()
-    .replace(/^```(?:json)?\s*/i, '')
-    .replace(/```\s*$/, '');
-}
-
-function parsePlanObject(text: string): unknown {
-  try {
-    return JSON.parse(stripCodeFence(text)) as unknown;
-  } catch {
-    return null;
-  }
-}
-
 // --- production planner -------------------------------------------------------
 
 /** Wraps a validated AI-facing plan with its deterministic relatedContent
@@ -346,7 +328,7 @@ export function createAiWriterPlanner(resolve: WriterAiResolver): WriterPlannerD
           logger.warn({ err, projectId: input.projectId }, 'writer plan chat call failed');
           return { ok: false, code: 'ai_error', note: contextNoteFromError(err) };
         }
-        const parsed = parsePlanObject(result.content);
+        const parsed = parseJsonObject(result.content);
         if (parsed === null) continue;
         const validated = writerPlanSchema.safeParse(parsed);
         if (!validated.success) continue;

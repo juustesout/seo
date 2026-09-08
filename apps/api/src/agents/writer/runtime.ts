@@ -38,7 +38,14 @@ import { ApiError } from '../../apiErrors.js';
 import type { WriterApprovalDecision } from './approval.js';
 import { parseWriterApprovalDecision } from './approval.js';
 import { emptyWriterContext, type WriterContext } from './context.js';
-import type { WriterApprovalStatus, WriterPlan, WriterPlanStatus, WriterState, WriterStatus } from './state.js';
+import type {
+  WriterApprovalStatus,
+  WriterPlan,
+  WriterPlanStatus,
+  WriterState,
+  WriterStatus,
+  WriterWrittenSection,
+} from './state.js';
 import type { CompiledWriterGraph } from './graph.js';
 
 // --- run identity -----------------------------------------------------------
@@ -73,9 +80,11 @@ function channel<T>(value: T | undefined, fallback: T): T {
 }
 
 /** Outcome of a writer run: the run id plus the resting state (identity,
- *  brief, the bounded context gatherContext produced, the planning outcome
- *  and the human approval state). A proposed plan rests on awaiting_approval
- *  with approval "pending" until an explicit resume approves or rejects it. */
+ *  brief, the bounded context gatherContext produced, the planning outcome,
+ *  the human approval state and - after approval - the written sections).
+ *  A proposed plan rests on awaiting_approval with approval "pending"; an
+ *  approved run writes its sections and rests on review_ready; rejection and
+ *  honest failures are terminal. */
 export interface WriterRunResult {
   runId: WriterRunId;
   projectId: string;
@@ -89,6 +98,8 @@ export interface WriterRunResult {
   planNote: string | null;
   approval: WriterApprovalStatus;
   approvalReason: string | null;
+  writtenSections: WriterWrittenSection[];
+  writeNote: string | null;
 }
 
 /** Maps raw graph state onto the public run result, tolerating channels the
@@ -108,6 +119,8 @@ export function writerRunResultFromState(runId: WriterRunId, state: WriterState)
     planNote: channel(state.planNote, null),
     approval: channel(state.approval, 'pending'),
     approvalReason: channel(state.approvalReason, null),
+    writtenSections: channel(state.writtenSections, []),
+    writeNote: channel(state.writeNote, null),
   };
 }
 

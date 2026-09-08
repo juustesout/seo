@@ -515,6 +515,8 @@ describe('writer graph deny-by-default invariants', () => {
       'planning',
       'awaiting_approval',
       'approved',
+      'writing',
+      'review_ready',
       'rejected',
       'completed',
       'failed',
