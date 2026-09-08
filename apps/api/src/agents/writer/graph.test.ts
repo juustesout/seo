@@ -24,6 +24,7 @@ import type {
 import type { WriterPlanInput, WriterPlannerDependencies, WriterPlanOutcome } from './planner.js';
 import {
   WRITER_STATUSES,
+  WRITER_APPROVAL_STATUSES,
   WRITER_MAX_CHUNK_TEXT_CHARS,
   WRITER_MAX_CONTENT_ITEMS,
   WRITER_MAX_INTELLIGENCE_KEYWORDS,
@@ -162,18 +163,25 @@ const failPlanner = (code: 'not_configured' | 'ai_error' | 'invalid_output', not
 const startState = () => ({ projectId, requestId, topic, status: 'idle' as const });
 
 describe('writer graph lifecycle', () => {
-  it('proposes a plan and rests on awaiting_approval preserving identity and topic', async () => {
+  it('proposes a plan, rests on awaiting_approval and pauses for approval', async () => {
     const graph = createWriterGraph({ planner: okPlanner() });
-    const finalState = await graph.invoke(startState());
+    const runId = createWriterRunId();
+    const finalState = await graph.invoke(startState(), { configurable: { thread_id: runId } });
 
     expect(finalState.projectId).toBe(projectId);
     expect(finalState.requestId).toBe(requestId);
     expect(finalState.topic).toBe(topic);
     expect(finalState.status).toBe('awaiting_approval');
+    expect(finalState.approval).toBe('pending');
+    expect(finalState.approvalReason).toBeNull();
     expect(finalState.planStatus).toBe('proposed');
     expect(finalState.plan?.title).toBe(OK_PLAN.title);
     expect(finalState.plan?.sections).toHaveLength(2);
     expect(finalState.planNote).toBeNull();
+
+    const paused = await graph.getState({ configurable: { thread_id: runId } });
+    expect(paused.values.status).toBe('awaiting_approval');
+    expect(paused.next).not.toEqual([]);
   });
 
   it('runWriterOnce returns a resting awaiting_approval run with a fresh wr_ run id', async () => {
@@ -209,14 +217,21 @@ describe('writer graph lifecycle', () => {
 
   it('refuses to start a run at a resting or terminal status', async () => {
     const graph = createWriterGraph({ planner: okPlanner() });
+    const config = () => ({ configurable: { thread_id: createWriterRunId() } });
 
-    await expect(graph.invoke({ ...startState(), status: 'awaiting_approval' })).rejects.toThrow(
+    await expect(graph.invoke({ ...startState(), status: 'awaiting_approval' }, config())).rejects.toThrow(
       'Invalid writer status transition',
     );
-    await expect(graph.invoke({ ...startState(), status: 'completed' })).rejects.toThrow(
+    await expect(graph.invoke({ ...startState(), status: 'approved' }, config())).rejects.toThrow(
       'Invalid writer status transition',
     );
-    await expect(graph.invoke({ ...startState(), status: 'failed' })).rejects.toThrow(
+    await expect(graph.invoke({ ...startState(), status: 'rejected' }, config())).rejects.toThrow(
+      'Invalid writer status transition',
+    );
+    await expect(graph.invoke({ ...startState(), status: 'completed' }, config())).rejects.toThrow(
+      'Invalid writer status transition',
+    );
+    await expect(graph.invoke({ ...startState(), status: 'failed' }, config())).rejects.toThrow(
       'Invalid writer status transition',
     );
   });
@@ -374,7 +389,7 @@ describe('writer context gathering', () => {
     });
 
     const graph = createWriterGraph({ context: contextDeps, planner: okPlanner() });
-    const finalState = await graph.invoke(startState());
+    const finalState = await graph.invoke(startState(), { configurable: { thread_id: createWriterRunId() } });
 
     expect(finalState.context.knowledge.chunks.length).toBeLessThanOrEqual(WRITER_MAX_KNOWLEDGE_CHUNKS);
     for (const chunk of finalState.context.knowledge.chunks) {
@@ -466,10 +481,18 @@ describe('writer graph deny-by-default invariants', () => {
     expect(() => assertStatusTransition('planning', 'awaiting_approval')).not.toThrow();
     expect(() => assertStatusTransition('planning', 'failed')).not.toThrow();
     expect(() => assertStatusTransition('planning', 'cancelled')).not.toThrow();
+    expect(() => assertStatusTransition('awaiting_approval', 'approved')).not.toThrow();
+    expect(() => assertStatusTransition('awaiting_approval', 'rejected')).not.toThrow();
+    expect(() => assertStatusTransition('awaiting_approval', 'failed')).not.toThrow();
 
     expect(() => assertStatusTransition('idle', 'planning')).toThrow('Invalid writer status transition');
     expect(() => assertStatusTransition('running', 'awaiting_approval')).toThrow('Invalid writer status transition');
     expect(() => assertStatusTransition('awaiting_approval', 'running')).toThrow('Invalid writer status transition');
+    expect(() => assertStatusTransition('awaiting_approval', 'planning')).toThrow('Invalid writer status transition');
+    expect(() => assertStatusTransition('awaiting_approval', 'completed')).toThrow('Invalid writer status transition');
+    expect(() => assertStatusTransition('approved', 'rejected')).toThrow('Invalid writer status transition');
+    expect(() => assertStatusTransition('approved', 'running')).toThrow('Invalid writer status transition');
+    expect(() => assertStatusTransition('rejected', 'approved')).toThrow('Invalid writer status transition');
     expect(() => assertStatusTransition('planning', 'completed')).toThrow('Invalid writer status transition');
     expect(() => assertStatusTransition('completed', 'running')).toThrow('Invalid writer status transition');
     expect(() => assertStatusTransition('idle', 'unknown' as never)).toThrow('Invalid writer status transition');
@@ -491,10 +514,13 @@ describe('writer graph deny-by-default invariants', () => {
       'running',
       'planning',
       'awaiting_approval',
+      'approved',
+      'rejected',
       'completed',
       'failed',
       'cancelled',
     ]);
+    expect(WRITER_APPROVAL_STATUSES).toEqual(['pending', 'approved', 'rejected']);
   });
 });
 
@@ -549,6 +575,8 @@ describe('writer run input validation', () => {
       planStatus: 'none',
       plan: null,
       planNote: null,
+      approval: 'pending',
+      approvalReason: null,
     });
     expect(start.context.knowledge.status).toBe('not_configured');
     expect(start.context.knowledge.chunks).toEqual([]);

@@ -1,5 +1,5 @@
 /**
- * Writer Agent state model (W0-W2).
+ * Writer Agent state model (W0-W3).
  *
  * A writer run is a small typed state machine that flows through the
  * LangGraph writer graph. The state carries run identity, the writer's brief
@@ -14,13 +14,14 @@
  * that rejects any change after the run has been initialised, so a run can
  * never silently migrate to another project or request while in flight. The
  * status channel is guarded by an explicit transition table
- * (idle -> running -> planning -> awaiting_approval). That table is the
- * deny-by-default gatekeeper of the lifecycle: an illegal transition fails
- * the run instead of letting the state drift into a combination the rest of
- * the platform cannot read. context is bounded and labelled by the boundary
- * helpers in context.ts before it is written, and the plan that planOutline
- * produces is Zod-validated at the planner boundary before it is stored, so
- * no retrieval source or model reply can grow state without limit.
+ * (idle -> running -> planning -> awaiting_approval -> approved | rejected).
+ * That table is the deny-by-default gatekeeper of the lifecycle: an illegal
+ * transition fails the run instead of letting the state drift into a
+ * combination the rest of the platform cannot read. context is bounded and
+ * labelled by the boundary helpers in context.ts before it is written, and
+ * the plan that planOutline produces is Zod-validated at the planner boundary
+ * before it is stored, so no retrieval source or model reply can grow state
+ * without limit.
  *
  * The plan channels (planStatus / plan / planNote) keep the plan artifact
  * separate from the run lifecycle: a run that proposed a plan rests on
@@ -28,33 +29,55 @@
  * a plan (AI not configured, transport error, invalid output) ends failed
  * with planStatus "failed" and a bounded honest note - never a fabricated
  * fallback plan.
+ *
+ * W3 adds the human approval gate. A proposed plan pauses the graph at
+ * awaitApproval (LangGraph interrupt) instead of ending it; the run rests on
+ * awaiting_approval with the approval channel at "pending" until an explicit,
+ * validated resume decision moves it to approved or rejected (both terminal,
+ * END). The approval value only ever comes from that validated resume input -
+ * never from AI, context or the prompt - and approvalReason carries the
+ * bounded, optional human note attached to a rejection. `completed` stays
+ * reserved for the later full write phase; a failed run keeps whatever plan it
+ * honestly produced (planStatus is about the plan artifact, not the run).
  */
 
 import { Annotation } from '@langchain/langgraph';
 import { emptyWriterContext, type WriterContext } from './context.js';
 
 /** All statuses a writer run can ever be in; empty transition lists mean the
- *  run rests there (awaiting_approval is where W3 later resumes from). */
+ *  run rests there. awaiting_approval pauses on the human approval interrupt
+ *  and is left only through an explicit approve/reject resume (approved and
+ *  rejected are both terminal END states). */
 export const WRITER_STATUSES = [
   'idle',
   'running',
   'planning',
   'awaiting_approval',
+  'approved',
+  'rejected',
   'completed',
   'failed',
   'cancelled',
 ] as const;
 export type WriterStatus = (typeof WRITER_STATUSES)[number];
 
+/** Where the human approval gate stands: pending until an explicit resume
+ *  decision resolves it to approved or rejected. */
+export const WRITER_APPROVAL_STATUSES = ['pending', 'approved', 'rejected'] as const;
+export type WriterApprovalStatus = (typeof WRITER_APPROVAL_STATUSES)[number];
+
 /** Legal one-step transitions between writer statuses; empty means the run
- *  rests there. completed becomes reachable again when W3 wires the
- *  post-approval writing phase; awaiting_approval gets its resume edges then
- *  too. */
+ *  rests there (approved / rejected are terminal). awaiting_approval -> failed
+ *  exists so a run whose resume input cannot be validated degrades honestly
+ *  instead of hanging; `completed` becomes reachable again when the later
+ *  post-approval writing phase lands. */
 export const STATUS_TRANSITIONS: Record<WriterStatus, readonly WriterStatus[]> = {
   idle: ['running'],
   running: ['planning'],
   planning: ['awaiting_approval', 'failed', 'cancelled'],
-  awaiting_approval: [],
+  awaiting_approval: ['approved', 'rejected', 'failed'],
+  approved: [],
+  rejected: [],
   completed: [],
   failed: [],
   cancelled: [],
@@ -142,6 +165,8 @@ export const WriterStateAnnotation = Annotation.Root({
   planStatus: Annotation<WriterPlanStatus>({ reducer: replaceReducer, default: () => 'none' }),
   plan: Annotation<WriterPlan | null>({ reducer: replaceReducer, default: () => null }),
   planNote: Annotation<string | null>({ reducer: replaceReducer, default: () => null }),
+  approval: Annotation<WriterApprovalStatus>({ reducer: replaceReducer, default: () => 'pending' }),
+  approvalReason: Annotation<string | null>({ reducer: replaceReducer, default: () => null }),
 });
 
 /** Full typed state a node receives. */

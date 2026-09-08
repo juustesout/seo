@@ -1,36 +1,61 @@
 /**
- * Writer Agent public surface (W0-W2).
+ * Writer Agent public surface (W0-W3).
  *
- * runWriterOnce is the only supported way to start a writer run in this
- * phase. It validates run identifiers and the writer brief at the boundary
- * (invalid input is rejected before the graph is touched), builds a fresh
- * compiled graph with the injected read-only context adapters and AI planner
- * and returns the resting state of the run: the bounded, source-labelled
- * context gatherContext produced and, when planning succeeded, the proposed
- * structural article plan resting on awaiting_approval.
+ * runWriterOnce is the only supported way to start a writer run. It validates
+ * run identifiers and the writer brief at the boundary (invalid input is
+ * rejected before the graph is touched), builds a fresh compiled graph with
+ * the injected read-only context adapters and AI planner and runs it on a
+ * thread identified by the writer run id (wr_<uuid>). When planning proposes
+ * a plan the graph now pauses on the W3 human-approval interrupt; the
+ * returned result rests on awaiting_approval with approval "pending".
  *
- * A run is identified by a writer run id (wr_<uuid>) that is unique per run
- * and doubles as the correlation handle callers store next to a run; when
- * checkpointing lands it becomes the LangGraph thread id for that run. The
- * requestId is the caller-supplied correlation id and travels inside the
- * state so it survives every checkpoint.
+ * resumeWriterRun is the only supported way to continue a paused run. It
+ * looks the run up in the same in-memory WriterRunRegistry (runId ->
+ * compiled graph owning that run's MemorySaver checkpoint), strictly
+ * validates the approve/reject decision and resumes the exact same thread.
+ * Runs are process-local: a restart loses the registry, and resuming a lost
+ * run then fails honestly with writer_run_not_found - never a silent restart
+ * from START. W8 replaces the registry/checkpointer with durable storage
+ * behind this same runId -> resume surface.
  */
 
-import { randomUUID } from 'node:crypto';
 import { ApiError } from '../../apiErrors.js';
-import { emptyWriterContext, type WriterContext, type WriterContextDependencies } from './context.js';
+import { emptyWriterContext, type WriterContextDependencies } from './context.js';
 import { createWriterGraph } from './graph.js';
 import type { WriterPlannerDependencies } from './planner.js';
-import type { WriterPlan, WriterPlanStatus, WriterState, WriterStatus } from './state.js';
+import {
+  createWriterRunId,
+  defaultWriterRunRegistry,
+  isWriterRunId,
+  writerRunResultFromState,
+  type WriterRunId,
+  type WriterRunRegistry,
+  type WriterRunResult,
+} from './runtime.js';
+import type { WriterState } from './state.js';
 
-export { createWriterGraph, WRITER_INITIALIZE_NODE, WRITER_GATHER_NODE, WRITER_PLAN_NODE } from './graph.js';
+export { createWriterGraph, WRITER_APPROVAL_NODE, WRITER_GATHER_NODE, WRITER_INITIALIZE_NODE, WRITER_PLAN_NODE } from './graph.js';
+export * from './approval.js';
 export * from './context.js';
 export * from './planner.js';
 export {
+  createWriterRunId,
+  createWriterRunRegistry,
+  isWriterRunId,
+  resumeWriterRun,
+  writerRunResultFromState,
+  WRITER_RUN_ID_PREFIX,
+  type WriterRunId,
+  type WriterRunRegistry,
+  type WriterRunResult,
+} from './runtime.js';
+export {
   STATUS_TRANSITIONS,
+  WRITER_APPROVAL_STATUSES,
   WRITER_STATUSES,
   WriterStateAnnotation,
   assertStatusTransition,
+  type WriterApprovalStatus,
   type WriterPlan,
   type WriterPlanStatus,
   type WriterRelatedContent,
@@ -40,10 +65,6 @@ export {
   type WriterStatus,
 } from './state.js';
 
-export const WRITER_RUN_ID_PREFIX = 'wr_';
-/** Unique correlation id for a writer run; future LangGraph thread id. */
-export type WriterRunId = `${typeof WRITER_RUN_ID_PREFIX}${string}`;
-
 /** Longest accepted topic for a writer run. */
 export const WRITER_MAX_TOPIC_CHARS = 500;
 /** Longest accepted target keyword for a writer run. */
@@ -52,16 +73,6 @@ export const WRITER_MAX_TARGET_KEYWORD_CHARS = 300;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 /** Upper bound on caller-supplied request ids (kept tiny on purpose). */
 const MAX_REQUEST_ID_LENGTH = 200;
-
-/** Creates a fresh, unique writer run id. */
-export function createWriterRunId(): WriterRunId {
-  return `${WRITER_RUN_ID_PREFIX}${randomUUID()}`;
-}
-
-/** True when the value is a well-formed writer run id. */
-export function isWriterRunId(value: unknown): value is WriterRunId {
-  return typeof value === 'string' && value.startsWith(WRITER_RUN_ID_PREFIX) && UUID_RE.test(value.slice(WRITER_RUN_ID_PREFIX.length));
-}
 
 /** Caller-supplied identifiers and brief for starting a writer run. */
 export interface WriterRunRequest {
@@ -83,23 +94,6 @@ export interface WriterRunRequest {
 export interface WriterRunDependencies {
   context?: WriterContextDependencies;
   planner?: WriterPlannerDependencies;
-}
-
-/** Outcome of a writer run: the run id plus the resting state (identity,
- *  brief, the bounded context gatherContext produced and the planning
- *  outcome). A proposed plan rests on awaiting_approval; a run that could not
- *  plan rests on failed with planStatus "failed" and no fabricated plan. */
-export interface WriterRunResult {
-  runId: WriterRunId;
-  projectId: string;
-  requestId: string;
-  topic: string;
-  targetKeyword: string | null;
-  status: WriterStatus;
-  context: WriterContext;
-  plan: WriterPlan | null;
-  planStatus: WriterPlanStatus;
-  planNote: string | null;
 }
 
 /**
@@ -150,6 +144,8 @@ export function parseWriterRunRequest(input: WriterRunRequest): WriterState {
     planStatus: 'none',
     plan: null,
     planNote: null,
+    approval: 'pending',
+    approvalReason: null,
   };
 }
 
@@ -160,25 +156,24 @@ export function parseWriterRunRequest(input: WriterRunRequest): WriterState {
  * ending the run failed instead of fabricating a plan. Throws
  * ApiError.badRequest for malformed input; genuine run failures surface from
  * the graph.
+ *
+ * When the run proposes a plan it pauses on the human approval interrupt and
+ * is registered under its runId in the supplied (or a fresh) in-memory run
+ * registry so resumeWriterRun can continue the exact same thread later. Pass
+ * one explicit registry to scope runs per service instance / test.
  */
 export async function runWriterOnce(
   input: WriterRunRequest,
   deps: WriterRunDependencies = {},
+  registry: WriterRunRegistry = defaultWriterRunRegistry(),
 ): Promise<WriterRunResult> {
   const start = parseWriterRunRequest(input);
   const runId = input.runId ?? createWriterRunId();
   const graph = createWriterGraph(deps);
-  const finalState = await graph.invoke(start);
-  return {
-    runId,
-    projectId: finalState.projectId,
-    requestId: finalState.requestId,
-    topic: finalState.topic,
-    targetKeyword: finalState.targetKeyword,
-    status: finalState.status,
-    context: finalState.context,
-    plan: finalState.plan,
-    planStatus: finalState.planStatus,
-    planNote: finalState.planNote,
-  };
+  const restingState = await graph.invoke(start, { configurable: { thread_id: runId } });
+  const result = writerRunResultFromState(runId, restingState);
+  if (result.status === 'awaiting_approval') {
+    registry.register(runId, graph);
+  }
+  return result;
 }
