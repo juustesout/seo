@@ -82,7 +82,7 @@ writerRouter.post(
         ? content.target_keyword.trim()
         : null;
 
-    const svc = new WriterRunService(container);
+    const svc = new WriterRunService(container, { actor: { userId: user!.sub } });
     const run = await svc.start(projectId, parseId(req, 'contentId'), { topic, targetKeyword });
     res.status(201).json({ data: run });
   }),

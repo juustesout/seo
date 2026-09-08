@@ -11,18 +11,20 @@
  * awaiting_approval with approval "pending". No section is ever written before
  * that approval.
  *
- * resumeWriterRun is the only supported way to continue a paused run. It
- * looks the run up in the same in-memory WriterRunRegistry (runId ->
- * compiled graph owning that run's MemorySaver checkpoint), strictly
- * validates the approve/reject decision and resumes the exact same thread. An
- * approve continues through the W4 writing phase (one AI call per approved
- * section) and the W5 deterministic review, resting on `completed` with a
- * canonical WriterReview artifact (content_json / content_html / full SeoResult
- * from the existing pipeline); a reject ends the run rejected with no writing.
- * Runs are process-local: a restart loses the registry, and resuming a lost
- * run then fails honestly with writer_run_not_found - never a silent restart
- * from START. W8 replaces the registry/checkpointer with durable storage
- * behind this same runId -> resume surface.
+ * resumeWriterRun is the in-process way to continue a paused run: it looks the
+ * run up in the in-memory WriterRunRegistry (runId -> compiled graph owning
+ * that run's MemorySaver checkpoint), strictly validates the approve/reject
+ * decision and resumes the exact same thread. An approve continues through the
+ * W4 writing phase (one AI call per approved section) and the W5 deterministic
+ * review, resting on `completed` with a canonical WriterReview artifact
+ * (content_json / content_html / full SeoResult from the existing pipeline); a
+ * reject ends the run rejected with no writing.
+ *
+ * These in-memory helpers are the unit-test surface for the graph. Production
+ * runs are durable (W7): WriterRunService persists each run to seo_writer_runs
+ * and keeps the LangGraph checkpoint in Postgres through the checkpoint host,
+ * then resumes through durable.ts - the same runId -> resume shape, but the
+ * registry/checkpointer no longer loses runs on a restart.
  */
 
 import { ApiError } from '../../apiErrors.js';

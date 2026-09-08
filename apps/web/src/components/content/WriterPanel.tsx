@@ -1,5 +1,5 @@
 /**
- * Writer panel for the Content Studio editor (W6).
+ * Writer panel for the Content Studio editor (W6, durable runs W7).
  *
  * Starts a writer run for the article being edited, shows the AI-generated
  * plan as a PROPOSAL, requires an explicit human decision (Approve & Write /
@@ -12,15 +12,30 @@
  *     polling the run until a terminal state (review_ready / completed /
  *     rejected / failed) - it never claims a result is ready before the graph
  *     reports it, and polling stops at terminal states;
- *   - the result is previewed only: W6 never saves it to seo_content, never
- *     publishes and never schedules. Applying it to the document stays an
- *     explicit, separate human action that this phase does not implement.
+ *   - the result is previewed only: the writer flow never saves it to
+ *     seo_content, never publishes and never schedules. Applying it to the
+ *     document stays an explicit, separate human action that is not
+ *     implemented here.
+ *   - W7 durability: a run survives API restarts and browser refreshes. The
+ *     panel keeps a per-content bookmark of the current run and reloads that
+ *     exact run on mount - it never silently starts a new run, and a run that
+ *     no longer exists simply falls back to the fresh start form.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { WriterRunDto, WriterRunStatus } from '@seo/contracts';
-import { api } from '../../lib/api';
+import { ApiRequestError, api } from '../../lib/api';
 
 const TERMINAL: ReadonlySet<WriterRunStatus> = new Set(['review_ready', 'completed', 'rejected', 'failed']);
+
+/**
+ * Local bookmark of the run belonging to this project+content, so a browser
+ * refresh reloads the SAME run instead of silently starting a new one. It is
+ * only a hint: the API re-authorizes the run against project/content on every
+ * read, and a stale/unknown id simply falls back to the start form.
+ */
+function storageKey(projectId: string, contentId: string): string {
+  return `seo.writer.run.${projectId}.${contentId}`;
+}
 
 function runPath(projectId: string, contentId: string, runId: string): string {
   return `/projects/${projectId}/content/${contentId}/writer/${runId}`;
@@ -60,11 +75,43 @@ export function WriterPanel({ projectId, contentId, defaultTopic, defaultKeyword
   const [run, setRun] = useState<WriterRunDto | null>(null);
   const [startBusy, setStartBusy] = useState(false);
   const [actionBusy, setActionBusy] = useState(false);
+  const [restoring, setRestoring] = useState(true);
   const [rejectReason, setRejectReason] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [fatal, setFatal] = useState<string | null>(null);
   const runRef = useRef<WriterRunDto | null>(null);
   runRef.current = run;
+
+  // W7: after a refresh the panel remounts with no run in memory. If this
+  // project/content has a known run, reload that exact run (the API resumes an
+  // interrupted `writing` run as a side effect of the read) instead of letting
+  // the user believe the old run vanished and starting a duplicate. A run that
+  // no longer exists (404) falls back to the fresh start form.
+  useEffect(() => {
+    let cancelled = false;
+    const stored = window.localStorage.getItem(storageKey(projectId, contentId));
+    if (!stored) {
+      setRestoring(false);
+      return;
+    }
+    (async () => {
+      try {
+        const next = await api<WriterRunDto>(runPath(projectId, contentId, stored));
+        if (!cancelled) setRun(next);
+      } catch (e) {
+        if (!cancelled && e instanceof ApiRequestError && e.status === 404) {
+          window.localStorage.removeItem(storageKey(projectId, contentId));
+        } else if (!cancelled) {
+          setError(e instanceof Error ? e.message : String(e));
+        }
+      } finally {
+        if (!cancelled) setRestoring(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId, contentId]);
 
   const refresh = useCallback(async () => {
     const current = runRef.current;
@@ -74,8 +121,8 @@ export function WriterPanel({ projectId, contentId, defaultTopic, defaultKeyword
       setRun(next);
       if (TERMINAL.has(next.status)) setFatal(null);
     } catch (e) {
-      // The run is gone or unreachable (e.g. the API restarted and the
-      // in-memory run was lost). Stop polling and surface the reason.
+      // The run is no longer readable (should be rare now that runs are
+      // durable). Stop polling and surface the reason; the user can reset.
       setFatal(e instanceof Error ? e.message : String(e));
     }
   }, [projectId, contentId]);
@@ -101,6 +148,7 @@ export function WriterPanel({ projectId, contentId, defaultTopic, defaultKeyword
         body: { instruction: instruction.trim() || undefined },
       });
       setRun(created);
+      window.localStorage.setItem(storageKey(projectId, contentId), created.runId);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -133,7 +181,21 @@ export function WriterPanel({ projectId, contentId, defaultTopic, defaultKeyword
     setError(null);
     setFatal(null);
     setRejectReason('');
+    window.localStorage.removeItem(storageKey(projectId, contentId));
   };
+
+  if (!run && restoring) {
+    return (
+      <div className="writer-panel">
+        <div className="ai-panel-head">
+          <strong>Writer</strong>
+          <span className="muted" style={{ fontSize: 12 }}>
+            Restoring the writer run for this article…
+          </span>
+        </div>
+      </div>
+    );
+  }
 
   if (!run) {
     return (

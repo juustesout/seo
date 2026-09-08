@@ -1,11 +1,14 @@
 /**
- * WriterPanel behaviour tests (W6).
+ * WriterPanel behaviour tests (W6 + durable runs W7).
  *
  * These drive the panel through the real API contract shape (start -> proposal
  * -> explicit approve/reject -> writing -> review-ready) with the transport
  * module mocked, and assert the honesty rules: the plan is surfaced as a
  * proposal, nothing auto-approves, nothing auto-saves, rejection stops the run
- * and polling ends at a terminal state.
+ * and polling ends at a terminal state. W7 additionally asserts refresh
+ * recovery: the panel reloads the bookmarked run for the content instead of
+ * silently starting a new one, and a run that no longer exists falls back to
+ * the fresh start form.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, fireEvent, within } from '@testing-library/react';
@@ -13,11 +16,24 @@ import { asTipDoc, evaluateSeo, tiptapEmptyDoc } from '@seo/contracts';
 import type { WriterRunDto, WriterRunPlanDto, WriterRunReviewDto } from '@seo/contracts';
 import { WriterPanel } from './WriterPanel';
 
-const { apiMock } = vi.hoisted(() => ({ apiMock: { api: vi.fn() } }));
-vi.mock('../../lib/api', () => ({ api: apiMock.api }));
+const { apiMock, ApiRequestError } = vi.hoisted(() => {
+  class ApiRequestError extends Error {
+    constructor(
+      public code: string,
+      message: string,
+      public status: number,
+    ) {
+      super(message);
+      this.name = 'ApiRequestError';
+    }
+  }
+  return { apiMock: { api: vi.fn() }, ApiRequestError };
+});
+vi.mock('../../lib/api', () => ({ api: apiMock.api, ApiRequestError }));
 
 const PROJECT = 'p-1';
 const CONTENT = 'c-1';
+const BOOKMARK_KEY = `seo.writer.run.${PROJECT}.${CONTENT}`;
 
 const PLAN: WriterRunPlanDto = {
   title: 'On-Page SEO Fundamentals',
@@ -113,6 +129,7 @@ async function startRun() {
 
 describe('WriterPanel', () => {
   beforeEach(() => {
+    window.localStorage.clear();
     apiMock.api.mockReset();
   });
 
@@ -221,5 +238,82 @@ describe('WriterPanel', () => {
     const scope = within(panel as HTMLElement);
     expect(scope.queryByText(PLAN.title)).toBeTruthy();
     expect(scope.queryByText(/suggested keywords/i)).toBeTruthy();
+  });
+});
+
+describe('WriterPanel - W7 refresh recovery', () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+    apiMock.api.mockReset();
+  });
+
+  it('reloads the bookmarked run after a refresh instead of starting a new one', async () => {
+    window.localStorage.setItem(BOOKMARK_KEY, 'run-1');
+    const fake = fakeApi(run({ status: 'awaiting_approval' }));
+    render(<WriterPanel projectId={PROJECT} contentId={CONTENT} defaultTopic="On-Page SEO" />);
+
+    await screen.findByText(/run-1/i);
+    expect(screen.getByText(/AI-generated proposal/i)).toBeTruthy();
+
+    const methods = fake.calls.map((c) => c.method ?? 'GET');
+    expect(methods.filter((m) => m === 'POST')).toEqual([]);
+    const get = fake.calls.find((c) => (c.method ?? 'GET') === 'GET' && c.path.endsWith('/writer/run-1'));
+    expect(get).toBeTruthy();
+    // A proposal reloaded from storage is still not approved or written.
+    expect(screen.getByRole('button', { name: /approve.*write/i })).toBeTruthy();
+  });
+
+  it('resumes polling on a reloaded writing run and never starts a duplicate', async () => {
+    window.localStorage.setItem(BOOKMARK_KEY, 'run-1');
+    // First read reloads the interrupted `writing` run; the following poll read
+    // reports the terminal review-ready result.
+    let reads = 0;
+    const fake = fakeApi(
+      run({ status: 'writing' }),
+      () =>
+        (reads += 1) > 1 ? run({ status: 'completed', review: REVIEW }) : run({ status: 'writing' }),
+    );
+    render(<WriterPanel projectId={PROJECT} contentId={CONTENT} defaultTopic="On-Page SEO" pollMs={5} />);
+
+    const writing = await screen.findByText(/writer is writing/i);
+    expect(writing).toBeTruthy();
+
+    const reviewReady = await screen.findByText(/review-ready draft/i, {}, { timeout: 2000 });
+    expect(reviewReady).toBeTruthy();
+
+    expect(fake.calls.every((c) => (c.method ?? 'GET') === 'GET')).toBe(true);
+  });
+
+  it('starts a run persist its bookmark for a later refresh', async () => {
+    fakeApi(run({ status: 'starting', plan: null }));
+    render(<WriterPanel projectId={PROJECT} contentId={CONTENT} defaultTopic="On-Page SEO" />);
+
+    fireEvent.click(screen.getByRole('button', { name: /start writer run/i }));
+    await screen.findByText(/AI-generated proposal/i);
+    expect(window.localStorage.getItem(BOOKMARK_KEY)).toBe('run-1');
+  });
+
+  it('forgets a run whose bookmark no longer exists (404) and shows the fresh form', async () => {
+    window.localStorage.setItem(BOOKMARK_KEY, 'stale-run');
+    apiMock.api.mockReset();
+    apiMock.api.mockRejectedValue(
+      new ApiRequestError('writer_run_not_found', 'No writer run exists for this project/content.', 404),
+    );
+    render(<WriterPanel projectId={PROJECT} contentId={CONTENT} defaultTopic="On-Page SEO" />);
+
+    await screen.findByRole('button', { name: /start writer run/i });
+    expect(window.localStorage.getItem(BOOKMARK_KEY)).toBeNull();
+    expect(screen.queryByText(/run-1/i)).toBeNull();
+  });
+
+  it('clears the bookmark when the user opts to start over', async () => {
+    window.localStorage.setItem(BOOKMARK_KEY, 'run-1');
+    fakeApi(run({ status: 'rejected', note: 'Not the direction.' }));
+    render(<WriterPanel projectId={PROJECT} contentId={CONTENT} defaultTopic="On-Page SEO" />);
+
+    await screen.findByText(/not the direction/i);
+    fireEvent.click(screen.getByRole('button', { name: /start a new run/i }));
+    expect(window.localStorage.getItem(BOOKMARK_KEY)).toBeNull();
+    expect(screen.getByRole('button', { name: /start writer run/i })).toBeTruthy();
   });
 });

@@ -44,13 +44,16 @@
  * END). Approval is the hard gate: nothing below ever runs without it.
  *
  * beginWriting + writeSections are the W4 controlled writing phase, reached
- * only from an approved run. beginWriting records the writing status; then a
- * single writeSections node iterates the approved outline in plan order and
- * calls the injected section writer allowlist (WriterSectionDependencies)
- * once per approved section (each call may internally retry once on invalid
- * output, mirroring planning). The outline itself is code-owned and
- * immutable: the AI receives the fixed heading/key points/keywords and returns
- * ONLY body content, which the node re-validates and stores under the section's
+ * only from an approved run. beginWriting records the writing status; then
+ * writeSections iterates the approved outline one section per superstep in
+ * plan order (a self-loop) and calls the injected section writer allowlist
+ * (WriterSectionDependencies) once per approved section (each call may
+ * internally retry once on invalid output, mirroring planning). With a durable
+ * checkpointer every completed section is persisted before the next one
+ * starts, so a crash mid-writing resumes from the last persisted section
+ * instead of rewriting it. The outline itself is code-owned and immutable: the
+ * AI receives the fixed heading/key points/keywords and returns ONLY body
+ * content, which the node re-validates and stores under the section's
  * deterministic plan index - no added/reordered sections, no model-chosen
  * structure, no AI routing. Any honest section failure (not_configured /
  * ai_error / invalid_output) ends the run failed, preserving whatever was
@@ -71,14 +74,17 @@
  * failed. reviewContent never trusts writtenSections order and never invents
  * content.
  *
- * The compiled graph owns a MemorySaver checkpointer (the run id doubles as
- * the thread id, see runtime.ts), so runs pause and resume on the exact same
- * checkpoint. MemorySaver is in-memory: a process restart loses every paused
- * run, and resume then fails honestly with writer_run_not_found. W8 replaces
- * it with durable storage behind the same runId/resume surface.
+ * The compiled graph always carries a checkpointer (the run id doubles as the
+ * thread id, see runtime.ts), so runs pause and resume on the exact same
+ * checkpoint. createWriterGraph defaults to an in-memory MemorySaver for tests
+ * and process-local use, and accepts an injected durable checkpointer (e.g. the
+ * official PostgresSaver) so production runs survive process restarts. With a
+ * durable checkpointer each writing superstep below is persisted after every
+ * section, which is what lets a crashed run resume mid-writing without
+ * rewriting already-written sections.
  */
 
-import { END, MemorySaver, START, StateGraph, interrupt } from '@langchain/langgraph';
+import { END, MemorySaver, START, StateGraph, interrupt, type BaseCheckpointSaver } from '@langchain/langgraph';
 import { ApiError } from '../../apiErrors.js';
 import { logger } from '../../logger.js';
 import {
@@ -271,14 +277,20 @@ function beginWritingNode(): WriterStateUpdate {
 }
 
 /**
- * The W4 controlled writing loop (runs only after explicit approval). It
- * iterates the approved outline strictly in plan order and calls the injected
- * section writer once per approved section; each section is stored under its
- * deterministic plan index, so no section can be added, reordered or written
- * twice. The approved outline is never passed back to the model as
- * mutable structure and no AI output ever routes the graph. An honest failure
- * (unwired writer, provider error, invalid output, an unexpected throw)
- * stops the run failed and keeps whatever was already written for debugging.
+ * The W4 controlled writing phase (runs only after explicit approval). The
+ * phase is split into one superstep per approved section so that with a
+ * durable checkpointer every written section is persisted before the next AI
+ * call starts: each invocation writes exactly the next not-yet-written section
+ * (derived from the persisted writtenSections channel) and then routes back to
+ * itself until the approved outline is complete. That self-loop is what makes
+ * crash recovery idempotent - a restarted thread resumes from its last
+ * checkpoint and picks up at the next section instead of rewriting the ones
+ * already persisted. Each section is stored under its deterministic plan
+ * index, so no section can be added, reordered or written twice; the approved
+ * outline is never passed back to the model as mutable structure and no AI
+ * output ever routes the graph. An honest failure (unwired writer, provider
+ * error, invalid output, an unexpected throw) stops the run failed and keeps
+ * whatever was already written for debugging.
  */
 async function writeSectionsNode(
   deps: WriterSectionDependencies,
@@ -288,46 +300,64 @@ async function writeSectionsNode(
   if (!plan) {
     return { status: 'failed', writeNote: 'No approved plan to write.' };
   }
-  const written: WriterWrittenSection[] = [];
-  try {
-    for (let index = 0; index < plan.sections.length; index += 1) {
-      const sectionId = writerSectionIdFor(index);
-      const section = plan.sections[index];
-      const input: WriterSectionInput = {
-        projectId: state.projectId,
-        topic: state.topic,
-        targetKeyword: state.targetKeyword ?? null,
-        articleTitle: plan.title,
-        sectionIndex: index,
-        section,
-        context: state.context,
-        previousSectionContent: previousSectionContext(written),
+  const written = state.writtenSections;
+  const index = written.length;
+  // Idempotency guard: the persisted progress marker must always be an exact,
+  // ordered prefix of the approved outline. Anything else means the checkpoint
+  // cannot be trusted and the run fails closed instead of re-writing.
+  for (let i = 0; i < index; i += 1) {
+    if (written[i].sectionId !== writerSectionIdFor(i)) {
+      return {
+        status: 'failed',
+        writtenSections: written,
+        writeNote: 'Persisted written sections are out of order; aborting to prevent duplicates.',
       };
-      const outcome = await deps.writeSection(input);
-      if (!outcome.ok) {
-        return { status: 'failed', writtenSections: written, writeNote: outcome.note };
-      }
-      if (!isValidSectionContent(outcome.content)) {
-        return {
-          status: 'failed',
-          writtenSections: written,
-          writeNote: `Section ${sectionId} produced invalid content and was not stored.`,
-        };
-      }
-      if (written.some((entry) => entry.sectionId === sectionId)) {
-        return {
-          status: 'failed',
-          writtenSections: written,
-          writeNote: `Section ${sectionId} was already written; aborting to prevent duplicates.`,
-        };
-      }
-      written.push({ sectionId, content: outcome.content });
     }
+  }
+  if (index >= plan.sections.length) {
+    return { status: 'review_ready', writtenSections: written, writeNote: null };
+  }
+
+  const sectionId = writerSectionIdFor(index);
+  const section = plan.sections[index];
+  const input: WriterSectionInput = {
+    projectId: state.projectId,
+    topic: state.topic,
+    targetKeyword: state.targetKeyword ?? null,
+    articleTitle: plan.title,
+    sectionIndex: index,
+    section,
+    context: state.context,
+    previousSectionContent: previousSectionContext(written),
+  };
+  let outcome: Awaited<ReturnType<WriterSectionDependencies['writeSection']>>;
+  try {
+    outcome = await deps.writeSection(input);
   } catch (err) {
     logger.error({ err, projectId: state.projectId }, 'writer section writer threw unexpectedly');
     return { status: 'failed', writtenSections: written, writeNote: contextNoteFromError(err) };
   }
-  return { status: 'review_ready', writtenSections: written, writeNote: null };
+  if (!outcome.ok) {
+    return { status: 'failed', writtenSections: written, writeNote: outcome.note };
+  }
+  if (!isValidSectionContent(outcome.content)) {
+    return {
+      status: 'failed',
+      writtenSections: written,
+      writeNote: `Section ${sectionId} produced invalid content and was not stored.`,
+    };
+  }
+  if (written.some((entry) => entry.sectionId === sectionId)) {
+    return {
+      status: 'failed',
+      writtenSections: written,
+      writeNote: `Section ${sectionId} was already written; aborting to prevent duplicates.`,
+    };
+  }
+  const next = [...written, { sectionId, content: outcome.content }];
+  return next.length >= plan.sections.length
+    ? { status: 'review_ready', writtenSections: next, writeNote: null }
+    : { status: 'writing', writtenSections: next, writeNote: null };
 }
 
 /**
@@ -371,16 +401,19 @@ function reviewContentNode(
  *  defaults to the canonical @seo/contracts evaluator and renderer, so a
  *  successful write always flows through the deterministic W5 review.
  *
- * The compiled graph owns a MemorySaver checkpointer, which the interrupt
- * pause requires. It is in-memory and process-local: a restart loses every
- * paused run (resume then fails honestly with writer_run_not_found); W8
- * swaps the saver for durable storage here without changing the workflow.
- * Every invoke must carry { configurable: { thread_id: <runId> } }. */
+ * The compiled graph always carries a checkpointer, which the interrupt pause
+ * requires. options.checkpointer injects a durable one (production); the
+ * default is an in-memory MemorySaver for tests and process-local use. With a
+ * durable checkpointer the per-section writing supersteps are persisted after
+ * every section, so a crashed run can resume mid-writing without re-writing
+ * persisted sections. Every invoke must carry
+ * { configurable: { thread_id: <runId> } }. */
 export function createWriterGraph(options: {
   context?: WriterContextDependencies;
   planner?: WriterPlannerDependencies;
   sectionWriter?: WriterSectionDependencies;
   review?: WriterReviewDependencies;
+  checkpointer?: BaseCheckpointSaver;
 } = {}) {
   const contextDeps = options.context ?? NO_ADAPTER_DEPENDENCIES;
   const plannerDeps = options.planner ?? NO_PLANNER_DEPENDENCIES;
@@ -403,10 +436,10 @@ export function createWriterGraph(options: {
     )
     .addEdge(WRITER_BEGIN_WRITING_NODE, WRITER_WRITE_SECTIONS_NODE)
     .addConditionalEdges(WRITER_WRITE_SECTIONS_NODE, (state: WriterState) =>
-      state.status === 'review_ready' ? WRITER_REVIEW_NODE : END,
+      state.status === 'review_ready' ? WRITER_REVIEW_NODE : state.status === 'writing' ? WRITER_WRITE_SECTIONS_NODE : END,
     )
     .addEdge(WRITER_REVIEW_NODE, END)
-    .compile({ checkpointer: new MemorySaver() });
+    .compile({ checkpointer: options.checkpointer ?? new MemorySaver() });
 }
 
 /** The compiled writer graph: owns the run's MemorySaver checkpointer. */

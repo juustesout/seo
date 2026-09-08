@@ -13,11 +13,10 @@
  *     owns its MemorySaver checkpoint). The registry is module/service-level
  *     runtime infrastructure, not user-controlled state, and it is injectable
  *     so tests can isolate runs and exercise missing-run behaviour. It is
- *     intentionally process-local: like the MemorySaver itself, a process
- *     restart loses every run, and resume of a lost run then fails honestly
- *     with writer_run_not_found instead of silently restarting from START.
- *     W8 replaces this in-memory registry/checkpointing with durable storage
- *     behind the same runId -> resume public API;
+ *     intentionally process-local: it is the unit-test surface for the
+ *     graph (W3-W5 tests drive runs through this registry). Durable W7 runs
+ *     (durable.ts + WriterRunService) keep the checkpoint in Postgres through
+ *     the checkpoint host and never register here;
  *   - resumeWriterRun: validates the runId + decision, denies anything that
  *     is not a registered run resting on awaiting_approval, then resumes the
  *     exact same thread with the validated decision. Approval only ever
@@ -141,7 +140,8 @@ export function writerRunResultFromState(runId: WriterRunId, state: WriterState)
 
 /** In-memory registry keyed by writer run id. Each entry owns the compiled
  *  graph for that run, which in turn owns the run's MemorySaver checkpoint.
- *  Process-local on purpose (W8 moves to durable storage). */
+ *  Process-local on purpose: the unit-test surface for the graph. Durable W7
+ *  runs live in Postgres via the checkpoint host and never use this registry. */
 export interface WriterRunRegistry {
   /** Registers the compiled graph that owns a run's checkpoint. */
   register(runId: WriterRunId, graph: CompiledWriterGraph): void;

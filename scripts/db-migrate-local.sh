@@ -628,4 +628,81 @@ if [ -z "${H1_LEAK_COUNT}" ] || [ "${H1_LEAK_COUNT}" != "0" ]; then
 fi
 echo "   smoke: non-member cannot read a foreign project schedule (RLS isolation OK)"
 
+echo "==> smoke test: durable writer runs (W7)"
+PSQL -d "${DB_NAME}" <<'SQL'
+set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-000000000001"}';
+do $$
+declare
+  v_project uuid;
+  v_content uuid;
+  v_run_id text;
+begin
+  select id into v_project from public.seo_projects where slug = 'demo' limit 1;
+  if v_project is null then raise exception 'smoke: w7 project missing'; end if;
+  select id into v_content from public.seo_content where slug = 'demo-article' and project_id = v_project limit 1;
+  if v_content is null then raise exception 'smoke: w7 content missing'; end if;
+
+  v_run_id := 'wr_' || gen_random_uuid()::text;
+
+  insert into public.seo_writer_runs (run_id, project_id, content_id, user_id, status, state_json)
+  values (v_run_id, v_project, v_content, '00000000-0000-0000-0000-000000000001', 'awaiting_approval',
+          ( '{"runId":"' || v_run_id || '","status":"awaiting_approval"}' )::jsonb);
+
+  if not exists (
+    select 1 from public.seo_writer_runs
+    where run_id = v_run_id and project_id = v_project and content_id = v_content
+      and status = 'awaiting_approval'
+  ) then raise exception 'smoke: w7 writer run row was not created'; end if;
+
+  -- The run must inherit the project's (nullable) account automatically.
+  if exists (
+    select 1 from public.seo_writer_runs r
+    join public.seo_projects p on p.id = r.project_id
+    where r.run_id = v_run_id
+      and p.account_id is distinct from r.account_id
+  ) then raise exception 'smoke: w7 writer run account_id does not mirror the project'; end if;
+
+  begin
+    insert into public.seo_writer_runs (run_id, project_id, content_id, user_id, status)
+    values (v_run_id, v_project, v_content, '00000000-0000-0000-0000-000000000001', 'awaiting_approval');
+    raise exception 'smoke: duplicate writer run_id unexpectedly allowed';
+  exception when unique_violation then
+    null;
+  end;
+
+  begin
+    insert into public.seo_writer_runs (run_id, project_id, content_id, user_id, status)
+    values ('wr_' || gen_random_uuid()::text, v_project, v_content,
+            '00000000-0000-0000-0000-000000000001', 'bogus');
+    raise exception 'smoke: invalid writer run status unexpectedly allowed';
+  exception when check_violation then
+    null;
+  end;
+
+  update public.seo_writer_runs
+  set status = 'completed', completed_at = now()
+  where run_id = v_run_id;
+  if not exists (
+    select 1 from public.seo_writer_runs where run_id = v_run_id and status = 'completed' and completed_at is not null
+  ) then raise exception 'smoke: w7 terminal writer run transition failed'; end if;
+
+  raise notice 'smoke: durable writer runs OK';
+end $$;
+SQL
+
+W7_LEAK_COUNT="$(PSQL -d "${DB_NAME}" -t -A <<'SQL'
+grant select on public.seo_writer_runs to authenticated;
+set role authenticated;
+set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-000000000002"}';
+select count(*) from public.seo_writer_runs r
+join public.seo_content c on c.id = r.content_id
+where c.slug = 'demo-article';
+SQL
+)"
+if [ -z "${W7_LEAK_COUNT}" ] || [ "${W7_LEAK_COUNT}" != "0" ]; then
+  echo "!! RLS leak: non-member read ${W7_LEAK_COUNT} rows from a foreign project writer run" >&2
+  exit 1
+fi
+echo "   smoke: non-member cannot read a foreign project writer run (RLS isolation OK)"
+
 echo "==> migration validation OK (${DB_NAME})"
