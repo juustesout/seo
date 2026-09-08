@@ -12,6 +12,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@langchain/langgraph": "^1.4.14",
     "@modelcontextprotocol/sdk": "^1.30.0",
     "@seo/contracts": "workspace:*",
     "@supabase/supabase-js": "^2.45.4",
