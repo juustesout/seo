@@ -41,11 +41,13 @@ const PLAN: WriterRunPlanDto = {
   introductionPurpose: 'Frame what on-page SEO controls and what it does not.',
   sections: [
     {
+      sectionId: 'section_0',
       heading: 'What on-page SEO controls',
       keyPoints: ['The page itself: copy, structure, metadata.'],
       suggestedKeywords: ['on page seo'],
     },
     {
+      sectionId: 'section_1',
       heading: 'Ranking factors beyond the page',
       keyPoints: ['Authority and links are not on-page.'],
       suggestedKeywords: [],
@@ -84,6 +86,8 @@ function run(over: Partial<WriterRunDto>): WriterRunDto {
     plan: PLAN,
     note: null,
     review: null,
+    revisionCount: 0,
+    lastRevisionAt: null,
     createdAt: '2026-01-01T00:00:00.000Z',
     ...over,
   };
@@ -112,6 +116,10 @@ function fakeApi(initial: WriterRunDto, onGet?: () => WriterRunDto | undefined):
         body?.decision === 'approve'
           ? run({ status: 'writing' })
           : run({ status: 'rejected', note: body?.reason ?? 'rejected without a reason' });
+      return current;
+    }
+    if (method === 'POST' && path.endsWith('/revise')) {
+      current = run({ status: 'revising' });
       return current;
     }
     const next = onGet ? onGet() : undefined;
@@ -174,14 +182,14 @@ describe('WriterPanel', () => {
     expect(screen.queryByText(/review-ready/i)).toBeNull();
   });
 
-  it('approves, reports writing honestly and ends at the review-ready result', async () => {
-    fakeApi(run({ status: 'starting', plan: null }), () => run({ status: 'completed', review: REVIEW }));
+  it('approves, reports writing honestly and rests on the review-ready review session', async () => {
+    fakeApi(run({ status: 'starting', plan: null }), () => run({ status: 'review_ready', review: REVIEW }));
     render(<WriterPanel projectId={PROJECT} contentId={CONTENT} defaultTopic="On-Page SEO" pollMs={5} />);
     await startRun();
 
     fireEvent.click(screen.getByRole('button', { name: /approve.*write/i }));
 
-    // Approve returned "writing": the panel says so and polls to the terminal
+    // Approve returned "writing": the panel says so and polls to the resting
     // state instead of claiming a result that does not exist yet.
     const writing = await screen.findByText(/writer is writing/i);
     expect(writing).toBeTruthy();
@@ -194,10 +202,14 @@ describe('WriterPanel', () => {
     expect(screen.getByText(/NOT saved to this document/i)).toBeTruthy();
     expect(screen.getByText(new RegExp(`SEO ${Math.round(REVIEW.seo.score)}/100`))).toBeTruthy();
 
-    // Terminal: the proposal actions and the run's own start/approve affordances are gone.
+    // `review_ready` is the W8 resting hub, not a terminal: the human decides
+    // next through the review-session controls. The proposal/approve actions
+    // are gone; the revise affordance is present.
+    expect(screen.getByText('review_ready')).toBeTruthy();
     expect(screen.queryByRole('button', { name: /approve.*write/i })).toBeNull();
     expect(screen.queryByRole('button', { name: /^reject/i })).toBeNull();
-    expect(screen.getByText('completed')).toBeTruthy();
+    expect(screen.getByText(/review session/i)).toBeTruthy();
+    expect(screen.getByRole('button', { name: /revise selected sections/i })).toBeTruthy();
   });
 
   it('rejects with a reason and offers a fresh run without writing anything', async () => {
@@ -266,12 +278,12 @@ describe('WriterPanel - W7 refresh recovery', () => {
   it('resumes polling on a reloaded writing run and never starts a duplicate', async () => {
     window.localStorage.setItem(BOOKMARK_KEY, 'run-1');
     // First read reloads the interrupted `writing` run; the following poll read
-    // reports the terminal review-ready result.
+    // reports the resting review-ready result.
     let reads = 0;
     const fake = fakeApi(
       run({ status: 'writing' }),
       () =>
-        (reads += 1) > 1 ? run({ status: 'completed', review: REVIEW }) : run({ status: 'writing' }),
+        (reads += 1) > 1 ? run({ status: 'review_ready', review: REVIEW }) : run({ status: 'writing' }),
     );
     render(<WriterPanel projectId={PROJECT} contentId={CONTENT} defaultTopic="On-Page SEO" pollMs={5} />);
 
@@ -315,5 +327,60 @@ describe('WriterPanel - W7 refresh recovery', () => {
     fireEvent.click(screen.getByRole('button', { name: /start a new run/i }));
     expect(window.localStorage.getItem(BOOKMARK_KEY)).toBeNull();
     expect(screen.getByRole('button', { name: /start writer run/i })).toBeTruthy();
+  });
+});
+
+describe('WriterPanel - W8 review session', () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+    apiMock.api.mockReset();
+  });
+
+  it('revises only the selected sections: posts the exact ids and polls to a fresh review-ready draft', async () => {
+    window.localStorage.setItem(BOOKMARK_KEY, 'run-1');
+    const revisedHtml =
+      '<h2>On-Page SEO Fundamentals</h2><p>This is the revised review-ready body.</p>';
+    const revisedReview: WriterRunReviewDto = { ...REVIEW, contentHtml: revisedHtml };
+    let reviseClicked = false;
+    const fake = fakeApi(run({ status: 'review_ready', review: REVIEW }), () =>
+      reviseClicked ? run({ status: 'review_ready', review: revisedReview, revisionCount: 1 }) : undefined,
+    );
+    // Keep a handle on the raw mock so the revise branch can set the flag.
+    const original = apiMock.api.getMockImplementation();
+    apiMock.api.mockImplementation(async (path: string, opts: { method?: string; body?: unknown } = {}) => {
+      if ((opts.method ?? 'GET') === 'POST' && path.endsWith('/revise')) reviseClicked = true;
+      return original!(path, opts);
+    });
+    render(<WriterPanel projectId={PROJECT} contentId={CONTENT} defaultTopic="On-Page SEO" pollMs={5} />);
+
+    // Restored review_ready run: only the review-session controls are shown.
+    await screen.findByText(/review-ready draft/i);
+    expect(screen.getByText('review_ready')).toBeTruthy();
+
+    const checkboxes = screen.getAllByRole('checkbox');
+    expect(checkboxes).toHaveLength(2);
+    fireEvent.click(checkboxes[0]!);
+
+    fireEvent.change(screen.getByPlaceholderText(/what should change/i), {
+      target: { value: 'Make the intro sharper' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /revise selected sections/i }));
+
+    // Revise returned "revising": the panel reports it honestly and polls.
+    const revising = await screen.findByText(/revising the selected sections/i);
+    expect(revising).toBeTruthy();
+
+    const fresh = await screen.findByText(/This is the revised review-ready body/i, {}, { timeout: 2000 });
+    expect(fresh).toBeTruthy();
+    expect(screen.getByText(/revision 1/i)).toBeTruthy();
+
+    // The exact stable section id was sent; the panel never fabricated a body.
+    const reviseCall = fake.calls.find((c) => c.method === 'POST' && c.path.endsWith('/revise'));
+    expect(reviseCall).toBeTruthy();
+    expect(reviseCall!.body).toEqual({
+      action: 'revise',
+      sectionIds: ['section_0'],
+      instruction: 'Make the intro sharper',
+    });
   });
 });

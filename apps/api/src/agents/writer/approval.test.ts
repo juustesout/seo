@@ -1,5 +1,5 @@
 /**
- * Writer Agent W3/W4 approval-resume tests.
+ * Writer Agent W3/W4/W5/W8 approval + session-resume tests.
  *
  * A proposed plan pauses the graph at the awaitApproval interrupt
  * (awaiting_approval / approval "pending"); only an explicit, strictly
@@ -7,14 +7,15 @@
  * the exact same thread/checkpoint - moves the run on. Since W4, an approve
  * continues the same run into the writing phase (approval is the hard gate
  * before any writing) and, since W5, through the deterministic review into a
- * terminal `completed` state: with a wired section writer the run lands on
- * completed carrying one written section per approved plan section plus the
- * canonical WriterReview artifact. These tests pin the vocabulary validation,
- * the deny-by-default resume rules (bad decision, unknown run, wrong lifecycle
- * state, cross-run isolation), the no-replanning guarantee (resume never calls
- * the planner or the context adapters again) and the restart honesty of the
- * in-memory run registry (a registry without the run fails with
- * writer_run_not_found instead of silently re-running from START).
+ * resting `review_ready` state at the W8 review-session interrupt: with a wired
+ * section writer the run carries one written section per approved plan section
+ * plus the canonical WriterReview artifact, and only an explicit session accept
+ * (resumeWriterSession) reaches the terminal `completed`. These tests pin the
+ * vocabulary validation, the deny-by-default resume rules (bad decision, unknown
+ * run, wrong lifecycle state, cross-run isolation), the no-replanning guarantee
+ * (resume never calls the planner or the context adapters again) and the
+ * restart honesty of the in-memory run registry (a registry without the run
+ * fails with writer_run_not_found instead of silently re-running from START).
  */
 
 import { describe, expect, it } from 'vitest';
@@ -31,6 +32,7 @@ import {
   createWriterGraph,
   isWriterRunId,
   resumeWriterRun,
+  resumeWriterSession,
   runWriterOnce,
   type WriterRunId,
   type WriterPlan,
@@ -183,7 +185,7 @@ describe('writer resume happy paths', () => {
     const resumed = await resumeWriterRun({ runId: run.runId, decision: { decision: 'approve' } }, registry);
 
     expect(resumed.runId).toBe(run.runId);
-    expect(resumed.status).toBe('completed');
+    expect(resumed.status).toBe('review_ready');
     expect(resumed.reviewStatus).toBe('completed');
     expect(resumed.approval).toBe('approved');
     expect(resumed.approvalReason).toBeNull();
@@ -196,6 +198,12 @@ describe('writer resume happy paths', () => {
     expect(resumed.context.knowledge.chunks[0].sourceId).toBe('k1');
     expect(resumed.projectId).toBe(projectId);
     expect(resumed.topic).toBe(topic);
+
+    // W8: the review session is the only way to finish; an explicit accept
+    // moves the resting review_ready run to the terminal completed state.
+    const completed = await resumeWriterSession({ runId: resumed.runId, decision: { action: 'accept' } }, registry);
+    expect(completed.status).toBe('completed');
+    expect(completed.reviewStatus).toBe('completed');
   });
 
   it('rejects a paused run and stores the bounded optional reason', async () => {
@@ -225,7 +233,7 @@ describe('writer resume happy paths', () => {
     expect(run.runId).toBe(runId);
     const resumed = await resumeWriterRun({ runId, decision: { decision: 'approve' } }, registry);
     expect(resumed.runId).toBe(runId);
-    expect(resumed.status).toBe('completed');
+    expect(resumed.status).toBe('review_ready');
   });
 
   it('the graph pauses with a bounded, human-readable interrupt request', async () => {
@@ -372,10 +380,13 @@ describe('writer resume isolation and honesty', () => {
     );
 
     const resumedA = await resumeWriterRun({ runId: runA.runId, decision: { decision: 'approve' } }, registry);
-    expect(resumedA.status).toBe('completed');
+    expect(resumedA.status).toBe('review_ready');
     expect(resumedA.reviewStatus).toBe('completed');
     expect(resumedA.approval).toBe('approved');
     expect(resumedA.plan?.title).toBe('Plan A');
+
+    const completedA = await resumeWriterSession({ runId: runA.runId, decision: { action: 'accept' } }, registry);
+    expect(completedA.status).toBe('completed');
 
     const resumedB = await resumeWriterRun(
       { runId: runB.runId, decision: { decision: 'reject', reason: 'not for B' } },
@@ -400,7 +411,7 @@ describe('writer resume isolation and honesty', () => {
     expect(planner.inputs).toHaveLength(1);
 
     const resumed = await resumeWriterRun({ runId: run.runId, decision: { decision: 'approve' } }, registry);
-    expect(resumed.status).toBe('completed');
+    expect(resumed.status).toBe('review_ready');
     expect(planner.inputs).toHaveLength(1);
     expect(context.tally.count).toBe(1);
     expect(writer.calls).toHaveLength(1);
@@ -432,6 +443,6 @@ describe('writer default registry plumbing', () => {
     expect(isWriterRunId(run.runId)).toBe(true);
 
     const resumed = await resumeWriterRun({ runId: run.runId, decision: { decision: 'approve' } });
-    expect(resumed.status).toBe('completed');
+    expect(resumed.status).toBe('review_ready');
   });
 });

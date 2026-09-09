@@ -1,6 +1,7 @@
 /**
- * Writer Agent W4/W5 tests: controlled section writing after approval and the
- * deterministic review that completes the run.
+ * Writer Agent W4/W5/W8 tests: controlled section writing after approval, the
+ * deterministic review that rests the run on the review session, and the W8
+ * controlled revision loop.
  *
  * Approval is the hard gate: a run paused on awaiting_approval never calls
  * the section writer until an explicit approve resume, a reject ends the run
@@ -11,8 +12,10 @@
  * failed while preserving what was already written; hostile reference or
  * previous-writing text is data only and cannot add calls, change the plan or
  * steer the workflow. A fully written run then flows through the W5
- * deterministic review and rests on `completed` with the canonical review
- * artifact (asserted in the happy path).
+ * deterministic review and rests on `review_ready` at the W8 review-session
+ * interrupt with the canonical review artifact (asserted in the happy path) -
+ * never terminal, and never `completed`: only an explicit session accept
+ * completes the run.
  */
 
 import { describe, expect, it } from 'vitest';
@@ -21,6 +24,7 @@ import {
   WRITER_SECTION_MAX_PREVIOUS_CHARS,
   createWriterRunRegistry,
   resumeWriterRun,
+  resumeWriterSession,
   runWriterOnce,
   writerSectionIdFor,
   type WriterPlan,
@@ -127,11 +131,12 @@ describe('writer section writing happy path', () => {
 
     const resumed = await resumeWriterRun({ runId: run.runId, decision: { decision: 'approve' } }, registry);
 
-    expect(resumed.status).toBe('completed');
+    expect(resumed.status).toBe('review_ready');
     expect(resumed.reviewStatus).toBe('completed');
     expect(resumed.approval).toBe('approved');
     expect(resumed.writeNote).toBeNull();
     expect(resumed.reviewNote).toBeNull();
+    expect(resumed.revisionCount).toBe(0);
     expect(resumed.review).not.toBeNull();
     expect(resumed.review?.contentJson.type).toBe('doc');
     expect(resumed.review?.contentHtml).toContain('<h1>');
@@ -149,6 +154,12 @@ describe('writer section writing happy path', () => {
     expect(writer.calls.map((c) => c.sectionIndex)).toEqual([0, 1, 2]);
     expect(writer.calls.every((c) => c.articleTitle === plan.title)).toBe(true);
     expect(resumed.plan?.title).toBe(plan.title);
+
+    // `review_ready` is the W8 resting hub: the run never completes on its own
+    // and only an explicit session accept reaches the terminal `completed`.
+    const completed = await resumeWriterSession({ runId: resumed.runId, decision: { action: 'accept' } }, registry);
+    expect(completed.status).toBe('completed');
+    expect(completed.writtenSections).toHaveLength(3);
   });
 
   it('feeds each section its fixed spec and bounds the previous-writing tail', async () => {
@@ -183,7 +194,7 @@ describe('writer section writing happy path', () => {
     );
     const resumed = await resumeWriterRun({ runId: run.runId, decision: { decision: 'approve' } }, registry);
 
-    expect(resumed.status).toBe('completed');
+    expect(resumed.status).toBe('review_ready');
     expect(writer.calls[1].previousSectionContent?.length).toBe(WRITER_SECTION_MAX_PREVIOUS_CHARS);
     expect(writer.calls[1].previousSectionContent).toBe(longBody.slice(0, WRITER_SECTION_MAX_PREVIOUS_CHARS));
   });
@@ -249,7 +260,7 @@ describe('writer approval gate (no writing without approval)', () => {
     );
 
     const resumed = await resumeWriterRun({ runId: run.runId, decision: { decision: 'approve' } }, registry);
-    expect(resumed.status).toBe('completed');
+    expect(resumed.status).toBe('review_ready');
     expect(writer.calls).toHaveLength(3);
 
     await expectApiError(
@@ -274,7 +285,7 @@ describe('writer structure integrity', () => {
     const resumed = await resumeWriterRun({ runId: run.runId, decision: { decision: 'approve' } }, registry);
 
     expect(resumed.plan).toEqual(plan);
-    expect(resumed.status).toBe('completed');
+    expect(resumed.status).toBe('review_ready');
     expect(resumed.writtenSections).toHaveLength(2);
     for (const entry of resumed.writtenSections) {
       expect(entry.sectionId).toMatch(/^section_\d+$/);
@@ -356,7 +367,7 @@ describe('writer hostile context boundaries', () => {
     );
     const resumed = await resumeWriterRun({ runId: run.runId, decision: { decision: 'approve' } }, registry);
 
-    expect(resumed.status).toBe('completed');
+    expect(resumed.status).toBe('review_ready');
     expect(resumed.writtenSections.map((s) => s.content)).toEqual([
       'Body for Heading 1.',
       'Body for Heading 2.',
@@ -381,7 +392,7 @@ describe('writer hostile context boundaries', () => {
     );
     const resumed = await resumeWriterRun({ runId: run.runId, decision: { decision: 'approve' } }, registry);
 
-    expect(resumed.status).toBe('completed');
+    expect(resumed.status).toBe('review_ready');
     expect(writer.calls.map((c) => c.sectionIndex)).toEqual([0, 1]);
     expect(resumed.writtenSections).toHaveLength(2);
     expect(resumed.plan?.sections.map((s) => s.heading)).toEqual(['Heading 1', 'Heading 2']);

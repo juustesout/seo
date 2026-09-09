@@ -686,6 +686,32 @@ begin
     select 1 from public.seo_writer_runs where run_id = v_run_id and status = 'completed' and completed_at is not null
   ) then raise exception 'smoke: w7 terminal writer run transition failed'; end if;
 
+  -- W8: the lifecycle vocabulary is widened with the revision loop statuses
+  -- (revising = async section rewrites, reviewing = synchronous re-review) and
+  -- the revision counters are observable columns derived from state_json.
+  update public.seo_writer_runs
+  set status = 'revising'
+  where run_id = v_run_id;
+  if not exists (
+    select 1 from public.seo_writer_runs where run_id = v_run_id and status = 'revising'
+  ) then raise exception 'smoke: w8 revising status was not accepted'; end if;
+
+  update public.seo_writer_runs
+  set status = 'reviewing'
+  where run_id = v_run_id;
+  if not exists (
+    select 1 from public.seo_writer_runs where run_id = v_run_id and status = 'reviewing'
+  ) then raise exception 'smoke: w8 reviewing status was not accepted'; end if;
+
+  update public.seo_writer_runs
+  set status = 'review_ready', revision_count = 1, last_revision_at = now()
+  where run_id = v_run_id;
+  if not exists (
+    select 1 from public.seo_writer_runs
+    where run_id = v_run_id and status = 'review_ready' and revision_count = 1
+      and last_revision_at is not null
+  ) then raise exception 'smoke: w8 review_ready rest + revision counters failed'; end if;
+
   raise notice 'smoke: durable writer runs OK';
 end $$;
 SQL

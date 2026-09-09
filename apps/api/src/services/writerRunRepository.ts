@@ -35,6 +35,8 @@ export const WRITER_RUN_DB_STATUSES = [
   'planning',
   'awaiting_approval',
   'writing',
+  'reviewing',
+  'revising',
   'review_ready',
   'completed',
   'rejected',
@@ -43,13 +45,15 @@ export const WRITER_RUN_DB_STATUSES = [
 export type WriterRunDbStatus = (typeof WRITER_RUN_DB_STATUSES)[number];
 
 export const WRITER_RUN_TERMINAL_STATUSES: readonly WriterRunDbStatus[] = ['completed', 'rejected', 'failed'];
-/** Statuses a process restart may need to do something about. */
+/** Statuses that mean in-progress graph work after a crash (a restart may need
+ *  to continue the thread). Rows resting on awaiting_approval / review_ready
+ *  need nothing: they wait for an explicit human decision. */
 export const WRITER_RUN_RECOVERABLE_STATUSES: readonly WriterRunDbStatus[] = [
   'starting',
   'gathering_context',
   'planning',
   'writing',
-  'review_ready',
+  'revising',
 ];
 
 /** A run row as the service sees it: binding + safe status + validated
@@ -156,6 +160,8 @@ export class SupabaseWriterRunRepository implements WriterRunRepository {
         user_id: run.userId,
         status: run.status,
         state_json: JSON.stringify(run.snapshot),
+        revision_count: run.snapshot.revisionCount,
+        last_revision_at: run.snapshot.lastRevisionAt,
       })
       .select('id');
     if (error) internalError('create', error);
@@ -180,6 +186,8 @@ export class SupabaseWriterRunRepository implements WriterRunRepository {
       .update({
         status: update.to,
         state_json: JSON.stringify(update.snapshot),
+        revision_count: update.snapshot.revisionCount,
+        last_revision_at: update.snapshot.lastRevisionAt,
         completed_at: update.completedAt,
       })
       .eq('run_id', update.runId)

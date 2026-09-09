@@ -28,6 +28,8 @@ import type {
   WriterPlanStatus,
   WriterReview,
   WriterReviewStatus,
+  WriterRevisionRequest,
+  WriterRevisionStatus,
   WriterStatus,
   WriterWrittenSection,
 } from './state.js';
@@ -51,6 +53,14 @@ export interface WriterRunSnapshot {
   review: WriterReview | null;
   reviewStatus: WriterReviewStatus;
   reviewNote: string | null;
+  revisionStatus: WriterRevisionStatus;
+  revisionCount: number;
+  lastRevisionAt: string | null;
+  revisionNote: string | null;
+  /** Validated revision request of a committed-but-unfinished revise round; set
+   *  on the row while it is `revising` so a crash before the thread resume can
+   *  re-issue the exact request (see durable.ts). Null otherwise. */
+  revisionRequest: WriterRevisionRequest | null;
 }
 
 const writerRelatedContentSchema = z.object({
@@ -87,11 +97,17 @@ const writerReviewSchema = z.object({
   seo: z.object({ score: z.number().finite().nonnegative() }).passthrough(),
 });
 
+const writerRevisionRequestSchema = z.object({
+  sectionIds: z.array(z.string().regex(/^section_\d+$/)).min(1).max(200),
+  instruction: z.string().min(1).max(2_000),
+});
+
 /** Strict top-level schema for a persisted snapshot. `.strict()` fails closed
  *  on any field we did not intend to persist (context, secrets, internal
  *  handles...). Parsed values are narrowed to the WriterRunSnapshot shape by
  *  the parse helpers below (the schema itself infers plain strings for the
- *  branded runId). */
+ *  branded runId). Revision fields are W8 additions: they default so older rows
+ *  persisted before W8 still parse. */
 export const writerRunSnapshotSchema = z
   .object({
     runId: z.string(),
@@ -106,6 +122,8 @@ export const writerRunSnapshotSchema = z
       'awaiting_approval',
       'approved',
       'writing',
+      'reviewing',
+      'revising',
       'review_ready',
       'rejected',
       'completed',
@@ -122,6 +140,11 @@ export const writerRunSnapshotSchema = z
     review: writerReviewSchema.nullable(),
     reviewStatus: z.enum(['pending', 'completed', 'failed']),
     reviewNote: z.string().nullable(),
+    revisionStatus: z.enum(['none', 'revising', 'completed', 'failed']).default('none'),
+    revisionCount: z.number().int().nonnegative().default(0),
+    lastRevisionAt: z.string().nullable().default(null),
+    revisionNote: z.string().nullable().default(null),
+    revisionRequest: writerRevisionRequestSchema.nullable().default(null),
   })
   .strict();
 
@@ -158,6 +181,12 @@ function assertSnapshotConsistency(snapshot: WriterRunSnapshot, runId: string, p
   ) {
     writerSnapshotInvalid(runId, 'run has no plan outside a failed state');
   }
+  if (snapshot.revisionRequest !== null && snapshot.status !== 'revising') {
+    writerSnapshotInvalid(runId, 'a revision request exists outside the revising state');
+  }
+  if (snapshot.status === 'revising' && snapshot.revisionRequest === null) {
+    writerSnapshotInvalid(runId, 'a revising run has no revision request');
+  }
 }
 
 /** Validates raw persisted JSON (state_json) against the strict schema and the
@@ -175,8 +204,13 @@ export function parseWriterRunSnapshot(raw: unknown, bind: { runId: string; proj
 
 /** Builds the safe, validated snapshot for a resting WriterRunResult. The
  *  bounded context channel is intentionally dropped; a serialization failure
- *  here is a programmer error and throws. */
-export function snapshotFromResult(result: WriterRunResult): WriterRunSnapshot {
+ *  here is a programmer error and throws. opts.revisionRequest lets a caller
+ *  persist the validated request of a committed-but-unfinished revise round
+ *  (the row is `revising` while the thread resumes); it is null otherwise. */
+export function snapshotFromResult(
+  result: WriterRunResult,
+  opts: { revisionRequest?: WriterRevisionRequest | null } = {},
+): WriterRunSnapshot {
   const parsed = writerRunSnapshotSchema.safeParse({
     runId: result.runId,
     projectId: result.projectId,
@@ -194,6 +228,11 @@ export function snapshotFromResult(result: WriterRunResult): WriterRunSnapshot {
     review: result.review,
     reviewStatus: result.reviewStatus,
     reviewNote: result.reviewNote,
+    revisionStatus: result.revisionStatus,
+    revisionCount: result.revisionCount,
+    lastRevisionAt: result.lastRevisionAt,
+    revisionNote: result.revisionNote,
+    revisionRequest: opts.revisionRequest ?? null,
   });
   if (!parsed.success) {
     throw new Error(`writer result for run ${result.runId} did not serialize to a valid snapshot`);
@@ -212,9 +251,34 @@ export function failedSnapshot(snapshot: WriterRunSnapshot, note: string): Write
     review: null,
     reviewStatus: 'pending',
     reviewNote: null,
+    revisionStatus: 'failed',
+    revisionRequest: null,
   });
   if (!parsed.success) {
     throw new Error(`could not build failed snapshot for run ${snapshot.runId}`);
+  }
+  return parsed.data as WriterRunSnapshot;
+}
+
+/** Builds the snapshot of a review_ready run whose revise round was just
+ *  committed to the row: status moves to `revising`, revisionStatus to
+ *  `revising`, and the validated request is persisted so a crash before the
+ *  thread resume can re-issue the exact revise (see durable.ts). The existing
+ *  review artifact is kept so the UI can keep showing the previous result while
+ *  the revision runs. */
+export function reviseCommittedSnapshot(
+  snapshot: WriterRunSnapshot,
+  request: WriterRevisionRequest,
+): WriterRunSnapshot {
+  const parsed = writerRunSnapshotSchema.safeParse({
+    ...snapshot,
+    status: 'revising',
+    revisionStatus: 'revising',
+    revisionNote: null,
+    revisionRequest: request,
+  });
+  if (!parsed.success) {
+    throw new Error(`could not build revising snapshot for run ${snapshot.runId}`);
   }
   return parsed.data as WriterRunSnapshot;
 }

@@ -30,8 +30,11 @@
  *     rejected, failed, completed, ...)               -> 409 writer_run_not_awaiting_approval
  * Resuming never re-runs from START and never calls the planner again. An
  * approve resume continues the same run through the W4 writing phase and the
- * W5 deterministic review, resting on completed with the WriterReview
- * artifact; a reject ends the run rejected.
+ * W5 deterministic review, resting on `review_ready` at the W8 review-session
+ * interrupt with the canonical WriterReview artifact (never terminal); a reject
+ * ends the run rejected. resumeWriterSession continues a review_ready run with
+ * a validated session decision: accept -> completed (terminal) or revise -> the
+ * controlled revision round back to a fresh review_ready rest.
  */
 
 import { randomUUID } from 'node:crypto';
@@ -39,6 +42,7 @@ import { Command } from '@langchain/langgraph';
 import { ApiError } from '../../apiErrors.js';
 import type { WriterApprovalDecision } from './approval.js';
 import { parseWriterApprovalDecision } from './approval.js';
+import { parseWriterSessionDecision, type WriterSessionDecision } from './revision.js';
 import { emptyWriterContext, type WriterContext } from './context.js';
 import type {
   WriterApprovalStatus,
@@ -46,6 +50,7 @@ import type {
   WriterPlanStatus,
   WriterReview,
   WriterReviewStatus,
+  WriterRevisionStatus,
   WriterState,
   WriterStatus,
   WriterWrittenSection,
@@ -85,11 +90,12 @@ function channel<T>(value: T | undefined, fallback: T): T {
 
 /** Outcome of a writer run: the run id plus the resting state (identity,
  *  brief, the bounded context gatherContext produced, the planning outcome,
- *  the human approval state, the written sections and - after the W5 review -
- *  the canonical review artifact). A proposed plan rests on awaiting_approval
- *  with approval "pending"; an approved run writes its sections, runs the
- *  deterministic review and rests on `completed` with a WriterReview; rejection
- *  and honest failures are terminal. */
+ *  the human approval state, the written sections, the canonical review
+ *  artifact after a review round and the W8 revision counters). A proposed
+ *  plan rests on awaiting_approval with approval "pending"; an approved run
+ *  writes its sections, runs the deterministic review and rests on
+ *  `review_ready` with a WriterReview (never terminal - the review session
+ *  decides next); acceptance and honest failures are terminal. */
 export interface WriterRunResult {
   runId: WriterRunId;
   projectId: string;
@@ -105,10 +111,18 @@ export interface WriterRunResult {
   approvalReason: string | null;
   writtenSections: WriterWrittenSection[];
   writeNote: string | null;
-  /** Canonical review artifact, present only after a completed W5 review. */
+  /** Canonical review artifact, present only after a completed review round. */
   review: WriterReview | null;
   reviewStatus: WriterReviewStatus;
   reviewNote: string | null;
+  /** Whether the last revision round is pending/active on the run. */
+  revisionStatus: WriterRevisionStatus;
+  /** Number of revision rounds this run has applied. */
+  revisionCount: number;
+  /** ISO timestamp of the most recent applied revision round, if any. */
+  lastRevisionAt: string | null;
+  /** Bounded, honest note of a failed revision round, if any. */
+  revisionNote: string | null;
 }
 
 /** Maps raw graph state onto the public run result, tolerating channels the
@@ -133,6 +147,10 @@ export function writerRunResultFromState(runId: WriterRunId, state: WriterState)
     review: channel(state.review, null),
     reviewStatus: channel(state.reviewStatus, 'pending'),
     reviewNote: channel(state.reviewNote, null),
+    revisionStatus: channel(state.revisionStatus, 'none'),
+    revisionCount: channel(state.revisionCount, 0),
+    lastRevisionAt: channel(state.lastRevisionAt, null),
+    revisionNote: channel(state.revisionNote, null),
   };
 }
 
@@ -238,6 +256,62 @@ export async function resumeWriterRun(
       409,
       'writer_run_not_awaiting_approval',
       `Writer run ${runId} is ${status}; only a run awaiting approval can be resumed.`,
+      { runId, status },
+    );
+  }
+
+  const finalState = await graph.invoke(new Command({ resume: parsed.decision }), writerRunThreadConfig(runId));
+  return writerRunResultFromState(runId, finalState);
+}
+
+/**
+ * Strictly validates and resumes a run paused on the W8 review session
+ * (review_ready) with the exact same thread/checkpoint that ran its start. An
+ * accept moves the run to `completed` (terminal); a revise runs the controlled
+ * revision round (revising -> reviewing -> review_ready) synchronously on this
+ * resume and rests again on `review_ready` with the fresh artifact. Deny-by-
+ * default rules mirror resumeWriterRun: an invalid session decision is 400
+ * invalid_review_session_decision, a missing run is 404 writer_run_not_found
+ * and a run not resting on review_ready is 409 writer_run_not_review_ready.
+ */
+export async function resumeWriterSession(
+  input: { runId: WriterRunId; decision: WriterSessionDecision },
+  registry: WriterRunRegistry = defaultRegistry,
+): Promise<WriterRunResult> {
+  const { runId, decision } = input;
+  if (!isWriterRunId(runId)) {
+    throw ApiError.badRequest('runId must be a writer run id (wr_<uuid>)', { runId });
+  }
+  const parsed = parseWriterSessionDecision(decision);
+  if (!parsed.ok) {
+    throw new ApiError(400, 'invalid_review_session_decision', parsed.note, { runId });
+  }
+
+  const graph = registry.get(runId);
+  if (!graph) {
+    throw new ApiError(
+      404,
+      'writer_run_not_found',
+      'No writer run is registered for this runId. Writer runs live in memory and do not survive a process restart.',
+      { runId },
+    );
+  }
+
+  const snapshot = await graph.getState(writerRunThreadConfig(runId));
+  const status = (snapshot.values as { status?: WriterStatus }).status;
+  if (!status) {
+    throw new ApiError(
+      404,
+      'writer_run_not_found',
+      'No writer run checkpoint exists for this runId.',
+      { runId },
+    );
+  }
+  if (status !== 'review_ready') {
+    throw new ApiError(
+      409,
+      'writer_run_not_review_ready',
+      `Writer run ${runId} is ${status}; only a run resting on review_ready can accept or revise.`,
       { runId, status },
     );
   }

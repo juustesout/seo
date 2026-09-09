@@ -16,9 +16,12 @@
  * that run's MemorySaver checkpoint), strictly validates the approve/reject
  * decision and resumes the exact same thread. An approve continues through the
  * W4 writing phase (one AI call per approved section) and the W5 deterministic
- * review, resting on `completed` with a canonical WriterReview artifact
- * (content_json / content_html / full SeoResult from the existing pipeline); a
- * reject ends the run rejected with no writing.
+ * review, resting on `review_ready` at the W8 review-session interrupt with a
+ * canonical WriterReview artifact (content_json / content_html / full SeoResult
+ * from the existing pipeline); a reject ends the run rejected with no writing.
+ * resumeWriterSession continues a review_ready run with a validated session
+ * decision - accept -> `completed` (the explicit save-finalization) or revise ->
+ * the controlled revision round (revising -> reviewing -> review_ready).
  *
  * These in-memory helpers are the unit-test surface for the graph. Production
  * runs are durable (W7): WriterRunService persists each run to seo_writer_runs
@@ -32,6 +35,7 @@ import { emptyWriterContext, type WriterContextDependencies } from './context.js
 import { createWriterGraph } from './graph.js';
 import type { WriterPlannerDependencies } from './planner.js';
 import type { WriterReviewDependencies } from './review.js';
+import type { WriterRevisionDependencies } from './revisionWriter.js';
 import type { WriterSectionDependencies } from './sectionWriter.js';
 import {
   createWriterRunId,
@@ -52,18 +56,23 @@ export {
   WRITER_INITIALIZE_NODE,
   WRITER_PLAN_NODE,
   WRITER_REVIEW_NODE,
+  WRITER_REVIEW_SESSION_NODE,
+  WRITER_REVISE_SECTIONS_NODE,
   WRITER_WRITE_SECTIONS_NODE,
 } from './graph.js';
 export * from './approval.js';
 export * from './context.js';
 export * from './planner.js';
 export * from './review.js';
+export * from './revision.js';
+export * from './revisionWriter.js';
 export * from './sectionWriter.js';
 export {
   createWriterRunId,
   createWriterRunRegistry,
   isWriterRunId,
   resumeWriterRun,
+  resumeWriterSession,
   writerRunResultFromState,
   WRITER_RUN_ID_PREFIX,
   type WriterRunId,
@@ -74,16 +83,20 @@ export {
   STATUS_TRANSITIONS,
   WRITER_APPROVAL_STATUSES,
   WRITER_REVIEW_STATUSES,
+  WRITER_REVISION_STATUSES,
   WRITER_STATUSES,
   WriterStateAnnotation,
   assertStatusTransition,
   writerSectionIdFor,
+  writerSectionIndexFor,
   type WriterApprovalStatus,
   type WriterPlan,
   type WriterPlanStatus,
   type WriterRelatedContent,
   type WriterReview,
   type WriterReviewStatus,
+  type WriterRevisionRequest,
+  type WriterRevisionStatus,
   type WriterSection,
   type WriterState,
   type WriterStateUpdate,
@@ -115,14 +128,15 @@ export interface WriterRunRequest {
 }
 
 /** Injectable seams for a writer run: the read-only context adapters, the AI
- *  planner, the section writer and the deterministic review allowlist. Each is
- *  optional; without one the matching capability reports itself not wired and
- *  the run degrades honestly (the review allowlist defaults to the canonical
- *  @seo/contracts evaluator + renderer). */
+ *  planner, the section writer, the revision writer and the deterministic
+ *  review allowlist. Each is optional; without one the matching capability
+ *  reports itself not wired and the run degrades honestly (the review allowlist
+ *  defaults to the canonical @seo/contracts evaluator + renderer). */
 export interface WriterRunDependencies {
   context?: WriterContextDependencies;
   planner?: WriterPlannerDependencies;
   sectionWriter?: WriterSectionDependencies;
+  revisionWriter?: WriterRevisionDependencies;
   review?: WriterReviewDependencies;
 }
 
@@ -181,6 +195,12 @@ export function parseWriterRunRequest(input: WriterRunRequest): WriterState {
     review: null,
     reviewStatus: 'pending',
     reviewNote: null,
+    revisionStatus: 'none',
+    revisionRequest: null,
+    revisionNote: null,
+    revisionProgress: [],
+    revisionCount: 0,
+    lastRevisionAt: null,
   };
 }
 

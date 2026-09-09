@@ -1,17 +1,25 @@
 /**
- * Writer panel for the Content Studio editor (W6, durable runs W7).
+ * Writer panel for the Content Studio editor (W6, durable runs W7, revision
+ * loop W8).
  *
  * Starts a writer run for the article being edited, shows the AI-generated
  * plan as a PROPOSAL, requires an explicit human decision (Approve & Write /
  * Reject) and - once the approved run has written and deterministically
- * reviewed - shows the review-ready result.
+ * reviewed - rests on the W8 review session (`review_ready`) where the run is
+ * previewed as a review-ready draft and the human can request a controlled
+ * revision of specific sections.
  *
  * Honesty rules honoured here:
  *   - the plan is presented as an AI-generated proposal, never as authority;
- *   - while the approved run is writing the panel says exactly that and keeps
- *     polling the run until a terminal state (review_ready / completed /
- *     rejected / failed) - it never claims a result is ready before the graph
- *     reports it, and polling stops at terminal states;
+ *   - while the approved run is progressing (writing / revising / reviewing)
+ *     the panel says exactly that and keeps polling the run until a resting
+ *     state (awaiting_approval / review_ready / completed / rejected / failed)
+ *     - it never claims a result is ready before the graph reports it, and
+ *     polling stops at resting states;
+ *   - `review_ready` is a resting hub, NOT terminal: at `review_ready` the
+ *     human chooses what happens next (a controlled revise of the selected
+ *     sections). `completed` is terminal but only ever reached through the
+ *     writer accept flow, which this W8 surface does not expose;
  *   - the result is previewed only: the writer flow never saves it to
  *     seo_content, never publishes and never schedules. Applying it to the
  *     document stays an explicit, separate human action that is not
@@ -25,7 +33,13 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { WriterRunDto, WriterRunStatus } from '@seo/contracts';
 import { ApiRequestError, api } from '../../lib/api';
 
-const TERMINAL: ReadonlySet<WriterRunStatus> = new Set(['review_ready', 'completed', 'rejected', 'failed']);
+/** Resting statuses the panel shows without polling. review_ready is NOT in
+ *  this set: it is the W8 review-session hub (a human decision is required),
+ *  and completed/rejected/failed are terminal. */
+const TERMINAL: ReadonlySet<WriterRunStatus> = new Set(['completed', 'rejected', 'failed']);
+
+/** In-progress statuses that keep the panel polling for a resting state. */
+const PROGRESS: ReadonlySet<WriterRunStatus> = new Set(['writing', 'revising', 'reviewing']);
 
 /**
  * Local bookmark of the run belonging to this project+content, so a browser
@@ -49,6 +63,8 @@ function statusClass(status: WriterRunStatus): string {
     case 'rejected':
       return 'err';
     case 'writing':
+    case 'revising':
+    case 'reviewing':
     case 'awaiting_approval':
     case 'starting':
     case 'gathering_context':
@@ -77,6 +93,8 @@ export function WriterPanel({ projectId, contentId, defaultTopic, defaultKeyword
   const [actionBusy, setActionBusy] = useState(false);
   const [restoring, setRestoring] = useState(true);
   const [rejectReason, setRejectReason] = useState('');
+  const [reviseSections, setReviseSections] = useState<string[]>([]);
+  const [reviseInstruction, setReviseInstruction] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [fatal, setFatal] = useState<string | null>(null);
   const runRef = useRef<WriterRunDto | null>(null);
@@ -127,10 +145,11 @@ export function WriterPanel({ projectId, contentId, defaultTopic, defaultKeyword
     }
   }, [projectId, contentId]);
 
-  // Poll only while the approved run is writing; stop at terminal states.
+  // Poll only while the run is progressing (writing after approve; revising /
+  // reviewing after a revise resume); stop at resting/terminal states.
   useEffect(() => {
     const current = runRef.current;
-    if (!current || current.status !== 'writing' || fatal) return;
+    if (!current || !PROGRESS.has(current.status) || fatal) return;
     const id = window.setInterval(() => {
       void refresh();
     }, pollMs);
@@ -176,11 +195,47 @@ export function WriterPanel({ projectId, contentId, defaultTopic, defaultKeyword
     }
   };
 
+  const toggleReviseSection = (sectionId: string) => {
+    setReviseSections((prev) =>
+      prev.includes(sectionId) ? prev.filter((id) => id !== sectionId) : [...prev, sectionId],
+    );
+  };
+
+  const reviseSelected = async () => {
+    const current = runRef.current;
+    if (!current || actionBusy) return;
+    const trimmed = reviseInstruction.trim();
+    if (reviseSections.length === 0 || !trimmed) return;
+    setActionBusy(true);
+    setError(null);
+    setFatal(null);
+    try {
+      const sectionIds = [...reviseSections].sort((a, b) => {
+        const ai = Number(/^section_(\d+)$/.exec(a)?.[1]);
+        const bi = Number(/^section_(\d+)$/.exec(b)?.[1]);
+        return ai - bi;
+      });
+      const next = await api<WriterRunDto>(`${runPath(projectId, contentId, current.runId)}/revise`, {
+        method: 'POST',
+        body: { action: 'revise', sectionIds, instruction: trimmed },
+      });
+      setRun(next);
+      setReviseSections([]);
+      setReviseInstruction('');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setActionBusy(false);
+    }
+  };
+
   const reset = () => {
     setRun(null);
     setError(null);
     setFatal(null);
     setRejectReason('');
+    setReviseSections([]);
+    setReviseInstruction('');
     window.localStorage.removeItem(storageKey(projectId, contentId));
   };
 
@@ -261,8 +316,36 @@ export function WriterPanel({ projectId, contentId, defaultTopic, defaultKeyword
         </p>
       )}
 
-      {(status === 'completed' || status === 'review_ready') && review && plan && (
-        <ReviewResult review={review} planTitle={plan.title} />
+      {status === 'revising' && (
+        <p className="muted" style={{ marginTop: 8 }}>
+          Writer is revising the selected sections… this article is not saved until you decide what to do with the
+          result.
+        </p>
+      )}
+
+      {status === 'reviewing' && (
+        <p className="muted" style={{ marginTop: 8 }}>
+          Writer is re-reviewing the revised draft…
+        </p>
+      )}
+
+      {status === 'review_ready' && review && plan && (
+        <>
+          <ReviewResult review={review} planTitle={plan.title} revisionCount={run.revisionCount} />
+          <ReviewSessionControls
+            sections={plan.sections}
+            selected={reviseSections}
+            instruction={reviseInstruction}
+            busy={actionBusy}
+            onToggle={toggleReviseSection}
+            onInstructionChange={setReviseInstruction}
+            onRevise={() => void reviseSelected()}
+          />
+        </>
+      )}
+
+      {status === 'completed' && review && plan && (
+        <ReviewResult review={review} planTitle={plan.title} revisionCount={run.revisionCount} />
       )}
 
       {status === 'rejected' && (
@@ -351,9 +434,17 @@ function PlanReview({
   );
 }
 
-/** Review-ready result of a completed run: canonical document + deterministic
- *  SEO evaluation. Preview only - never auto-saved or auto-published. */
-function ReviewResult({ review, planTitle }: { review: NonNullable<WriterRunDto['review']>; planTitle: string }) {
+/** Review-ready result of a run: canonical document + deterministic SEO
+ *  evaluation. Preview only - never auto-saved or auto-published. */
+function ReviewResult({
+  review,
+  planTitle,
+  revisionCount,
+}: {
+  review: NonNullable<WriterRunDto['review']>;
+  planTitle: string;
+  revisionCount?: number;
+}) {
   const passed = review.seo.checks.filter((c) => c.status === 'pass').length;
   return (
     <div style={{ marginTop: 10 }}>
@@ -364,6 +455,9 @@ function ReviewResult({ review, planTitle }: { review: NonNullable<WriterRunDto[
       <div className="row" style={{ alignItems: 'center', gap: 12, margin: '10px 0' }}>
         <h2 style={{ margin: 0 }}>{planTitle}</h2>
         <span className="pill ok">SEO {Math.round(review.seo.score)}/100</span>
+        {typeof revisionCount === 'number' && revisionCount > 0 && (
+          <span className="pill">Revision {revisionCount}</span>
+        )}
         <span className="muted" style={{ fontSize: 12 }}>
           Deterministic evaluation — {passed} of {review.seo.checks.length} checks passing.
         </span>
@@ -372,8 +466,75 @@ function ReviewResult({ review, planTitle }: { review: NonNullable<WriterRunDto[
         <div className="article-body" dangerouslySetInnerHTML={{ __html: review.contentHtml }} />
       </div>
       <p className="muted" style={{ fontSize: 12 }}>
-        To use this draft in the editor you would explicitly apply it as content - W6 does not do that for you.
+        To use this draft in the editor you would explicitly apply it as content - this panel does not do that for you.
       </p>
+    </div>
+  );
+}
+
+/** W8 review-session controls: the human picks exactly the approved sections to
+ *  rewrite and gives one instruction. No section is ever revised implicitly. */
+function ReviewSessionControls({
+  sections,
+  selected,
+  instruction,
+  busy,
+  onToggle,
+  onInstructionChange,
+  onRevise,
+}: {
+  sections: NonNullable<WriterRunDto['plan']>['sections'];
+  selected: string[];
+  instruction: string;
+  busy: boolean;
+  onToggle: (sectionId: string) => void;
+  onInstructionChange: (value: string) => void;
+  onRevise: () => void;
+}) {
+  const canRevise = selected.length > 0 && instruction.trim().length > 0 && !busy;
+  return (
+    <div className="writer-revision" style={{ marginTop: 14 }}>
+      <div className="writer-proposal">
+        <span className="pill busy">Review session</span>
+        <span className="muted" style={{ fontSize: 12 }}>
+          Not happy yet? Select exactly the sections to rewrite and tell the writer what to change. The approved outline
+          stays fixed and untouched sections are kept as they are.
+        </span>
+      </div>
+      <div style={{ marginTop: 8 }}>
+        {sections.map((s, i) => {
+          const sectionId = s.sectionId ?? `section_${i}`;
+          const checked = selected.includes(sectionId);
+          return (
+            <label key={sectionId} className="row" style={{ alignItems: 'center', gap: 8, margin: '4px 0' }}>
+              <input
+                type="checkbox"
+                checked={checked}
+                disabled={busy}
+                onChange={() => onToggle(sectionId)}
+              />
+              <span className="muted mono" style={{ fontSize: 12 }}>
+                {i + 1}.
+              </span>
+              <span>{s.heading}</span>
+            </label>
+          );
+        })}
+      </div>
+      <div className="row" style={{ marginTop: 10, alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+        <input
+          type="text"
+          placeholder="What should change? (e.g. make the intro sharper, add concrete examples)"
+          value={instruction}
+          onChange={(e) => onInstructionChange(e.target.value)}
+          disabled={busy}
+          style={{ minWidth: 380, flex: 1 }}
+        />
+        <button className="btn primary" disabled={!canRevise} onClick={onRevise}>
+          Revise selected sections
+        </button>
+      </div>
+      {busy && <p className="muted" style={{ marginTop: 8 }}>Requesting the revision…</p>}
     </div>
   );
 }

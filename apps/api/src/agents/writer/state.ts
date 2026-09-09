@@ -56,12 +56,32 @@
  * content_html through the existing renderer and scores it with the existing
  * Phase C SEO evaluator. It makes no AI call, writes nothing and stores the
  * result as a WriterReview artifact under the review channel with
- * reviewStatus "completed". The run then rests on `completed` - the writer has
- * produced a review-ready canonical artifact, not a saved article. `completed`
- * is only reached through a successful review; any honest review failure
- * (missing/extra section, invalid content, render/evaluate error) ends the run
- * failed with reviewStatus "failed" and a bounded note. A failed run keeps
- * whatever plan and written sections it honestly produced.
+ * reviewStatus "completed".
+ *
+ * W8 turns the post-review state into a controlled revision loop. A fully
+ * written run moves writing -> reviewing -> review_ready and then pauses on the
+ * review session interrupt instead of ending: `review_ready` is the resting,
+ * revisable state that exposes the canonical artifact. From there an explicit
+ * human decision resumes the same thread:
+ *
+ *   - accept -> `completed` (terminal, explicit save-finalization; only reachable
+ *     through this accept, never automatically) - END;
+ *   - revise -> `revising`: the AI rewrites exactly the requested, plan-validated
+ *     sections (one call per section, in plan order, supersteps persisted after
+ *     every section) while every unselected section and the approved plan stay
+ *     untouched, then reviewing -> review_ready runs the deterministic re-review
+ *     and the run rests again on `review_ready` with the fresh artifact.
+ *
+ * `review_ready` is therefore NOT terminal and `completed` is never reached by a
+ * successful review alone: a run can be revised any number of times and only
+ * ends through accept (or an honest failed/rejected exit). The revision request
+ * only ever arrives through the validated review-session resume input (see
+ * revision.ts) - never from AI, context or a prompt - and revisionNote carries
+ * the bounded, honest failure note of a revision round. Any honest review
+ * failure (missing/extra section, invalid content, render/evaluate error) or
+ * revision failure (not_configured / ai_error / invalid_output / a degraded
+ * resume) ends the run failed with a bounded note. A failed run keeps whatever
+ * plan and written sections it honestly produced.
  */
 
 import { Annotation } from '@langchain/langgraph';
@@ -69,11 +89,16 @@ import type { SeoResult, TipDoc } from '@seo/contracts';
 import { emptyWriterContext, type WriterContext } from './context.js';
 
 /** All statuses a writer run can ever be in; empty transition lists mean the
- *  run rests there (completed / rejected / failed are terminal). completed is
- *  reached only through the W5 review phase: the writer produced one canonical
- *  review artifact, not a saved article. awaiting_approval pauses on the human
- *  approval interrupt and is left only through an explicit approve/reject
- *  resume. */
+ *  run rests there (rejected / failed are terminal; completed is terminal and
+ *  reached only through the explicit review-session accept). awaiting_approval
+ *  pauses on the human approval interrupt and is left only through an explicit
+ *  approve/reject resume. review_ready is the W8 resting, revisable state after
+ *  the deterministic review: it pauses on the review-session interrupt and is
+ *  left through an explicit accept (-> completed) or revise (-> revising)
+ *  resume. revising is the async W8 rewriting phase; reviewing is the
+ *  (near-instant, deterministic) re-review that follows it and flows on to
+ *  review_ready in the same execution - it is lifecycle vocabulary, not an
+ *  observable rest. */
 export const WRITER_STATUSES = [
   'idle',
   'running',
@@ -81,6 +106,8 @@ export const WRITER_STATUSES = [
   'awaiting_approval',
   'approved',
   'writing',
+  'reviewing',
+  'revising',
   'review_ready',
   'rejected',
   'completed',
@@ -94,28 +121,35 @@ export type WriterStatus = (typeof WRITER_STATUSES)[number];
 export const WRITER_APPROVAL_STATUSES = ['pending', 'approved', 'rejected'] as const;
 export type WriterApprovalStatus = (typeof WRITER_APPROVAL_STATUSES)[number];
 
-/** Where the W5 deterministic review stands. pending until reviewContent runs;
+/** Where the deterministic review stands. pending until a review round runs;
  *  completed only after it produced a canonical review artifact; failed on any
  *  honest review failure. Independent of the run lifecycle status. */
 export const WRITER_REVIEW_STATUSES = ['pending', 'completed', 'failed'] as const;
 export type WriterReviewStatus = (typeof WRITER_REVIEW_STATUSES)[number];
 
 /** Legal one-step transitions between writer statuses; empty means the run
- *  rests there (completed / rejected / failed are terminal). approved -> writing
- *  -> review_ready -> completed is the code-owned W4+W5 path that starts only
- *  after an explicit approval: writing fills the approved sections and the
- *  deterministic review phase assembles the canonical document. awaiting_approval
- *  -> failed exists so a run whose resume input cannot be validated degrades
- *  honestly instead of hanging; writing/review_ready -> failed let an honest
- *  section or review failure stop the run. */
+ *  rests there (rejected / failed are terminal; completed is terminal and only
+ *  reachable through the explicit review-session accept - a successful review
+ *  alone never completes a run). approved -> writing -> reviewing ->
+ *  review_ready is the code-owned W4+W5 path that starts only after an explicit
+ *  approval: writing fills the approved sections and the deterministic review
+ *  phase assembles the canonical document; review_ready -> revising ->
+ *  reviewing -> review_ready is the W8 revision loop that starts only after an
+ *  explicit, validated revise resume, and review_ready -> completed is the
+ *  explicit accept. awaiting_approval -> failed exists so a run whose resume
+ *  input cannot be validated degrades honestly instead of hanging;
+ *  writing/reviewing/revising/review_ready -> failed let an honest section,
+ *  revision or review failure stop the run. */
 export const STATUS_TRANSITIONS: Record<WriterStatus, readonly WriterStatus[]> = {
   idle: ['running'],
   running: ['planning'],
   planning: ['awaiting_approval', 'failed', 'cancelled'],
   awaiting_approval: ['approved', 'rejected', 'failed'],
   approved: ['writing'],
-  writing: ['review_ready', 'failed'],
-  review_ready: ['completed', 'failed'],
+  writing: ['reviewing', 'failed'],
+  reviewing: ['review_ready', 'failed'],
+  revising: ['reviewing', 'failed'],
+  review_ready: ['revising', 'completed', 'failed'],
   rejected: [],
   completed: [],
   failed: [],
@@ -202,12 +236,43 @@ export function writerSectionIdFor(index: number): string {
   return `section_${index}`;
 }
 
+/** Zero-based approved-plan index a deterministic section id addresses; NaN
+ *  when the id is not `section_<number>`. */
+export function writerSectionIndexFor(sectionId: string): number {
+  const match = /^section_(\d+)$/.exec(sectionId);
+  return match ? Number(match[1]) : Number.NaN;
+}
+
 /** One section of article body content, keyed to exactly one approved plan
  *  section (by deterministic section id). */
 export interface WriterWrittenSection {
   sectionId: string;
   content: string;
 }
+
+// --- revision artifact (W8) ---------------------------------------------------
+//
+// The W8 review session turns the resting review_ready run into a controlled
+// revision loop. Each explicit revise resume carries a validated request that
+// addresses exactly the sections to rewrite (stable `section_<index>` ids that
+// the backend re-validates against the canonical approved plan) plus the human
+// instruction. The request is the only thing that ever selects sections: never
+// UI order, heading text or an AI identifier. revisionCount / lastRevisionAt
+// record how many rounds this run has gone through; revisionNote carries the
+// bounded, honest note of a failed round.
+
+/** The validated, plan-ordered set of sections a revision round rewrites. */
+export interface WriterRevisionRequest {
+  /** Stable section ids to rewrite, ascending in approved-plan order, every id
+   *  validated to exist in the approved plan and present at most once. */
+  sectionIds: string[];
+  /** Human revision instruction (authoritative, bounded). */
+  instruction: string;
+}
+
+/** Whether a revision round is currently pending/active on the run. */
+export const WRITER_REVISION_STATUSES = ['none', 'revising', 'completed', 'failed'] as const;
+export type WriterRevisionStatus = (typeof WRITER_REVISION_STATUSES)[number];
 
 // --- review artifact (W5) ----------------------------------------------------
 //
@@ -256,6 +321,16 @@ export const WriterStateAnnotation = Annotation.Root({
   review: Annotation<WriterReview | null>({ reducer: replaceReducer, default: () => null }),
   reviewStatus: Annotation<WriterReviewStatus>({ reducer: replaceReducer, default: () => 'pending' }),
   reviewNote: Annotation<string | null>({ reducer: replaceReducer, default: () => null }),
+  revisionStatus: Annotation<WriterRevisionStatus>({ reducer: replaceReducer, default: () => 'none' }),
+  revisionRequest: Annotation<WriterRevisionRequest | null>({ reducer: replaceReducer, default: () => null }),
+  revisionNote: Annotation<string | null>({ reducer: replaceReducer, default: () => null }),
+  /** Progress of the current revision round: which requested section ids have
+   *  been rewritten so far (idempotency guard, persisted with each superstep). */
+  revisionProgress: Annotation<string[]>({ reducer: replaceReducer, default: () => [] }),
+  /** Number of revision rounds this run has applied. */
+  revisionCount: Annotation<number>({ reducer: replaceReducer, default: () => 0 }),
+  /** ISO timestamp of the most recent applied revision round, if any. */
+  lastRevisionAt: Annotation<string | null>({ reducer: replaceReducer, default: () => null }),
 });
 
 /** Full typed state a node receives. */

@@ -1,33 +1,38 @@
 /**
- * WriterRunService tests (W7 durable runs).
+ * WriterRunService tests (W7/W8 durable runs).
  *
  * The service is the application seam that records each run durably (bound to
  * exactly one projectId+contentId) and resumes its LangGraph thread on a
- * shared checkpointer. These tests exercise the REAL writer runtime (W0-W5)
+ * shared checkpointer. These tests exercise the REAL writer runtime (W0-W8)
  * with injected fake planner/section-writer/context allowlists (as the
  * writer's own tests do) over an in-memory repository + a shared checkpointer,
- * proving the W7 lifecycle honestly:
+ * proving the durable lifecycle honestly:
  *   - start rests on awaiting_approval with the proposed plan (human gate) and
  *     records a durable row;
- *   - approve returns `writing` and polling getRun rests on completed with the
- *     canonical W5 review artifact (real evaluateSeo + renderer, no AI);
+ *   - approve returns `writing` and polling getRun rests on `review_ready` with
+ *     the canonical W5 review artifact (real evaluateSeo + renderer, no AI) -
+ *     never terminal; completion is a W8 graph-only explicit accept;
  *   - reject rests on rejected with the reason as note;
- *   - after a restart a run whose row is `writing` is recovered on the SAME
- *     checkpointer: it is never re-planned and no section is written twice;
- *   - after a restart that lost the checkpoint (in-memory fallback), a
- *     `writing` run is failed honestly - never silently re-run from START;
+ *   - revise commits review_ready -> revising and polling rests on review_ready
+ *     again with revision counters bumped (see revision tests);
+ *   - after a restart a run whose row is `writing`/`revising` is recovered on
+ *     the SAME checkpointer: it is never re-planned and no section is written
+ *     twice;
+ *   - after a restart that lost the checkpoint (in-memory fallback), an
+ *     in-progress run is failed honestly - never silently re-run from START;
  *   - corrupt persisted state fails closed (writer_run_state_invalid);
  *   - the runId is bound to the project/content it was started under: a runId
  *     from another project or content can never be addressed (404);
  *   - unknown / malformed / wrong-state runs fail closed (404/400/409);
  *   - the service never touches ContentService, jobs, publishing or any
- *     database write beyond seo_writer_runs; a completed run only produces a
+ *     database write beyond seo_writer_runs; a resting run only produces a
  *     review-ready artifact.
  */
 import { describe, expect, it } from 'vitest';
 import { MemorySaver } from '@langchain/langgraph';
 import type { WriterRunDependencies, WriterRunId } from '../agents/writer/index.js';
 import type { WriterPlan } from '../agents/writer/index.js';
+import { reviseCommittedSnapshot } from '../agents/writer/snapshot.js';
 import { WriterRunService } from './writerRunService.js';
 import { InMemoryWriterRunRepository, type WriterRunRepository } from './writerRunRepository.js';
 
@@ -51,10 +56,10 @@ function plan(): WriterPlan {
 
 /** Recording dependencies: the ONLY allowlists the run may call. Anything that
  *  needs an extra capability (a real AIService, ContentService write, job
- *  store, publisher...) would have to be wired here and is not - a completed
+ *  store, publisher...) would have to be wired here and is not - a resting
  *  run proves the writer phase needs nothing else. */
-function recordingDeps(): { deps: WriterRunDependencies; calls: { plans: number; writes: number } } {
-  const calls = { plans: 0, writes: 0 };
+function recordingDeps(): { deps: WriterRunDependencies; calls: { plans: number; writes: number; revisions: number } } {
+  const calls = { plans: 0, writes: 0, revisions: 0 };
   const deps: WriterRunDependencies = {
     context: {
       getKnowledge: async () => ({ status: 'empty' as const, note: null, chunks: [] }),
@@ -71,6 +76,12 @@ function recordingDeps(): { deps: WriterRunDependencies; calls: { plans: number;
       async writeSection() {
         calls.writes += 1;
         return { ok: true as const, content: 'Section body with enough words to assemble into a paragraph.' };
+      },
+    },
+    revisionWriter: {
+      async reviseSection(input) {
+        calls.revisions += 1;
+        return { ok: true as const, content: `Revised section ${input.sectionIndex} body.` };
       },
     },
   };
@@ -96,12 +107,17 @@ function makeService(
   });
 }
 
-async function waitForTerminal(service: WriterRunService, runId: string, timeoutMs = 2000): Promise<unknown> {
+async function waitForTerminal(
+  service: WriterRunService,
+  runId: string,
+  timeoutMs = 2000,
+  inProgress: string[] = ['writing'],
+): Promise<unknown> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
     const dto = await service.getRun(runId as `wr_${string}`, PROJECT, CONTENT);
-    if (dto.status !== 'writing') return dto;
-    if (Date.now() > deadline) throw new Error('run did not reach a terminal state in time');
+    if (!inProgress.includes(dto.status)) return dto;
+    if (Date.now() > deadline) throw new Error(`run did not reach a resting state in time (still ${dto.status})`);
     await new Promise((r) => setTimeout(r, 5));
   }
 }
@@ -156,7 +172,7 @@ describe('WriterRunService start', () => {
 });
 
 describe('WriterRunService approval + writing', () => {
-  it('approve -> writing -> completed with the canonical W5 review artifact', async () => {
+  it('approve -> writing -> review_ready resting with the canonical W5 review artifact', async () => {
     const { deps, calls } = recordingDeps();
     const service = makeService(deps);
     const started = await service.start(PROJECT, CONTENT, { topic: 'SEO ops', targetKeyword: 'langgraph' });
@@ -170,7 +186,7 @@ describe('WriterRunService approval + writing', () => {
       note: string | null;
       review: { contentHtml: string; seo: { score: number } } | null;
     };
-    expect(done.status).toBe('completed');
+    expect(done.status).toBe('review_ready');
     expect(calls.writes).toBe(3);
     expect(done.review).not.toBeNull();
     expect(done.review!.contentHtml).toContain('<h1>');
@@ -191,6 +207,111 @@ describe('WriterRunService approval + writing', () => {
     expect(dto.status).toBe('rejected');
     expect(dto.note).toBe('Goes against our pillar page.');
     expect(dto.plan).not.toBeNull();
+  });
+});
+
+describe('WriterRunService revision (W8)', () => {
+  /** Runs a full approve flow to the resting review_ready state. */
+  async function restingReviewReady(service: WriterRunService): Promise<`wr_${string}`> {
+    const started = await service.start(PROJECT, CONTENT, { topic: 'SEO ops', targetKeyword: 'langgraph' });
+    const runId = started.runId as `wr_${string}`;
+    await service.decide(runId, { decision: 'approve' }, PROJECT, CONTENT);
+    const resting = (await waitForTerminal(service, runId)) as { status: string };
+    expect(resting.status).toBe('review_ready');
+    return runId;
+  }
+
+  it('revise commits revising, rewrites only the requested sections and rests on review_ready again', async () => {
+    const { deps, calls } = recordingDeps();
+    const service = makeService(deps);
+    const runId = await restingReviewReady(service);
+
+    const revising = await service.revise(
+      runId,
+      { action: 'revise', sectionIds: ['section_2', 'section_0'], instruction: 'Make them sharper' },
+      PROJECT,
+      CONTENT,
+    );
+    expect(revising.status).toBe('revising');
+
+    const rested = (await waitForTerminal(service, runId, 2000, ['revising', 'reviewing'])) as {
+      status: string;
+      review: { contentHtml: string } | null;
+      revisionCount: number;
+      note: string | null;
+    };
+    expect(rested.status).toBe('review_ready');
+    expect(calls.revisions).toBe(2);
+    expect(rested.revisionCount).toBe(1);
+    expect(rested.note).toBeNull();
+    // The deterministic re-review rebuilt the artifact from the revised bodies
+    // only; the unselected section_1 keeps its original text.
+    expect(rested.review?.contentHtml).toContain('<h1>');
+    expect(rested.review?.contentHtml).toContain('Revised section 0 body');
+    expect(rested.review?.contentHtml).toContain('Revised section 2 body');
+    expect(rested.review?.contentHtml).not.toContain('Revised section 1 body');
+  });
+
+  it('refuses a revise on a run not resting on review_ready', async () => {
+    const service = makeService();
+    const started = await service.start(PROJECT, CONTENT, { topic: 'SEO ops' });
+    const runId = started.runId as `wr_${string}`;
+
+    await expect(
+      service.revise(runId, { action: 'revise', sectionIds: ['section_0'], instruction: 'nope' }, PROJECT, CONTENT),
+    ).rejects.toMatchObject({ status: 409, code: 'writer_run_not_review_ready' });
+  });
+
+  it('rejects invalid section ids and a non-revise session decision', async () => {
+    const service = makeService();
+    const runId = await restingReviewReady(service);
+
+    await expect(
+      service.revise(runId, { action: 'revise', sectionIds: ['section_99'], instruction: 'nope' }, PROJECT, CONTENT),
+    ).rejects.toMatchObject({ status: 400, code: 'invalid_revision_sections' });
+
+    await expect(
+      service.revise(runId, { action: 'accept' }, PROJECT, CONTENT),
+    ).rejects.toMatchObject({ status: 400, code: 'invalid_review_session_decision' });
+  });
+
+  it('recovers a committed-but-unresumed revise after a restart (re-issues the persisted request)', async () => {
+    const { deps, calls } = recordingDeps();
+    const repository = new InMemoryWriterRunRepository();
+    const checkpointer = new MemorySaver();
+
+    // Process 1 runs to the resting review_ready state, then dies right after
+    // committing a revise: the row says `revising` (with the validated request
+    // persisted) but the thread never left the review session.
+    const serviceOne = makeService(deps, { repository, checkpointer });
+    const runId = await restingReviewReady(serviceOne);
+    const resting = await repository.getBound(runId, PROJECT, CONTENT);
+    await repository.transition({
+      runId,
+      projectId: PROJECT,
+      contentId: CONTENT,
+      from: ['review_ready'],
+      to: 'revising',
+      snapshot: reviseCommittedSnapshot(resting!.snapshot, {
+        sectionIds: ['section_2'],
+        instruction: 'Fix the third section',
+      }),
+      completedAt: null,
+    });
+
+    // Process 2 (fresh service, SAME repository + SAME durable checkpointer)
+    // reads the row and must recover it, re-issuing the persisted revision
+    // request onto the still-review_ready thread.
+    const serviceTwo = makeService(deps, { repository, checkpointer });
+    const rested = (await waitForTerminal(serviceTwo, runId, 2000, ['revising', 'reviewing'])) as {
+      status: string;
+      review: { contentHtml: string } | null;
+      revisionCount: number;
+    };
+    expect(rested.status).toBe('review_ready');
+    expect(calls.revisions).toBe(1);
+    expect(rested.revisionCount).toBe(1);
+    expect(rested.review?.contentHtml).toContain('Revised section 2 body');
   });
 });
 
@@ -236,14 +357,14 @@ describe('WriterRunService run binding + fail closed', () => {
     });
   });
 
-  it('409 when a terminal run is decided on again', async () => {
+  it('409 when an already-consumed run is decided on again', async () => {
     const service = makeService();
     const started = await service.start(PROJECT, CONTENT, { topic: 'SEO ops' });
     const runId = started.runId as `wr_${string}`;
     await service.decide(runId, { decision: 'approve' }, PROJECT, CONTENT);
     const done = (await waitForTerminal(service, runId)) as { status: string };
 
-    expect(done.status).toBe('completed');
+    expect(done.status).toBe('review_ready');
     await expect(service.decide(runId, { decision: 'approve' }, PROJECT, CONTENT)).rejects.toMatchObject({
       status: 409,
       code: 'writer_run_not_awaiting_approval',
@@ -296,7 +417,7 @@ describe('WriterRunService durable recovery (W7)', () => {
     const serviceTwo = makeService(deps, { repository, checkpointer });
     const done = (await waitForTerminal(serviceTwo, runId)) as { status: string; note: string | null };
 
-    expect(done.status).toBe('completed');
+    expect(done.status).toBe('review_ready');
     expect(done.note).toBeNull();
     expect(calls.plans).toBe(1);
     expect(calls.writes).toBe(3);
@@ -363,7 +484,7 @@ describe('WriterRunService durable recovery (W7)', () => {
 
     const serviceTwo = makeService(deps, { repository, checkpointer, inFlight });
     const done = (await waitForTerminal(serviceTwo, runId)) as { status: string };
-    expect(done.status).toBe('completed');
+    expect(done.status).toBe('review_ready');
     // Every poll that ran while the row was `writing` shared the in-flight set,
     // so the thread was resumed exactly once and no section was written twice.
     expect(calls.writes).toBe(3);
@@ -413,7 +534,18 @@ describe('WriterRunService API-safe DTO', () => {
     const snapshot = JSON.parse(JSON.stringify(started)) as Record<string, unknown>;
 
     expect(Object.keys(snapshot).sort()).toEqual(
-      ['contentId', 'createdAt', 'note', 'plan', 'projectId', 'review', 'runId', 'status'].sort(),
+      [
+        'contentId',
+        'createdAt',
+        'lastRevisionAt',
+        'note',
+        'plan',
+        'projectId',
+        'review',
+        'revisionCount',
+        'runId',
+        'status',
+      ].sort(),
     );
     const serialized = JSON.stringify(snapshot).toLowerCase();
     expect(serialized).not.toContain('checkpoint');

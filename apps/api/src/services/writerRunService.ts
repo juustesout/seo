@@ -18,24 +18,35 @@
  *   - approve is committed to the row first (awaiting_approval -> writing)
  *     and only then resumes the thread in the background - so an approve can
  *     never be lost to a crash before it takes effect, and a row left on
- *     `writing` by a crash is recovered (see below);
+ *     `writing` by a crash is recovered (see below). A fully written run now
+ *     rests on `review_ready` (the W8 review-session pause), never `completed`;
  *   - reject resumes synchronously to rejected;
- *   - a getRun that finds a `writing` row no longer being written by this
- *     process (a crash mid-writing after a restart) triggers a background
+ *   - revise (W8) mirrors approve on a run resting on review_ready: it is
+ *     committed to the row first (review_ready -> revising, carrying the
+ *     validated revision request so a crash cannot lose it), then resumes the
+ *     thread in the background; the run flows through the revision supersteps
+ *     and the deterministic re-review and rests on review_ready again with a
+ *     fresh artifact. `completed` is W8-graph-only (an explicit accept); this
+ *     W8 service exposes no accept endpoint;
+ *   - a getRun that finds a `writing`/`revising` row no longer being written by
+ *     this process (a crash mid-run after a restart) triggers a background
  *     recovery that continues the exact same thread from its last persisted
- *     checkpoint: already-written sections are never rewritten (each section
- *     is its own persisted superstep), the run is never re-planned, and the
- *     row catches up to the resting result. A writing run that this process IS
- *     writing (approve in flight) is simply reported as `writing`.
+ *     checkpoint: already-written/rewritten sections are never redone (each
+ *     section is its own persisted superstep), a committed-but-unresumed revise
+ *     is re-issued from the row's persisted request, the run is never
+ *     re-planned, and the row catches up to the resting result. A row this
+ *     process IS writing is simply reported as its in-progress status.
  *
  * Deny-by-default rules (W6 semantics preserved): a run is always addressed by
  * runId + the exact projectId+contentId it was started under (else 404
  * writer_run_not_found), malformed runId -> 400, invalid approval decision ->
- * 400 invalid_approval_decision, a run not resting on awaiting_approval -> 409
- * writer_run_not_awaiting_approval, a run whose checkpoint was lost -> 404
- * writer_run_not_found (never a silent restart from START), a corrupt
+ * 400 invalid_approval_decision, invalid review-session decision -> 400
+ * invalid_review_session_decision, a run not resting on awaiting_approval ->
+ * 409 writer_run_not_awaiting_approval, a run not resting on review_ready (for
+ * revise) -> 409 writer_run_not_review_ready, a run whose checkpoint was lost
+ * -> 404 writer_run_not_found (never a silent restart from START), a corrupt
  * persisted snapshot -> 500 writer_run_state_invalid. The service never
- * fabricates a plan, a section, a review or a metric.
+ * fabricates a plan, a section, a revision, a review or a metric.
  *
  * Explicit boundaries honoured (unchanged from W6): the writer stays an
  * orchestration layer - this service never writes seo_content, never publishes
@@ -57,19 +68,24 @@ import {
   createWriterRunId,
   isWriterRunId,
   parseWriterApprovalDecision,
+  parseWriterSessionDecision,
+  validateRevisionSectionIds,
   type WriterRunDependencies,
   type WriterRunId,
   type WriterRunResult,
+  type WriterSessionDecision,
 } from '../agents/writer/index.js';
 import {
   continueDurableWriterRun,
+  resumeDurableReviewSession,
   resumeDurableWriterRun,
   startDurableWriterRun,
 } from '../agents/writer/durable.js';
 import { createWriterContextDependencies } from '../agents/writer/contextDependencies.js';
 import { createAiWriterPlanner, type WriterAiResolver } from '../agents/writer/planner.js';
+import { createAiWriterRevisionWriter } from '../agents/writer/revisionWriter.js';
 import { createAiWriterSectionWriter } from '../agents/writer/sectionWriter.js';
-import { failedSnapshot, snapshotFromResult } from '../agents/writer/snapshot.js';
+import { failedSnapshot, reviseCommittedSnapshot, snapshotFromResult } from '../agents/writer/snapshot.js';
 import {
   SupabaseWriterRunRepository,
   type NewWriterRun,
@@ -80,9 +96,9 @@ import {
 import { defaultWriterCheckpointProvider, type WriterCheckpointProvider } from './writerCheckpointHost.js';
 
 /** Builds the writer dependency allowlist for a live service container: the
- *  read-only project context adapters plus AI planner/section writer resolved
- *  through the existing AIService.resolve boundary. The deterministic W5
- *  review allowlist is left to its canonical contracts default. */
+ *  read-only project context adapters plus AI planner/section writer/revision
+ *  writer resolved through the existing AIService.resolve boundary. The
+ *  deterministic review allowlist is left to its canonical contracts default. */
 export function writerDependenciesFor(container: ServiceContainer): WriterRunDependencies {
   const ai = new AIService(container);
   const resolve: WriterAiResolver = async (projectId) => {
@@ -93,6 +109,7 @@ export function writerDependenciesFor(container: ServiceContainer): WriterRunDep
     context: createWriterContextDependencies(container),
     planner: createAiWriterPlanner(resolve),
     sectionWriter: createAiWriterSectionWriter(resolve),
+    revisionWriter: createAiWriterRevisionWriter(resolve),
   };
 }
 
@@ -110,13 +127,17 @@ export function defaultWriterInFlight(): Set<WriterRunId> {
 
 // --- status + DTO mapping ----------------------------------------------------
 
-/** Maps a resting writer result onto the durable row status vocabulary. A
- *  writer status that should never rest (a bug or a crash mid-flight) is
- *  surfaced as a failed run, never invented as progress. */
+/** Maps a resting writer result onto the durable row status vocabulary. The
+ *  resting statuses are awaiting_approval, review_ready (the W8 review-session
+ *  pause - never terminal), completed/rejected/failed (terminal). A writer
+ *  status that should never rest (a bug or a crash mid-flight) is surfaced as
+ *  a failed run, never invented as progress. */
 function resultToRowStatus(result: WriterRunResult): WriterRunDbStatus {
   switch (result.status) {
     case 'awaiting_approval':
       return 'awaiting_approval';
+    case 'review_ready':
+      return 'review_ready';
     case 'completed':
       return 'completed';
     case 'rejected':
@@ -128,13 +149,20 @@ function resultToRowStatus(result: WriterRunResult): WriterRunDbStatus {
   }
 }
 
+/** Terminal row statuses: the only states a run can end in. review_ready rests
+ *  (it waits on the review session) but is not terminal. */
+function isTerminalRowStatus(status: WriterRunDbStatus): boolean {
+  return status === 'completed' || status === 'rejected' || status === 'failed';
+}
+
 function toPlanDto(plan: WriterRunRow['snapshot']['plan']): WriterRunDto['plan'] {
   if (!plan) return null;
   return {
     title: plan.title,
     metaDescription: plan.metaDescription,
     introductionPurpose: plan.introductionPurpose,
-    sections: plan.sections.map((s) => ({
+    sections: plan.sections.map((s, index) => ({
+      sectionId: `section_${index}`,
       heading: s.heading,
       keyPoints: s.keyPoints,
       suggestedKeywords: s.suggestedKeywords,
@@ -158,6 +186,7 @@ function noteForRow(row: WriterRunRow): string | null {
       row.snapshot.planNote ??
       row.snapshot.writeNote ??
       row.snapshot.reviewNote ??
+      row.snapshot.revisionNote ??
       'The writer run failed.'
     );
   }
@@ -176,6 +205,8 @@ function rowToDto(row: WriterRunRow): WriterRunDto {
     plan: toPlanDto(row.snapshot.plan),
     review: toReviewDto(row.snapshot.review),
     note: noteForRow(row),
+    revisionCount: row.snapshot.revisionCount,
+    lastRevisionAt: row.snapshot.lastRevisionAt,
     createdAt: row.createdAt,
   };
 }
@@ -253,54 +284,75 @@ export class WriterRunService {
     return row;
   }
 
-  /** Optimistic terminal transition for a writing run; a no-op (false) when
-   *  the row is no longer on `writing` (already recovered elsewhere). */
+  /** Optimistic transition that catches a row up to its resting result. The
+   *  `from` set is the in-progress status(es) the caller committed, so a stale
+   *  transition is a no-op (already recovered elsewhere). completed_at is only
+   *  stamped on a terminal status: awaiting_approval and review_ready rest and
+   *  are not terminal. */
   private async persistResting(
     binding: { runId: WriterRunId; projectId: string; contentId: string },
     result: WriterRunResult,
+    from: readonly WriterRunDbStatus[],
   ): Promise<boolean> {
     const status = resultToRowStatus(result);
     return this.repository.transition({
       runId: binding.runId,
       projectId: binding.projectId,
       contentId: binding.contentId,
-      from: ['writing'],
+      from,
       to: status,
       snapshot: snapshotFromResult(result),
-      completedAt: status === 'writing' ? null : new Date().toISOString(),
+      completedAt: isTerminalRowStatus(status) ? new Date().toISOString() : null,
     });
   }
 
-  /** Recovers a `writing` row that this process is not currently writing (a
-   *  crash after an approve, found after a restart). Continues the exact same
-   *  thread on the shared checkpointer and catches the row up; a thread that
-   *  no longer exists is failed honestly instead of being restarted. */
-  private async recoverWriting(row: WriterRunRow): Promise<void> {
+  /** Recovers a `writing` or `revising` row that this process is not currently
+   *  writing (a crash after an approve/revise, found after a restart).
+   *  Continues the exact same thread on the shared checkpointer and catches the
+   *  row up; a thread that no longer exists is failed honestly instead of being
+   *  restarted. For a `revising` row the committed revision request (persisted
+   *  on the row) is handed to the continuation so a crash between the commit
+   *  and the thread resume re-issues the exact revise instead of losing it. */
+  private async recoverInProgress(row: WriterRunRow): Promise<void> {
     if (this.inFlight.has(row.runId)) return;
     this.inFlight.add(row.runId);
     try {
       const current = await this.repository.getBound(row.runId, row.projectId, row.contentId);
-      if (!current || current.status !== 'writing') return;
+      if (!current) return;
+      if (current.status !== 'writing' && current.status !== 'revising') return;
       const saver = await this.checkpointer();
-      const result = await continueDurableWriterRun(row.runId, this.depsFor(), saver);
+      const reviewSessionResume = current.snapshot.revisionRequest
+        ? {
+            action: 'revise' as const,
+            sectionIds: current.snapshot.revisionRequest.sectionIds,
+            instruction: current.snapshot.revisionRequest.instruction,
+          }
+        : undefined;
+      const result = await continueDurableWriterRun(row.runId, this.depsFor(), saver, {
+        ...(reviewSessionResume ? { reviewSessionResume } : {}),
+      });
       if (result === null) {
-        await this.failWritingRow(
+        await this.failInProgressRow(
           current,
           'The writer run checkpoint was lost and cannot be resumed after the restart.',
         );
         return;
       }
-      await this.persistResting({ runId: current.runId, projectId: current.projectId, contentId: current.contentId }, result);
+      await this.persistResting(
+        { runId: current.runId, projectId: current.projectId, contentId: current.contentId },
+        result,
+        [current.status],
+      );
     } catch (err) {
       logger.error({ err, runId: row.runId }, 'writer run recovery failed');
       try {
         const latest = await this.repository.getBound(row.runId, row.projectId, row.contentId);
-        if (latest && latest.status === 'writing') {
-          await this.failWritingRow(latest, this.safeFailureNote(err));
+        if (latest && (latest.status === 'writing' || latest.status === 'revising')) {
+          await this.failInProgressRow(latest, this.safeFailureNote(err));
         }
       } catch {
-        // The failed transition itself is best-effort; the row stays writing
-        // and the next read will retry recovery.
+        // The failed transition itself is best-effort; the row stays in
+        // progress and the next read will retry recovery.
       }
     } finally {
       this.inFlight.delete(row.runId);
@@ -316,13 +368,14 @@ export class WriterRunService {
       : 'The writer run could not be resumed; please start a new run.';
   }
 
-  /** Optimistically fails a `writing` row with an honest bounded note. */
-  private async failWritingRow(row: WriterRunRow, note: string): Promise<void> {
+  /** Optimistically fails a `writing`/`revising` row with an honest bounded
+   *  note. */
+  private async failInProgressRow(row: WriterRunRow, note: string): Promise<void> {
     await this.repository.transition({
       runId: row.runId,
       projectId: row.projectId,
       contentId: row.contentId,
-      from: ['writing'],
+      from: [row.status],
       to: 'failed',
       snapshot: failedSnapshot(row.snapshot, note),
       completedAt: new Date().toISOString(),
@@ -330,13 +383,13 @@ export class WriterRunService {
   }
 
   /** Runs an approved resume to its resting state in the background and
-  *   catches the row up. Owns its in-flight slot: it is only entered with the
-  *   run already in this.inFlight (see decide), and removes it when the run
-  *   rests (terminal) or fails honestly - never before, so concurrent getRun
-  *   recovery never double-resumes a thread this process is writing. A resume
-  *   that throws before doing work (e.g. the thread already advanced past
-  *   awaiting_approval on a crash) falls back to continueDurableWriterRun so
-  *   the run is caught up instead of being failed. */
+   *  catches the row up. Owns its in-flight slot: it is only entered with the
+   *  run already in this.inFlight (see decide), and removes it when the run
+   *  rests (review_ready / terminal) or fails honestly - never before, so
+   *  concurrent getRun recovery never double-resumes a thread this process is
+   *  writing. A resume that throws before doing work (e.g. the thread already
+   *  advanced past awaiting_approval on a crash) falls back to
+   *  continueDurableWriterRun so the run is caught up instead of being failed. */
   private async resumeApprovalInBackground(
     runId: WriterRunId,
     projectId: string,
@@ -353,12 +406,12 @@ export class WriterRunService {
         result = await continueDurableWriterRun(runId, deps, saver);
       }
       if (result !== null) {
-        await this.persistResting({ runId, projectId, contentId }, result);
+        await this.persistResting({ runId, projectId, contentId }, result, ['writing']);
         return;
       }
       const latest = await this.repository.getBound(runId, projectId, contentId);
       if (latest && latest.status === 'writing') {
-        await this.failWritingRow(
+        await this.failInProgressRow(
           latest,
           'The writer run checkpoint was lost and cannot be resumed after the restart.',
         );
@@ -368,10 +421,57 @@ export class WriterRunService {
       try {
         const latest = await this.repository.getBound(runId, projectId, contentId);
         if (latest && latest.status === 'writing') {
-          await this.failWritingRow(latest, this.safeFailureNote(err));
+          await this.failInProgressRow(latest, this.safeFailureNote(err));
         }
       } catch {
         // Best-effort; the row stays writing and a later read retries recovery.
+      }
+    } finally {
+      this.inFlight.delete(runId);
+    }
+  }
+
+  /** Runs a committed revise resume to its resting state (review_ready again)
+   *  in the background and catches the row up. Same ownership contract as
+   *  resumeApprovalInBackground: only entered with the run already in
+   *  this.inFlight (see revise); a resume that throws (e.g. the thread already
+   *  left the review session) falls back to continueDurableWriterRun so the run
+   *  is caught up instead of being failed. */
+  private async resumeReviseInBackground(
+    runId: WriterRunId,
+    projectId: string,
+    contentId: string,
+    decision: WriterSessionDecision,
+  ): Promise<void> {
+    try {
+      const saver = await this.checkpointer();
+      const deps = this.depsFor();
+      let result: WriterRunResult | null;
+      try {
+        result = await resumeDurableReviewSession({ runId, decision }, deps, saver);
+      } catch {
+        result = await continueDurableWriterRun(runId, deps, saver);
+      }
+      if (result !== null) {
+        await this.persistResting({ runId, projectId, contentId }, result, ['revising']);
+        return;
+      }
+      const latest = await this.repository.getBound(runId, projectId, contentId);
+      if (latest && latest.status === 'revising') {
+        await this.failInProgressRow(
+          latest,
+          'The writer run checkpoint was lost and cannot be resumed after the restart.',
+        );
+      }
+    } catch (err) {
+      logger.error({ err, runId }, 'writer revise resume failed');
+      try {
+        const latest = await this.repository.getBound(runId, projectId, contentId);
+        if (latest && latest.status === 'revising') {
+          await this.failInProgressRow(latest, this.safeFailureNote(err));
+        }
+      } catch {
+        // Best-effort; the row stays revising and a later read retries recovery.
       }
     } finally {
       this.inFlight.delete(runId);
@@ -410,13 +510,14 @@ export class WriterRunService {
   }
 
   /** Safe DTO for one run, strictly bound to the project/content pair in the
-   *  URL. Unknown or mismatched run -> 404. A `writing` run whose thread this
-   *  process is not actively writing (crash leftover after a restart) is
-   *  recovered in the background while `writing` is reported to the caller. */
+   *  URL. Unknown or mismatched run -> 404. A `writing`/`revising` row whose
+   *  thread this process is not actively resuming (crash leftover after a
+   *  restart) is recovered in the background while its in-progress status is
+   *  reported to the caller. */
   async getRun(runId: WriterRunId, projectId: string, contentId: string): Promise<WriterRunDto> {
     const row = await this.requireBoundRow(runId, projectId, contentId);
-    if (row.status === 'writing' && !this.inFlight.has(row.runId)) {
-      void this.recoverWriting(row);
+    if ((row.status === 'writing' || row.status === 'revising') && !this.inFlight.has(row.runId)) {
+      void this.recoverInProgress(row);
     }
     return rowToDto(row);
   }
@@ -497,11 +598,115 @@ export class WriterRunService {
       );
     }
     // The background resume owns its in-flight slot and releases it once the
-    // run rests (terminal) or fails honestly - never before.
+    // run rests (review_ready or terminal) or fails honestly - never before.
     void this.resumeApprovalInBackground(runId, projectId, contentId, parsed.decision);
     // Report `writing` from the row we just committed, deterministically: the
     // background may already have finished (fast tests) but the approve response
-    // is the durable W6 contract - poll getRun for the terminal state.
+    // is the durable W6 contract - poll getRun for the resting state.
     return rowToDto({ ...row, status: 'writing' });
+  }
+
+  /** Starts a controlled revision round (W8) for a run resting on
+   *  review_ready. Mirrors approve: the revise is validated and committed to
+   *  the row first (review_ready -> revising, carrying the validated request so
+   *  a crash cannot lose it), then the thread is resumed in the background and
+   *  `revising` is returned immediately so callers can poll getRun. The run
+   *  flows through one AI rewrite per requested section and the deterministic
+   *  re-review, then rests on review_ready again with a fresh artifact and the
+   *  revision counters bumped. Wrong-state / unknown runs fail closed.
+   */
+  async revise(
+    runId: WriterRunId,
+    decision: unknown,
+    projectId: string,
+    contentId: string,
+  ): Promise<WriterRunDto> {
+    const row = await this.requireBoundRow(runId, projectId, contentId);
+    if (row.status !== 'review_ready') {
+      throw new ApiError(
+        409,
+        'writer_run_not_review_ready',
+        `Writer run ${runId} is ${row.status}; only a run resting on review_ready can be revised.`,
+        { runId, status: row.status },
+      );
+    }
+    if (this.inFlight.has(runId)) {
+      throw new ApiError(
+        409,
+        'writer_run_not_review_ready',
+        `Writer run ${runId} is already being revised.`,
+        { runId, status: 'revising' },
+      );
+    }
+
+    const parsed = parseWriterSessionDecision(decision);
+    if (!parsed.ok || parsed.decision.action !== 'revise') {
+      throw new ApiError(
+        400,
+        'invalid_review_session_decision',
+        parsed.ok
+          ? 'A revision must be requested with { action: "revise", sectionIds, instruction }; accepting is not available for this run.'
+          : parsed.note,
+        { runId },
+      );
+    }
+    const plan = row.snapshot.plan;
+    if (!plan) {
+      throw new ApiError(
+        500,
+        'writer_run_state_invalid',
+        'A review_ready writer run has no approved plan to revise.',
+        { runId },
+      );
+    }
+    const sectionValidation = validateRevisionSectionIds(plan, parsed.decision.sectionIds);
+    if (!sectionValidation.ok) {
+      throw new ApiError(400, 'invalid_revision_sections', sectionValidation.note, { runId });
+    }
+    const request = {
+      sectionIds: sectionValidation.sectionIds,
+      instruction: parsed.decision.instruction,
+    };
+
+    // Claim the in-flight slot, commit the revision durably (status + the
+    // validated request), then resume the thread in the background. Claiming
+    // the slot BEFORE the row transition closes the window where a concurrent
+    // getRun could see the new `revising` row and start a recovery resume on
+    // the same thread.
+    this.inFlight.add(runId);
+    const committed = await this.repository.transition({
+      runId,
+      projectId,
+      contentId,
+      from: ['review_ready'],
+      to: 'revising',
+      snapshot: reviseCommittedSnapshot(row.snapshot, request),
+      completedAt: null,
+    });
+    if (!committed) {
+      this.inFlight.delete(runId);
+      const latest = await this.requireBoundRow(runId, projectId, contentId);
+      throw new ApiError(
+        409,
+        'writer_run_not_review_ready',
+        `Writer run ${runId} is ${latest.status}; only a run resting on review_ready can be revised.`,
+        { runId, status: latest.status },
+      );
+    }
+    // The background resume owns its in-flight slot and releases it once the
+    // run rests on review_ready (or fails honestly) - never before.
+    void this.resumeReviseInBackground(runId, projectId, contentId, {
+      action: 'revise',
+      sectionIds: request.sectionIds,
+      instruction: request.instruction,
+    });
+    // Report `revising` from the row we just committed, deterministically: the
+    // background may already have finished (fast tests) but the revise response
+    // is the durable W8 contract - poll getRun for the resting review_ready.
+    return rowToDto({
+      ...row,
+      status: 'revising',
+      snapshot: reviseCommittedSnapshot(row.snapshot, request),
+    });
   }
 }

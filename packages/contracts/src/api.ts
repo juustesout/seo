@@ -193,13 +193,20 @@ export interface ContentAiSuggestionDto {
 // ---------------------------------------------------------------------------
 
 /**
- * Lifecycle of one writer run as seen by the API/UI. Only statuses the writer
- * graph genuinely reports are emitted: `awaiting_approval` (proposed plan,
- * paused on the human gate), `writing` (an approved run is actively writing),
- * `completed` (the W5 review produced a canonical artifact), `rejected` and
- * `failed`. The transient vocabulary (starting/gathering_context/planning/
- * review_ready) is kept for forward compatibility but is never fabricated:
- * the graph reports `completed` only after its deterministic review ran.
+ * Lifecycle of one writer run as seen by the API/UI. The W8 revision loop
+ * turns `review_ready` into the resting, revisable state: a run whose W5
+ * deterministic review produced a canonical artifact pauses there and can be
+ * revised (AI rewrites the selected sections) any number of times before it is
+ * explicitly accepted. The states a caller can actually meet are:
+ * `awaiting_approval` (proposed plan, paused on the human gate), `writing`
+ * (an approved run is actively writing the first generation), `reviewing`
+ * (the deterministic re-review is running), `review_ready` (resting result,
+ * revision hub - non-terminal), `revising` (AI is rewriting the selected
+ * sections), `completed` (terminal, reserved for an explicit accept that W8
+ * does not auto-reach), `rejected` and `failed`. The transient vocabulary
+ * (starting/gathering_context/planning) is kept for forward compatibility but
+ * is never fabricated: the graph rests on `review_ready` only after its
+ * deterministic review ran, never before.
  */
 export type WriterRunStatus =
   | 'starting'
@@ -207,13 +214,21 @@ export type WriterRunStatus =
   | 'planning'
   | 'awaiting_approval'
   | 'writing'
+  | 'reviewing'
+  | 'revising'
   | 'review_ready'
   | 'completed'
   | 'rejected'
   | 'failed';
 
-/** One planned section of a writer proposal: heading + content targets. */
+/**
+ * One planned section of a writer proposal: heading + content targets. Each
+ * section carries a stable, backend-validated identity (`section_<index>`,
+ * derived from the approved plan) so a W8 revision request can address
+ * exactly the sections it wants without relying on UI order or heading text.
+ */
 export interface WriterRunPlanSectionDto {
+  sectionId: string;
   heading: string;
   keyPoints: string[];
   suggestedKeywords: string[];
@@ -249,9 +264,11 @@ export interface WriterRunReviewDto {
 /**
  * A safe writer-run snapshot for the UI: identity bound to exactly one
  * project+content pair, the proposed plan, an optional human note (rejection
- * reason / honest failure message) and - once the run completed - the W5
- * canonical review artifact. It never carries prompts, internal graph state,
- * checkpoint data or credentials.
+ * reason / honest failure message) and - once the run rests on `review_ready`
+ * or later - the W5 canonical review artifact. It never carries prompts,
+ * internal graph state, checkpoint data or credentials. `revisionCount` /
+ * `lastRevisionAt` let the UI show how many times this run has been revised
+ * without leaking the revision request wording.
  */
 export interface WriterRunDto {
   runId: string;
@@ -261,6 +278,10 @@ export interface WriterRunDto {
   plan: WriterRunPlanDto | null;
   note: string | null;
   review: WriterRunReviewDto | null;
+  /** Number of W8 revisions applied to this run (0 when never revised). */
+  revisionCount: number;
+  /** ISO timestamp of the most recent revision round, if any. */
+  lastRevisionAt: string | null;
   createdAt: string;
 }
 
@@ -268,6 +289,19 @@ export interface WriterRunDto {
  *  the run's topic; without one the content title is used. */
 export interface WriterStartRequest {
   instruction?: string;
+}
+
+/**
+ * Request a W8 revision of one `review_ready` writer run. The strict grammar
+ * is validated server-side by the shared writer revision gate (mirroring the
+ * W3 approval boundary): `sectionIds` must address stable, plan-validated
+ * section identities and `instruction` must be present and bounded. A
+ * revision only ever rewrites the selected sections; the approved plan and
+ * every unselected section are preserved as-is.
+ */
+export interface WriterReviseRequest {
+  sectionIds: string[];
+  instruction: string;
 }
 
 // ---------------------------------------------------------------------------

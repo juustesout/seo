@@ -9,8 +9,10 @@
  * the assembly invariants (plan order is authoritative, writtenSections order
  * is never trusted, missing/extra/duplicate/invalid sections fail honestly),
  * the deterministic delegation to the existing evaluator/renderer and the
- * graph-level no-side-effect completion (no ContentService, no job, no
- * publication, no AI provider anywhere in the phase).
+ * graph-level no-side-effect flow: a successful review rests the run on the W8
+ * `review_ready` review-session interrupt (no ContentService, no job, no
+ * publication, no AI provider anywhere in the phase) and only an explicit
+ * session accept reaches the terminal `completed`.
  */
 
 import { describe, expect, it } from 'vitest';
@@ -25,6 +27,7 @@ import {
 import {
   createWriterRunRegistry,
   resumeWriterRun,
+  resumeWriterSession,
   runWriterOnce,
   writerSectionIdFor,
   type WriterPlan,
@@ -317,8 +320,8 @@ describe('reviewWriterContent', () => {
   });
 });
 
-describe('W5 graph completion', () => {
-  it('completes a fully written run through the injected deterministic review', async () => {
+describe('W5 graph review + W8 resting hub', () => {
+  it('rests a fully written run on review_ready through the injected deterministic review; only an accept completes', async () => {
     const registry = createWriterRunRegistry();
     const { deps, evaluateInputs } = recordingDeps();
     const p = plan();
@@ -331,15 +334,18 @@ describe('W5 graph completion', () => {
 
     const resumed = await resumeWriterRun({ runId: run.runId, decision: { decision: 'approve' } }, registry);
 
-    expect(resumed.status).toBe('completed');
+    expect(resumed.status).toBe('review_ready');
     expect(resumed.reviewStatus).toBe('completed');
     expect(resumed.reviewNote).toBeNull();
     expect(resumed.review?.seo).toEqual(cannedSeo);
     expect(resumed.review?.contentJson.type).toBe('doc');
     expect(evaluateInputs).toHaveLength(1);
+
+    const completed = await resumeWriterSession({ runId: resumed.runId, decision: { action: 'accept' } }, registry);
+    expect(completed.status).toBe('completed');
   });
 
-  it('completes with the real deterministic score when no review allowlist is injected', async () => {
+  it('rests on review_ready with the real deterministic score when no review allowlist is injected', async () => {
     const registry = createWriterRunRegistry();
     const p = plan();
     const run = await runWriterOnce(
@@ -349,7 +355,7 @@ describe('W5 graph completion', () => {
     );
     const resumed = await resumeWriterRun({ runId: run.runId, decision: { decision: 'approve' } }, registry);
 
-    expect(resumed.status).toBe('completed');
+    expect(resumed.status).toBe('review_ready');
     expect(resumed.reviewStatus).toBe('completed');
     expect(resumed.review).not.toBeNull();
     const expected = evaluateSeo({
@@ -362,9 +368,10 @@ describe('W5 graph completion', () => {
 
   it('never calls ContentService, jobs or the publisher: only the injected allowlists run', async () => {
     // The run has no database, job, scheduler or publication dependency anywhere:
-    // it completes purely from the context/planner/section-writer/review
-    // allowlists. If any hidden side effect existed, it would have to be wired
-    // and would fail here.
+    // it flows purely from the context/planner/section-writer/review
+    // allowlists into the review_ready rest at the W8 review-session interrupt.
+    // If any hidden side effect existed, it would have to be wired and would
+    // fail here.
     const registry = createWriterRunRegistry();
     const p = plan();
     const run = await runWriterOnce(
@@ -377,7 +384,7 @@ describe('W5 graph completion', () => {
       registry,
     );
     const resumed = await resumeWriterRun({ runId: run.runId, decision: { decision: 'approve' } }, registry);
-    expect(resumed.status).toBe('completed');
+    expect(resumed.status).toBe('review_ready');
     expect(resumed.reviewStatus).toBe('completed');
     expect(resumed.plan).toEqual(p);
   });

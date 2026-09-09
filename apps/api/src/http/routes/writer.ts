@@ -15,15 +15,20 @@
  *   POST /              start a run (editor+)     -> WriterRunDto (awaiting_approval)
  *   GET  /:runId        safe run snapshot (viewer+) -> WriterRunDto
  *   POST /:runId/approval  approve/reject (editor+) -> WriterRunDto (writing | rejected)
+ *   POST /:runId/revise    revise sections (editor+) -> WriterRunDto (revising)
  *
  * Error semantics reuse the W3 writer boundary: malformed runId -> 400, an
- * invalid approval decision -> 400 invalid_approval_decision, unknown or
+ * invalid approval decision -> 400 invalid_approval_decision, an invalid
+ * review-session revision -> 400 invalid_review_session_decision, unknown or
  * mismatched run -> 404 writer_run_not_found, run not awaiting approval ->
- * 409 writer_run_not_awaiting_approval.
+ * 409 writer_run_not_awaiting_approval, run not resting on review_ready (for
+ * revise) -> 409 writer_run_not_review_ready.
  *
- * W6 boundaries: starting/approving never writes seo_content, never publishes
- * and never schedules - a completed run only exposes its review-ready
- * artifact. Responses carry no prompts, no checkpoint data and no credentials.
+ * W6/W8 boundaries: starting/approving/revising never writes seo_content,
+ * never publishes and never schedules - a review_ready run only exposes its
+ * review-ready artifact, and this W8 surface exposes no accept/completed path
+ * (that stays graph/contract-level until a later milestone). Responses carry
+ * no prompts, no checkpoint data and no credentials.
  */
 
 import { Router } from 'express';
@@ -37,6 +42,7 @@ import { WriterRunService } from '../../services/writerRunService.js';
 import {
   isWriterRunId,
   parseWriterApprovalDecision,
+  parseWriterSessionDecision,
   type WriterRunId,
 } from '../../agents/writer/index.js';
 
@@ -108,7 +114,7 @@ writerRouter.get(
 /** Explicit human approval or rejection of a proposed plan (editor+). The
  *  exact W3 approval vocabulary is enforced here; an approve starts the W4+W5
  *  phase in-process and returns the run as `writing` (poll GET /:runId until a
- *  terminal status), a reject resumes synchronously to `rejected`. */
+ *  resting status), a reject resumes synchronously to `rejected`. */
 writerRouter.post(
   '/:runId/approval',
   asyncHandler(async (req, res) => {
@@ -126,6 +132,40 @@ writerRouter.post(
 
     const svc = new WriterRunService(container);
     const run = await svc.decide(runId, parsed.decision, projectId, contentId);
+    res.json({ data: run });
+  }),
+);
+
+/** Explicit revision of one or more sections of a review_ready run (editor+).
+ *  The exact W8 review-session revise vocabulary is enforced here (sectionIds
+ *  must address existing approved-plan sections, instruction bounded, no extra
+ *  fields); accepting a run is not part of this W8 surface. A valid revise
+ *  commits the run to `revising` first and resumes the revision round in the
+ *  background - poll GET /:runId until it rests on review_ready again. */
+writerRouter.post(
+  '/:runId/revise',
+  asyncHandler(async (req, res) => {
+    const projectId = parseProjectId(req);
+    const { container, user } = req;
+    await container.access.requireRole(user!.sub, projectId, 'editor');
+    const contentId = parseId(req, 'contentId');
+    await new ContentService(container.sb).get(projectId, contentId);
+    const runId = parseRunId(req.params.runId);
+
+    const parsed = parseWriterSessionDecision({ action: 'revise', ...(req.body as Record<string, unknown>) });
+    if (!parsed.ok || parsed.decision.action !== 'revise') {
+      throw new ApiError(
+        400,
+        'invalid_review_session_decision',
+        parsed.ok
+          ? 'This endpoint only accepts revisions; accepting a run is not available.'
+          : parsed.note,
+        { runId },
+      );
+    }
+
+    const svc = new WriterRunService(container);
+    const run = await svc.revise(runId, parsed.decision, projectId, contentId);
     res.json({ data: run });
   }),
 );

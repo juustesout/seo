@@ -13,8 +13,14 @@
  *         -> awaitApproval (interrupt)
  *              - reject -> rejected -> END
  *              - approve -> approved -> beginWriting (writing)
- *                          -> writeSections (review_ready | failed)
- *                          -> reviewContent (completed | failed) -> END
+ *                          -> writeSections (reviewing | failed)
+ *                          -> reviewContent (review_ready | failed)
+ *                          -> awaitReviewSession (interrupt)
+ *                                - accept -> completed -> END
+ *                                - revise -> revising -> reviseSections
+ *                                            (supersteps) -> reviewing
+ *                                            -> reviewContent -> review_ready
+ *                                            -> awaitReviewSession (rest)
  *
  * gatherContext is the only node that touches the outside world before
  * planning and it does so exclusively through the dependency-injected
@@ -61,27 +67,56 @@
  * research/publish decisions, and no AI-produced SEO score anywhere in the
  * workflow.
  *
- * reviewContent is the W5 deterministic review + assembly phase, reached only
- * from a fully written run (review_ready). It is a pure local conveyor (see
- * review.ts): it reassembles the written sections into one canonical Content
- * Studio TipTap document strictly in the approved plan order, renders
- * content_html through the existing canonical renderer and scores it with the
- * existing Phase C SEO evaluator - no AI call, no provider call, no database
- * write, no job, no publication, no new SEO rules. Success rests on
- * `completed` with the WriterReview artifact stored; the writer has produced a
- * canonical review artifact, not a saved article. Any honest review failure
- * (missing/extra section, invalid content, render/evaluate error) ends the run
- * failed. reviewContent never trusts writtenSections order and never invents
- * content.
+ * reviewContent is the W5 deterministic review + assembly node, reached only
+ * from a fully written run (status `reviewing`, set by writeSections when the
+ * last section is persisted). It is a pure local conveyor (see review.ts): it
+ * reassembles the written sections into one canonical Content Studio TipTap
+ * document strictly in the approved plan order, renders content_html through
+ * the existing canonical renderer and scores it with the existing Phase C SEO
+ * evaluator - no AI call, no provider call, no database write, no job, no
+ * publication, no new SEO rules. Success rests on `review_ready` with the
+ * WriterReview artifact stored and a status the review session (W8) pauses on;
+ * the writer has produced a canonical review artifact, not a saved article.
+ * Any honest review failure (missing/extra section, invalid content,
+ * render/evaluate error) ends the run failed. reviewContent never trusts
+ * writtenSections order and never invents content.
+ *
+ * awaitReviewSession is the W8 review-session gate, the human interrupt a run
+ * rests on after every review round. It pauses on `review_ready` (never
+ * terminal) until the same thread is resumed with a strictly validated review
+ * session decision (see revision.ts): `accept` moves the run to `completed`
+ * (terminal - explicit save-finalization, the only way to complete a run;
+ * nothing ever reaches completed automatically), while `revise` starts a
+ * controlled revision round. The node re-validates the resume value, so an
+ * out-of-band resume degrades to a failed run instead of being trusted.
+ *
+ * reviseSections is the W8 controlled revision phase, reached only from a
+ * validated revise resume (status `revising`). Like writeSections it is split
+ * into one superstep per requested section so that with a durable checkpointer
+ * every rewritten section is persisted before the next AI call starts: each
+ * invocation rewrites exactly the next not-yet-rewritten requested section
+ * (derived from the persisted revisionProgress channel, which must always be an
+ * exact ordered prefix of the validated request) and then routes back to itself
+ * until every requested section has been rewritten. The approved plan stays
+ * immutable, every unselected section is preserved byte-for-byte, and each
+ * revision call goes through the injected revision writer allowlist
+ * (WriterRevisionDependencies). When the requested sections are all rewritten
+ * the round is recorded (revisionStatus completed, revisionCount/lastRevisionAt
+ * bumped) and the run moves to `reviewing`, which flows straight into the
+ * deterministic re-review (reviewContent) and back onto the review session with
+ * a fresh review_ready artifact - the human always decides again after a
+ * revision. An honest revision failure (unwired writer, provider error, invalid
+ * output, a degraded resume, an unexpected throw) stops the run failed and
+ * keeps the sections that were successfully rewritten for inspection.
  *
  * The compiled graph always carries a checkpointer (the run id doubles as the
  * thread id, see runtime.ts), so runs pause and resume on the exact same
  * checkpoint. createWriterGraph defaults to an in-memory MemorySaver for tests
  * and process-local use, and accepts an injected durable checkpointer (e.g. the
  * official PostgresSaver) so production runs survive process restarts. With a
- * durable checkpointer each writing superstep below is persisted after every
- * section, which is what lets a crashed run resume mid-writing without
- * rewriting already-written sections.
+ * durable checkpointer each writing/revision superstep below is persisted after
+ * every section, which is what lets a crashed run resume mid-writing or
+ * mid-revision without rewriting already-persisted sections.
  */
 
 import { END, MemorySaver, START, StateGraph, interrupt, type BaseCheckpointSaver } from '@langchain/langgraph';
@@ -104,6 +139,7 @@ import {
   type WriterPlanOutcome,
 } from './planner.js';
 import { parseWriterApprovalDecision } from './approval.js';
+import { parseWriterSessionDecision, validateRevisionSectionIds } from './revision.js';
 import {
   DEFAULT_WRITER_REVIEW_DEPENDENCIES,
   reviewWriterContent,
@@ -111,13 +147,19 @@ import {
   type WriterReviewInput,
 } from './review.js';
 import {
+  NO_REVISION_WRITER_DEPENDENCIES,
+  isValidRevisionContent,
+  type WriterRevisionDependencies,
+  type WriterRevisionInput,
+} from './revisionWriter.js';
+import {
   NO_SECTION_WRITER_DEPENDENCIES,
   isValidSectionContent,
   WRITER_SECTION_MAX_PREVIOUS_CHARS,
   type WriterSectionDependencies,
   type WriterSectionInput,
 } from './sectionWriter.js';
-import { WriterStateAnnotation, writerSectionIdFor } from './state.js';
+import { WriterStateAnnotation, writerSectionIdFor, writerSectionIndexFor } from './state.js';
 import type { WriterState, WriterStateUpdate, WriterWrittenSection } from './state.js';
 
 export const WRITER_INITIALIZE_NODE = 'initialize';
@@ -127,6 +169,8 @@ export const WRITER_APPROVAL_NODE = 'awaitApproval';
 export const WRITER_BEGIN_WRITING_NODE = 'beginWriting';
 export const WRITER_WRITE_SECTIONS_NODE = 'writeSections';
 export const WRITER_REVIEW_NODE = 'reviewContent';
+export const WRITER_REVIEW_SESSION_NODE = 'awaitReviewSession';
+export const WRITER_REVISE_SECTIONS_NODE = 'reviseSections';
 
 /** Marks the run as started; later phases assemble per-project context here. */
 function initializeNode(_state: WriterState): WriterStateUpdate {
@@ -315,7 +359,7 @@ async function writeSectionsNode(
     }
   }
   if (index >= plan.sections.length) {
-    return { status: 'review_ready', writtenSections: written, writeNote: null };
+    return { status: 'reviewing', writtenSections: written, writeNote: null };
   }
 
   const sectionId = writerSectionIdFor(index);
@@ -356,24 +400,27 @@ async function writeSectionsNode(
   }
   const next = [...written, { sectionId, content: outcome.content }];
   return next.length >= plan.sections.length
-    ? { status: 'review_ready', writtenSections: next, writeNote: null }
+    ? { status: 'reviewing', writtenSections: next, writeNote: null }
     : { status: 'writing', writtenSections: next, writeNote: null };
 }
 
 /**
  * The W5 deterministic review and content-assembly node. It runs only after a
- * fully written run (review_ready) and is a pure local pipeline over the
+ * fully written run (status `reviewing`, set by writeSections/reviseSections
+ * when no further section writes are due) and is a pure local pipeline over the
  * immutable approved plan and the written sections: it never talks to AI,
- * providers, the database or the scheduler. The conditional edge guarantees
- * the node only ever sees a review_ready run; the defensive guard still fails
- * honestly instead of trusting an inconsistent state.
+ * providers, the database or the scheduler. The conditional edge guarantees the
+ * node only ever sees a reviewing run; the defensive guard still fails honestly
+ * instead of trusting an inconsistent state. On success the run rests on
+ * `review_ready` with the canonical artifact stored - the review session (W8)
+ * interrupt is the next node and decides what happens to it.
  */
 function reviewContentNode(
   deps: WriterReviewDependencies,
   state: WriterState,
 ): WriterStateUpdate {
-  if (state.status !== 'review_ready') {
-    return { status: 'failed', reviewStatus: 'failed', reviewNote: 'Review ran outside the writing phase.' };
+  if (state.status !== 'reviewing') {
+    return { status: 'failed', reviewStatus: 'failed', reviewNote: 'Review ran outside the reviewing phase.' };
   }
   const plan = state.plan;
   if (!plan) {
@@ -388,36 +435,241 @@ function reviewContentNode(
   if (!outcome.ok) {
     return { status: 'failed', reviewStatus: 'failed', reviewNote: outcome.note };
   }
-  return { status: 'completed', review: outcome.review, reviewStatus: 'completed', reviewNote: null };
+  return { status: 'review_ready', review: outcome.review, reviewStatus: 'completed', reviewNote: null };
 }
 
-/** Builds a fresh compiled writer graph. Options.context injects the read-only
+/**
+ * The W8 human review-session gate. A run with a canonical review_ready
+ * artifact pauses here via interrupt() instead of ending: `review_ready` is the
+ * resting, revisable state, and nothing (no accept, no further AI work, no
+ * publication) happens automatically. The graph only continues when the same
+ * thread is resumed through a strictly validated review-session resume (see
+ * revision.ts); the node itself re-validates that resume value and degrades an
+ * out-of-band, invalid resume to a failed run rather than trusting it. An
+ * accept is the explicit save-finalization to `completed` (terminal, never
+ * automatic); a revise stores the validated, plan-ordered revision request and
+ * moves to `revising`.
+ */
+function awaitReviewSessionNode(
+  state: WriterState,
+  config?: { configurable?: { thread_id?: string } },
+): WriterStateUpdate {
+  if (state.status !== 'review_ready') {
+    return { status: 'failed', reviewStatus: 'failed', reviewNote: 'The review session ran outside the review_ready state.' };
+  }
+  const plan = state.plan;
+  if (!plan) {
+    return { status: 'failed', reviewStatus: 'failed', reviewNote: 'No approved plan to accept or revise.' };
+  }
+  const resumeValue: unknown = interrupt({
+    request: 'Accept the review-ready article or revise specific sections before it is saved.',
+    runId: config?.configurable?.thread_id ?? null,
+    status: 'review_ready',
+    planTitle: plan.title,
+    review: {
+      seoScore: state.review?.seo.score ?? null,
+      sectionCount: plan.sections.length,
+      writtenSections: state.writtenSections.length,
+      revisionCount: state.revisionCount ?? 0,
+    },
+  });
+
+  const parsed = parseWriterSessionDecision(resumeValue);
+  if (!parsed.ok) {
+    return {
+      status: 'failed',
+      reviewStatus: 'failed',
+      reviewNote: `The review session resume input was invalid: ${parsed.note}`,
+    };
+  }
+  if (parsed.decision.action === 'accept') {
+    return { status: 'completed' };
+  }
+  const validated = validateRevisionSectionIds(plan, parsed.decision.sectionIds);
+  if (!validated.ok) {
+    return {
+      status: 'failed',
+      revisionStatus: 'failed',
+      revisionNote: `The revision request was invalid: ${validated.note}`,
+    };
+  }
+  return {
+    status: 'revising',
+    revisionStatus: 'revising',
+    revisionRequest: {
+      sectionIds: validated.sectionIds,
+      instruction: parsed.decision.instruction,
+    },
+    revisionNote: null,
+    revisionProgress: [],
+  };
+}
+
+/** Bounded tail of the written section at plan position index-1 (already in its
+ *  final post-revision state because revisions run in plan order), used only
+ *  for continuity while rewriting a requested section. */
+function previousSectionContextAt(written: WriterWrittenSection[], index: number): string | null {
+  if (index <= 0) return null;
+  const previous = written.find((entry) => entry.sectionId === writerSectionIdFor(index - 1));
+  if (!previous) return null;
+  return previous.content.slice(0, WRITER_SECTION_MAX_PREVIOUS_CHARS);
+}
+
+/**
+ * The W8 controlled revision phase (runs only after a validated revise resume,
+ * status `revising`). Mirrors writeSections: one superstep per requested
+ * section so that with a durable checkpointer every rewritten section is
+ * persisted before the next AI call starts. Each invocation rewrites exactly
+ * the next requested section that revisionProgress does not yet cover (the
+ * progress channel must always be an exact, ordered prefix of the validated
+ * request - anything else fails closed instead of re-writing or skipping) and
+ * routes back to itself until the round is complete. Each rewrite replaces only
+ * the stored body of that one approved-plan section; unselected sections and
+ * the approved plan itself are never touched. When every requested section has
+ * been rewritten the round is recorded (revisionStatus completed,
+ * revisionCount/lastRevisionAt bumped) and the run moves to `reviewing`, which
+ * flows straight into the deterministic re-review and back onto the review
+ * session. An honest failure (unwired writer, provider error, invalid output, a
+ * degraded resume, an unexpected throw) stops the run failed and keeps whatever
+ * sections were successfully rewritten for inspection.
+ */
+async function reviseSectionsNode(
+  deps: WriterRevisionDependencies,
+  state: WriterState,
+): Promise<WriterStateUpdate> {
+  if (state.status !== 'revising') {
+    return { status: 'failed', revisionStatus: 'failed', revisionNote: 'Revision ran outside the revising phase.' };
+  }
+  const plan = state.plan;
+  const request = state.revisionRequest;
+  if (!plan) {
+    return { status: 'failed', revisionStatus: 'failed', revisionNote: 'No approved plan to revise.' };
+  }
+  if (!request) {
+    return { status: 'failed', revisionStatus: 'failed', revisionNote: 'No revision request to apply.' };
+  }
+  const validated = validateRevisionSectionIds(plan, request.sectionIds);
+  if (!validated.ok) {
+    return {
+      status: 'failed',
+      revisionStatus: 'failed',
+      revisionNote: `The revision request was invalid: ${validated.note}`,
+    };
+  }
+  const requested = validated.sectionIds;
+  const progress = state.revisionProgress ?? [];
+  // Idempotency guard: the persisted progress marker must always be an exact,
+  // ordered prefix of the validated request. Anything else means the checkpoint
+  // cannot be trusted and the run fails closed instead of re-writing.
+  for (let i = 0; i < progress.length; i += 1) {
+    if (progress[i] !== requested[i]) {
+      return {
+        status: 'failed',
+        revisionStatus: 'failed',
+        revisionNote: 'Persisted revision progress is out of order; aborting to prevent duplicates.',
+      };
+    }
+  }
+  if (progress.length >= requested.length) {
+    // Round fully applied: record it and flow into the deterministic re-review
+    // (reviewing -> reviewContent), never looping again.
+    return {
+      status: 'reviewing',
+      revisionStatus: 'completed',
+      revisionNote: null,
+      revisionCount: (state.revisionCount ?? 0) + 1,
+      lastRevisionAt: new Date().toISOString(),
+    };
+  }
+
+  const sectionId = requested[progress.length];
+  const index = writerSectionIndexFor(sectionId);
+  if (!Number.isInteger(index) || index < 0 || index >= plan.sections.length) {
+    return {
+      status: 'failed',
+      revisionStatus: 'failed',
+      revisionNote: `Section ${sectionId} is not part of the approved plan; aborting the revision.`,
+    };
+  }
+  const existing = state.writtenSections.find((entry) => entry.sectionId === sectionId);
+  if (!existing) {
+    return {
+      status: 'failed',
+      revisionStatus: 'failed',
+      revisionNote: `Section ${sectionId} has no written content to revise; aborting the revision.`,
+    };
+  }
+  const section = plan.sections[index];
+  const input: WriterRevisionInput = {
+    projectId: state.projectId,
+    topic: state.topic,
+    targetKeyword: state.targetKeyword ?? null,
+    articleTitle: plan.title,
+    sectionIndex: index,
+    section,
+    instruction: request.instruction,
+    currentContent: existing.content,
+    context: state.context,
+  };
+  let outcome: Awaited<ReturnType<WriterRevisionDependencies['reviseSection']>>;
+  try {
+    outcome = await deps.reviseSection(input);
+  } catch (err) {
+    logger.error({ err, projectId: state.projectId }, 'writer revision writer threw unexpectedly');
+    return {
+      status: 'failed',
+      revisionStatus: 'failed',
+      revisionNote: contextNoteFromError(err),
+    };
+  }
+  if (!outcome.ok) {
+    return { status: 'failed', revisionStatus: 'failed', revisionNote: outcome.note };
+  }
+  if (!isValidRevisionContent(outcome.content)) {
+    return {
+      status: 'failed',
+      revisionStatus: 'failed',
+      revisionNote: `Section ${sectionId} produced invalid revised content and was not stored.`,
+    };
+  }
+  const updated = state.writtenSections.map((entry) =>
+    entry.sectionId === sectionId ? { sectionId, content: outcome.content } : entry,
+  );
+  return { status: 'revising', writtenSections: updated, revisionProgress: [...progress, sectionId] };
+}
+
+/**
+ * Builds a fresh compiled writer graph. Options.context injects the read-only
  *  adapter allowlist, options.planner the AI planning allowlist,
- *  options.sectionWriter the section-writing allowlist and options.review the
- *  deterministic review allowlist; without the former three every source
- *  reports not configured, planning reports "no AI planner wired" and an
- *  approved run's writing reports "no section writer wired", ending the run
- *  failed instead of fabricating a plan or a section. The review allowlist
- *  defaults to the canonical @seo/contracts evaluator and renderer, so a
- *  successful write always flows through the deterministic W5 review.
+ *  options.sectionWriter the section-writing allowlist, options.revisionWriter
+ *  the revision-writing allowlist and options.review the deterministic review
+ *  allowlist; without the former four every source reports not configured,
+ *  planning reports "no AI planner wired", an approved run's writing reports
+ *  "no section writer wired" and a revise resume reports "no revision writer
+ *  wired", ending the run failed instead of fabricating a plan, a section or a
+ *  revision. The review allowlist defaults to the canonical @seo/contracts
+ *  evaluator and renderer, so a successful write or revision always flows
+ *  through the deterministic W5 review.
  *
  * The compiled graph always carries a checkpointer, which the interrupt pause
  * requires. options.checkpointer injects a durable one (production); the
  * default is an in-memory MemorySaver for tests and process-local use. With a
- * durable checkpointer the per-section writing supersteps are persisted after
- * every section, so a crashed run can resume mid-writing without re-writing
- * persisted sections. Every invoke must carry
+ * durable checkpointer the per-section writing/revision supersteps are
+ * persisted after every section, so a crashed run can resume mid-writing or
+ * mid-revision without re-writing persisted sections. Every invoke must carry
  * { configurable: { thread_id: <runId> } }. */
 export function createWriterGraph(options: {
   context?: WriterContextDependencies;
   planner?: WriterPlannerDependencies;
   sectionWriter?: WriterSectionDependencies;
+  revisionWriter?: WriterRevisionDependencies;
   review?: WriterReviewDependencies;
   checkpointer?: BaseCheckpointSaver;
 } = {}) {
   const contextDeps = options.context ?? NO_ADAPTER_DEPENDENCIES;
   const plannerDeps = options.planner ?? NO_PLANNER_DEPENDENCIES;
   const sectionWriterDeps = options.sectionWriter ?? NO_SECTION_WRITER_DEPENDENCIES;
+  const revisionWriterDeps = options.revisionWriter ?? NO_REVISION_WRITER_DEPENDENCIES;
   const reviewDeps = options.review ?? DEFAULT_WRITER_REVIEW_DEPENDENCIES;
   return new StateGraph(WriterStateAnnotation)
     .addNode(WRITER_INITIALIZE_NODE, initializeNode)
@@ -427,6 +679,8 @@ export function createWriterGraph(options: {
     .addNode(WRITER_BEGIN_WRITING_NODE, beginWritingNode)
     .addNode(WRITER_WRITE_SECTIONS_NODE, (state: WriterState) => writeSectionsNode(sectionWriterDeps, state))
     .addNode(WRITER_REVIEW_NODE, (state: WriterState) => reviewContentNode(reviewDeps, state))
+    .addNode(WRITER_REVIEW_SESSION_NODE, (state: WriterState, config) => awaitReviewSessionNode(state, config))
+    .addNode(WRITER_REVISE_SECTIONS_NODE, (state: WriterState) => reviseSectionsNode(revisionWriterDeps, state))
     .addEdge(START, WRITER_INITIALIZE_NODE)
     .addEdge(WRITER_INITIALIZE_NODE, WRITER_GATHER_NODE)
     .addEdge(WRITER_GATHER_NODE, WRITER_PLAN_NODE)
@@ -436,9 +690,25 @@ export function createWriterGraph(options: {
     )
     .addEdge(WRITER_BEGIN_WRITING_NODE, WRITER_WRITE_SECTIONS_NODE)
     .addConditionalEdges(WRITER_WRITE_SECTIONS_NODE, (state: WriterState) =>
-      state.status === 'review_ready' ? WRITER_REVIEW_NODE : state.status === 'writing' ? WRITER_WRITE_SECTIONS_NODE : END,
+      state.status === 'writing'
+        ? WRITER_WRITE_SECTIONS_NODE
+        : state.status === 'reviewing'
+          ? WRITER_REVIEW_NODE
+          : END,
     )
-    .addEdge(WRITER_REVIEW_NODE, END)
+    .addConditionalEdges(WRITER_REVIEW_NODE, (state: WriterState) =>
+      state.status === 'review_ready' ? WRITER_REVIEW_SESSION_NODE : END,
+    )
+    .addConditionalEdges(WRITER_REVIEW_SESSION_NODE, (state: WriterState) =>
+      state.status === 'revising' ? WRITER_REVISE_SECTIONS_NODE : END,
+    )
+    .addConditionalEdges(WRITER_REVISE_SECTIONS_NODE, (state: WriterState) =>
+      state.status === 'revising'
+        ? WRITER_REVISE_SECTIONS_NODE
+        : state.status === 'reviewing'
+          ? WRITER_REVIEW_NODE
+          : END,
+    )
     .compile({ checkpointer: options.checkpointer ?? new MemorySaver() });
 }
 
