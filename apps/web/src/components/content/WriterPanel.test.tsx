@@ -13,7 +13,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, fireEvent, within } from '@testing-library/react';
 import { asTipDoc, evaluateSeo, tiptapEmptyDoc } from '@seo/contracts';
-import type { WriterRunDto, WriterRunPlanDto, WriterRunReviewDto, WriterMagicAction } from '@seo/contracts';
+import type {
+  WriterEvidenceDto,
+  WriterRunDto,
+  WriterRunPlanDto,
+  WriterRunReviewDto,
+  WriterMagicAction,
+} from '@seo/contracts';
 import { WriterPanel } from './WriterPanel';
 
 const { apiMock, ApiRequestError } = vi.hoisted(() => {
@@ -89,6 +95,7 @@ function run(over: Partial<WriterRunDto>): WriterRunDto {
     revisionCount: 0,
     lastRevisionAt: null,
     magicAction: null,
+    evidence: null,
     createdAt: '2026-01-01T00:00:00.000Z',
     ...over,
   };
@@ -96,6 +103,7 @@ function run(over: Partial<WriterRunDto>): WriterRunDto {
 
 interface FakeApi {
   current: () => WriterRunDto;
+  setCurrent: (next: WriterRunDto) => void;
   calls: Array<{ path: string; method?: string; body?: unknown }>;
 }
 
@@ -132,7 +140,13 @@ function fakeApi(initial: WriterRunDto, onGet?: () => WriterRunDto | undefined):
     if (next) current = next;
     return current;
   });
-  return { current: () => current, calls };
+  return {
+    current: () => current,
+    setCurrent: (next: WriterRunDto) => {
+      current = next;
+    },
+    calls,
+  };
 }
 
 async function startRun() {
@@ -497,5 +511,122 @@ describe('WriterPanel - W10.1 Section Magic', () => {
       target: { value: 'Tighten the argument' },
     });
     expect((screen.getByRole('button', { name: /apply magic to selected sections/i }) as HTMLButtonElement).disabled).toBe(false);
+  });
+});
+
+describe('WriterPanel - W10.2 research & evidence', () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+    apiMock.api.mockReset();
+  });
+
+  const EVIDENCE: WriterEvidenceDto = {
+    gatheredAt: '2026-01-02T00:00:00.000Z',
+    sources: [
+      {
+        source: 'knowledge',
+        status: 'available',
+        note: null,
+        items: [
+          {
+            id: 'knowledge:0',
+            source: 'knowledge',
+            title: 'On-page factors overview',
+            text: 'Authority and content relevance drive rankings.',
+            url: null,
+            retrievedAt: '2026-01-02T00:00:00.000Z',
+            trust: 'untrusted',
+          },
+        ],
+      },
+      {
+        source: 'search',
+        status: 'not_configured',
+        note: 'No project-scoped search source is configured.',
+        items: [],
+      },
+      { source: 'existing_content', status: 'empty', note: null, items: [] },
+      {
+        source: 'intelligence',
+        status: 'unavailable',
+        note: 'DataForSEO signals are not configured for this project.',
+        items: [],
+      },
+    ],
+  };
+
+  it('gathers evidence only on the explicit human click and shows it as untrusted research context', async () => {
+    window.localStorage.setItem(BOOKMARK_KEY, 'run-1');
+    const base = run({ status: 'review_ready', review: REVIEW });
+    const fake = fakeApi(base);
+    const original = apiMock.api.getMockImplementation();
+    apiMock.api.mockImplementation(async (path: string, opts: { method?: string; body?: unknown } = {}) => {
+      if ((opts.method ?? 'GET') === 'POST' && path.endsWith('/research')) {
+        fake.setCurrent(run({ status: 'review_ready', review: REVIEW, evidence: EVIDENCE }));
+      }
+      return original!(path, opts);
+    });
+    render(<WriterPanel projectId={PROJECT} contentId={CONTENT} defaultTopic="On-Page SEO" pollMs={5} />);
+
+    await screen.findByText(/review-ready draft/i);
+
+    // Before gathering there is no evidence and no magic research note.
+    expect(screen.getByRole('button', { name: /gather evidence/i })).toBeTruthy();
+    expect(screen.queryByText(/1 item/i)).toBeNull();
+    expect(screen.queryByText(/untrusted reference material for these sections/i)).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: /gather evidence/i }));
+
+    // The synchronous gather returns the resting review_ready DTO with evidence.
+    const item = await screen.findByText(/Authority and content relevance drive rankings/i, {}, { timeout: 2000 });
+    expect(item).toBeTruthy();
+    expect(screen.getByText('Research context')).toBeTruthy();
+    expect(screen.getByText(/1 item/i)).toBeTruthy();
+    expect(screen.getByRole('button', { name: /gather again/i })).toBeTruthy();
+    // Honest per-source statuses surface exactly as reported.
+    expect(screen.getByText(/not_configured/i)).toBeTruthy();
+    expect(screen.getByText(/unavailable/i)).toBeTruthy();
+    expect(screen.getByText(/No project-scoped search source is configured/i)).toBeTruthy();
+
+    // The evidence is offered to a later magic round as untrusted reference
+    // material only - never auto-applied, never accepted.
+    expect(screen.getByText(/will be offered to the writer as untrusted reference material/i)).toBeTruthy();
+    expect(screen.getByText(/NOT saved to this document/i)).toBeTruthy();
+    expect(screen.getByText('review_ready')).toBeTruthy();
+
+    const researchCall = fake.calls.find((c) => c.method === 'POST' && c.path.endsWith('/research'));
+    expect(researchCall).toBeTruthy();
+    expect(researchCall!.body).toEqual({});
+  });
+
+  it('reports a gathered-but-empty research result honestly (no fabricated fallback)', async () => {
+    window.localStorage.setItem(BOOKMARK_KEY, 'run-1');
+    const EMPTY: WriterEvidenceDto = {
+      gatheredAt: '2026-01-02T00:00:00.000Z',
+      sources: [
+        { source: 'knowledge', status: 'empty', note: null, items: [] },
+        { source: 'search', status: 'not_configured', note: null, items: [] },
+        { source: 'existing_content', status: 'empty', note: null, items: [] },
+        { source: 'intelligence', status: 'unavailable', note: null, items: [] },
+      ],
+    };
+    const base = run({ status: 'review_ready', review: REVIEW });
+    const fake = fakeApi(base);
+    const original = apiMock.api.getMockImplementation();
+    apiMock.api.mockImplementation(async (path: string, opts: { method?: string; body?: unknown } = {}) => {
+      if ((opts.method ?? 'GET') === 'POST' && path.endsWith('/research')) {
+        fake.setCurrent(run({ status: 'review_ready', review: REVIEW, evidence: EMPTY }));
+      }
+      return original!(path, opts);
+    });
+    render(<WriterPanel projectId={PROJECT} contentId={CONTENT} defaultTopic="On-Page SEO" pollMs={5} />);
+
+    await screen.findByText(/review-ready draft/i);
+    fireEvent.click(screen.getByRole('button', { name: /gather evidence/i }));
+
+    await screen.findByText(/0 items/i, {}, { timeout: 2000 });
+    expect(screen.getAllByText(/No items gathered from this source/i)).toHaveLength(4);
+    // With no usable items the magic note stays off: nothing to offer.
+    expect(screen.queryByText(/will be offered to the writer as untrusted reference material/i)).toBeNull();
   });
 });

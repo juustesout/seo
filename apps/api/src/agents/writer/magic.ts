@@ -41,6 +41,11 @@ import {
   type RevisionSectionValidation,
   type WriterSessionDecision,
 } from './revision.js';
+import {
+  isWriterResearchSessionDecision,
+  writerResearchSessionSchema,
+  type WriterResearchSessionDecision,
+} from './evidence.js';
 import type { WriterPlan, WriterRevisionRequest } from './state.js';
 
 /** Canonical Section Magic action vocabulary (W10.1). */
@@ -309,8 +314,9 @@ const magicSessionSchema = z
 
 export type WriterMagicSessionDecision = z.infer<typeof magicSessionSchema>;
 
-/** A valid review-session resume value: W8 accept/revise or W10.1 magic. */
-export type WriterReviewSessionResume = WriterSessionDecision | WriterMagicSessionDecision;
+/** A valid review-session resume value: W8 accept/revise, W10.1 magic or the
+ *  W10.2 research gather (`{ action: "research" }`, see evidence.ts). */
+export type WriterReviewSessionResume = WriterSessionDecision | WriterMagicSessionDecision | WriterResearchSessionDecision;
 
 export type WriterSessionResumeParse =
   | { ok: true; resume: WriterReviewSessionResume }
@@ -321,14 +327,18 @@ export function isWriterMagicSessionDecision(value: unknown): value is WriterMag
   return magicSessionSchema.safeParse(value).success;
 }
 
-/** The single validation gate for review-session resumes (W8 accept/revise +
- *  W10.1 magic). Both the graph node and the resume boundaries call this so
- *  the layers can never disagree about what a valid session resume is. */
+/** The single validation gate for review-session resumes (W8 accept/revise,
+ *  W10.1 magic and W10.2 research). Both the graph node and the resume
+ *  boundaries call this so the layers can never disagree about what a valid
+ *  session resume is. */
 export function parseReviewSessionResume(value: unknown): WriterSessionResumeParse {
   const session = parseWriterSessionDecision(value);
   if (session.ok) return { ok: true, resume: session.decision };
   const magic = magicSessionSchema.safeParse(value);
   if (magic.success) return { ok: true, resume: magic.data };
+  if (isWriterResearchSessionDecision(value)) {
+    return { ok: true, resume: writerResearchSessionSchema.parse(value) };
+  }
   return { ok: false, note: session.note };
 }
 

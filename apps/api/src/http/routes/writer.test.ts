@@ -54,6 +54,7 @@ function dto(overrides: Partial<Record<string, unknown>> = {}) {
     revisionCount: 0,
     lastRevisionAt: null,
     magicAction: null,
+    evidence: null,
     createdAt: '2026-09-08T00:00:00.000Z',
     ...overrides,
   };
@@ -120,6 +121,9 @@ beforeEach(() => {
   vi.spyOn(WriterRunService.prototype, 'magic').mockResolvedValue(
     dto({ status: 'revising', magicAction: 'improve' }) as never,
   );
+  vi.spyOn(WriterRunService.prototype, 'research').mockResolvedValue(
+    dto({ status: 'review_ready' }) as never,
+  );
 });
 
 afterEach(() => {
@@ -127,7 +131,7 @@ afterEach(() => {
 });
 
 describe('writer API - authorization', () => {
-  it.each(['POST /', 'GET /:runId', 'POST /:runId/approval', 'POST /:runId/magic'])(
+  it.each(['POST /', 'GET /:runId', 'POST /:runId/approval', 'POST /:runId/magic', 'POST /:runId/research'])(
     '401 when unauthenticated',
     async (route) => {
       const [method, pathTemplate] = route.split(' ') as [string, string];
@@ -138,7 +142,9 @@ describe('writer API - authorization', () => {
             ? `/${RUN}`
             : pathTemplate === '/:runId/approval'
               ? `/${RUN}/approval`
-              : `/${RUN}/magic`;
+              : pathTemplate === '/:runId/magic'
+                ? `/${RUN}/magic`
+                : `/${RUN}/research`;
       const res = await request(path, { method, body: {} });
       expect(res.status).toBe(401);
       expect((res.json as { error: { code: string } }).error.code).toBe('unauthorized');
@@ -166,6 +172,11 @@ describe('writer API - authorization', () => {
       token: 'viewer-token',
       body: { action: 'improve', sectionIds: ['section_0'] },
     });
+    expect(res.status).toBe(403);
+  });
+
+  it('403: viewer cannot gather research evidence', async () => {
+    const res = await request(`/${RUN}/research`, { method: 'POST', token: 'viewer-token', body: {} });
     expect(res.status).toBe(403);
   });
 
@@ -299,6 +310,52 @@ describe('writer API - lifecycle + errors', () => {
     expect(res.status).toBe(409);
     expect((res.json as { error: { code: string } }).error.code).toBe('writer_run_not_review_ready');
   });
+
+  it('gathers research evidence as an editor (200) with the optional purpose forwarded and never touches content writes', async () => {
+    const researchSpy = vi.mocked(WriterRunService.prototype.research);
+    const updateSpy = vi.spyOn(ContentService.prototype, 'update');
+    const createSpy = vi.spyOn(ContentService.prototype, 'create');
+    const removeSpy = vi.spyOn(ContentService.prototype, 'remove');
+
+    const planned = await request(`/${RUN}/research`, {
+      method: 'POST',
+      token: 'editor-token',
+      body: { purpose: 'planning' },
+    });
+    expect(planned.status).toBe(200);
+    expect((planned.json as { data: { status: string } }).data.status).toBe('review_ready');
+    expect(researchSpy).toHaveBeenCalledWith(RUN, 'planning', PROJECT, CONTENT);
+
+    // No purpose defaults to the bounded revision vocabulary.
+    const defaulted = await request(`/${RUN}/research`, { method: 'POST', token: 'editor-token', body: {} });
+    expect(defaulted.status).toBe(200);
+    expect(researchSpy).toHaveBeenCalledWith(RUN, 'revision', PROJECT, CONTENT);
+
+    expect(updateSpy).not.toHaveBeenCalled();
+    expect(createSpy).not.toHaveBeenCalled();
+    expect(removeSpy).not.toHaveBeenCalled();
+  });
+
+  it('400 for an invalid research purpose and never reaches the service', async () => {
+    const researchSpy = vi.mocked(WriterRunService.prototype.research);
+    const bad = await request(`/${RUN}/research`, {
+      method: 'POST',
+      token: 'editor-token',
+      body: { purpose: 'scrape_the_internet' },
+    });
+    expect(bad.status).toBe(400);
+    expect((bad.json as { error: { code: string } }).error.code).toBe('invalid_research_request');
+    expect(researchSpy).not.toHaveBeenCalled();
+  });
+
+  it('409 when research runs on a run not resting on review_ready', async () => {
+    vi.mocked(WriterRunService.prototype.research).mockRejectedValue(
+      new ApiError(409, 'writer_run_not_review_ready', 'Writer run is writing; only a run resting on review_ready can gather evidence.') as never,
+    );
+    const res = await request(`/${RUN}/research`, { method: 'POST', token: 'editor-token', body: {} });
+    expect(res.status).toBe(409);
+    expect((res.json as { error: { code: string } }).error.code).toBe('writer_run_not_review_ready');
+  });
 });
 
 describe('writer API - safe response envelope', () => {
@@ -306,7 +363,7 @@ describe('writer API - safe response envelope', () => {
     const res = await request('', { method: 'POST', token: 'editor-token', body: { instruction: 'Write' } });
     const json = res.json as { data: Record<string, unknown> };
     expect(Object.keys(json.data).sort()).toEqual(
-      ['contentId', 'createdAt', 'lastRevisionAt', 'magicAction', 'note', 'plan', 'projectId', 'review', 'revisionCount', 'runId', 'status'].sort(),
+      ['contentId', 'createdAt', 'evidence', 'lastRevisionAt', 'magicAction', 'note', 'plan', 'projectId', 'review', 'revisionCount', 'runId', 'status'].sort(),
     );
     const text = JSON.stringify(json).toLowerCase();
     expect(text).not.toContain('authorization');

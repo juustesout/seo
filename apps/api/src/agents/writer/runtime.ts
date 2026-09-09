@@ -44,6 +44,7 @@ import type { WriterApprovalDecision } from './approval.js';
 import { parseWriterApprovalDecision } from './approval.js';
 import { parseReviewSessionResume, type WriterReviewSessionResume } from './magic.js';
 import { emptyWriterContext, type WriterContext } from './context.js';
+import type { WriterEvidence } from './evidence.js';
 import type {
   WriterApprovalStatus,
   WriterPlan,
@@ -123,6 +124,9 @@ export interface WriterRunResult {
   lastRevisionAt: string | null;
   /** Bounded, honest note of a failed revision round, if any. */
   revisionNote: string | null;
+  /** Durable W10.2 research context gathered for this run, or null until the
+   *  human triggers a research operation (see evidence.ts). */
+  evidence: WriterEvidence | null;
 }
 
 /** Maps raw graph state onto the public run result, tolerating channels the
@@ -151,6 +155,7 @@ export function writerRunResultFromState(runId: WriterRunId, state: WriterState)
     revisionCount: channel(state.revisionCount, 0),
     lastRevisionAt: channel(state.lastRevisionAt, null),
     revisionNote: channel(state.revisionNote, null),
+    evidence: channel(state.evidence, null),
   };
 }
 

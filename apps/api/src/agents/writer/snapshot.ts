@@ -3,12 +3,15 @@
  *
  * What may be persisted about a writer run and how it is re-validated. A run's
  * DB row keeps a *safe snapshot* of the resting WriterRunResult - identity,
- * brief, the article plan, the written sections, the canonical review artifact
- * and the honest notes - and nothing else. Deliberately excluded: the bounded
- * retrieval context (reference data is ephemeral and never needed to serve the
- * run to the UI or to resume it; the LangGraph checkpoint is the authoritative
- * execution state), and by construction no credentials, API keys, prompt text,
- * service handles or LangGraph runtime objects.
+ * brief, the article plan, the written sections, the canonical review artifact,
+ * the honest notes and the W10.2 research evidence the human gathered (evidence
+ * IS persisted: after a restart it must stay clear which research context was
+ * available, so later revision/magic rounds never fabricate it) - and nothing
+ * else. Deliberately excluded: the bounded W1 retrieval context (that reference
+ * data is ephemeral and never needed to serve the run to the UI or to resume
+ * it; the LangGraph checkpoint is the authoritative execution state), and by
+ * construction no credentials, API keys, prompt text, service handles or
+ * LangGraph runtime objects.
  *
  * Reads are fail-closed: persisted JSON is parsed with a strict Zod schema and
  * checked for internal consistency (run binding matches the row, status is a
@@ -20,6 +23,16 @@
 
 import { z } from 'zod';
 import { ApiError } from '../../apiErrors.js';
+import type { WriterEvidence, WriterEvidenceSource, WriterEvidenceStatus } from './evidence.js';
+import {
+  WRITER_MAX_EVIDENCE_ITEM_TEXT_CHARS,
+  WRITER_MAX_EVIDENCE_ITEMS,
+  WRITER_MAX_EVIDENCE_METADATA_STR_CHARS,
+  WRITER_MAX_EVIDENCE_NOTE_CHARS,
+  WRITER_MAX_EVIDENCE_SOURCE_ITEMS,
+  WRITER_MAX_EVIDENCE_SOURCES,
+  WRITER_MAX_EVIDENCE_TITLE_CHARS,
+} from './evidence.js';
 import { writerMagicIntentSchema } from './magic.js';
 import type { WriterRunId } from './runtime.js';
 import type { WriterRunResult } from './runtime.js';
@@ -62,6 +75,10 @@ export interface WriterRunSnapshot {
    *  on the row while it is `revising` so a crash before the thread resume can
    *  re-issue the exact request (see durable.ts). Null otherwise. */
   revisionRequest: WriterRevisionRequest | null;
+  /** W10.2 research context the human explicitly gathered for this run, or
+   *  null until a research operation has run. Persisted so a restart keeps it
+   *  clear which evidence was available. */
+  evidence: WriterEvidence | null;
 }
 
 const writerRelatedContentSchema = z.object({
@@ -109,6 +126,68 @@ const writerRevisionRequestSchema = z
   })
   .strict();
 
+const writerEvidenceItemSchema = z
+  .object({
+    id: z.string().min(1).max(200),
+    source: z.enum(['knowledge', 'existing_content', 'search', 'intelligence']),
+    title: z.string().max(WRITER_MAX_EVIDENCE_TITLE_CHARS).nullable(),
+    text: z.string().max(WRITER_MAX_EVIDENCE_ITEM_TEXT_CHARS),
+    url: z.string().nullable(),
+    retrievedAt: z.string().nullable(),
+    trust: z.literal('untrusted'),
+    metadata: z
+      .record(
+        z.string().min(1).max(120),
+        z.union([
+          z.string().max(WRITER_MAX_EVIDENCE_METADATA_STR_CHARS),
+          z.number().finite(),
+          z.boolean(),
+          z.null(),
+        ]),
+      )
+      .optional(),
+  })
+  .strict();
+
+const writerEvidenceSourceSchema = z
+  .object({
+    source: z.enum(['knowledge', 'existing_content', 'search', 'intelligence']),
+    status: z.enum(['available', 'empty', 'not_configured', 'unavailable']),
+    note: z.string().max(WRITER_MAX_EVIDENCE_NOTE_CHARS).nullable(),
+    items: z.array(writerEvidenceItemSchema).max(WRITER_MAX_EVIDENCE_SOURCE_ITEMS),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    if (value.status === 'not_configured' && value.items.length > 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['items'],
+        message: 'A not_configured source cannot carry evidence items.',
+      });
+    }
+  });
+
+/** Strict schema for the persisted W10.2 evidence artifact. `.strict()` fails
+ *  closed on anything we did not intend to persist (raw provider responses,
+ *  credentials, tokens, internals...). Total item count is re-capped here so a
+ *  corrupt snapshot that violates the writer evidence bounds fails closed. */
+export const writerEvidenceSchema = z
+  .object({
+    gatheredAt: z.string().min(1).max(100).nullable(),
+    sources: z.array(writerEvidenceSourceSchema).max(WRITER_MAX_EVIDENCE_SOURCES),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    const totalItems = value.sources.reduce((sum, source) => sum + source.items.length, 0);
+    if (totalItems > WRITER_MAX_EVIDENCE_ITEMS) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['sources'],
+        message: 'Evidence item count exceeds the writer evidence bound.',
+      });
+    }
+  });
+
 /** Strict top-level schema for a persisted snapshot. `.strict()` fails closed
  *  on any field we did not intend to persist (context, secrets, internal
  *  handles...). Parsed values are narrowed to the WriterRunSnapshot shape by
@@ -152,6 +231,7 @@ export const writerRunSnapshotSchema = z
     lastRevisionAt: z.string().nullable().default(null),
     revisionNote: z.string().nullable().default(null),
     revisionRequest: writerRevisionRequestSchema.nullable().default(null),
+    evidence: writerEvidenceSchema.nullable().default(null),
   })
   .strict();
 
@@ -193,6 +273,9 @@ function assertSnapshotConsistency(snapshot: WriterRunSnapshot, runId: string, p
   }
   if (snapshot.status === 'revising' && snapshot.revisionRequest === null) {
     writerSnapshotInvalid(runId, 'a revising run has no revision request');
+  }
+  if (snapshot.evidence !== null && snapshot.evidence.gatheredAt === null) {
+    writerSnapshotInvalid(runId, 'evidence exists without a gather timestamp');
   }
 }
 
@@ -240,6 +323,7 @@ export function snapshotFromResult(
     lastRevisionAt: result.lastRevisionAt,
     revisionNote: result.revisionNote,
     revisionRequest: opts.revisionRequest ?? null,
+    evidence: result.evidence ?? null,
   });
   if (!parsed.success) {
     throw new Error(`writer result for run ${result.runId} did not serialize to a valid snapshot`);

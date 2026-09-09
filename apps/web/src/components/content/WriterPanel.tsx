@@ -1,6 +1,6 @@
 /**
  * Writer panel for the Content Studio editor (W6, durable runs W7, revision
- * loop W8, Section Magic W10.1).
+ * loop W8, Section Magic W10.1, research context W10.2).
  *
  * Starts a writer run for the article being edited, shows the AI-generated
  * plan as a PROPOSAL, requires an explicit human decision (Approve & Write /
@@ -36,7 +36,15 @@
  *     no longer exists simply falls back to the fresh start form.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { WriterRunDto, WriterRunStatus, WriterMagicAction, WriterMagicTone } from '@seo/contracts';
+import type {
+  WriterEvidenceDto,
+  WriterEvidenceSource,
+  WriterEvidenceStatus,
+  WriterRunDto,
+  WriterRunStatus,
+  WriterMagicAction,
+  WriterMagicTone,
+} from '@seo/contracts';
 import { ApiRequestError, api } from '../../lib/api';
 
 /** Canonical Section Magic actions surfaced in the picker, mirroring the API
@@ -142,6 +150,7 @@ export function WriterPanel({ projectId, contentId, defaultTopic, defaultKeyword
   const [magicAction, setMagicAction] = useState<WriterMagicAction>('improve');
   const [magicTone, setMagicTone] = useState<WriterMagicTone>('professional');
   const [magicInstruction, setMagicInstruction] = useState('');
+  const [researchBusy, setResearchBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [fatal, setFatal] = useState<string | null>(null);
   const runRef = useRef<WriterRunDto | null>(null);
@@ -308,6 +317,30 @@ export function WriterPanel({ projectId, contentId, defaultTopic, defaultKeyword
     }
   };
 
+  /** W10.2 research gather: posts to the research endpoint so the writer
+   *  collects bounded, project-scoped evidence for this draft. It is an honest,
+   *  synchronous gather - the response carries the resting review_ready DTO with
+   *  `evidence` filled in. Research never changes the article, never applies the
+   *  evidence and never leaves review_ready. */
+  const gatherResearch = async () => {
+    const current = runRef.current;
+    if (!current || actionBusy || researchBusy) return;
+    setResearchBusy(true);
+    setError(null);
+    setFatal(null);
+    try {
+      const next = await api<WriterRunDto>(`${runPath(projectId, contentId, current.runId)}/research`, {
+        method: 'POST',
+        body: {},
+      });
+      setRun(next);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setResearchBusy(false);
+    }
+  };
+
   const reset = () => {
     setRun(null);
     setError(null);
@@ -363,7 +396,7 @@ export function WriterPanel({ projectId, contentId, defaultTopic, defaultKeyword
     );
   }
 
-  const { status, plan, review, note } = run;
+  const { status, plan, review, note, evidence } = run;
 
   return (
     <div className="writer-panel">
@@ -413,11 +446,12 @@ export function WriterPanel({ projectId, contentId, defaultTopic, defaultKeyword
       {status === 'review_ready' && review && plan && (
         <>
           <ReviewResult review={review} planTitle={plan.title} revisionCount={run.revisionCount} />
+          <ResearchControls evidence={evidence} busy={actionBusy || researchBusy} onGather={() => void gatherResearch()} />
           <ReviewSessionControls
             sections={plan.sections}
             selected={reviseSections}
             instruction={reviseInstruction}
-            busy={actionBusy}
+            busy={actionBusy || researchBusy}
             onToggle={toggleReviseSection}
             onInstructionChange={setReviseInstruction}
             onRevise={() => void reviseSelected()}
@@ -428,7 +462,8 @@ export function WriterPanel({ projectId, contentId, defaultTopic, defaultKeyword
             action={magicAction}
             tone={magicTone}
             instruction={magicInstruction}
-            busy={actionBusy}
+            busy={actionBusy || researchBusy}
+            hasResearch={Boolean(evidence && evidence.sources.some((s) => s.items.length > 0))}
             onActionChange={setMagicAction}
             onToneChange={setMagicTone}
             onInstructionChange={setMagicInstruction}
@@ -565,6 +600,137 @@ function ReviewResult({
   );
 }
 
+/** W10.2 Research context block. Explicit, honest: shows which research
+ *  evidence the human gathered for this draft as untrusted reference material
+ *  ("research context"), never as verified facts, and never auto-applies it.
+ *  Empty / not configured / unavailable sources are reported exactly as they
+ *  are - nothing is fabricated. */
+function ResearchControls({
+  evidence,
+  busy,
+  onGather,
+}: {
+  evidence: WriterRunDto['evidence'];
+  busy: boolean;
+  onGather: () => void;
+}) {
+  const itemCount = evidence ? evidence.sources.reduce((sum, s) => sum + s.items.length, 0) : 0;
+  return (
+    <div className="writer-research" style={{ marginTop: 14 }}>
+      <div className="writer-proposal">
+        <span className="pill busy">Research context</span>
+        <span className="muted" style={{ fontSize: 12 }}>
+          Reference material gathered from this project for the draft - it is not verified facts, it is never applied
+          automatically, and it is offered to later revisions only as untrusted context.
+        </span>
+      </div>
+      {busy && <p className="muted" style={{ marginTop: 8 }}>Gathering evidence…</p>}
+      {!busy && !evidence && (
+        <div className="row" style={{ marginTop: 8, alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+          <p className="muted" style={{ margin: 0, flex: 1 }}>
+            No research context has been gathered for this draft yet.
+          </p>
+          <button className="btn" onClick={onGather} disabled={busy}>
+            Gather evidence
+          </button>
+        </div>
+      )}
+      {!busy && evidence && (
+        <div style={{ marginTop: 8 }}>
+          <div className="row" style={{ alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
+            <span className="pill ok">{itemCount} item{itemCount === 1 ? '' : 's'}</span>
+            <span className="muted" style={{ fontSize: 12 }}>
+              Gathered {evidence.gatheredAt ? new Date(evidence.gatheredAt).toLocaleString() : ''}
+            </span>
+            <button className="btn sm" onClick={onGather} disabled={busy}>
+              Gather again
+            </button>
+          </div>
+          {evidence.sources.map((source) => (
+            <ResearchSourceSection key={source.source} source={source.source} status={source.status} note={source.note} items={source.items} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ResearchSourceSection({
+  source,
+  status,
+  note,
+  items,
+}: {
+  source: WriterEvidenceSource;
+  status: WriterEvidenceStatus;
+  note: string | null;
+  items: WriterEvidenceDto['sources'][number]['items'];
+}) {
+  const label: Record<WriterEvidenceSource, string> = {
+    knowledge: 'Knowledge',
+    existing_content: 'Existing content',
+    search: 'Search',
+    intelligence: 'Intelligence',
+  };
+  return (
+    <div className="writer-section" style={{ marginTop: 8 }}>
+      <div className="row" style={{ alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+        <strong style={{ fontSize: 13 }}>{label[source]}</strong>
+        <span className={`pill ${statusClassFromEvidence(status)}`}>{status}</span>
+      </div>
+      {note && (
+        <p className="muted" style={{ fontSize: 12, margin: '2px 0' }}>
+          {note}
+        </p>
+      )}
+      {items.length === 0 && status !== 'available' && (
+        <p className="muted" style={{ fontSize: 12, margin: '4px 0' }}>
+          No items gathered from this source.
+        </p>
+      )}
+      {items.map((item) => (
+        <div key={item.id} style={{ margin: '6px 0' }}>
+          <div className="row" style={{ alignItems: 'baseline', gap: 6, flexWrap: 'wrap' }}>
+            {item.title ? <strong style={{ fontSize: 13 }}>{item.title}</strong> : null}
+            {item.url ? (
+              <a className="muted" style={{ fontSize: 12 }} href={item.url} target="_blank" rel="noreferrer">
+                source
+              </a>
+            ) : null}
+            {item.source === 'intelligence' && item.metadata ? (
+              <span className="muted mono" style={{ fontSize: 12 }}>
+                {typeof item.metadata.volume === 'number' ? `vol ${item.metadata.volume}` : ''}
+                {typeof item.metadata.difficulty === 'number' ? ` diff ${item.metadata.difficulty}` : ''}
+                {typeof item.metadata.cpc === 'number' ? ` cpc ${item.metadata.cpc}` : ''}
+              </span>
+            ) : null}
+          </div>
+          {item.text ? <p className="sub" style={{ margin: '2px 0' }}>{item.text}</p> : null}
+          {!item.text && item.source !== 'intelligence' && (
+            <p className="muted" style={{ fontSize: 12, margin: '2px 0' }}>
+              Untrusted reference item — see its source above.
+            </p>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function statusClassFromEvidence(status: WriterEvidenceStatus): string {
+  switch (status) {
+    case 'available':
+      return 'ok';
+    case 'unavailable':
+      return 'err';
+    case 'empty':
+    case 'not_configured':
+      return '';
+    default:
+      return '';
+  }
+}
+
 /** W8 review-session controls: the human picks exactly the approved sections to
  *  rewrite and gives one instruction. No section is ever revised implicitly. */
 function ReviewSessionControls({
@@ -645,6 +811,7 @@ function MagicControls({
   tone,
   instruction,
   busy,
+  hasResearch = false,
   onActionChange,
   onToneChange,
   onInstructionChange,
@@ -656,6 +823,9 @@ function MagicControls({
   tone: WriterMagicTone;
   instruction: string;
   busy: boolean;
+  /** True when gathered research context exists and will be offered to the
+   *  writer as untrusted reference material for the transformed sections. */
+  hasResearch?: boolean;
   onActionChange: (action: WriterMagicAction) => void;
   onToneChange: (tone: WriterMagicTone) => void;
   onInstructionChange: (value: string) => void;
@@ -685,6 +855,12 @@ function MagicControls({
           ? 'No sections selected yet.'
           : `Will transform: ${selectedHeadings.join('; ')}`}
       </p>
+      {hasResearch && (
+        <p className="muted" style={{ fontSize: 12, margin: '4px 0' }}>
+          Gathered research context will be offered to the writer as untrusted reference material for these sections —
+          it is never applied verbatim.
+        </p>
+      )}
       <div className="row" style={{ marginTop: 8, alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
         <label className="muted" style={{ fontSize: 12 }}>
           Action

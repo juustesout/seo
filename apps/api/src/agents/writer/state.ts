@@ -87,6 +87,7 @@
 import { Annotation } from '@langchain/langgraph';
 import type { SeoResult, TipDoc } from '@seo/contracts';
 import { emptyWriterContext, type WriterContext } from './context.js';
+import type { WriterEvidence, WriterResearchPurpose } from './evidence.js';
 import type { WriterMagicIntent } from './magic.js';
 
 /** All statuses a writer run can ever be in; empty transition lists mean the
@@ -280,6 +281,22 @@ export interface WriterRevisionRequest {
 export const WRITER_REVISION_STATUSES = ['none', 'revising', 'completed', 'failed'] as const;
 export type WriterRevisionStatus = (typeof WRITER_REVISION_STATUSES)[number];
 
+// --- research & evidence artifact (W10.2) --------------------------------------
+//
+// The W10.2 research surface lets the human explicitly gather bounded,
+// project-scoped evidence for the review_ready draft. The evidence channel
+// holds the durable, sanitized result (bounds/labels applied in evidence.ts
+// before it is written) and is offered to later revision/magic rounds as
+// untrusted material only; the evidenceRequest channel is a transient
+// routing marker set by the review session on a research resume and cleared by
+// the gather node when evidence is stored - it never rests.
+
+/** Transient marker that routes a research resume to the gather node. */
+export interface WriterEvidenceRequest {
+  /** Why the human gathered evidence (vocabulary only; never steers work). */
+  purpose: WriterResearchPurpose;
+}
+
 // --- review artifact (W5) ----------------------------------------------------
 //
 // The W5 review phase is a deterministic, local conveyor: it reassembles the
@@ -337,6 +354,12 @@ export const WriterStateAnnotation = Annotation.Root({
   revisionCount: Annotation<number>({ reducer: replaceReducer, default: () => 0 }),
   /** ISO timestamp of the most recent applied revision round, if any. */
   lastRevisionAt: Annotation<string | null>({ reducer: replaceReducer, default: () => null }),
+  /** Durable W10.2 research context gathered for this run, or null until the
+   *  human triggers a research operation. Bounded + labelled in evidence.ts. */
+  evidence: Annotation<WriterEvidence | null>({ reducer: replaceReducer, default: () => null }),
+  /** Transient W10.2 routing marker set by a research session resume and
+   *  cleared by the gather node; never observed at rest. */
+  evidenceRequest: Annotation<WriterEvidenceRequest | null>({ reducer: replaceReducer, default: () => null }),
 });
 
 /** Full typed state a node receives. */

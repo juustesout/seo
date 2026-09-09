@@ -315,6 +315,133 @@ describe('WriterRunService revision (W8)', () => {
   });
 });
 
+describe('WriterRunService research & evidence (W10.2)', () => {
+  /** Runs a full approve flow to the resting review_ready state. */
+  async function restingReviewReady(service: WriterRunService): Promise<`wr_${string}`> {
+    const started = await service.start(PROJECT, CONTENT, { topic: 'SEO ops', targetKeyword: 'langgraph' });
+    const runId = started.runId as `wr_${string}`;
+    await service.decide(runId, { decision: 'approve' }, PROJECT, CONTENT);
+    const resting = (await waitForTerminal(service, runId)) as { status: string };
+    expect(resting.status).toBe('review_ready');
+    return runId;
+  }
+
+  it('gathers evidence on an explicit research call, stays on review_ready and keeps the evidence for later revisions', async () => {
+    const requests: Array<{ projectId: string; topic: string; targetKeyword: string | null; purpose: string }> = [];
+    const deps: WriterRunDependencies = {
+      ...recordingDeps().deps,
+      research: {
+        async research(input) {
+          requests.push({
+            projectId: input.projectId,
+            topic: input.topic,
+            targetKeyword: input.targetKeyword,
+            purpose: input.purpose,
+          });
+          return {
+            purpose: input.purpose,
+            knowledge: {
+              status: 'available',
+              note: null,
+              chunks: [{ sourceId: 'k1', title: 'Research doc', text: 'Evidence text for the article.' }],
+            },
+            existingContent: { status: 'not_configured', note: 'not wired', items: [] },
+            intelligence: { status: 'not_configured', note: 'not wired', keywords: [] },
+            search: { status: 'not_configured', note: 'not wired', items: [] },
+          };
+        },
+      },
+    };
+    const service = makeService(deps);
+    const runId = await restingReviewReady(service);
+
+    const gathered = await service.research(runId, 'planning', PROJECT, CONTENT);
+    expect(gathered.status).toBe('review_ready');
+    expect(gathered.review).not.toBeNull();
+    expect(gathered.revisionCount).toBe(0);
+    expect(gathered.evidence).not.toBeNull();
+    expect(gathered.evidence!.gatheredAt).toBeTruthy();
+    const knowledge = gathered.evidence!.sources.find((s) => s.source === 'knowledge')!;
+    expect(knowledge.status).toBe('available');
+    expect(knowledge.items[0].text).toBe('Evidence text for the article.');
+    expect(knowledge.items[0].trust).toBe('untrusted');
+    const search = gathered.evidence!.sources.find((s) => s.source === 'search')!;
+    expect(search.status).toBe('not_configured');
+    expect(search.items).toEqual([]);
+
+    // The request reached the allowlist with the run's immutable project scope.
+    expect(requests).toEqual([
+      { projectId: PROJECT, topic: 'SEO ops', targetKeyword: 'langgraph', purpose: 'planning' },
+    ]);
+
+    // A later revision round still works and keeps the gathered evidence on the
+    // resting review_ready DTO - evidence is context, never an obstacle.
+    const revising = await service.revise(
+      runId,
+      { action: 'revise', sectionIds: ['section_0'], instruction: 'Tighten it' },
+      PROJECT,
+      CONTENT,
+    );
+    expect(revising.status).toBe('revising');
+    const rested = (await waitForTerminal(service, runId, 2000, ['revising', 'reviewing'])) as {
+      status: string;
+      evidence: { gatheredAt: string | null } | null;
+    };
+    expect(rested.status).toBe('review_ready');
+    expect(rested.evidence?.gatheredAt).toBeTruthy();
+  });
+
+  it('degrades honestly when no research source is wired and persists the evidence durably across a restart', async () => {
+    const { deps } = recordingDeps();
+    const repository = new InMemoryWriterRunRepository();
+    const checkpointer = new MemorySaver();
+    const serviceOne = makeService(deps, { repository, checkpointer });
+    const runId = await restingReviewReady(serviceOne);
+
+    const gathered = await serviceOne.research(runId, 'section_magic', PROJECT, CONTENT);
+    expect(gathered.status).toBe('review_ready');
+    expect(gathered.evidence!.sources).toHaveLength(4);
+    for (const source of gathered.evidence!.sources) {
+      expect(source.status).toBe('not_configured');
+      expect(source.items).toEqual([]);
+    }
+    const row = await repository.getBound(runId, PROJECT, CONTENT);
+    expect(row?.snapshot.evidence?.gatheredAt).toBeTruthy();
+
+    // A fresh service on the same repository + durable checkpointer reads the
+    // evidence back from the row - a restart never fabricates or loses it.
+    const serviceTwo = makeService(deps, { repository, checkpointer });
+    const reloaded = await serviceTwo.getRun(runId, PROJECT, CONTENT);
+    expect(reloaded.status).toBe('review_ready');
+    expect(reloaded.evidence?.gatheredAt).toBeTruthy();
+    expect(reloaded.evidence!.sources).toHaveLength(4);
+  });
+
+  it('refuses research on a run not resting on review_ready', async () => {
+    const service = makeService();
+    const started = await service.start(PROJECT, CONTENT, { topic: 'SEO ops' });
+    const runId = started.runId as `wr_${string}`;
+
+    await expect(service.research(runId, 'revision', PROJECT, CONTENT)).rejects.toMatchObject({
+      status: 409,
+      code: 'writer_run_not_review_ready',
+    });
+  });
+
+  it('refuses research while the run is already being updated (busy)', async () => {
+    const { deps } = recordingDeps();
+    const inFlight = new Set<WriterRunId>();
+    const service = makeService(deps, { inFlight });
+    const runId = await restingReviewReady(service);
+    inFlight.add(runId);
+
+    await expect(service.research(runId, 'revision', PROJECT, CONTENT)).rejects.toMatchObject({
+      status: 409,
+      code: 'writer_run_busy',
+    });
+  });
+});
+
 describe('WriterRunService run binding + fail closed', () => {
   it('404 for an unknown runId', async () => {
     const service = makeService();
@@ -537,6 +664,7 @@ describe('WriterRunService API-safe DTO', () => {
       [
         'contentId',
         'createdAt',
+        'evidence',
         'lastRevisionAt',
         'magicAction',
         'note',

@@ -133,6 +133,14 @@ import {
   type WriterKnowledgeResult,
 } from './context.js';
 import {
+  boundEvidence,
+  degradedResearchResult,
+  NO_RESEARCH_DEPENDENCIES,
+  type WriterResearchDependencies,
+  type WriterResearchRequest,
+  type WriterResearchResult,
+} from './evidence.js';
+import {
   NO_PLANNER_DEPENDENCIES,
   type WriterPlanInput,
   type WriterPlannerDependencies,
@@ -176,6 +184,7 @@ export const WRITER_WRITE_SECTIONS_NODE = 'writeSections';
 export const WRITER_REVIEW_NODE = 'reviewContent';
 export const WRITER_REVIEW_SESSION_NODE = 'awaitReviewSession';
 export const WRITER_REVISE_SECTIONS_NODE = 'reviseSections';
+export const WRITER_GATHER_EVIDENCE_NODE = 'gatherEvidence';
 
 /** Marks the run as started; later phases assemble per-project context here. */
 function initializeNode(_state: WriterState): WriterStateUpdate {
@@ -230,6 +239,40 @@ async function gatherContextNode(deps: WriterContextDependencies, state: WriterS
     deps.getIntelligence(input).catch(intelligenceFallback),
   ]);
   return { context: boundWriterContext({ knowledge, content, intelligence }), status: 'planning' };
+}
+
+/**
+ * The W10.2 research node. It runs only from a review_ready rest after an
+ * explicit `{ action: "research" }` session resume (evidenceRequest set) and
+ * is a read-only gather exactly like gatherContext: it calls the injected
+ * research allowlist (never SQL/providers directly), bounds + labels the raw
+ * results through boundEvidence and stores them as durable evidence. A
+ * throwing research call degrades to honest per-source results instead of
+ * failing the run, and the run always returns to the review-session rest with
+ * whatever evidence was honestly gathered - never a fabricated item.
+ */
+async function gatherEvidenceNode(
+  deps: WriterResearchDependencies,
+  state: WriterState,
+): Promise<WriterStateUpdate> {
+  const request = state.evidenceRequest;
+  if (!request) {
+    return { evidenceRequest: null };
+  }
+  const input: WriterResearchRequest = {
+    projectId: state.projectId,
+    topic: state.topic,
+    targetKeyword: state.targetKeyword ?? null,
+    purpose: request.purpose,
+  };
+  let result: WriterResearchResult;
+  try {
+    result = await deps.research(input);
+  } catch (err) {
+    logger.error({ err, projectId: state.projectId }, 'writer research threw unexpectedly');
+    result = degradedResearchResult(request.purpose);
+  }
+  return { evidence: boundEvidence(new Date().toISOString(), result), evidenceRequest: null };
 }
 
 /** Maps a planner outcome onto the run state. A proposed plan rests on
@@ -493,6 +536,13 @@ function awaitReviewSessionNode(
   if (resume.action === 'accept') {
     return { status: 'completed' };
   }
+  if (resume.action === 'research') {
+    // W10.2 explicit research gather. The run stays on review_ready (no new
+    // lifecycle state): the transient evidenceRequest marker routes the graph
+    // to the read-only gather node, which stores bounded evidence and returns
+    // to this same review-session rest. Nothing is written or published.
+    return { evidenceRequest: { purpose: resume.purpose ?? 'revision' } };
+  }
   if (resume.action === 'magic') {
     const built = buildMagicRevisionRequest(plan, magicSessionToRequest(resume));
     if (!built.ok) {
@@ -635,6 +685,7 @@ async function reviseSectionsNode(
     instruction: request.instruction,
     currentContent: existing.content,
     context: state.context,
+    evidence: state.evidence ?? null,
     ...(request.magic !== undefined ? { magic: request.magic } : {}),
   };
   let outcome: Awaited<ReturnType<WriterRevisionDependencies['reviseSection']>>;
@@ -689,6 +740,7 @@ export function createWriterGraph(options: {
   planner?: WriterPlannerDependencies;
   sectionWriter?: WriterSectionDependencies;
   revisionWriter?: WriterRevisionDependencies;
+  research?: WriterResearchDependencies;
   review?: WriterReviewDependencies;
   checkpointer?: BaseCheckpointSaver;
 } = {}) {
@@ -696,6 +748,7 @@ export function createWriterGraph(options: {
   const plannerDeps = options.planner ?? NO_PLANNER_DEPENDENCIES;
   const sectionWriterDeps = options.sectionWriter ?? NO_SECTION_WRITER_DEPENDENCIES;
   const revisionWriterDeps = options.revisionWriter ?? NO_REVISION_WRITER_DEPENDENCIES;
+  const researchDeps = options.research ?? NO_RESEARCH_DEPENDENCIES;
   const reviewDeps = options.review ?? DEFAULT_WRITER_REVIEW_DEPENDENCIES;
   return new StateGraph(WriterStateAnnotation)
     .addNode(WRITER_INITIALIZE_NODE, initializeNode)
@@ -707,6 +760,7 @@ export function createWriterGraph(options: {
     .addNode(WRITER_REVIEW_NODE, (state: WriterState) => reviewContentNode(reviewDeps, state))
     .addNode(WRITER_REVIEW_SESSION_NODE, (state: WriterState, config) => awaitReviewSessionNode(state, config))
     .addNode(WRITER_REVISE_SECTIONS_NODE, (state: WriterState) => reviseSectionsNode(revisionWriterDeps, state))
+    .addNode(WRITER_GATHER_EVIDENCE_NODE, (state: WriterState) => gatherEvidenceNode(researchDeps, state))
     .addEdge(START, WRITER_INITIALIZE_NODE)
     .addEdge(WRITER_INITIALIZE_NODE, WRITER_GATHER_NODE)
     .addEdge(WRITER_GATHER_NODE, WRITER_PLAN_NODE)
@@ -726,7 +780,16 @@ export function createWriterGraph(options: {
       state.status === 'review_ready' ? WRITER_REVIEW_SESSION_NODE : END,
     )
     .addConditionalEdges(WRITER_REVIEW_SESSION_NODE, (state: WriterState) =>
-      state.status === 'revising' ? WRITER_REVISE_SECTIONS_NODE : END,
+      state.status === 'revising'
+        ? WRITER_REVISE_SECTIONS_NODE
+        : state.evidenceRequest
+          ? WRITER_GATHER_EVIDENCE_NODE
+          : END,
+    )
+    .addConditionalEdges(WRITER_GATHER_EVIDENCE_NODE, (state: WriterState) =>
+      state.status === 'review_ready' && state.evidenceRequest === null
+        ? WRITER_REVIEW_SESSION_NODE
+        : END,
     )
     .addConditionalEdges(WRITER_REVISE_SECTIONS_NODE, (state: WriterState) =>
       state.status === 'revising'

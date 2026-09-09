@@ -17,6 +17,7 @@
  *   POST /:runId/approval  approve/reject (editor+) -> WriterRunDto (writing | rejected)
  *   POST /:runId/revise    revise sections (editor+) -> WriterRunDto (revising)
  *   POST /:runId/magic     Section Magic transform (editor+) -> WriterRunDto (revising)
+ *   POST /:runId/research  gather research evidence (editor+) -> WriterRunDto (review_ready)
  *
  * Error semantics reuse the W3 writer boundary: malformed runId -> 400, an
  * invalid approval decision -> 400 invalid_approval_decision, an invalid
@@ -61,6 +62,9 @@ const startSchema = z
     instruction: z.string().trim().min(1).max(500).optional(),
   })
   .passthrough();
+
+/** Bounded W10.2 research purposes accepted by the research endpoint. */
+const researchPurposeSchema = z.enum(['planning', 'section_magic', 'revision']).optional();
 
 /** Strict W3 approval vocabulary is validated through the shared gate. */
 function parseRunId(raw: string | undefined): WriterRunId {
@@ -202,6 +206,40 @@ writerRouter.post(
 
     const svc = new WriterRunService(container);
     const run = await svc.magic(runId, req.body, projectId, contentId);
+    res.json({ data: run });
+  }),
+);
+
+/** Explicit research-evidence gather for a review_ready run (editor+, W10.2).
+ *  Research is a read-only, synchronous operation: the run rests on
+ *  review_ready the whole time and the response is the resting DTO carrying the
+ *  fresh `evidence` (honest per-source status - never fabricated, never
+ *  auto-applied, never written to the article). The optional body purpose is
+ *  bounded to the canonical vocabulary. Wrong-state / unknown runs fail closed
+ *  exactly like revise/magic. */
+writerRouter.post(
+  '/:runId/research',
+  asyncHandler(async (req, res) => {
+    const projectId = parseProjectId(req);
+    const { container, user } = req;
+    await container.access.requireRole(user!.sub, projectId, 'editor');
+    const contentId = parseId(req, 'contentId');
+    await new ContentService(container.sb).get(projectId, contentId);
+    const runId = parseRunId(req.params.runId);
+
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const purpose = researchPurposeSchema.safeParse(body.purpose);
+    if (!purpose.success) {
+      throw new ApiError(
+        400,
+        'invalid_research_request',
+        'Research purpose, when provided, must be one of: planning, section_magic, revision.',
+        { runId },
+      );
+    }
+
+    const svc = new WriterRunService(container);
+    const run = await svc.research(runId, purpose.data ?? 'revision', projectId, contentId);
     res.json({ data: run });
   }),
 );

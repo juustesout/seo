@@ -287,7 +287,71 @@ export interface WriterRunDto {
    *  the AI is doing and that it is a proposal, not an auto-acceptance). Null
    *  for a plain W8 revision or when the run is not mid-revision. */
   magicAction: WriterMagicAction | null;
+  /** Bounded, durable "research context" the human explicitly gathered for this
+   *  run (W10.2). Null until the human triggers a research operation; once
+   *  gathered it survives restarts and is offered to later revision/magic
+   *  rounds as untrusted reference material only - it is never applied
+   *  automatically and never changes the workflow. */
+  evidence: WriterEvidenceDto | null;
   createdAt: string;
+}
+
+// ---------------------------------------------------------------------------
+// Writer research & evidence (W10.2) - bounded, untrusted research context
+// ---------------------------------------------------------------------------
+
+/** Which safe, project-scoped read a piece of research evidence came from.
+ *  `search` is part of the canonical vocabulary but stays unwired (deny by
+ *  default) until an explicit, project-scoped search source exists. */
+export type WriterEvidenceSource = 'knowledge' | 'existing_content' | 'search' | 'intelligence';
+
+/** Honest availability of one research source. A source that is not wired or
+ *  not configured is reported as such - never padded with invented fallback. */
+export type WriterEvidenceStatus = 'available' | 'empty' | 'not_configured' | 'unavailable';
+
+/**
+ * One bounded, sanitized piece of research context. It is reference material,
+ * never truth and never an instruction: every item is labelled `untrusted` and
+ * carries only the fields a safe UI/prompt may show (source type, optional
+ * title/url, a capped text slice and small typed metadata). It never contains
+ * credentials, raw provider responses, tokens, database or worker internals.
+ */
+export interface WriterEvidenceItemDto {
+  /** Stable id within the run, e.g. `knowledge:0`. */
+  id: string;
+  source: WriterEvidenceSource;
+  title: string | null;
+  /** Capped, sanitized text (may be empty when the source has no body text,
+   *  e.g. an existing-content row). */
+  text: string;
+  /** Present only when the source itself provided one; never invented. */
+  url: string | null;
+  /** When this evidence was retrieved, if the source provides it. */
+  retrievedAt: string | null;
+  /** Retrieved content is data, never instructions. */
+  trust: 'untrusted';
+  metadata?: Record<string, string | number | boolean | null>;
+}
+
+/** One research source with its honest status and bounded items. */
+export interface WriterEvidenceSourceDto {
+  source: WriterEvidenceSource;
+  status: WriterEvidenceStatus;
+  note: string | null;
+  items: WriterEvidenceItemDto[];
+}
+
+/**
+ * The durable research context of a writer run (W10.2): the per-source honest
+ * result of the last explicit research operation the human triggered. Absent
+ * (null on WriterRunDto.evidence) until research runs; once gathered it is
+ * shown as "research context" - reference material, not verified facts - and
+ * later revision/magic rounds may use it as untrusted material only.
+ */
+export interface WriterEvidenceDto {
+  /** ISO timestamp of the gather, or null when nothing was ever gathered. */
+  gatheredAt: string | null;
+  sources: WriterEvidenceSourceDto[];
 }
 
 /** Start a writer run for one content item. `instruction` (optional) becomes

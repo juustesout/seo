@@ -32,6 +32,7 @@
 
 import { ApiError } from '../../apiErrors.js';
 import { emptyWriterContext, type WriterContextDependencies } from './context.js';
+import type { WriterResearchDependencies } from './evidence.js';
 import { createWriterGraph } from './graph.js';
 import type { WriterPlannerDependencies } from './planner.js';
 import type { WriterReviewDependencies } from './review.js';
@@ -52,6 +53,7 @@ export {
   createWriterGraph,
   WRITER_APPROVAL_NODE,
   WRITER_BEGIN_WRITING_NODE,
+  WRITER_GATHER_EVIDENCE_NODE,
   WRITER_GATHER_NODE,
   WRITER_INITIALIZE_NODE,
   WRITER_PLAN_NODE,
@@ -62,6 +64,7 @@ export {
 } from './graph.js';
 export * from './approval.js';
 export * from './context.js';
+export * from './evidence.js';
 export * from './magic.js';
 export * from './planner.js';
 export * from './review.js';
@@ -129,15 +132,17 @@ export interface WriterRunRequest {
 }
 
 /** Injectable seams for a writer run: the read-only context adapters, the AI
- *  planner, the section writer, the revision writer and the deterministic
- *  review allowlist. Each is optional; without one the matching capability
- *  reports itself not wired and the run degrades honestly (the review allowlist
- *  defaults to the canonical @seo/contracts evaluator + renderer). */
+ *  planner, the section writer, the revision writer, the W10.2 research
+ *  allowlist and the deterministic review allowlist. Each is optional; without
+ *  one the matching capability reports itself not wired and the run degrades
+ *  honestly (the review allowlist defaults to the canonical @seo/contracts
+ *  evaluator + renderer; research defaults to no sources wired). */
 export interface WriterRunDependencies {
   context?: WriterContextDependencies;
   planner?: WriterPlannerDependencies;
   sectionWriter?: WriterSectionDependencies;
   revisionWriter?: WriterRevisionDependencies;
+  research?: WriterResearchDependencies;
   review?: WriterReviewDependencies;
 }
 
@@ -202,6 +207,8 @@ export function parseWriterRunRequest(input: WriterRunRequest): WriterState {
     revisionProgress: [],
     revisionCount: 0,
     lastRevisionAt: null,
+    evidence: null,
+    evidenceRequest: null,
   };
 }
 
