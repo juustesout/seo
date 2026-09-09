@@ -87,6 +87,7 @@
 import { Annotation } from '@langchain/langgraph';
 import type { SeoResult, TipDoc } from '@seo/contracts';
 import { emptyWriterContext, type WriterContext } from './context.js';
+import type { WriterMagicIntent } from './magic.js';
 
 /** All statuses a writer run can ever be in; empty transition lists mean the
  *  run rests there (rejected / failed are terminal; completed is terminal and
@@ -268,6 +269,11 @@ export interface WriterRevisionRequest {
   sectionIds: string[];
   /** Human revision instruction (authoritative, bounded). */
   instruction: string;
+  /** W10.1 Section Magic intent metadata when this round is a magic
+   *  transformation rather than a plain W8 revision. Optional so a plain
+   *  revise round stays identical to W8; the durable request keeps it so a
+   *  crash mid-round can re-issue the exact magic after a restart. */
+  magic?: WriterMagicIntent;
 }
 
 /** Whether a revision round is currently pending/active on the run. */

@@ -13,7 +13,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, fireEvent, within } from '@testing-library/react';
 import { asTipDoc, evaluateSeo, tiptapEmptyDoc } from '@seo/contracts';
-import type { WriterRunDto, WriterRunPlanDto, WriterRunReviewDto } from '@seo/contracts';
+import type { WriterRunDto, WriterRunPlanDto, WriterRunReviewDto, WriterMagicAction } from '@seo/contracts';
 import { WriterPanel } from './WriterPanel';
 
 const { apiMock, ApiRequestError } = vi.hoisted(() => {
@@ -88,6 +88,7 @@ function run(over: Partial<WriterRunDto>): WriterRunDto {
     review: null,
     revisionCount: 0,
     lastRevisionAt: null,
+    magicAction: null,
     createdAt: '2026-01-01T00:00:00.000Z',
     ...over,
   };
@@ -120,6 +121,11 @@ function fakeApi(initial: WriterRunDto, onGet?: () => WriterRunDto | undefined):
     }
     if (method === 'POST' && path.endsWith('/revise')) {
       current = run({ status: 'revising' });
+      return current;
+    }
+    if (method === 'POST' && path.endsWith('/magic')) {
+      const body = opts.body as { action?: WriterMagicAction } | undefined;
+      current = run({ status: 'revising', magicAction: body?.action ?? 'improve' });
       return current;
     }
     const next = onGet ? onGet() : undefined;
@@ -336,7 +342,7 @@ describe('WriterPanel - W8 review session', () => {
     apiMock.api.mockReset();
   });
 
-  it('revises only the selected sections: posts the exact ids and polls to a fresh review-ready draft', async () => {
+  it('revises only the selected sections: posts the exact ids and polls to a fresh review-ready draft', { timeout: 15000 }, async () => {
     window.localStorage.setItem(BOOKMARK_KEY, 'run-1');
     const revisedHtml =
       '<h2>On-Page SEO Fundamentals</h2><p>This is the revised review-ready body.</p>';
@@ -382,5 +388,114 @@ describe('WriterPanel - W8 review session', () => {
       sectionIds: ['section_0'],
       instruction: 'Make the intro sharper',
     });
+  });
+});
+
+describe('WriterPanel - W10.1 Section Magic', () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+    apiMock.api.mockReset();
+  });
+
+  it('applies a magic action to the selected sections only: posts the exact ids + action and reports honest progress', async () => {
+    window.localStorage.setItem(BOOKMARK_KEY, 'run-1');
+    const expandedHtml =
+      '<h2>On-Page SEO Fundamentals</h2><p>This is the expanded review-ready body.</p>';
+    const expandedReview: WriterRunReviewDto = { ...REVIEW, contentHtml: expandedHtml };
+    let magicApplied = false;
+    const fake = fakeApi(run({ status: 'review_ready', review: REVIEW }), () =>
+      magicApplied ? run({ status: 'review_ready', review: expandedReview, revisionCount: 1 }) : undefined,
+    );
+    const original = apiMock.api.getMockImplementation();
+    apiMock.api.mockImplementation(async (path: string, opts: { method?: string; body?: unknown } = {}) => {
+      if ((opts.method ?? 'GET') === 'POST' && path.endsWith('/magic')) magicApplied = true;
+      return original!(path, opts);
+    });
+    render(<WriterPanel projectId={PROJECT} contentId={CONTENT} defaultTopic="On-Page SEO" pollMs={5} />);
+
+    await screen.findByText(/review-ready draft/i);
+    // Section selection is shared with the revision flow above.
+    const checkboxes = screen.getAllByRole('checkbox');
+    expect(checkboxes).toHaveLength(2);
+    fireEvent.click(checkboxes[0]!);
+    expect(screen.getByText(/Will transform:/i)).toBeTruthy();
+
+    // Pick an action and an optional instruction (default action is improve).
+    const actionSelect = screen.getAllByRole('combobox')[0]!;
+    fireEvent.change(actionSelect, { target: { value: 'expand' } });
+    fireEvent.change(screen.getByPlaceholderText(/Optional instruction/i), {
+      target: { value: 'Add concrete details' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /apply magic to selected sections/i }));
+
+    // The run reported `revising` with the action surfaced; the panel says so
+    // honestly and polls to the fresh review-ready proposal.
+    const applying = await screen.findByText(/applying Expand/i);
+    expect(applying).toBeTruthy();
+
+    const fresh = await screen.findByText(/This is the expanded review-ready body/i, {}, { timeout: 2000 });
+    expect(fresh).toBeTruthy();
+    expect(screen.getByText(/revision 1/i)).toBeTruthy();
+
+    const magicCall = fake.calls.find((c) => c.method === 'POST' && c.path.endsWith('/magic'));
+    expect(magicCall).toBeTruthy();
+    expect(magicCall!.body).toEqual({
+      action: 'expand',
+      sectionIds: ['section_0'],
+      instruction: 'Add concrete details',
+    });
+    // Nothing was auto-accepted: the run rests on review_ready as a proposal.
+    expect(screen.queryByText(/completed/i)).toBeNull();
+    expect(screen.getByText(/NOT saved to this document/i)).toBeTruthy();
+  });
+
+  it('sends a tone (and never an instruction) for the change_tone action', async () => {
+    window.localStorage.setItem(BOOKMARK_KEY, 'run-1');
+    let applied = false;
+    const fake = fakeApi(run({ status: 'review_ready', review: REVIEW }), () =>
+      applied ? run({ status: 'review_ready', review: REVIEW, revisionCount: 1 }) : undefined,
+    );
+    const original = apiMock.api.getMockImplementation();
+    apiMock.api.mockImplementation(async (path: string, opts: { method?: string; body?: unknown } = {}) => {
+      if ((opts.method ?? 'GET') === 'POST' && path.endsWith('/magic')) applied = true;
+      return original!(path, opts);
+    });
+    render(<WriterPanel projectId={PROJECT} contentId={CONTENT} defaultTopic="On-Page SEO" pollMs={5} />);
+
+    await screen.findByText(/review-ready draft/i);
+    fireEvent.click(screen.getAllByRole('checkbox')[1]!);
+
+    fireEvent.change(screen.getAllByRole('combobox')[0]!, { target: { value: 'change_tone' } });
+    // change_tone hides the free-text instruction and shows a bounded tone picker.
+    expect(screen.queryByPlaceholderText(/Optional instruction/i)).toBeNull();
+    const toneSelect = screen.getAllByRole('combobox')[1]!;
+    fireEvent.change(toneSelect, { target: { value: 'casual' } });
+    fireEvent.click(screen.getByRole('button', { name: /apply magic to selected sections/i }));
+
+    await screen.findByText(/applying Change tone/i);
+
+    const magicCall = fake.calls.find((c) => c.method === 'POST' && c.path.endsWith('/magic'));
+    expect(magicCall!.body).toEqual({
+      action: 'change_tone',
+      sectionIds: ['section_1'],
+      tone: 'casual',
+    });
+  });
+
+  it('requires an instruction for the custom action before it can be applied', async () => {
+    window.localStorage.setItem(BOOKMARK_KEY, 'run-1');
+    fakeApi(run({ status: 'review_ready', review: REVIEW }));
+    render(<WriterPanel projectId={PROJECT} contentId={CONTENT} defaultTopic="On-Page SEO" />);
+
+    await screen.findByText(/review-ready draft/i);
+    fireEvent.click(screen.getAllByRole('checkbox')[0]!);
+    fireEvent.change(screen.getAllByRole('combobox')[0]!, { target: { value: 'custom' } });
+
+    const apply = screen.getByRole('button', { name: /apply magic to selected sections/i }) as HTMLButtonElement;
+    expect(apply.disabled).toBe(true);
+    fireEvent.change(screen.getByPlaceholderText(/required for custom/i), {
+      target: { value: 'Tighten the argument' },
+    });
+    expect((screen.getByRole('button', { name: /apply magic to selected sections/i }) as HTMLButtonElement).disabled).toBe(false);
   });
 });

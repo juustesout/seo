@@ -49,7 +49,7 @@ import { createWriterGraph } from './graph.js';
 import type { CompiledWriterGraph } from './graph.js';
 import type { WriterRunDependencies, WriterRunRequest } from './index.js';
 import { parseWriterRunRequest } from './index.js';
-import { parseWriterSessionDecision, type WriterSessionDecision } from './revision.js';
+import { parseReviewSessionResume, type WriterReviewSessionResume } from './magic.js';
 import {
   createWriterRunId,
   isWriterRunId,
@@ -130,13 +130,13 @@ export async function resumeDurableWriterRun(
 
 /**
  * Strictly validates and resumes a review_ready thread on the shared durable
- * checkpointer with a validated review-session decision (accept -> completed;
- * revise -> the revision loop through review_ready). Mirrors
- * resumeDurableWriterRun: a missing thread is writer_run_not_found, a thread
- * not resting on `review_ready` is writer_run_not_review_ready, an invalid
- * decision is invalid_review_session_decision. It never re-runs from START,
- * never calls the planner and never lets anything but the validated session
- * decision steer the run.
+ * checkpointer with a validated review-session resume (accept -> completed;
+ * revise or a W10.1 magic resume -> the revision round through review_ready).
+ * Mirrors resumeDurableWriterRun: a missing thread is writer_run_not_found, a
+ * thread not resting on `review_ready` is writer_run_not_review_ready, an
+ * invalid resume is invalid_review_session_decision. It never re-runs from
+ * START, never calls the planner and never lets anything but the validated
+ * session resume steer the run.
  */
 export async function resumeDurableReviewSession(
   input: { runId: WriterRunId; decision: unknown },
@@ -147,7 +147,7 @@ export async function resumeDurableReviewSession(
   if (!isWriterRunId(runId)) {
     throw ApiError.badRequest('runId must be a writer run id (wr_<uuid>)', { runId });
   }
-  const parsed = parseWriterSessionDecision(input.decision);
+  const parsed = parseReviewSessionResume(input.decision);
   if (!parsed.ok) {
     throw new ApiError(400, 'invalid_review_session_decision', parsed.note, { runId });
   }
@@ -171,7 +171,7 @@ export async function resumeDurableReviewSession(
     );
   }
 
-  const finalState = await graph.invoke(new Command({ resume: parsed.decision }), writerRunThreadConfig(runId));
+  const finalState = await graph.invoke(new Command({ resume: parsed.resume }), writerRunThreadConfig(runId));
   return writerRunResultFromState(runId, finalState);
 }
 
@@ -189,7 +189,7 @@ export async function continueDurableWriterRun(
   runId: WriterRunId,
   deps: WriterRunDependencies,
   checkpointer: BaseCheckpointSaver,
-  opts: { reviewSessionResume?: WriterSessionDecision } = {},
+  opts: { reviewSessionResume?: WriterReviewSessionResume } = {},
 ): Promise<WriterRunResult | null> {
   const graph = compileWriterGraph(deps, checkpointer);
   const config = writerRunThreadConfig(runId);

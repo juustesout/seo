@@ -139,7 +139,12 @@ import {
   type WriterPlanOutcome,
 } from './planner.js';
 import { parseWriterApprovalDecision } from './approval.js';
-import { parseWriterSessionDecision, validateRevisionSectionIds } from './revision.js';
+import {
+  buildMagicRevisionRequest,
+  magicSessionToRequest,
+  parseReviewSessionResume,
+} from './magic.js';
+import { validateRevisionSectionIds } from './revision.js';
 import {
   DEFAULT_WRITER_REVIEW_DEPENDENCIES,
   reviewWriterContent,
@@ -444,11 +449,13 @@ function reviewContentNode(
  * resting, revisable state, and nothing (no accept, no further AI work, no
  * publication) happens automatically. The graph only continues when the same
  * thread is resumed through a strictly validated review-session resume (see
- * revision.ts); the node itself re-validates that resume value and degrades an
- * out-of-band, invalid resume to a failed run rather than trusting it. An
- * accept is the explicit save-finalization to `completed` (terminal, never
- * automatic); a revise stores the validated, plan-ordered revision request and
- * moves to `revising`.
+ * revision.ts + magic.ts); the node itself re-validates that resume value and
+ * degrades an out-of-band, invalid resume to a failed run rather than trusting
+ * it. An accept is the explicit save-finalization to `completed` (terminal,
+ * never automatic); a revise stores the validated, plan-ordered revision
+ * request and moves to `revising`; a W10.1 magic resume translates through
+ * buildMagicRevisionRequest into the exact same revising round (same status,
+ * request metadata only - no new lifecycle state, no auto-acceptance).
  */
 function awaitReviewSessionNode(
   state: WriterState,
@@ -474,7 +481,7 @@ function awaitReviewSessionNode(
     },
   });
 
-  const parsed = parseWriterSessionDecision(resumeValue);
+  const parsed = parseReviewSessionResume(resumeValue);
   if (!parsed.ok) {
     return {
       status: 'failed',
@@ -482,10 +489,28 @@ function awaitReviewSessionNode(
       reviewNote: `The review session resume input was invalid: ${parsed.note}`,
     };
   }
-  if (parsed.decision.action === 'accept') {
+  const resume = parsed.resume;
+  if (resume.action === 'accept') {
     return { status: 'completed' };
   }
-  const validated = validateRevisionSectionIds(plan, parsed.decision.sectionIds);
+  if (resume.action === 'magic') {
+    const built = buildMagicRevisionRequest(plan, magicSessionToRequest(resume));
+    if (!built.ok) {
+      return {
+        status: 'failed',
+        revisionStatus: 'failed',
+        revisionNote: `The magic request was invalid: ${built.note}`,
+      };
+    }
+    return {
+      status: 'revising',
+      revisionStatus: 'revising',
+      revisionRequest: built.request,
+      revisionNote: null,
+      revisionProgress: [],
+    };
+  }
+  const validated = validateRevisionSectionIds(plan, resume.sectionIds);
   if (!validated.ok) {
     return {
       status: 'failed',
@@ -498,7 +523,7 @@ function awaitReviewSessionNode(
     revisionStatus: 'revising',
     revisionRequest: {
       sectionIds: validated.sectionIds,
-      instruction: parsed.decision.instruction,
+      instruction: resume.instruction,
     },
     revisionNote: null,
     revisionProgress: [],
@@ -610,6 +635,7 @@ async function reviseSectionsNode(
     instruction: request.instruction,
     currentContent: existing.content,
     context: state.context,
+    ...(request.magic !== undefined ? { magic: request.magic } : {}),
   };
   let outcome: Awaited<ReturnType<WriterRevisionDependencies['reviseSection']>>;
   try {

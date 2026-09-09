@@ -1,13 +1,13 @@
 /**
  * Writer panel for the Content Studio editor (W6, durable runs W7, revision
- * loop W8).
+ * loop W8, Section Magic W10.1).
  *
  * Starts a writer run for the article being edited, shows the AI-generated
  * plan as a PROPOSAL, requires an explicit human decision (Approve & Write /
  * Reject) and - once the approved run has written and deterministically
  * reviewed - rests on the W8 review session (`review_ready`) where the run is
  * previewed as a review-ready draft and the human can request a controlled
- * revision of specific sections.
+ * revision of specific sections or a W10.1 Section Magic transformation.
  *
  * Honesty rules honoured here:
  *   - the plan is presented as an AI-generated proposal, never as authority;
@@ -18,8 +18,14 @@
  *     polling stops at resting states;
  *   - `review_ready` is a resting hub, NOT terminal: at `review_ready` the
  *     human chooses what happens next (a controlled revise of the selected
- *     sections). `completed` is terminal but only ever reached through the
- *     writer accept flow, which this W8 surface does not expose;
+ *     sections, or a Section Magic transformation of them). `completed` is
+ *     terminal but only ever reached through the writer accept flow, which
+ *     this surface does not expose;
+ *   - Section Magic (W10.1) is always user-triggered and section-scoped: the
+ *     human selects the sections and the action, the AI only ever transforms
+ *     exactly those sections, and a magic round is reported as a proposal in
+ *     progress (`revising` with the action surfaced from the run) - it is never
+ *     auto-accepted or auto-published;
  *   - the result is previewed only: the writer flow never saves it to
  *     seo_content, never publishes and never schedules. Applying it to the
  *     document stays an explicit, separate human action that is not
@@ -30,8 +36,37 @@
  *     no longer exists simply falls back to the fresh start form.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { WriterRunDto, WriterRunStatus } from '@seo/contracts';
+import type { WriterRunDto, WriterRunStatus, WriterMagicAction, WriterMagicTone } from '@seo/contracts';
 import { ApiRequestError, api } from '../../lib/api';
+
+/** Canonical Section Magic actions surfaced in the picker, mirroring the API
+ *  vocabulary. change_tone requires a tone; custom requires an instruction;
+ *  the rest take an optional instruction. */
+const MAGIC_ACTIONS: Array<{ value: WriterMagicAction; label: string }> = [
+  { value: 'improve', label: 'Improve' },
+  { value: 'expand', label: 'Expand' },
+  { value: 'shorten', label: 'Shorten' },
+  { value: 'clarify', label: 'Clarify' },
+  { value: 'change_tone', label: 'Change tone' },
+  { value: 'add_examples', label: 'Add examples' },
+  { value: 'improve_seo', label: 'Improve SEO' },
+  { value: 'custom', label: 'Custom' },
+];
+
+const MAGIC_TONES: Array<{ value: WriterMagicTone; label: string }> = [
+  { value: 'professional', label: 'Professional' },
+  { value: 'friendly', label: 'Friendly' },
+  { value: 'authoritative', label: 'Authoritative' },
+  { value: 'conversational', label: 'Conversational' },
+  { value: 'formal', label: 'Formal' },
+  { value: 'persuasive', label: 'Persuasive' },
+  { value: 'practical', label: 'Practical' },
+  { value: 'casual', label: 'Casual' },
+];
+
+function magicActionLabel(value: WriterMagicAction): string {
+  return MAGIC_ACTIONS.find((a) => a.value === value)?.label ?? value;
+}
 
 /** Resting statuses the panel shows without polling. review_ready is NOT in
  *  this set: it is the W8 review-session hub (a human decision is required),
@@ -75,6 +110,15 @@ function statusClass(status: WriterRunStatus): string {
   }
 }
 
+/** Stable plan-order sort of selected section ids (mirrors the API). */
+function sortedSectionIds(sectionIds: string[]): string[] {
+  return [...sectionIds].sort((a, b) => {
+    const ai = Number(/^section_(\d+)$/.exec(a)?.[1]);
+    const bi = Number(/^section_(\d+)$/.exec(b)?.[1]);
+    return ai - bi;
+  });
+}
+
 interface WriterPanelProps {
   projectId: string;
   contentId: string;
@@ -95,6 +139,9 @@ export function WriterPanel({ projectId, contentId, defaultTopic, defaultKeyword
   const [rejectReason, setRejectReason] = useState('');
   const [reviseSections, setReviseSections] = useState<string[]>([]);
   const [reviseInstruction, setReviseInstruction] = useState('');
+  const [magicAction, setMagicAction] = useState<WriterMagicAction>('improve');
+  const [magicTone, setMagicTone] = useState<WriterMagicTone>('professional');
+  const [magicInstruction, setMagicInstruction] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [fatal, setFatal] = useState<string | null>(null);
   const runRef = useRef<WriterRunDto | null>(null);
@@ -210,11 +257,7 @@ export function WriterPanel({ projectId, contentId, defaultTopic, defaultKeyword
     setError(null);
     setFatal(null);
     try {
-      const sectionIds = [...reviseSections].sort((a, b) => {
-        const ai = Number(/^section_(\d+)$/.exec(a)?.[1]);
-        const bi = Number(/^section_(\d+)$/.exec(b)?.[1]);
-        return ai - bi;
-      });
+      const sectionIds = sortedSectionIds(reviseSections);
       const next = await api<WriterRunDto>(`${runPath(projectId, contentId, current.runId)}/revise`, {
         method: 'POST',
         body: { action: 'revise', sectionIds, instruction: trimmed },
@@ -229,6 +272,42 @@ export function WriterPanel({ projectId, contentId, defaultTopic, defaultKeyword
     }
   };
 
+  /** W10.1 Section Magic: posts the human-selected sections + action (with the
+   *  optional bounded instruction, or a tone for change_tone) to the magic
+   *  endpoint. The AI transforms exactly those sections; the run goes `revising`
+   *  and this panel polls to the next review_ready proposal - nothing is
+   *  accepted or published automatically. */
+  const applyMagic = async () => {
+    const current = runRef.current;
+    if (!current || actionBusy) return;
+    const sectionIds = sortedSectionIds(reviseSections);
+    if (sectionIds.length === 0) return;
+    const body: Record<string, unknown> = { action: magicAction, sectionIds };
+    if (magicAction === 'change_tone') {
+      body.tone = magicTone;
+    } else {
+      const trimmed = magicInstruction.trim();
+      if (magicAction === 'custom' && !trimmed) return;
+      if (trimmed) body.instruction = trimmed;
+    }
+    setActionBusy(true);
+    setError(null);
+    setFatal(null);
+    try {
+      const next = await api<WriterRunDto>(`${runPath(projectId, contentId, current.runId)}/magic`, {
+        method: 'POST',
+        body,
+      });
+      setRun(next);
+      setReviseSections([]);
+      setMagicInstruction('');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setActionBusy(false);
+    }
+  };
+
   const reset = () => {
     setRun(null);
     setError(null);
@@ -236,6 +315,7 @@ export function WriterPanel({ projectId, contentId, defaultTopic, defaultKeyword
     setRejectReason('');
     setReviseSections([]);
     setReviseInstruction('');
+    setMagicInstruction('');
     window.localStorage.removeItem(storageKey(projectId, contentId));
   };
 
@@ -318,8 +398,9 @@ export function WriterPanel({ projectId, contentId, defaultTopic, defaultKeyword
 
       {status === 'revising' && (
         <p className="muted" style={{ marginTop: 8 }}>
-          Writer is revising the selected sections… this article is not saved until you decide what to do with the
-          result.
+          {run.magicAction
+            ? `Writer is applying ${magicActionLabel(run.magicAction)} to the selected section(s)… the result will be a fresh review-ready proposal and is never accepted or published automatically.`
+            : 'Writer is revising the selected sections… this article is not saved until you decide what to do with the result.'}
         </p>
       )}
 
@@ -340,6 +421,18 @@ export function WriterPanel({ projectId, contentId, defaultTopic, defaultKeyword
             onToggle={toggleReviseSection}
             onInstructionChange={setReviseInstruction}
             onRevise={() => void reviseSelected()}
+          />
+          <MagicControls
+            sections={plan.sections}
+            selected={reviseSections}
+            action={magicAction}
+            tone={magicTone}
+            instruction={magicInstruction}
+            busy={actionBusy}
+            onActionChange={setMagicAction}
+            onToneChange={setMagicTone}
+            onInstructionChange={setMagicInstruction}
+            onApply={() => void applyMagic()}
           />
         </>
       )}
@@ -535,6 +628,110 @@ function ReviewSessionControls({
         </button>
       </div>
       {busy && <p className="muted" style={{ marginTop: 8 }}>Requesting the revision…</p>}
+    </div>
+  );
+}
+
+/** W10.1 Section Magic controls: the human picks the sections (shared with the
+ *  revision flow above) AND the action - the AI never decides what to transform
+ *  or why. change_tone requires a tone (no free-text instruction); custom
+ *  requires an instruction; the rest take an optional bounded instruction.
+ *  Applying only ever posts the transformation; the run must rest on
+ *  review_ready again and the human decides what happens to the result. */
+function MagicControls({
+  sections,
+  selected,
+  action,
+  tone,
+  instruction,
+  busy,
+  onActionChange,
+  onToneChange,
+  onInstructionChange,
+  onApply,
+}: {
+  sections: NonNullable<WriterRunDto['plan']>['sections'];
+  selected: string[];
+  action: WriterMagicAction;
+  tone: WriterMagicTone;
+  instruction: string;
+  busy: boolean;
+  onActionChange: (action: WriterMagicAction) => void;
+  onToneChange: (tone: WriterMagicTone) => void;
+  onInstructionChange: (value: string) => void;
+  onApply: () => void;
+}) {
+  const usesTone = action === 'change_tone';
+  const needsInstruction = action === 'custom';
+  const canApply =
+    !busy &&
+    selected.length > 0 &&
+    (usesTone || (needsInstruction ? instruction.trim().length > 0 : true));
+  const selectedHeadings = sections
+    .filter((s, i) => selected.includes(s.sectionId ?? `section_${i}`))
+    .map((s) => s.heading);
+  return (
+    <div className="writer-magic" style={{ marginTop: 10 }}>
+      <div className="writer-proposal">
+        <span className="pill busy">Section Magic</span>
+        <span className="muted" style={{ fontSize: 12 }}>
+          Want to improve a section without writing a full revision? Select sections above (shared with the revision
+          flow), pick an action here, and the writer transforms exactly those sections into a fresh review-ready
+          proposal. Nothing is accepted or published automatically.
+        </span>
+      </div>
+      <p className="sub" style={{ margin: '8px 0 4px' }}>
+        {selected.length === 0
+          ? 'No sections selected yet.'
+          : `Will transform: ${selectedHeadings.join('; ')}`}
+      </p>
+      <div className="row" style={{ marginTop: 8, alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+        <label className="muted" style={{ fontSize: 12 }}>
+          Action
+        </label>
+        <select
+          value={action}
+          disabled={busy}
+          onChange={(e) => onActionChange(e.target.value as WriterMagicAction)}
+        >
+          {MAGIC_ACTIONS.map((a) => (
+            <option key={a.value} value={a.value}>
+              {a.label}
+            </option>
+          ))}
+        </select>
+        {usesTone ? (
+          <>
+            <label className="muted" style={{ fontSize: 12 }}>
+              Tone
+            </label>
+            <select
+              value={tone}
+              disabled={busy}
+              onChange={(e) => onToneChange(e.target.value as WriterMagicTone)}
+            >
+              {MAGIC_TONES.map((t) => (
+                <option key={t.value} value={t.value}>
+                  {t.label}
+                </option>
+              ))}
+            </select>
+          </>
+        ) : (
+          <input
+            type="text"
+            placeholder={needsInstruction ? 'Describe the change (required for custom)' : 'Optional instruction…'}
+            value={instruction}
+            onChange={(e) => onInstructionChange(e.target.value)}
+            disabled={busy}
+            style={{ minWidth: 260, flex: 1 }}
+          />
+        )}
+        <button className="btn primary" disabled={!canApply} onClick={onApply}>
+          Apply magic to selected sections
+        </button>
+      </div>
+      {busy && <p className="muted" style={{ marginTop: 8 }}>Requesting the transformation…</p>}
     </div>
   );
 }

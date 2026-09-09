@@ -20,6 +20,7 @@
 
 import { z } from 'zod';
 import { ApiError } from '../../apiErrors.js';
+import { writerMagicIntentSchema } from './magic.js';
 import type { WriterRunId } from './runtime.js';
 import type { WriterRunResult } from './runtime.js';
 import type {
@@ -97,10 +98,16 @@ const writerReviewSchema = z.object({
   seo: z.object({ score: z.number().finite().nonnegative() }).passthrough(),
 });
 
-const writerRevisionRequestSchema = z.object({
-  sectionIds: z.array(z.string().regex(/^section_\d+$/)).min(1).max(200),
-  instruction: z.string().min(1).max(2_000),
-});
+const writerRevisionRequestSchema = z
+  .object({
+    sectionIds: z.array(z.string().regex(/^section_\d+$/)).min(1).max(200),
+    instruction: z.string().min(1).max(2_000),
+    /** W10.1 Section Magic intent of a magic round; absent for a plain W8
+     *  revise so a crash re-issues the exact request (action/tone/user intent)
+     *  after a restart. */
+    magic: writerMagicIntentSchema.optional(),
+  })
+  .strict();
 
 /** Strict top-level schema for a persisted snapshot. `.strict()` fails closed
  *  on any field we did not intend to persist (context, secrets, internal

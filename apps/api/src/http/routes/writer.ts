@@ -16,19 +16,24 @@
  *   GET  /:runId        safe run snapshot (viewer+) -> WriterRunDto
  *   POST /:runId/approval  approve/reject (editor+) -> WriterRunDto (writing | rejected)
  *   POST /:runId/revise    revise sections (editor+) -> WriterRunDto (revising)
+ *   POST /:runId/magic     Section Magic transform (editor+) -> WriterRunDto (revising)
  *
  * Error semantics reuse the W3 writer boundary: malformed runId -> 400, an
  * invalid approval decision -> 400 invalid_approval_decision, an invalid
- * review-session revision -> 400 invalid_review_session_decision, unknown or
- * mismatched run -> 404 writer_run_not_found, run not awaiting approval ->
- * 409 writer_run_not_awaiting_approval, run not resting on review_ready (for
- * revise) -> 409 writer_run_not_review_ready.
+ * review-session revision -> 400 invalid_review_session_decision, an invalid
+ * Section Magic request -> 400 invalid_magic_request, unknown or mismatched run
+ * -> 404 writer_run_not_found, run not awaiting approval -> 409
+ * writer_run_not_awaiting_approval, run not resting on review_ready (for
+ * revise/magic) -> 409 writer_run_not_review_ready.
  *
- * W6/W8 boundaries: starting/approving/revising never writes seo_content,
- * never publishes and never schedules - a review_ready run only exposes its
- * review-ready artifact, and this W8 surface exposes no accept/completed path
- * (that stays graph/contract-level until a later milestone). Responses carry
- * no prompts, no checkpoint data and no credentials.
+ * W6/W8/W10.1 boundaries: starting/approving/revising/magic never writes
+ * seo_content, never publishes and never schedules - a review_ready run only
+ * exposes its review-ready artifact, and this surface exposes no accept/
+ * completed path (that stays graph/contract-level until a later milestone).
+ * Section Magic only ever transforms the explicitly selected sections of a
+ * review_ready run through the W8 revision round and never accepts or publishes
+ * on its own. Responses carry no prompts, no checkpoint data and no
+ * credentials.
  */
 
 import { Router } from 'express';
@@ -43,6 +48,7 @@ import {
   isWriterRunId,
   parseWriterApprovalDecision,
   parseWriterSessionDecision,
+  parseWriterMagicRequest,
   type WriterRunId,
 } from '../../agents/writer/index.js';
 
@@ -166,6 +172,36 @@ writerRouter.post(
 
     const svc = new WriterRunService(container);
     const run = await svc.revise(runId, parsed.decision, projectId, contentId);
+    res.json({ data: run });
+  }),
+);
+
+/** Explicit Section Magic transformation of one or more sections of a
+ *  review_ready run (editor+). The exact W10.1 magic vocabulary is enforced
+ *  here: sectionIds must address existing approved-plan sections (re-validated
+ *  against the run's plan), the action is one of the canonical bounded magic
+ *  actions, the instruction is optional and bounded, and change_tone/custom
+ *  obey their per-action field rules. A valid magic request commits the run to
+ *  `revising` first and resumes the W8 revision round in the background - poll
+ *  GET /:runId until it rests on review_ready again. Magic never accepts or
+ *  publishes a run and never transforms sections the user did not select. */
+writerRouter.post(
+  '/:runId/magic',
+  asyncHandler(async (req, res) => {
+    const projectId = parseProjectId(req);
+    const { container, user } = req;
+    await container.access.requireRole(user!.sub, projectId, 'editor');
+    const contentId = parseId(req, 'contentId');
+    await new ContentService(container.sb).get(projectId, contentId);
+    const runId = parseRunId(req.params.runId);
+
+    const parsed = parseWriterMagicRequest(req.body);
+    if (!parsed.ok) {
+      throw new ApiError(400, 'invalid_magic_request', parsed.note, { runId });
+    }
+
+    const svc = new WriterRunService(container);
+    const run = await svc.magic(runId, req.body, projectId, contentId);
     res.json({ data: run });
   }),
 );

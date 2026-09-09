@@ -42,7 +42,7 @@ import { Command } from '@langchain/langgraph';
 import { ApiError } from '../../apiErrors.js';
 import type { WriterApprovalDecision } from './approval.js';
 import { parseWriterApprovalDecision } from './approval.js';
-import { parseWriterSessionDecision, type WriterSessionDecision } from './revision.js';
+import { parseReviewSessionResume, type WriterReviewSessionResume } from './magic.js';
 import { emptyWriterContext, type WriterContext } from './context.js';
 import type {
   WriterApprovalStatus,
@@ -269,20 +269,22 @@ export async function resumeWriterRun(
  * (review_ready) with the exact same thread/checkpoint that ran its start. An
  * accept moves the run to `completed` (terminal); a revise runs the controlled
  * revision round (revising -> reviewing -> review_ready) synchronously on this
- * resume and rests again on `review_ready` with the fresh artifact. Deny-by-
- * default rules mirror resumeWriterRun: an invalid session decision is 400
- * invalid_review_session_decision, a missing run is 404 writer_run_not_found
- * and a run not resting on review_ready is 409 writer_run_not_review_ready.
+ * resume and rests again on `review_ready` with the fresh artifact; a W10.1
+ * magic resume flows through the same revising round with its validated magic
+ * intent. Deny-by-default rules mirror resumeWriterRun: an invalid session
+ * resume is 400 invalid_review_session_decision, a missing run is 404
+ * writer_run_not_found and a run not resting on review_ready is 409
+ * writer_run_not_review_ready.
  */
 export async function resumeWriterSession(
-  input: { runId: WriterRunId; decision: WriterSessionDecision },
+  input: { runId: WriterRunId; decision: WriterReviewSessionResume },
   registry: WriterRunRegistry = defaultRegistry,
 ): Promise<WriterRunResult> {
   const { runId, decision } = input;
   if (!isWriterRunId(runId)) {
     throw ApiError.badRequest('runId must be a writer run id (wr_<uuid>)', { runId });
   }
-  const parsed = parseWriterSessionDecision(decision);
+  const parsed = parseReviewSessionResume(decision);
   if (!parsed.ok) {
     throw new ApiError(400, 'invalid_review_session_decision', parsed.note, { runId });
   }
@@ -316,6 +318,6 @@ export async function resumeWriterSession(
     );
   }
 
-  const finalState = await graph.invoke(new Command({ resume: parsed.decision }), writerRunThreadConfig(runId));
+  const finalState = await graph.invoke(new Command({ resume: parsed.resume }), writerRunThreadConfig(runId));
   return writerRunResultFromState(runId, finalState);
 }

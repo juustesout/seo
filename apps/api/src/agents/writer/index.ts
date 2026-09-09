@@ -62,6 +62,7 @@ export {
 } from './graph.js';
 export * from './approval.js';
 export * from './context.js';
+export * from './magic.js';
 export * from './planner.js';
 export * from './review.js';
 export * from './revision.js';

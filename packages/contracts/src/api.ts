@@ -282,6 +282,11 @@ export interface WriterRunDto {
   revisionCount: number;
   /** ISO timestamp of the most recent revision round, if any. */
   lastRevisionAt: string | null;
+  /** The Section Magic action currently being applied, present only while the
+   *  run is `revising` through a magic request (so the UI can say exactly what
+   *  the AI is doing and that it is a proposal, not an auto-acceptance). Null
+   *  for a plain W8 revision or when the run is not mid-revision. */
+  magicAction: WriterMagicAction | null;
   createdAt: string;
 }
 
@@ -302,6 +307,55 @@ export interface WriterStartRequest {
 export interface WriterReviseRequest {
   sectionIds: string[];
   instruction: string;
+}
+
+// ---------------------------------------------------------------------------
+// Writer Section Magic (W10.1) - controlled, user-triggered transformations
+// ---------------------------------------------------------------------------
+
+/**
+ * The canonical Section Magic action vocabulary (W10.1). Each action has
+ * deterministic prompt semantics and only ever rewrites the body of the
+ * explicitly selected section(s) the user chose - never the approved outline,
+ * other sections or the workflow. Unknown action strings are rejected.
+ */
+export type WriterMagicAction =
+  | 'improve'
+  | 'expand'
+  | 'shorten'
+  | 'clarify'
+  | 'change_tone'
+  | 'add_examples'
+  | 'improve_seo'
+  | 'custom';
+
+/**
+ * Bounded, validated tone choices for the `change_tone` magic action. The
+ * tone itself is never free text: it must be one of these canonical values.
+ */
+export type WriterMagicTone =
+  | 'professional'
+  | 'friendly'
+  | 'authoritative'
+  | 'conversational'
+  | 'formal'
+  | 'persuasive'
+  | 'practical'
+  | 'casual';
+
+/**
+ * A Section Magic request (W10.1): the user explicitly picks the action and
+ * the sections to transform. `instruction` is an optional bounded prose
+ * refinement - it is untrusted user intent that may influence prose only and
+ * can never control the workflow, the outline or other sections. `tone` is
+ * required (and `instruction` must be absent) for `change_tone`; `custom`
+ * requires an `instruction`.
+ */
+export interface WriterMagicRequest {
+  sectionIds: string[];
+  action: WriterMagicAction;
+  instruction?: string;
+  tone?: WriterMagicTone;
 }
 
 // ---------------------------------------------------------------------------

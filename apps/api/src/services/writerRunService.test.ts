@@ -538,6 +538,7 @@ describe('WriterRunService API-safe DTO', () => {
         'contentId',
         'createdAt',
         'lastRevisionAt',
+        'magicAction',
         'note',
         'plan',
         'projectId',
@@ -552,5 +553,118 @@ describe('WriterRunService API-safe DTO', () => {
     expect(serialized).not.toContain('writtenSections');
     expect(serialized).not.toContain('context');
     expect(serialized).not.toContain('authorization');
+  });
+});
+
+describe('WriterRunService Section Magic (W10.1)', () => {
+  /** Runs a full approve flow to the resting review_ready state. */
+  async function restingReviewReady(service: WriterRunService): Promise<`wr_${string}`> {
+    const started = await service.start(PROJECT, CONTENT, { topic: 'SEO ops', targetKeyword: 'langgraph' });
+    const runId = started.runId as `wr_${string}`;
+    await service.decide(runId, { decision: 'approve' }, PROJECT, CONTENT);
+    const resting = (await waitForTerminal(service, runId)) as { status: string };
+    expect(resting.status).toBe('review_ready');
+    return runId;
+  }
+
+  it('commits a magic round, rewrites exactly the selected sections and rests on review_ready with the action surfaced', async () => {
+    const { deps, calls } = recordingDeps();
+    const service = makeService(deps);
+    const runId = await restingReviewReady(service);
+
+    const transforming = await service.magic(
+      runId,
+      { action: 'improve', sectionIds: ['section_2', 'section_0'], instruction: 'Add concrete examples' },
+      PROJECT,
+      CONTENT,
+    );
+    expect(transforming.status).toBe('revising');
+    // The DTO surfaces the exact magic action while the round runs.
+    expect(transforming.magicAction).toBe('improve');
+
+    const rested = (await waitForTerminal(service, runId, 2000, ['revising', 'reviewing'])) as {
+      status: string;
+      review: { contentHtml: string } | null;
+      revisionCount: number;
+      note: string | null;
+      magicAction: string | null;
+    };
+    expect(rested.status).toBe('review_ready');
+    expect(calls.revisions).toBe(2);
+    expect(rested.revisionCount).toBe(1);
+    expect(rested.note).toBeNull();
+    // The magic action is only surfaced while the round is actually revising.
+    expect(rested.magicAction).toBeNull();
+    // Only the two requested sections were rewritten; section_1 is untouched.
+    expect(rested.review?.contentHtml).toContain('Revised section 0 body');
+    expect(rested.review?.contentHtml).toContain('Revised section 2 body');
+    expect(rested.review?.contentHtml).not.toContain('Revised section 1 body');
+  });
+
+  it('rejects an invalid magic request, wrong-state runs and out-of-plan sections', async () => {
+    const service = makeService();
+    const runId = await restingReviewReady(service);
+
+    await expect(service.magic(runId, { action: 'explode', sectionIds: ['section_0'] }, PROJECT, CONTENT)).rejects.toMatchObject({
+      status: 400,
+      code: 'invalid_magic_request',
+    });
+    await expect(
+      service.magic(runId, { action: 'change_tone', sectionIds: ['section_0'] }, PROJECT, CONTENT),
+    ).rejects.toMatchObject({ status: 400, code: 'invalid_magic_request' });
+    await expect(
+      service.magic(runId, { action: 'improve', sectionIds: ['section_99'] }, PROJECT, CONTENT),
+    ).rejects.toMatchObject({ status: 400, code: 'invalid_revision_sections' });
+  });
+
+  it('refuses a magic round on a run not resting on review_ready', async () => {
+    const service = makeService();
+    const started = await service.start(PROJECT, CONTENT, { topic: 'SEO ops' });
+    const runId = started.runId as `wr_${string}`;
+
+    await expect(
+      service.magic(runId, { action: 'improve', sectionIds: ['section_0'] }, PROJECT, CONTENT),
+    ).rejects.toMatchObject({ status: 409, code: 'writer_run_not_review_ready' });
+  });
+
+  it('recovers a committed-but-unresumed magic round after a restart (re-issues the exact persisted magic)', async () => {
+    const { deps, calls } = recordingDeps();
+    const repository = new InMemoryWriterRunRepository();
+    const checkpointer = new MemorySaver();
+
+    // Process 1 runs to the resting review_ready state, then dies right after
+    // committing a magic round: the row says `revising` (with the validated
+    // request + magic intent persisted) but the thread never left the review
+    // session.
+    const serviceOne = makeService(deps, { repository, checkpointer });
+    const runId = await restingReviewReady(serviceOne);
+    const resting = await repository.getBound(runId, PROJECT, CONTENT);
+    await repository.transition({
+      runId,
+      projectId: PROJECT,
+      contentId: CONTENT,
+      from: ['review_ready'],
+      to: 'revising',
+      snapshot: reviseCommittedSnapshot(resting!.snapshot, {
+        sectionIds: ['section_2'],
+        instruction: 'Improve this section',
+        magic: { action: 'improve', userIntent: 'make it concrete' },
+      }),
+      completedAt: null,
+    });
+
+    // Process 2 (fresh service, SAME repository + SAME durable checkpointer)
+    // reads the row and must recover it, re-issuing the exact persisted magic
+    // (action + bounded user intent) onto the still-review_ready thread.
+    const serviceTwo = makeService(deps, { repository, checkpointer });
+    const rested = (await waitForTerminal(serviceTwo, runId, 2000, ['revising', 'reviewing'])) as {
+      status: string;
+      review: { contentHtml: string } | null;
+      revisionCount: number;
+    };
+    expect(rested.status).toBe('review_ready');
+    expect(calls.revisions).toBe(1);
+    expect(rested.revisionCount).toBe(1);
+    expect(rested.review?.contentHtml).toContain('Revised section 2 body');
   });
 });

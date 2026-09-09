@@ -51,6 +51,9 @@ function dto(overrides: Partial<Record<string, unknown>> = {}) {
     },
     review: null,
     note: null,
+    revisionCount: 0,
+    lastRevisionAt: null,
+    magicAction: null,
     createdAt: '2026-09-08T00:00:00.000Z',
     ...overrides,
   };
@@ -114,6 +117,9 @@ beforeEach(() => {
   vi.spyOn(WriterRunService.prototype, 'start').mockResolvedValue(dto() as never);
   vi.spyOn(WriterRunService.prototype, 'getRun').mockResolvedValue(dto() as never);
   vi.spyOn(WriterRunService.prototype, 'decide').mockResolvedValue(dto({ status: 'writing' }) as never);
+  vi.spyOn(WriterRunService.prototype, 'magic').mockResolvedValue(
+    dto({ status: 'revising', magicAction: 'improve' }) as never,
+  );
 });
 
 afterEach(() => {
@@ -121,13 +127,23 @@ afterEach(() => {
 });
 
 describe('writer API - authorization', () => {
-  it.each(['POST /', 'GET /:runId', 'POST /:runId/approval'])('401 when unauthenticated', async (route) => {
-    const [method, pathTemplate] = route.split(' ') as [string, string];
-    const path = pathTemplate === 'POST /' ? '' : pathTemplate === '/:runId' ? `/${RUN}` : `/${RUN}/approval`;
-    const res = await request(path, { method, body: {} });
-    expect(res.status).toBe(401);
-    expect((res.json as { error: { code: string } }).error.code).toBe('unauthorized');
-  });
+  it.each(['POST /', 'GET /:runId', 'POST /:runId/approval', 'POST /:runId/magic'])(
+    '401 when unauthenticated',
+    async (route) => {
+      const [method, pathTemplate] = route.split(' ') as [string, string];
+      const path =
+        pathTemplate === 'POST /'
+          ? ''
+          : pathTemplate === '/:runId'
+            ? `/${RUN}`
+            : pathTemplate === '/:runId/approval'
+              ? `/${RUN}/approval`
+              : `/${RUN}/magic`;
+      const res = await request(path, { method, body: {} });
+      expect(res.status).toBe(401);
+      expect((res.json as { error: { code: string } }).error.code).toBe('unauthorized');
+    },
+  );
 
   it('403: viewer cannot start', async () => {
     const res = await request('', { method: 'POST', token: 'viewer-token', body: { instruction: 'Write' } });
@@ -141,6 +157,15 @@ describe('writer API - authorization', () => {
 
   it('403: viewer cannot reject', async () => {
     const res = await request(`/${RUN}/approval`, { method: 'POST', token: 'viewer-token', body: { decision: 'reject' } });
+    expect(res.status).toBe(403);
+  });
+
+  it('403: viewer cannot apply Section Magic', async () => {
+    const res = await request(`/${RUN}/magic`, {
+      method: 'POST',
+      token: 'viewer-token',
+      body: { action: 'improve', sectionIds: ['section_0'] },
+    });
     expect(res.status).toBe(403);
   });
 
@@ -223,6 +248,57 @@ describe('writer API - lifecycle + errors', () => {
     expect(res.status).toBe(409);
     expect((res.json as { error: { code: string } }).error.code).toBe('writer_run_not_awaiting_approval');
   });
+
+  it('applies a Section Magic request as an editor (200) and never touches content writes', async () => {
+    const magicSpy = vi.mocked(WriterRunService.prototype.magic);
+    const updateSpy = vi.spyOn(ContentService.prototype, 'update');
+    const createSpy = vi.spyOn(ContentService.prototype, 'create');
+    const removeSpy = vi.spyOn(ContentService.prototype, 'remove');
+
+    const res = await request(`/${RUN}/magic`, {
+      method: 'POST',
+      token: 'editor-token',
+      body: { action: 'shorten', sectionIds: ['section_1', 'section_0'], instruction: 'Tighten' },
+    });
+    expect(res.status).toBe(200);
+    expect((res.json as { data: { status: string } }).data.status).toBe('revising');
+    expect(magicSpy).toHaveBeenCalledWith(RUN, { action: 'shorten', sectionIds: ['section_1', 'section_0'], instruction: 'Tighten' }, PROJECT, CONTENT);
+    expect(updateSpy).not.toHaveBeenCalled();
+    expect(createSpy).not.toHaveBeenCalled();
+    expect(removeSpy).not.toHaveBeenCalled();
+  });
+
+  it('400 for an invalid Section Magic request', async () => {
+    const magicSpy = vi.mocked(WriterRunService.prototype.magic);
+    const bad = await request(`/${RUN}/magic`, {
+      method: 'POST',
+      token: 'editor-token',
+      body: { action: 'explode', sectionIds: ['section_0'] },
+    });
+    expect(bad.status).toBe(400);
+    expect((bad.json as { error: { code: string } }).error.code).toBe('invalid_magic_request');
+
+    const toneMissing = await request(`/${RUN}/magic`, {
+      method: 'POST',
+      token: 'editor-token',
+      body: { action: 'change_tone', sectionIds: ['section_0'] },
+    });
+    expect(toneMissing.status).toBe(400);
+    expect(magicSpy).not.toHaveBeenCalled();
+  });
+
+  it('409 when a Section Magic run is not resting on review_ready', async () => {
+    vi.mocked(WriterRunService.prototype.magic).mockRejectedValue(
+      new ApiError(409, 'writer_run_not_review_ready', 'Writer run is writing; only a run resting on review_ready can be transformed.') as never,
+    );
+    const res = await request(`/${RUN}/magic`, {
+      method: 'POST',
+      token: 'editor-token',
+      body: { action: 'improve', sectionIds: ['section_0'] },
+    });
+    expect(res.status).toBe(409);
+    expect((res.json as { error: { code: string } }).error.code).toBe('writer_run_not_review_ready');
+  });
 });
 
 describe('writer API - safe response envelope', () => {
@@ -230,7 +306,7 @@ describe('writer API - safe response envelope', () => {
     const res = await request('', { method: 'POST', token: 'editor-token', body: { instruction: 'Write' } });
     const json = res.json as { data: Record<string, unknown> };
     expect(Object.keys(json.data).sort()).toEqual(
-      ['contentId', 'createdAt', 'note', 'plan', 'projectId', 'review', 'runId', 'status'].sort(),
+      ['contentId', 'createdAt', 'lastRevisionAt', 'magicAction', 'note', 'plan', 'projectId', 'review', 'revisionCount', 'runId', 'status'].sort(),
     );
     const text = JSON.stringify(json).toLowerCase();
     expect(text).not.toContain('authorization');

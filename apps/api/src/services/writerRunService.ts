@@ -69,11 +69,14 @@ import {
   isWriterRunId,
   parseWriterApprovalDecision,
   parseWriterSessionDecision,
+  parseWriterMagicRequest,
+  buildMagicRevisionRequest,
+  magicResumeFromRequest,
   validateRevisionSectionIds,
   type WriterRunDependencies,
   type WriterRunId,
   type WriterRunResult,
-  type WriterSessionDecision,
+  type WriterReviewSessionResume,
 } from '../agents/writer/index.js';
 import {
   continueDurableWriterRun,
@@ -193,6 +196,17 @@ function noteForRow(row: WriterRunRow): string | null {
   return null;
 }
 
+/** The Section Magic action currently being applied to a run. Present only
+ *  while the row is `revising` through a magic request (so the UI can say
+ *  exactly what the AI is doing and that it is a proposal, not an
+ *  auto-acceptance); null for a plain W8 revision or any non-revising state. */
+function magicActionForRow(row: WriterRunRow): WriterRunDto['magicAction'] {
+  if (row.status === 'revising' && row.snapshot.revisionRequest?.magic) {
+    return row.snapshot.revisionRequest.magic.action;
+  }
+  return null;
+}
+
 /** Maps a durable row onto the safe API/UI DTO. The DTO status vocabulary and
  *  the row status vocabulary are the same strings, so the row status maps
  *  straight through; only the note is derived from the snapshot. */
@@ -207,6 +221,7 @@ function rowToDto(row: WriterRunRow): WriterRunDto {
     note: noteForRow(row),
     revisionCount: row.snapshot.revisionCount,
     lastRevisionAt: row.snapshot.lastRevisionAt,
+    magicAction: magicActionForRow(row),
     createdAt: row.createdAt,
   };
 }
@@ -321,12 +336,15 @@ export class WriterRunService {
       if (!current) return;
       if (current.status !== 'writing' && current.status !== 'revising') return;
       const saver = await this.checkpointer();
-      const reviewSessionResume = current.snapshot.revisionRequest
-        ? {
-            action: 'revise' as const,
-            sectionIds: current.snapshot.revisionRequest.sectionIds,
-            instruction: current.snapshot.revisionRequest.instruction,
-          }
+      const revisionRequest = current.snapshot.revisionRequest;
+      const reviewSessionResume: WriterReviewSessionResume | undefined = revisionRequest
+        ? revisionRequest.magic
+          ? magicResumeFromRequest(revisionRequest)
+          : {
+              action: 'revise',
+              sectionIds: revisionRequest.sectionIds,
+              instruction: revisionRequest.instruction,
+            }
         : undefined;
       const result = await continueDurableWriterRun(row.runId, this.depsFor(), saver, {
         ...(reviewSessionResume ? { reviewSessionResume } : {}),
@@ -431,26 +449,26 @@ export class WriterRunService {
     }
   }
 
-  /** Runs a committed revise resume to its resting state (review_ready again)
-   *  in the background and catches the row up. Same ownership contract as
+  /** Runs a committed revise/magic resume to its resting state (review_ready
+   *  again) in the background and catches the row up. Same ownership contract as
    *  resumeApprovalInBackground: only entered with the run already in
-   *  this.inFlight (see revise); a resume that throws (e.g. the thread already
-   *  left the review session) falls back to continueDurableWriterRun so the run
-   *  is caught up instead of being failed. */
+   *  this.inFlight (see revise/magic); a resume that throws (e.g. the thread
+   *  already left the review session) falls back to continueDurableWriterRun so
+   *  the run is caught up instead of being failed. */
   private async resumeReviseInBackground(
     runId: WriterRunId,
     projectId: string,
     contentId: string,
-    decision: WriterSessionDecision,
+    resume: WriterReviewSessionResume,
   ): Promise<void> {
     try {
       const saver = await this.checkpointer();
       const deps = this.depsFor();
       let result: WriterRunResult | null;
       try {
-        result = await resumeDurableReviewSession({ runId, decision }, deps, saver);
+        result = await resumeDurableReviewSession({ runId, decision: resume }, deps, saver);
       } catch {
-        result = await continueDurableWriterRun(runId, deps, saver);
+        result = await continueDurableWriterRun(runId, deps, saver, { reviewSessionResume: resume });
       }
       if (result !== null) {
         await this.persistResting({ runId, projectId, contentId }, result, ['revising']);
@@ -703,6 +721,99 @@ export class WriterRunService {
     // Report `revising` from the row we just committed, deterministically: the
     // background may already have finished (fast tests) but the revise response
     // is the durable W8 contract - poll getRun for the resting review_ready.
+    return rowToDto({
+      ...row,
+      status: 'revising',
+      snapshot: reviseCommittedSnapshot(row.snapshot, request),
+    });
+  }
+
+  /** Starts a controlled Section Magic round (W10.1) for a run resting on
+   *  review_ready. Section Magic is an explicit, user-triggered transformation:
+   *  the caller picks the sections and the action (never the AI), the request is
+   *  strictly validated (bounded action/tone vocabulary, optional bounded user
+   *  prose, plan re-validation through buildMagicRevisionRequest) and then flows
+   *  through the exact W8 revision infrastructure as a validated revision
+   *  request carrying magic intent metadata - there is no parallel system, no
+   *  auto-acceptance and no lifecycle state beyond the existing
+   *  `review_ready -> revising -> reviewing -> review_ready` round. Mirrors
+   *  revise(): commit to the row first, resume the thread in the background,
+   *  return `revising` so callers can poll. Wrong-state / unknown runs fail
+   *  closed. */
+  async magic(
+    runId: WriterRunId,
+    body: unknown,
+    projectId: string,
+    contentId: string,
+  ): Promise<WriterRunDto> {
+    const row = await this.requireBoundRow(runId, projectId, contentId);
+    if (row.status !== 'review_ready') {
+      throw new ApiError(
+        409,
+        'writer_run_not_review_ready',
+        `Writer run ${runId} is ${row.status}; only a run resting on review_ready can be transformed.`,
+        { runId, status: row.status },
+      );
+    }
+    if (this.inFlight.has(runId)) {
+      throw new ApiError(
+        409,
+        'writer_run_not_review_ready',
+        `Writer run ${runId} is already being revised.`,
+        { runId, status: 'revising' },
+      );
+    }
+
+    const parsed = parseWriterMagicRequest(body);
+    if (!parsed.ok) {
+      throw new ApiError(400, 'invalid_magic_request', parsed.note, { runId });
+    }
+    const plan = row.snapshot.plan;
+    if (!plan) {
+      throw new ApiError(
+        500,
+        'writer_run_state_invalid',
+        'A review_ready writer run has no approved plan to transform.',
+        { runId },
+      );
+    }
+    const built = buildMagicRevisionRequest(plan, parsed.request);
+    if (!built.ok) {
+      throw new ApiError(400, 'invalid_revision_sections', built.note, { runId });
+    }
+    const request = built.request;
+
+    // Claim the in-flight slot, commit the magic round durably (status + the
+    // validated request with its magic intent), then resume the thread in the
+    // background. Claiming the slot BEFORE the row transition closes the window
+    // where a concurrent getRun could see the new `revising` row and start a
+    // recovery resume on the same thread.
+    this.inFlight.add(runId);
+    const committed = await this.repository.transition({
+      runId,
+      projectId,
+      contentId,
+      from: ['review_ready'],
+      to: 'revising',
+      snapshot: reviseCommittedSnapshot(row.snapshot, request),
+      completedAt: null,
+    });
+    if (!committed) {
+      this.inFlight.delete(runId);
+      const latest = await this.requireBoundRow(runId, projectId, contentId);
+      throw new ApiError(
+        409,
+        'writer_run_not_review_ready',
+        `Writer run ${runId} is ${latest.status}; only a run resting on review_ready can be transformed.`,
+        { runId, status: latest.status },
+      );
+    }
+    // The background resume owns its in-flight slot and releases it once the
+    // run rests on review_ready (or fails honestly) - never before.
+    void this.resumeReviseInBackground(runId, projectId, contentId, magicResumeFromRequest(request));
+    // Report `revising` from the row we just committed, deterministically: the
+    // background may already have finished (fast tests) but the magic response
+    // is the durable W10.1 contract - poll getRun for the resting review_ready.
     return rowToDto({
       ...row,
       status: 'revising',
