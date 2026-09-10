@@ -52,8 +52,12 @@ jobs:
           set -euo pipefail
           mkdir -p "$HOME/.ssh"
           chmod 700 "$HOME/.ssh"
-          printf '%s\n' "$VPS_SSH_KEY" > "$HOME/.ssh/id_deploy"
+          printf '%b\n' "$VPS_SSH_KEY" | tr -d '\r' > "$HOME/.ssh/id_deploy"
           chmod 600 "$HOME/.ssh/id_deploy"
+          if ! ssh-keygen -y -f "$HOME/.ssh/id_deploy" </dev/null >/dev/null 2>&1; then
+            echo "::error::VPS_SSH_KEY is not a valid unencrypted OpenSSH private key"
+            exit 1
+          fi
           PORT="${VPS_PORT:-22}"
           if [ -n "${VPS_KNOWN_HOSTS:-}" ]; then
             printf '%s\n' "$VPS_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
