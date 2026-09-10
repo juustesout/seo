@@ -1,0 +1,91 @@
+name: Deploy API
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: [main]
+
+concurrency:
+  group: deploy-api-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  deploy:
+    if: >
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_branch == 'main'
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      DEPLOY_ROOT: /opt/seo-api
+      SERVICE_USER: ${{ secrets.VPS_SERVICE_USER || 'root' }}
+      KEEP_RELEASES: "3"
+      HEALTH_URL: ${{ secrets.VPS_HEALTH_URL || 'http://127.0.0.1:3001/api/health' }}
+      RELEASE_ID: ${{ github.event.workflow_run.head_sha }}
+      ARTIFACT_RUN_ID: ${{ github.event.workflow_run.id }}
+    steps:
+      - name: Checkout deploy scripts
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - name: Download API artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: seo-api-artifact
+          run-id: ${{ env.ARTIFACT_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: artifact
+
+      - name: Configure SSH
+        env:
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_KNOWN_HOSTS: ${{ secrets.VPS_KNOWN_HOSTS }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_PORT: ${{ secrets.VPS_PORT }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
+          printf '%s\n' "$VPS_SSH_KEY" > "$HOME/.ssh/id_deploy"
+          chmod 600 "$HOME/.ssh/id_deploy"
+          PORT="${VPS_PORT:-22}"
+          if [ -n "${VPS_KNOWN_HOSTS:-}" ]; then
+            printf '%s\n' "$VPS_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          else
+            ssh-keyscan -p "$PORT" -H "$VPS_HOST" > "$HOME/.ssh/known_hosts" 2>/dev/null
+          fi
+          chmod 600 "$HOME/.ssh/known_hosts"
+
+      - name: Upload release and scripts
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PORT: ${{ secrets.VPS_PORT }}
+        run: |
+          set -euo pipefail
+          PORT="${VPS_PORT:-22}"
+          SHORT="${RELEASE_ID:0:12}-${ARTIFACT_RUN_ID}"
+          SSH_OPTS=(-i "$HOME/.ssh/id_deploy" -p "$PORT" -o StrictHostKeyChecking=yes -o "UserKnownHostsFile=$HOME/.ssh/known_hosts")
+          ssh "${SSH_OPTS[@]}" "$VPS_USER@$VPS_HOST" \
+            "mkdir -p '$DEPLOY_ROOT/incoming' '$DEPLOY_ROOT/releases' '$DEPLOY_ROOT/shared/logs' '$DEPLOY_ROOT/scripts'"
+          rsync -az -e "ssh ${SSH_OPTS[*]}" artifact/api-artifact.tar.gz "$VPS_USER@$VPS_HOST:$DEPLOY_ROOT/incoming/$SHORT.tar.gz"
+          rsync -az -e "ssh ${SSH_OPTS[*]}" deploy/vps/deploy-release.sh "$VPS_USER@$VPS_HOST:$DEPLOY_ROOT/scripts/deploy-release.sh"
+
+      - name: Activate release
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PORT: ${{ secrets.VPS_PORT }}
+        run: |
+          set -euo pipefail
+          PORT="${VPS_PORT:-22}"
+          SHORT="${RELEASE_ID:0:12}-${ARTIFACT_RUN_ID}"
+          SSH_OPTS=(-i "$HOME/.ssh/id_deploy" -p "$PORT" -o StrictHostKeyChecking=yes -o "UserKnownHostsFile=$HOME/.ssh/known_hosts")
+          ssh "${SSH_OPTS[@]}" "$VPS_USER@$VPS_HOST" \
+            "env DEPLOY_ROOT='$DEPLOY_ROOT' SERVICE_USER='$SERVICE_USER' KEEP_RELEASES='$KEEP_RELEASES' HEALTH_URL='$HEALTH_URL' bash '$DEPLOY_ROOT/scripts/deploy-release.sh' '$SHORT'"

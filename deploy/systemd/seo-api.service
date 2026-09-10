@@ -1,0 +1,22 @@
+[Unit]
+Description=SEO Platform API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=@SERVICE_USER@
+Group=@SERVICE_USER@
+WorkingDirectory=@DEPLOY_ROOT@/current
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+EnvironmentFile=@DEPLOY_ROOT@/shared/.env
+ExecStart=/usr/bin/env node @DEPLOY_ROOT@/current/dist/index.js
+Restart=on-failure
+RestartSec=5
+StandardOutput=append:@DEPLOY_ROOT@/shared/logs/seo-api.log
+StandardError=append:@DEPLOY_ROOT@/shared/logs/seo-api.log
+# Enable MemoryMax only after measuring real RSS (see deploy/README.md).
+# MemoryMax=512M
+
+[Install]
+WantedBy=multi-user.target

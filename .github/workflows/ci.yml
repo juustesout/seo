@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.25.0
+          run_install: false
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build contracts
+        run: pnpm --filter @seo/contracts build
+
+      - name: Typecheck API
+        run: pnpm --filter @seo/api typecheck
+
+      - name: Test API
+        run: pnpm --filter @seo/api test
+
+      - name: Build API
+        run: pnpm --filter @seo/api build
+
+      - name: Typecheck web
+        run: pnpm --filter @seo/web typecheck
+
+      - name: Test web
+        run: pnpm --filter @seo/web test
+
+      - name: Build web
+        run: pnpm --filter @seo/web build
+
+      - name: Package API artifact
+        if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+        run: bash deploy/build-artifact.sh artifact
+
+      - name: Upload API artifact
+        if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+        uses: actions/upload-artifact@v4
+        with:
+          name: seo-api-artifact
+          path: artifact/api-artifact.tar.gz
+          if-no-files-found: error
+          retention-days: 14
