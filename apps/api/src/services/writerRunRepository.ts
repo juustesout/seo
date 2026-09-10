@@ -159,7 +159,7 @@ export class SupabaseWriterRunRepository implements WriterRunRepository {
         content_id: run.contentId,
         user_id: run.userId,
         status: run.status,
-        state_json: JSON.stringify(run.snapshot),
+        state_json: run.snapshot as never,
         revision_count: run.snapshot.revisionCount,
         last_revision_at: run.snapshot.lastRevisionAt,
       })
@@ -185,7 +185,7 @@ export class SupabaseWriterRunRepository implements WriterRunRepository {
       .from('seo_writer_runs')
       .update({
         status: update.to,
-        state_json: JSON.stringify(update.snapshot),
+        state_json: update.snapshot as never,
         revision_count: update.snapshot.revisionCount,
         last_revision_at: update.snapshot.lastRevisionAt,
         completed_at: update.completedAt,
