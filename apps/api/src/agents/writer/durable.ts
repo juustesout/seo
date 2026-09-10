@@ -59,6 +59,7 @@ import {
   type WriterRunResult,
 } from './runtime.js';
 import type { WriterRevisionStatus, WriterStatus } from './state.js';
+import type { WriterAgentState } from './agent.js';
 
 /** Compiles a fresh writer graph that shares the process-wide checkpointer. */
 export function compileWriterGraph(
@@ -189,12 +190,16 @@ export async function continueDurableWriterRun(
   runId: WriterRunId,
   deps: WriterRunDependencies,
   checkpointer: BaseCheckpointSaver,
-  opts: { reviewSessionResume?: WriterReviewSessionResume } = {},
+  opts: { reviewSessionResume?: WriterReviewSessionResume; agentResume?: WriterReviewSessionResume } = {},
 ): Promise<WriterRunResult | null> {
   const graph = compileWriterGraph(deps, checkpointer);
   const config = writerRunThreadConfig(runId);
   const current = await graph.getState(config);
-  const values = current.values as { status?: WriterStatus; revisionStatus?: WriterRevisionStatus };
+  const values = current.values as {
+    status?: WriterStatus;
+    revisionStatus?: WriterRevisionStatus;
+    agent?: WriterAgentState | null;
+  };
   const status = values.status;
   if (!status) return null;
 
@@ -203,6 +208,20 @@ export async function continueDurableWriterRun(
     // resume never executed (crash between the DB transition and the invoke).
     // Re-issue the approve so the run proceeds instead of hanging mid-writing.
     const finalState = await graph.invoke(new Command({ resume: { decision: 'approve' } }), config);
+    return writerRunResultFromState(runId, finalState);
+  }
+  if (status === 'review_ready' && values.agent?.status === 'running') {
+    // A W10.4 agent loop is mid-flight (a consumed superstep was persisted but
+    // the loop had not finished): continue the pending supersteps only, so no
+    // already-committed agent step is re-run.
+    const finalState = await graph.invoke(null, config);
+    return writerRunResultFromState(runId, finalState);
+  }
+  if (status === 'review_ready' && opts.agentResume && !values.agent) {
+    // An agent start was committed (the row snapshot says `running`) but its
+    // Command resume never executed (crash between the commit and the invoke).
+    // Re-issue the exact validated agent resume so the run is not lost.
+    const finalState = await graph.invoke(new Command({ resume: opts.agentResume }), config);
     return writerRunResultFromState(runId, finalState);
   }
   if (status === 'review_ready' && opts.reviewSessionResume && values.revisionStatus === 'none') {

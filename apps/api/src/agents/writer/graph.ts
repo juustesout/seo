@@ -123,6 +123,19 @@ import { END, MemorySaver, START, StateGraph, interrupt, type BaseCheckpointSave
 import { ApiError } from '../../apiErrors.js';
 import { logger } from '../../logger.js';
 import {
+  emptyWriterAgentActionCounts,
+  finalizeWriterAgent,
+  initialWriterAgent,
+  recordWriterAgentStep,
+  validateWriterAgentDecision,
+  WRITER_AGENT_ACTIONS,
+  WRITER_AGENT_ACTIONS_REGISTRY,
+  NO_AGENT_DEPENDENCIES,
+  type WriterAgentDecisionInput,
+  type WriterAgentDependencies,
+  type WriterAgentState,
+} from './agent.js';
+import {
   boundWriterContext,
   contextNoteFromError,
   NO_ADAPTER_DEPENDENCIES,
@@ -135,6 +148,7 @@ import {
 import {
   boundEvidence,
   degradedResearchResult,
+  evidenceItemCount,
   NO_RESEARCH_DEPENDENCIES,
   type WriterResearchDependencies,
   type WriterResearchRequest,
@@ -181,7 +195,7 @@ import {
   type WriterSectionInput,
 } from './sectionWriter.js';
 import { WriterStateAnnotation, writerSectionIdFor, writerSectionIndexFor } from './state.js';
-import type { WriterState, WriterStateUpdate, WriterWrittenSection } from './state.js';
+import type { WriterRevisionRequest, WriterState, WriterStateUpdate, WriterWrittenSection } from './state.js';
 
 export const WRITER_INITIALIZE_NODE = 'initialize';
 export const WRITER_GATHER_NODE = 'gatherContext';
@@ -194,6 +208,8 @@ export const WRITER_REVIEW_SESSION_NODE = 'awaitReviewSession';
 export const WRITER_REVISE_SECTIONS_NODE = 'reviseSections';
 export const WRITER_GATHER_EVIDENCE_NODE = 'gatherEvidence';
 export const WRITER_GATHER_INTELLIGENCE_NODE = 'gatherIntelligence';
+/** W10.4 bounded agent coordinator loop. */
+export const WRITER_AGENT_NODE = 'agentCoordinate';
 
 /** Marks the run as started; later phases assemble per-project context here. */
 function initializeNode(_state: WriterState): WriterStateUpdate {
@@ -320,6 +336,298 @@ async function gatherIntelligenceNode(
     reading = degradedIntelligenceReading();
   }
   return { intelligence: boundIntelligence(new Date().toISOString(), reading), intelligenceRequest: null };
+}
+
+/** Remaining per-action budget for the coordinator's next decision. `finish`
+ *  has no budget and is always available. */
+function remainingAgentBudgets(agent: WriterAgentState): Record<(typeof WRITER_AGENT_ACTIONS)[number], number> {
+  const remaining = emptyWriterAgentActionCounts();
+  for (const action of WRITER_AGENT_ACTIONS) {
+    const max = WRITER_AGENT_ACTIONS_REGISTRY[action].maxCalls;
+    remaining[action] = Math.max(0, max - (agent.actionCounts[action] ?? 0));
+  }
+  return remaining;
+}
+
+/**
+ * The W10.4 bounded agent coordinator. It runs only from a review_ready rest
+ * (the agent session resume only stores a goal; the run status never changes):
+ * each superstep makes exactly one decision through the injected coordinator
+ * allowlist, re-validates it deterministically (deny by default, fixed action
+ * registry, hard step/action budgets, plan-validated sections) and executes it
+ * through the EXACT same safe boundaries a human-triggered action uses:
+ *
+ *   - research/intelligence -> the read-only gather allowlists, bounded +
+ *     labelled (untrusted) before they are stored;
+ *   - review -> the deterministic local review allowlist (no AI);
+ *   - magic/revision -> the controlled revision writer allowlist, one rewrite
+ *     per selected section; the approved plan and every unselected section are
+ *     preserved untouched and the result stays a review artifact (never applied
+ *     or published);
+ *   - finish -> stops the loop honestly.
+ *
+ * The node then self-loops until the agent is no longer `running`, at which
+ * point it returns to the review-session rest. Every superstep is persisted by
+ * the checkpointer, so a consumed step is never re-run after a restart. A
+ * decision that cannot be validated or a failed action ends the agent `failed`
+ * (or `limit_reached` when a budget is the reason); it never silently widens
+ * the vocabulary or keeps going.
+ */
+async function agentNode(
+  deps: {
+    agent: WriterAgentDependencies;
+    research: WriterResearchDependencies;
+    intelligence: WriterIntelligenceDependencies;
+    revision: WriterRevisionDependencies;
+    review: WriterReviewDependencies;
+  },
+  state: WriterState,
+): Promise<WriterStateUpdate> {
+  const now = new Date().toISOString();
+  let agent = state.agent;
+  if (!agent) {
+    const request = state.agentRequest;
+    if (!request) {
+      return {
+        status: 'failed',
+        reviewStatus: 'failed',
+        reviewNote: 'The agent coordinator ran without a validated goal.',
+      };
+    }
+    agent = initialWriterAgent(request, now);
+  }
+  if (agent.status !== 'running') {
+    return { agent, agentRequest: null };
+  }
+  const plan = state.plan;
+  if (!plan) {
+    return {
+      agent: finalizeWriterAgent(agent, 'failed', 'The agent has no approved plan to work from.', now),
+      agentRequest: null,
+    };
+  }
+  if (agent.stepCount >= agent.maxSteps) {
+    return {
+      agent: finalizeWriterAgent(agent, 'limit_reached', 'Agent reached its configured step limit.', now),
+      agentRequest: null,
+    };
+  }
+
+  const input: WriterAgentDecisionInput = {
+    projectId: state.projectId,
+    topic: state.topic,
+    targetKeyword: state.targetKeyword ?? null,
+    goal: agent.goal,
+    instruction: agent.instruction,
+    stepIndex: agent.stepCount,
+    maxSteps: agent.maxSteps,
+    sections: plan.sections.map((section, index) => ({ id: writerSectionIdFor(index), heading: section.heading })),
+    preferredSections: agent.preferredSections,
+    remaining: remainingAgentBudgets(agent),
+    evidence: state.evidence ?? null,
+    intelligence: state.intelligence ?? null,
+    reviewSeoScore: state.review?.seo.score ?? null,
+    revisionCount: state.revisionCount ?? 0,
+  };
+
+  let raw: unknown;
+  try {
+    raw = await deps.agent.decide(input);
+  } catch (err) {
+    logger.error({ err, projectId: state.projectId }, 'writer agent coordinator threw unexpectedly');
+    return {
+      agent: finalizeWriterAgent(agent, 'failed', 'The agent coordinator could not produce a decision.', now),
+      agentRequest: null,
+    };
+  }
+  const validated = validateWriterAgentDecision({ raw, agent, plan, runStatus: state.status });
+  if (!validated.ok) {
+    if (validated.code === 'budget_exhausted') {
+      return {
+        agent: finalizeWriterAgent(agent, 'limit_reached', 'Agent reached its configured action budget.', now),
+        agentRequest: null,
+      };
+    }
+    return {
+      agent: finalizeWriterAgent(agent, 'failed', `The agent decision was rejected: ${validated.note}`, now),
+      agentRequest: null,
+    };
+  }
+  const decision = validated.decision;
+
+  if (decision.action === 'finish') {
+    return {
+      agent: recordWriterAgentStep(finalizeWriterAgent(agent, 'completed', null, now), 'finish', 'completed', decision.reason),
+      agentRequest: null,
+    };
+  }
+
+  if (decision.action === 'research') {
+    const request: WriterResearchRequest = {
+      projectId: state.projectId,
+      topic: state.topic,
+      targetKeyword: state.targetKeyword ?? null,
+      purpose: 'revision',
+    };
+    let result: WriterResearchResult;
+    try {
+      result = await deps.research.research(request);
+    } catch (err) {
+      logger.error({ err, projectId: state.projectId }, 'writer agent research threw unexpectedly');
+      result = degradedResearchResult('revision');
+    }
+    const evidence = boundEvidence(now, result);
+    const summary = `Research gathered ${evidenceItemCount(evidence)} item(s). ${decision.reason}`;
+    return {
+      agent: recordWriterAgentStep(agent, 'research', 'completed', summary),
+      evidence,
+      agentRequest: null,
+    };
+  }
+
+  if (decision.action === 'intelligence') {
+    const request: WriterIntelligenceRequest = {
+      projectId: state.projectId,
+      contentId: state.requestId,
+      topic: state.topic,
+      targetKeyword: state.targetKeyword ?? null,
+      purpose: 'deep_research',
+      focus: null,
+      sections: decision.sections,
+    };
+    let reading: WriterIntelligenceReading;
+    try {
+      reading = await deps.intelligence.gather(request);
+    } catch (err) {
+      logger.error({ err, projectId: state.projectId }, 'writer agent intelligence threw unexpectedly');
+      reading = degradedIntelligenceReading();
+    }
+    const intelligence = boundIntelligence(now, reading);
+    const summary = `Intelligence gathered ${intelligence.findings.length} finding(s). ${decision.reason}`;
+    return {
+      agent: recordWriterAgentStep(agent, 'intelligence', 'completed', summary),
+      intelligence,
+      agentRequest: null,
+    };
+  }
+
+  if (decision.action === 'review') {
+    const outcome = reviewWriterContent(deps.review, {
+      plan,
+      writtenSections: state.writtenSections,
+      targetKeyword: state.targetKeyword ?? null,
+    });
+    if (!outcome.ok) {
+      return {
+        agent: recordWriterAgentStep(finalizeWriterAgent(agent, 'failed', outcome.note, now), 'review', 'failed', outcome.note),
+        agentRequest: null,
+      };
+    }
+    return {
+      agent: recordWriterAgentStep(agent, 'review', 'completed', `Reviewed the draft (SEO score ${outcome.review.seo.score}).`),
+      review: outcome.review,
+      reviewStatus: 'completed',
+      reviewNote: null,
+      agentRequest: null,
+    };
+  }
+
+  // magic / revision: mutate prose only through the existing controlled
+  // revision writer boundary; the approved plan and unselected sections stay
+  // untouched and the artifact is never applied or published.
+  let revisionRequest: WriterRevisionRequest;
+  if (decision.action === 'magic') {
+    const built = buildMagicRevisionRequest(plan, {
+      sectionIds: decision.sections,
+      magic: { action: 'improve', userIntent: decision.reason },
+    });
+    if (!built.ok) {
+      return {
+        agent: recordWriterAgentStep(finalizeWriterAgent(agent, 'failed', built.note, now), decision.action, 'failed', built.note),
+        agentRequest: null,
+      };
+    }
+    revisionRequest = built.request;
+  } else {
+    const validatedSections = validateRevisionSectionIds(plan, decision.sections);
+    if (!validatedSections.ok) {
+      return {
+        agent: recordWriterAgentStep(finalizeWriterAgent(agent, 'failed', validatedSections.note, now), decision.action, 'failed', validatedSections.note),
+        agentRequest: null,
+      };
+    }
+    revisionRequest = { sectionIds: validatedSections.sectionIds, instruction: decision.reason };
+  }
+
+  let written = state.writtenSections;
+  for (const sectionId of revisionRequest.sectionIds) {
+    const index = writerSectionIndexFor(sectionId);
+    const section = plan.sections[index];
+    const existing = written.find((entry) => entry.sectionId === sectionId);
+    if (!section || !existing) {
+      const note = `Section ${sectionId} is not part of the approved plan; aborting the agent action.`;
+      return {
+        agent: recordWriterAgentStep(finalizeWriterAgent(agent, 'failed', note, now), decision.action, 'failed', note),
+        writtenSections: written,
+        agentRequest: null,
+      };
+    }
+    const revisionInput: WriterRevisionInput = {
+      projectId: state.projectId,
+      topic: state.topic,
+      targetKeyword: state.targetKeyword ?? null,
+      articleTitle: plan.title,
+      sectionIndex: index,
+      section,
+      instruction: revisionRequest.instruction,
+      currentContent: existing.content,
+      context: state.context,
+      evidence: state.evidence ?? null,
+      intelligence: state.intelligence ?? null,
+      ...(revisionRequest.magic !== undefined ? { magic: revisionRequest.magic } : {}),
+    };
+    let outcome: Awaited<ReturnType<WriterRevisionDependencies['reviseSection']>>;
+    try {
+      outcome = await deps.revision.reviseSection(revisionInput);
+    } catch (err) {
+      logger.error({ err, projectId: state.projectId }, 'writer agent revision writer threw unexpectedly');
+      return {
+        agent: recordWriterAgentStep(finalizeWriterAgent(agent, 'failed', contextNoteFromError(err), now), decision.action, 'failed', contextNoteFromError(err)),
+        writtenSections: written,
+        agentRequest: null,
+      };
+    }
+    if (!outcome.ok) {
+      return {
+        agent: recordWriterAgentStep(finalizeWriterAgent(agent, 'failed', outcome.note, now), decision.action, 'failed', outcome.note),
+        writtenSections: written,
+        agentRequest: null,
+      };
+    }
+    if (!isValidRevisionContent(outcome.content)) {
+      const note = `Section ${sectionId} produced invalid revised content and was not stored.`;
+      return {
+        agent: recordWriterAgentStep(finalizeWriterAgent(agent, 'failed', note, now), decision.action, 'failed', note),
+        writtenSections: written,
+        agentRequest: null,
+      };
+    }
+    written = written.map((entry) =>
+      entry.sectionId === sectionId ? { sectionId, content: outcome.content } : entry,
+    );
+  }
+  const summary = `Rewrote ${revisionRequest.sectionIds.length} section(s) through the controlled ${
+    decision.action === 'magic' ? 'Section Magic' : 'revision'
+  } boundary. ${decision.reason}`;
+  return {
+    agent: recordWriterAgentStep(agent, decision.action, 'completed', summary),
+    writtenSections: written,
+    revisionStatus: 'completed',
+    revisionNote: null,
+    revisionCount: (state.revisionCount ?? 0) + 1,
+    lastRevisionAt: now,
+    agentRequest: null,
+  };
 }
 
 /** Maps a planner outcome onto the run state. A proposed plan rests on
@@ -618,6 +926,34 @@ function awaitReviewSessionNode(
       },
     };
   }
+  if (resume.action === 'agent') {
+    // W10.4 bounded agent start. The run stays on review_ready; the transient
+    // agentRequest marker routes the graph to the coordinator loop, which only
+    // ever chooses from the fixed action allowlist and returns here. Preferred
+    // sections are re-validated against the approved plan so a stale/unknown id
+    // fails closed instead of steering the agent at a section that does not
+    // exist.
+    let sections: string[] = [];
+    if (resume.sections && resume.sections.length > 0) {
+      const validated = validateRevisionSectionIds(plan, resume.sections);
+      if (!validated.ok) {
+        return {
+          status: 'failed',
+          reviewStatus: 'failed',
+          reviewNote: `The agent request was invalid: ${validated.note}`,
+        };
+      }
+      sections = validated.sectionIds;
+    }
+    return {
+      agentRequest: {
+        goal: resume.goal,
+        maxSteps: resume.maxSteps,
+        instruction: resume.instruction ?? null,
+        sections,
+      },
+    };
+  }
   if (resume.action === 'magic') {
     const built = buildMagicRevisionRequest(plan, magicSessionToRequest(resume));
     if (!built.ok) {
@@ -818,6 +1154,7 @@ export function createWriterGraph(options: {
   revisionWriter?: WriterRevisionDependencies;
   research?: WriterResearchDependencies;
   intelligence?: WriterIntelligenceDependencies;
+  agent?: WriterAgentDependencies;
   review?: WriterReviewDependencies;
   checkpointer?: BaseCheckpointSaver;
 } = {}) {
@@ -827,6 +1164,7 @@ export function createWriterGraph(options: {
   const revisionWriterDeps = options.revisionWriter ?? NO_REVISION_WRITER_DEPENDENCIES;
   const researchDeps = options.research ?? NO_RESEARCH_DEPENDENCIES;
   const intelligenceDeps = options.intelligence ?? NO_INTELLIGENCE_DEPENDENCIES;
+  const agentDeps = options.agent ?? NO_AGENT_DEPENDENCIES;
   const reviewDeps = options.review ?? DEFAULT_WRITER_REVIEW_DEPENDENCIES;
   return new StateGraph(WriterStateAnnotation)
     .addNode(WRITER_INITIALIZE_NODE, initializeNode)
@@ -840,6 +1178,18 @@ export function createWriterGraph(options: {
     .addNode(WRITER_REVISE_SECTIONS_NODE, (state: WriterState) => reviseSectionsNode(revisionWriterDeps, state))
     .addNode(WRITER_GATHER_EVIDENCE_NODE, (state: WriterState) => gatherEvidenceNode(researchDeps, state))
     .addNode(WRITER_GATHER_INTELLIGENCE_NODE, (state: WriterState) => gatherIntelligenceNode(intelligenceDeps, state))
+    .addNode(WRITER_AGENT_NODE, (state: WriterState) =>
+      agentNode(
+        {
+          agent: agentDeps,
+          research: researchDeps,
+          intelligence: intelligenceDeps,
+          revision: revisionWriterDeps,
+          review: reviewDeps,
+        },
+        state,
+      ),
+    )
     .addEdge(START, WRITER_INITIALIZE_NODE)
     .addEdge(WRITER_INITIALIZE_NODE, WRITER_GATHER_NODE)
     .addEdge(WRITER_GATHER_NODE, WRITER_PLAN_NODE)
@@ -865,7 +1215,16 @@ export function createWriterGraph(options: {
           ? WRITER_GATHER_EVIDENCE_NODE
           : state.intelligenceRequest
             ? WRITER_GATHER_INTELLIGENCE_NODE
-            : END,
+            : state.agentRequest
+              ? WRITER_AGENT_NODE
+              : END,
+    )
+    .addConditionalEdges(WRITER_AGENT_NODE, (state: WriterState) =>
+      state.status === 'review_ready'
+        ? state.agent?.status === 'running'
+          ? WRITER_AGENT_NODE
+          : WRITER_REVIEW_SESSION_NODE
+        : END,
     )
     .addConditionalEdges(WRITER_GATHER_EVIDENCE_NODE, (state: WriterState) =>
       state.status === 'review_ready' && state.evidenceRequest === null

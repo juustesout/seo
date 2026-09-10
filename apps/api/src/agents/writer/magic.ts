@@ -51,6 +51,11 @@ import {
   writerIntelligenceSessionSchema,
   type WriterIntelligenceSessionDecision,
 } from './intelligence.js';
+import {
+  isWriterAgentSessionDecision,
+  writerAgentSessionSchema,
+  type WriterAgentSessionDecision,
+} from './agent.js';
 import type { WriterPlan, WriterRevisionRequest } from './state.js';
 
 /** Canonical Section Magic action vocabulary (W10.1). */
@@ -320,14 +325,16 @@ const magicSessionSchema = z
 export type WriterMagicSessionDecision = z.infer<typeof magicSessionSchema>;
 
 /** A valid review-session resume value: W8 accept/revise, W10.1 magic, the
- *  W10.2 research gather (`{ action: "research" }`, see evidence.ts) or the
+ *  W10.2 research gather (`{ action: "research" }`, see evidence.ts), the
  *  W10.3 intelligence gather (`{ action: "intelligence" }`, see
- *  intelligence.ts). */
+ *  intelligence.ts) or the W10.4 bounded agent start (`{ action: "agent" }`,
+ *  see agent.ts). */
 export type WriterReviewSessionResume =
   | WriterSessionDecision
   | WriterMagicSessionDecision
   | WriterResearchSessionDecision
-  | WriterIntelligenceSessionDecision;
+  | WriterIntelligenceSessionDecision
+  | WriterAgentSessionDecision;
 
 export type WriterSessionResumeParse =
   | { ok: true; resume: WriterReviewSessionResume }
@@ -352,6 +359,9 @@ export function parseReviewSessionResume(value: unknown): WriterSessionResumePar
   }
   if (isWriterIntelligenceSessionDecision(value)) {
     return { ok: true, resume: writerIntelligenceSessionSchema.parse(value) };
+  }
+  if (isWriterAgentSessionDecision(value)) {
+    return { ok: true, resume: writerAgentSessionSchema.parse(value) };
   }
   return { ok: false, note: session.note };
 }

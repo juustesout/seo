@@ -299,7 +299,84 @@ export interface WriterRunDto {
    *  intelligence operation runs; once gathered it is reference material only -
    *  never applied automatically and never a workflow command. */
   intelligence: WriterIntelligenceDto | null;
+  /** Bounded W10.4 agent coordinator state for this run: the explicit goal the
+   *  human started, the safe per-step summaries of the actions it chose from the
+   *  fixed allowlist and the honest terminal status. Null until an agent run is
+   *  started. It never carries prompts, chain-of-thought, credentials or raw
+   *  provider output. */
+  agent: WriterAgentDto | null;
   createdAt: string;
+}
+
+// ---------------------------------------------------------------------------
+// Writer advanced agent (W10.4) - bounded, allowlisted multi-step coordination
+// ---------------------------------------------------------------------------
+
+/**
+ * Lifecycle of one bounded agent coordination run. `idle` is the resting/absent
+ * value, `running` means the bounded loop is choosing/executing allowlisted
+ * actions, `awaiting_approval` is reserved for a future explicit approval gate,
+ * `completed` means the loop chose `finish`, `limit_reached` means a step or
+ * per-action budget stopped it and `failed` means a decision could not be
+ * validated or an action failed honestly. The agent never auto-applies or
+ * publishes.
+ */
+export type WriterAgentStatus = 'idle' | 'running' | 'awaiting_approval' | 'completed' | 'limit_reached' | 'failed';
+
+/** The only actions the W10.4 coordinator may choose. `research`, `intelligence`
+ *  and `review` are read-only/observational; `magic` and `revision` mutate prose
+ *  only through the existing controlled revision boundary; `finish` stops. */
+export type WriterAgentAction = 'research' | 'intelligence' | 'magic' | 'revision' | 'review' | 'finish';
+
+/** Bounded goal vocabulary the human can start the coordinator with. There is
+ *  no free-form autonomy: the goal only biases which allowlisted actions the
+ *  coordinator prefers. */
+export type WriterAgentGoal =
+  | 'improve_evidence'
+  | 'improve_seo'
+  | 'improve_clarity'
+  | 'deep_research'
+  | 'section_improvement';
+
+/** Status of one recorded agent step. */
+export type WriterAgentStepStatus = 'planned' | 'running' | 'completed' | 'failed';
+
+/** One safe, human-readable agent step. It carries only the chosen action, its
+ *  status and a bounded summary - never prompts, reasoning or raw payloads. */
+export interface WriterAgentStepDto {
+  index: number;
+  action: WriterAgentAction;
+  status: WriterAgentStepStatus;
+  summary: string | null;
+}
+
+/** The durable W10.4 agent state of a writer run. It is a safe progress record,
+ *  never a reasoning trace. */
+export interface WriterAgentDto {
+  status: WriterAgentStatus;
+  goal: WriterAgentGoal;
+  /** Bounded, untrusted user instruction, or null. It never grants a capability. */
+  instruction: string | null;
+  /** Server-bounded step budget the run was started with. */
+  maxSteps: number;
+  stepCount: number;
+  steps: WriterAgentStepDto[];
+  /** How many times each action was actually executed. */
+  actionCounts: Record<WriterAgentAction, number>;
+  note: string | null;
+  startedAt: string | null;
+  finishedAt: string | null;
+}
+
+/** Start one bounded agent coordination run on a `review_ready` writer run.
+ *  `max_steps` is optional and server-bounded; `instruction` is untrusted user
+ *  intent that can never add capabilities; `sections` are optional plan-scoped
+ *  ids. */
+export interface WriterAgentRequest {
+  goal: WriterAgentGoal;
+  max_steps?: number;
+  instruction?: string;
+  sections?: string[];
 }
 
 // ---------------------------------------------------------------------------

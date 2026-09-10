@@ -56,6 +56,7 @@ function dto(overrides: Partial<Record<string, unknown>> = {}) {
     magicAction: null,
     evidence: null,
     intelligence: null,
+    agent: null,
     createdAt: '2026-09-08T00:00:00.000Z',
     ...overrides,
   };
@@ -128,6 +129,23 @@ beforeEach(() => {
   vi.spyOn(WriterRunService.prototype, 'intelligence').mockResolvedValue(
     dto({ status: 'review_ready' }) as never,
   );
+  vi.spyOn(WriterRunService.prototype, 'agent').mockResolvedValue(
+    dto({
+      status: 'review_ready',
+      agent: {
+        status: 'running',
+        goal: 'improve_seo',
+        instruction: null,
+        maxSteps: 5,
+        stepCount: 0,
+        steps: [],
+        actionCounts: { research: 0, intelligence: 0, magic: 0, revision: 0, review: 0, finish: 0 },
+        note: null,
+        startedAt: '2026-09-08T00:00:00.000Z',
+        finishedAt: null,
+      },
+    }) as never,
+  );
 });
 
 afterEach(() => {
@@ -135,7 +153,7 @@ afterEach(() => {
 });
 
 describe('writer API - authorization', () => {
-  it.each(['POST /', 'GET /:runId', 'POST /:runId/approval', 'POST /:runId/magic', 'POST /:runId/research', 'POST /:runId/intelligence'])(
+  it.each(['POST /', 'GET /:runId', 'POST /:runId/approval', 'POST /:runId/magic', 'POST /:runId/research', 'POST /:runId/intelligence', 'POST /:runId/agent'])(
     '401 when unauthenticated',
     async (route) => {
       const [method, pathTemplate] = route.split(' ') as [string, string];
@@ -150,7 +168,9 @@ describe('writer API - authorization', () => {
                 ? `/${RUN}/magic`
                 : pathTemplate === '/:runId/research'
                   ? `/${RUN}/research`
-                  : `/${RUN}/intelligence`;
+                  : pathTemplate === '/:runId/intelligence'
+                    ? `/${RUN}/intelligence`
+                    : `/${RUN}/agent`;
       const res = await request(path, { method, body: {} });
       expect(res.status).toBe(401);
       expect((res.json as { error: { code: string } }).error.code).toBe('unauthorized');
@@ -191,6 +211,15 @@ describe('writer API - authorization', () => {
       method: 'POST',
       token: 'viewer-token',
       body: { purpose: 'revision' },
+    });
+    expect(res.status).toBe(403);
+  });
+
+  it('403: viewer cannot start the advanced agent', async () => {
+    const res = await request(`/${RUN}/agent`, {
+      method: 'POST',
+      token: 'viewer-token',
+      body: { goal: 'improve_seo' },
     });
     expect(res.status).toBe(403);
   });
@@ -444,12 +473,95 @@ describe('writer API - lifecycle + errors', () => {
   });
 });
 
+describe('writer API - advanced agent (W10.4)', () => {
+  it('starts a bounded agent as an editor (200), forwards the parsed request and never touches content writes', async () => {
+    const agentSpy = vi.mocked(WriterRunService.prototype.agent);
+    const updateSpy = vi.spyOn(ContentService.prototype, 'update');
+
+    const res = await request(`/${RUN}/agent`, {
+      method: 'POST',
+      token: 'editor-token',
+      body: { goal: 'improve_seo', max_steps: 3, instruction: 'tighten the intro', sections: ['section_0'] },
+    });
+
+    expect(res.status).toBe(200);
+    expect(agentSpy).toHaveBeenCalledWith(
+      RUN,
+      { goal: 'improve_seo', maxSteps: 3, instruction: 'tighten the intro', sections: ['section_0'] },
+      PROJECT,
+      CONTENT,
+    );
+    expect(updateSpy).not.toHaveBeenCalled();
+    const data = (res.json as { data: { status: string; agent: { status: string } | null } }).data;
+    expect(data.status).toBe('review_ready');
+    expect(data.agent?.status).toBe('running');
+  });
+
+  it('400 for an invalid agent request (unknown goal / extra workflow fields) and never reaches the service', async () => {
+    const agentSpy = vi.mocked(WriterRunService.prototype.agent);
+    const bad = await request(`/${RUN}/agent`, { method: 'POST', token: 'editor-token', body: { goal: 'do_everything' } });
+    expect(bad.status).toBe(400);
+    expect((bad.json as { error: { code: string } }).error.code).toBe('invalid_agent_request');
+    expect(agentSpy).not.toHaveBeenCalled();
+
+    const extra = await request(`/${RUN}/agent`, {
+      method: 'POST',
+      token: 'editor-token',
+      body: { goal: 'improve_seo', auto_apply: true },
+    });
+    expect(extra.status).toBe(400);
+    expect(agentSpy).not.toHaveBeenCalled();
+  });
+
+  it('409 when the agent starts on a run not resting on review_ready', async () => {
+    vi.mocked(WriterRunService.prototype.agent).mockRejectedValue(
+      new ApiError(409, 'writer_run_not_review_ready', 'Writer run is writing; only a run resting on review_ready can start the agent.') as never,
+    );
+    const res = await request(`/${RUN}/agent`, { method: 'POST', token: 'editor-token', body: { goal: 'improve_seo' } });
+    expect(res.status).toBe(409);
+    expect((res.json as { error: { code: string } }).error.code).toBe('writer_run_not_review_ready');
+  });
+
+  it('409 when an agent run is already in progress (busy)', async () => {
+    vi.mocked(WriterRunService.prototype.agent).mockRejectedValue(
+      new ApiError(409, 'writer_agent_busy', 'Writer run already has an agent run in progress.') as never,
+    );
+    const res = await request(`/${RUN}/agent`, { method: 'POST', token: 'editor-token', body: { goal: 'improve_seo' } });
+    expect(res.status).toBe(409);
+    expect((res.json as { error: { code: string } }).error.code).toBe('writer_agent_busy');
+  });
+
+  it('agent response carries only the safe progress DTO (no prompts/reasoning/credentials)', async () => {
+    const res = await request(`/${RUN}/agent`, { method: 'POST', token: 'editor-token', body: { goal: 'improve_seo' } });
+    expect(res.status).toBe(200);
+    const agent = (res.json as { data: { agent: Record<string, unknown> } }).data.agent;
+    expect(Object.keys(agent).sort()).toEqual(
+      [
+        'actionCounts',
+        'finishedAt',
+        'goal',
+        'instruction',
+        'maxSteps',
+        'note',
+        'startedAt',
+        'status',
+        'stepCount',
+        'steps',
+      ].sort(),
+    );
+    const text = JSON.stringify(res.json).toLowerCase();
+    expect(text).not.toContain('prompt');
+    expect(text).not.toContain('reasoning');
+    expect(text).not.toContain('api_key');
+  });
+});
+
 describe('writer API - safe response envelope', () => {
   it('start response carries only the documented DTO fields (no secrets/checkpoint)', async () => {
     const res = await request('', { method: 'POST', token: 'editor-token', body: { instruction: 'Write' } });
     const json = res.json as { data: Record<string, unknown> };
     expect(Object.keys(json.data).sort()).toEqual(
-      ['contentId', 'createdAt', 'evidence', 'intelligence', 'lastRevisionAt', 'magicAction', 'note', 'plan', 'projectId', 'review', 'revisionCount', 'runId', 'status'].sort(),
+      ['agent', 'contentId', 'createdAt', 'evidence', 'intelligence', 'lastRevisionAt', 'magicAction', 'note', 'plan', 'projectId', 'review', 'revisionCount', 'runId', 'status'].sort(),
     );
     const text = JSON.stringify(json).toLowerCase();
     expect(text).not.toContain('authorization');

@@ -44,6 +44,7 @@ import type { WriterApprovalDecision } from './approval.js';
 import { parseWriterApprovalDecision } from './approval.js';
 import { parseReviewSessionResume, type WriterReviewSessionResume } from './magic.js';
 import { emptyWriterContext, type WriterContext } from './context.js';
+import type { WriterAgentState } from './agent.js';
 import type { WriterEvidence } from './evidence.js';
 import type { WriterIntelligence } from './intelligence.js';
 import type {
@@ -131,6 +132,9 @@ export interface WriterRunResult {
   /** Durable W10.3 intelligence snapshot gathered for this run, or null until
    *  the human triggers an intelligence operation (see intelligence.ts). */
   intelligence: WriterIntelligence | null;
+  /** Durable W10.4 advanced-agent progress record, or null until an agent run
+   *  is started (see agent.ts). Safe progress metadata only. */
+  agent: WriterAgentState | null;
 }
 
 /** Maps raw graph state onto the public run result, tolerating channels the
@@ -161,6 +165,7 @@ export function writerRunResultFromState(runId: WriterRunId, state: WriterState)
     revisionNote: channel(state.revisionNote, null),
     evidence: channel(state.evidence, null),
     intelligence: channel(state.intelligence, null),
+    agent: channel(state.agent, null),
   };
 }
 

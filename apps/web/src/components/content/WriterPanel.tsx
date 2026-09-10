@@ -37,6 +37,9 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type {
+  WriterAgentAction,
+  WriterAgentDto,
+  WriterAgentGoal,
   WriterEvidenceDto,
   WriterEvidenceSource,
   WriterEvidenceStatus,
@@ -83,6 +86,30 @@ const INTELLIGENCE_PURPOSES: Array<{ value: string; label: string }> = [
 
 function magicActionLabel(value: WriterMagicAction): string {
   return MAGIC_ACTIONS.find((a) => a.value === value)?.label ?? value;
+}
+
+/** Canonical W10.4 bounded agent goals, mirroring the API vocabulary. The goal
+ *  only biases which allowlisted actions the coordinator prefers. */
+const AGENT_GOALS: Array<{ value: WriterAgentGoal; label: string }> = [
+  { value: 'improve_evidence', label: 'Improve evidence coverage' },
+  { value: 'improve_seo', label: 'Improve SEO quality' },
+  { value: 'improve_clarity', label: 'Improve clarity' },
+  { value: 'deep_research', label: 'Deep research' },
+  { value: 'section_improvement', label: 'Improve selected sections' },
+];
+
+/** Human labels for the fixed W10.4 agent action allowlist. */
+const AGENT_ACTION_LABELS: Record<WriterAgentAction, string> = {
+  research: 'Research',
+  intelligence: 'Intelligence',
+  magic: 'Section Magic',
+  revision: 'Revision',
+  review: 'Review',
+  finish: 'Finish',
+};
+
+function agentGoalLabel(value: WriterAgentGoal): string {
+  return AGENT_GOALS.find((g) => g.value === value)?.label ?? value;
 }
 
 /** Resting statuses the panel shows without polling. review_ready is NOT in
@@ -164,6 +191,10 @@ export function WriterPanel({ projectId, contentId, defaultTopic, defaultKeyword
   const [intelligencePurpose, setIntelligencePurpose] = useState('deep_research');
   const [intelligenceFocus, setIntelligenceFocus] = useState('');
   const [intelligenceSections, setIntelligenceSections] = useState<string[]>([]);
+  const [agentBusy, setAgentBusy] = useState(false);
+  const [agentGoal, setAgentGoal] = useState<WriterAgentGoal>('improve_clarity');
+  const [agentInstruction, setAgentInstruction] = useState('');
+  const [agentSections, setAgentSections] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [fatal, setFatal] = useState<string | null>(null);
   const runRef = useRef<WriterRunDto | null>(null);
@@ -215,10 +246,13 @@ export function WriterPanel({ projectId, contentId, defaultTopic, defaultKeyword
   }, [projectId, contentId]);
 
   // Poll only while the run is progressing (writing after approve; revising /
-  // reviewing after a revise resume); stop at resting/terminal states.
+  // reviewing after a revise resume) OR a bounded W10.4 agent loop is running
+  // on top of the resting review_ready state; stop at true resting/terminal
+  // states.
   useEffect(() => {
     const current = runRef.current;
-    if (!current || !PROGRESS.has(current.status) || fatal) return;
+    const agentRunning = current?.agent?.status === 'running';
+    if (!current || (!PROGRESS.has(current.status) && !agentRunning) || fatal) return;
     const id = window.setInterval(() => {
       void refresh();
     }, pollMs);
@@ -390,6 +424,44 @@ export function WriterPanel({ projectId, contentId, defaultTopic, defaultKeyword
     );
   };
 
+  /** W10.4 bounded agent: posts the human-chosen goal (with the optional,
+   *  bounded, untrusted instruction and optional section focus) to the agent
+   *  endpoint. The coordinator only ever chooses from its fixed allowlist,
+   *  stays within hard step/action budgets and never applies or publishes the
+   *  article. The run stays review_ready while `agent.status` is `running`; the
+   *  panel polls until the agent reaches a terminal status. */
+  const startAgent = async () => {
+    const current = runRef.current;
+    if (!current || actionBusy || agentBusy) return;
+    setAgentBusy(true);
+    setError(null);
+    setFatal(null);
+    try {
+      const instruction = agentInstruction.trim();
+      const next = await api<WriterRunDto>(`${runPath(projectId, contentId, current.runId)}/agent`, {
+        method: 'POST',
+        body: {
+          goal: agentGoal,
+          ...(instruction ? { instruction } : {}),
+          ...(agentSections.length > 0 ? { sections: sortedSectionIds(agentSections) } : {}),
+        },
+      });
+      setRun(next);
+      setAgentInstruction('');
+      setAgentSections([]);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setAgentBusy(false);
+    }
+  };
+
+  const toggleAgentSection = (sectionId: string) => {
+    setAgentSections((prev) =>
+      prev.includes(sectionId) ? prev.filter((s) => s !== sectionId) : [...prev, sectionId],
+    );
+  };
+
   const reset = () => {
     setRun(null);
     setError(null);
@@ -400,6 +472,8 @@ export function WriterPanel({ projectId, contentId, defaultTopic, defaultKeyword
     setMagicInstruction('');
     setIntelligenceFocus('');
     setIntelligenceSections([]);
+    setAgentInstruction('');
+    setAgentSections([]);
     window.localStorage.removeItem(storageKey(projectId, contentId));
   };
 
@@ -447,7 +521,9 @@ export function WriterPanel({ projectId, contentId, defaultTopic, defaultKeyword
     );
   }
 
-  const { status, plan, review, note, evidence, intelligence } = run;
+  const { status, plan, review, note, evidence, intelligence, agent } = run;
+  const agentRunning = agent?.status === 'running';
+  const agentBusyState = actionBusy || researchBusy || agentRunning;
 
   return (
     <div className="writer-panel">
@@ -497,14 +573,14 @@ export function WriterPanel({ projectId, contentId, defaultTopic, defaultKeyword
       {status === 'review_ready' && review && plan && (
         <>
           <ReviewResult review={review} planTitle={plan.title} revisionCount={run.revisionCount} />
-          <ResearchControls evidence={evidence} busy={actionBusy || researchBusy} onGather={() => void gatherResearch()} />
+          <ResearchControls evidence={evidence} busy={actionBusy || researchBusy || agentRunning} onGather={() => void gatherResearch()} />
           <IntelligenceControls
             intelligence={intelligence}
             sections={plan.sections}
             purpose={intelligencePurpose}
             focus={intelligenceFocus}
             selected={intelligenceSections}
-            busy={actionBusy || intelligenceBusy}
+            busy={actionBusy || intelligenceBusy || agentRunning}
             onPurposeChange={setIntelligencePurpose}
             onFocusChange={setIntelligenceFocus}
             onToggleSection={toggleIntelligenceSection}
@@ -514,7 +590,7 @@ export function WriterPanel({ projectId, contentId, defaultTopic, defaultKeyword
             sections={plan.sections}
             selected={reviseSections}
             instruction={reviseInstruction}
-            busy={actionBusy || researchBusy}
+            busy={agentBusyState}
             onToggle={toggleReviseSection}
             onInstructionChange={setReviseInstruction}
             onRevise={() => void reviseSelected()}
@@ -525,12 +601,24 @@ export function WriterPanel({ projectId, contentId, defaultTopic, defaultKeyword
             action={magicAction}
             tone={magicTone}
             instruction={magicInstruction}
-            busy={actionBusy || researchBusy}
+            busy={agentBusyState}
             hasResearch={Boolean(evidence && evidence.sources.some((s) => s.items.length > 0))}
             onActionChange={setMagicAction}
             onToneChange={setMagicTone}
             onInstructionChange={setMagicInstruction}
             onApply={() => void applyMagic()}
+          />
+          <AgentControls
+            agent={agent}
+            sections={plan.sections}
+            goal={agentGoal}
+            instruction={agentInstruction}
+            selected={agentSections}
+            busy={agentBusy || actionBusy || researchBusy || agentRunning}
+            onGoalChange={setAgentGoal}
+            onInstructionChange={setAgentInstruction}
+            onToggleSection={toggleAgentSection}
+            onStart={() => void startAgent()}
           />
         </>
       )}
@@ -979,6 +1067,183 @@ function IntelligenceSourceSection({
         <p className="muted" style={{ fontSize: 12, margin: '4px 0' }}>
           No findings gathered from this source.
         </p>
+      )}
+    </div>
+  );
+}
+
+/** W10.4 Advanced Agent controls. The human picks a bounded goal (optional
+ *  untrusted instruction and section focus) and starts one bounded coordination
+ *  run. The coordinator only ever chooses from its fixed action allowlist, stays
+ *  within the hard step/action budgets and never applies or publishes. While it
+ *  runs the panel reports step progress and polls; a `limit_reached`/`failed`
+ *  terminal state is shown honestly and nothing restarts automatically. */
+function AgentControls({
+  agent,
+  sections,
+  goal,
+  instruction,
+  selected,
+  busy,
+  onGoalChange,
+  onInstructionChange,
+  onToggleSection,
+  onStart,
+}: {
+  agent: WriterAgentDto | null;
+  sections: Array<{ heading: string }>;
+  goal: WriterAgentGoal;
+  instruction: string;
+  selected: string[];
+  busy: boolean;
+  onGoalChange: (value: WriterAgentGoal) => void;
+  onInstructionChange: (value: string) => void;
+  onToggleSection: (sectionId: string) => void;
+  onStart: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const running = agent?.status === 'running';
+  const statusLabel = agent ? agent.status : 'idle';
+  const statusPill =
+    agent?.status === 'completed' || agent?.status === 'limit_reached'
+      ? 'ok'
+      : agent?.status === 'failed'
+        ? 'error'
+        : running
+          ? 'busy'
+          : '';
+  return (
+    <div className="writer-agent" style={{ marginTop: 14 }}>
+      <div className="writer-proposal">
+        <span className="pill busy">Advanced Agent</span>
+        <span className="muted" style={{ fontSize: 12 }}>
+          A bounded coordinator that only chooses from a fixed allowlist (research, intelligence, Section Magic,
+          revision, review, finish). It never adds tools, never bypasses the step/action limits and never applies or
+          publishes the article.
+        </span>
+        <button className="btn sm" style={{ marginLeft: 'auto' }} onClick={() => setOpen((v) => !v)}>
+          {open ? 'Hide agent' : agent ? `Agent (${statusLabel})` : 'Start agent'}
+        </button>
+      </div>
+
+      {open && (
+        <>
+          <div className="row" style={{ marginTop: 8, alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+            <select
+              value={goal}
+              onChange={(e) => onGoalChange(e.target.value as WriterAgentGoal)}
+              disabled={busy}
+              aria-label="Agent goal"
+            >
+              {AGENT_GOALS.map((g) => (
+                <option key={g.value} value={g.value}>
+                  {g.label}
+                </option>
+              ))}
+            </select>
+            <input
+              type="text"
+              value={instruction}
+              placeholder="Instruction (optional)"
+              onChange={(e) => onInstructionChange(e.target.value)}
+              disabled={busy}
+              maxLength={500}
+              style={{ minWidth: 260 }}
+            />
+            <button className="btn" onClick={onStart} disabled={busy || running}>
+              {running ? 'Agent working…' : agent ? 'Run agent again' : 'Start agent'}
+            </button>
+          </div>
+
+          {sections.length > 0 && (
+            <div className="row" style={{ marginTop: 6, flexWrap: 'wrap', gap: 8 }}>
+              <span className="muted" style={{ fontSize: 12 }}>
+                Focus sections (optional):
+              </span>
+              {sections.map((section, index) => {
+                const sectionId = `section_${index}`;
+                const active = selected.includes(sectionId);
+                return (
+                  <label key={sectionId} className="muted" style={{ fontSize: 12, display: 'flex', gap: 4, alignItems: 'center' }}>
+                    <input
+                      type="checkbox"
+                      checked={active}
+                      disabled={busy}
+                      onChange={() => onToggleSection(sectionId)}
+                    />
+                    {section.heading}
+                  </label>
+                );
+              })}
+            </div>
+          )}
+
+          {running && (
+            <p className="muted" style={{ marginTop: 8 }}>
+              The agent is choosing bounded actions… it stops on its own within the step and action limits.
+            </p>
+          )}
+
+          {!agent && (
+            <p className="muted" style={{ marginTop: 8 }}>
+              No advanced agent run has been started for this draft yet. Starting one runs only allowlisted actions on
+              this run; nothing is ever applied or published automatically.
+            </p>
+          )}
+
+          {agent && (
+            <div style={{ marginTop: 8 }}>
+              <div className="row" style={{ alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
+                <span className={`pill ${statusPill}`}>{statusLabel}</span>
+                <span className="pill">{agentGoalLabel(agent.goal)}</span>
+                <span className="muted" style={{ fontSize: 12 }}>
+                  step {agent.stepCount}/{agent.maxSteps}
+                </span>
+                {agent.startedAt && (
+                  <span className="muted" style={{ fontSize: 12 }}>
+                    Started {new Date(agent.startedAt).toLocaleString()}
+                  </span>
+                )}
+                {agent.finishedAt && (
+                  <span className="muted" style={{ fontSize: 12 }}>
+                    Finished {new Date(agent.finishedAt).toLocaleString()}
+                  </span>
+                )}
+              </div>
+              {agent.note && (
+                <p className="muted" style={{ fontSize: 12 }}>
+                  {agent.note}
+                </p>
+              )}
+              {agent.steps.length > 0 && (
+                <div style={{ marginTop: 6 }}>
+                  {agent.steps.map((step) => (
+                    <div key={step.index} className="writer-section" style={{ marginTop: 6 }}>
+                      <div className="row" style={{ alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                        <span className="pill">{AGENT_ACTION_LABELS[step.action]}</span>
+                        <span
+                          className={`pill ${
+                            step.status === 'failed' ? 'error' : step.status === 'completed' ? 'ok' : 'busy'
+                          }`}
+                        >
+                          {step.status}
+                        </span>
+                        <span className="muted" style={{ fontSize: 12 }}>
+                          Step {step.index + 1}
+                        </span>
+                      </div>
+                      {step.summary && (
+                        <p className="sub" style={{ margin: '4px 0' }}>
+                          {step.summary}
+                        </p>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </>
       )}
     </div>
   );

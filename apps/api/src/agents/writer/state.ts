@@ -87,6 +87,7 @@
 import { Annotation } from '@langchain/langgraph';
 import type { SeoResult, TipDoc } from '@seo/contracts';
 import { emptyWriterContext, type WriterContext } from './context.js';
+import type { WriterAgentGoalName, WriterAgentState } from './agent.js';
 import type { WriterEvidence, WriterResearchPurpose } from './evidence.js';
 import type { WriterIntelligence, WriterIntelligencePurpose } from './intelligence.js';
 import type { WriterMagicIntent } from './magic.js';
@@ -319,6 +320,28 @@ export interface WriterIntelligenceIntent {
   sections: string[];
 }
 
+// --- advanced agent artifact (W10.4) ------------------------------------------
+//
+// The W10.4 coordinator runs a bounded loop of allowlisted actions on a
+// review_ready draft. The agent channel holds the durable, safe progress record
+// (goal, per-step action/status/summary, budgets, honest terminal status) built
+// only from the deterministic decision gate in agent.ts; the agentRequest
+// channel is a transient routing marker set by the review session on an agent
+// resume and cleared by the coordinator node - it never rests. No prompts,
+// chain-of-thought or raw payloads ever enter either channel.
+
+/** Transient marker that routes an agent resume to the coordinator node. */
+export interface WriterAgentIntent {
+  /** Bounded goal the human started the agent with. */
+  goal: WriterAgentGoalName;
+  /** Server-bounded step budget. */
+  maxSteps: number;
+  /** Bounded, untrusted user instruction (never a capability grant). */
+  instruction: string | null;
+  /** Validated, plan-scoped section ids the agent should prefer (empty = none). */
+  sections: string[];
+}
+
 // --- review artifact (W5) ----------------------------------------------------
 //
 // The W5 review phase is a deterministic, local conveyor: it reassembles the
@@ -392,6 +415,12 @@ export const WriterStateAnnotation = Annotation.Root({
     reducer: replaceReducer,
     default: () => null,
   }),
+  /** Durable W10.4 advanced-agent progress record, or null until an agent run
+   *  is started. Built only from the deterministic decision gate; safe metadata. */
+  agent: Annotation<WriterAgentState | null>({ reducer: replaceReducer, default: () => null }),
+  /** Transient W10.4 routing marker set by an agent session resume and cleared
+   *  by the coordinator node; never observed at rest. */
+  agentRequest: Annotation<WriterAgentIntent | null>({ reducer: replaceReducer, default: () => null }),
 });
 
 /** Full typed state a node receives. */

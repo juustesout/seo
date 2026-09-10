@@ -73,8 +73,12 @@ import {
   buildMagicRevisionRequest,
   magicResumeFromRequest,
   validateRevisionSectionIds,
+  agentResumeFromState,
+  initialWriterAgent,
+  WRITER_AGENT_MAX_STEPS,
   type WriterResearchPurpose,
   type WriterIntelligencePurpose,
+  type WriterAgentStartIntent,
   type WriterRunDependencies,
   type WriterRunId,
   type WriterRunResult,
@@ -89,10 +93,16 @@ import {
 import { createWriterContextDependencies } from '../agents/writer/contextDependencies.js';
 import { createWriterResearchDependencies } from '../agents/writer/researchDependencies.js';
 import { createWriterIntelligenceDependencies } from '../agents/writer/intelligenceDependencies.js';
+import { createAiWriterAgentCoordinator } from '../agents/writer/agentDependencies.js';
 import { createAiWriterPlanner, type WriterAiResolver } from '../agents/writer/planner.js';
 import { createAiWriterRevisionWriter } from '../agents/writer/revisionWriter.js';
 import { createAiWriterSectionWriter } from '../agents/writer/sectionWriter.js';
-import { failedSnapshot, reviseCommittedSnapshot, snapshotFromResult } from '../agents/writer/snapshot.js';
+import {
+  agentCommittedSnapshot,
+  failedSnapshot,
+  reviseCommittedSnapshot,
+  snapshotFromResult,
+} from '../agents/writer/snapshot.js';
 import {
   SupabaseWriterRunRepository,
   type NewWriterRun,
@@ -120,6 +130,7 @@ export function writerDependenciesFor(container: ServiceContainer): WriterRunDep
     revisionWriter: createAiWriterRevisionWriter(resolve),
     research: createWriterResearchDependencies(context),
     intelligence: createWriterIntelligenceDependencies(container, context),
+    agent: createAiWriterAgentCoordinator(resolve),
   };
 }
 
@@ -234,6 +245,29 @@ function toIntelligenceDto(
   };
 }
 
+/** Maps the stored, bounded W10.4 agent progress onto the safe API DTO. Only the
+ *  already-safe progress metadata travels; never prompts or reasoning. */
+function toAgentDto(agent: WriterRunRow['snapshot']['agent']): WriterRunDto['agent'] {
+  if (!agent) return null;
+  return {
+    status: agent.status,
+    goal: agent.goal,
+    instruction: agent.instruction,
+    maxSteps: agent.maxSteps,
+    stepCount: agent.stepCount,
+    steps: agent.steps.map((step) => ({
+      index: step.index,
+      action: step.action,
+      status: step.status,
+      summary: step.summary,
+    })),
+    actionCounts: agent.actionCounts,
+    note: agent.note,
+    startedAt: agent.startedAt,
+    finishedAt: agent.finishedAt,
+  };
+}
+
 /** Human note for the UI, derived from the safe snapshot only: the rejection
  *  reason, an honest failure message or null while a run is progressing. */
 function noteForRow(row: WriterRunRow): string | null {
@@ -280,6 +314,7 @@ function rowToDto(row: WriterRunRow): WriterRunDto {
     magicAction: magicActionForRow(row),
     evidence: toEvidenceDto(row.snapshot.evidence),
     intelligence: toIntelligenceDto(row.snapshot.intelligence),
+    agent: toAgentDto(row.snapshot.agent),
     createdAt: row.createdAt,
   };
 }
@@ -392,6 +427,27 @@ export class WriterRunService {
     try {
       const current = await this.repository.getBound(row.runId, row.projectId, row.contentId);
       if (!current) return;
+      if (current.status === 'review_ready' && current.snapshot.agent?.status === 'running') {
+        // A W10.4 agent loop survived a restart mid-flight. Its committed steps
+        // are durable in the checkpoint, so continue pending supersteps only.
+        const saver = await this.checkpointer();
+        const result = await continueDurableWriterRun(row.runId, this.depsFor(), saver, {
+          agentResume: agentResumeFromState(current.snapshot.agent),
+        });
+        if (result === null) {
+          await this.failInProgressRow(
+            current,
+            'The writer agent checkpoint was lost and cannot be resumed after the restart.',
+          );
+          return;
+        }
+        await this.persistResting(
+          { runId: current.runId, projectId: current.projectId, contentId: current.contentId },
+          result,
+          ['review_ready'],
+        );
+        return;
+      }
       if (current.status !== 'writing' && current.status !== 'revising') return;
       const saver = await this.checkpointer();
       const revisionRequest = current.snapshot.revisionRequest;
@@ -592,7 +648,8 @@ export class WriterRunService {
    *  reported to the caller. */
   async getRun(runId: WriterRunId, projectId: string, contentId: string): Promise<WriterRunDto> {
     const row = await this.requireBoundRow(runId, projectId, contentId);
-    if ((row.status === 'writing' || row.status === 'revising') && !this.inFlight.has(row.runId)) {
+    const agentRunning = row.status === 'review_ready' && row.snapshot.agent?.status === 'running';
+    if (((row.status === 'writing' || row.status === 'revising') || agentRunning) && !this.inFlight.has(row.runId)) {
       void this.recoverInProgress(row);
     }
     return rowToDto(row);
@@ -1051,6 +1108,154 @@ export class WriterRunService {
         return rowToDto(stored);
       }
       return rowToDto(stored);
+    } finally {
+      this.inFlight.delete(runId);
+    }
+  }
+
+  /** Starts one bounded W10.4 agent coordination run on a run resting on
+   *  review_ready. Like revise/magic the intent is validated and committed to
+   *  the row first (staying review_ready; the agent is a bounded loop on top of
+   *  the resting state), then the coordinator thread is resumed in the
+   *  background and the row catches up when the loop rests. Only the run's own
+   *  read actions and the existing controlled revision boundary ever run; the
+   *  agent can never apply or publish. Wrong-state / busy / unknown runs fail
+   *  closed; `sections` and `max_steps` are re-validated here. */
+  async agent(
+    runId: WriterRunId,
+    request: WriterAgentStartIntent,
+    projectId: string,
+    contentId: string,
+  ): Promise<WriterRunDto> {
+    const row = await this.requireBoundRow(runId, projectId, contentId);
+    if (row.status !== 'review_ready') {
+      throw new ApiError(
+        409,
+        'writer_run_not_review_ready',
+        `Writer run ${runId} is ${row.status}; only a run resting on review_ready can start the agent.`,
+        { runId, status: row.status },
+      );
+    }
+    const plan = row.snapshot.plan;
+    if (!plan) {
+      throw new ApiError(
+        500,
+        'writer_run_state_invalid',
+        'A review_ready writer run has no approved plan to run the agent on.',
+        { runId },
+      );
+    }
+    if (request.maxSteps < 1 || request.maxSteps > WRITER_AGENT_MAX_STEPS) {
+      throw new ApiError(
+        400,
+        'agent_step_limit_invalid',
+        `max_steps must be between 1 and ${WRITER_AGENT_MAX_STEPS}.`,
+        { runId },
+      );
+    }
+    let sections: string[] = [];
+    if (request.sections.length > 0) {
+      const validated = validateRevisionSectionIds(plan, request.sections);
+      if (!validated.ok) {
+        throw new ApiError(400, 'invalid_agent_sections', validated.note, { runId });
+      }
+      sections = validated.sectionIds;
+    }
+    if (row.snapshot.agent?.status === 'running') {
+      throw new ApiError(
+        409,
+        'writer_agent_busy',
+        `Writer run ${runId} already has an agent run in progress.`,
+        { runId },
+      );
+    }
+    if (this.inFlight.has(runId)) {
+      throw new ApiError(
+        409,
+        'writer_agent_busy',
+        `Writer run ${runId} is already being updated; wait until it rests before starting the agent.`,
+        { runId },
+      );
+    }
+
+    const startedAt = new Date().toISOString();
+    const agent = initialWriterAgent(
+      { goal: request.goal, maxSteps: request.maxSteps, instruction: request.instruction, sections },
+      startedAt,
+    );
+    this.inFlight.add(runId);
+    const committed = await this.repository.transition({
+      runId,
+      projectId,
+      contentId,
+      from: ['review_ready'],
+      to: 'review_ready',
+      snapshot: agentCommittedSnapshot(row.snapshot, agent),
+      completedAt: null,
+    });
+    if (!committed) {
+      this.inFlight.delete(runId);
+      const latest = await this.requireBoundRow(runId, projectId, contentId);
+      throw new ApiError(
+        409,
+        'writer_agent_busy',
+        `Writer run ${runId} is ${latest.status}; the agent could not be started.`,
+        { runId, status: latest.status },
+      );
+    }
+    // The background resume owns its in-flight slot and releases it once the
+    // agent loop rests or fails honestly.
+    void this.resumeAgentInBackground(runId, projectId, contentId, {
+      action: 'agent',
+      goal: request.goal,
+      maxSteps: request.maxSteps,
+      ...(request.instruction !== null ? { instruction: request.instruction } : {}),
+      ...(sections.length > 0 ? { sections } : {}),
+    });
+    return rowToDto(await this.requireBoundRow(runId, projectId, contentId));
+  }
+
+  /** Runs a committed W10.4 agent resume to its resting state in the
+   *  background and catches the row up. Same ownership contract as
+   *  resumeReviseInBackground: only entered with the run already in
+   *  this.inFlight; a resume that throws falls back to
+   *  continueDurableWriterRun so the run is caught up instead of being failed. */
+  private async resumeAgentInBackground(
+    runId: WriterRunId,
+    projectId: string,
+    contentId: string,
+    resume: WriterReviewSessionResume,
+  ): Promise<void> {
+    try {
+      const saver = await this.checkpointer();
+      const deps = this.depsFor();
+      let result: WriterRunResult | null;
+      try {
+        result = await resumeDurableReviewSession({ runId, decision: resume }, deps, saver);
+      } catch {
+        result = await continueDurableWriterRun(runId, deps, saver, { agentResume: resume });
+      }
+      if (result !== null) {
+        await this.persistResting({ runId, projectId, contentId }, result, ['review_ready']);
+        return;
+      }
+      const latest = await this.repository.getBound(runId, projectId, contentId);
+      if (latest && latest.status === 'review_ready') {
+        await this.failInProgressRow(
+          latest,
+          'The writer agent checkpoint was lost and cannot be resumed after the restart.',
+        );
+      }
+    } catch (err) {
+      logger.error({ err, runId }, 'writer agent resume failed');
+      try {
+        const latest = await this.repository.getBound(runId, projectId, contentId);
+        if (latest && latest.status === 'review_ready') {
+          await this.failInProgressRow(latest, this.safeFailureNote(err));
+        }
+      } catch {
+        // Best-effort; the row stays review_ready and a later read retries recovery.
+      }
     } finally {
       this.inFlight.delete(runId);
     }

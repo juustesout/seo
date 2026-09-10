@@ -32,7 +32,8 @@ import { describe, expect, it } from 'vitest';
 import { MemorySaver } from '@langchain/langgraph';
 import type { WriterRunDependencies, WriterRunId } from '../agents/writer/index.js';
 import type { WriterPlan } from '../agents/writer/index.js';
-import { reviseCommittedSnapshot } from '../agents/writer/snapshot.js';
+import { initialWriterAgent } from '../agents/writer/index.js';
+import { agentCommittedSnapshot, reviseCommittedSnapshot } from '../agents/writer/snapshot.js';
 import { WriterRunService } from './writerRunService.js';
 import { InMemoryWriterRunRepository, type WriterRunRepository } from './writerRunRepository.js';
 
@@ -818,6 +819,7 @@ describe('WriterRunService API-safe DTO', () => {
 
     expect(Object.keys(snapshot).sort()).toEqual(
       [
+        'agent',
         'contentId',
         'createdAt',
         'evidence',
@@ -951,5 +953,257 @@ describe('WriterRunService Section Magic (W10.1)', () => {
     expect(calls.revisions).toBe(1);
     expect(rested.revisionCount).toBe(1);
     expect(rested.review?.contentHtml).toContain('Revised section 2 body');
+  });
+});
+
+describe('WriterRunService advanced agent (W10.4)', () => {
+  type RunDto = Awaited<ReturnType<WriterRunService['getRun']>>;
+
+  /** Runs a full approve flow to the resting review_ready state. */
+  async function restingReviewReady(service: WriterRunService): Promise<`wr_${string}`> {
+    const started = await service.start(PROJECT, CONTENT, { topic: 'SEO ops', targetKeyword: 'langgraph' });
+    const runId = started.runId as `wr_${string}`;
+    await service.decide(runId, { decision: 'approve' }, PROJECT, CONTENT);
+    const resting = (await waitForTerminal(service, runId)) as { status: string };
+    expect(resting.status).toBe('review_ready');
+    return runId;
+  }
+
+  /** Polls getRun until the bounded agent leaves `running` (the run status
+   *  itself stays review_ready the whole time). */
+  async function waitForAgent(service: WriterRunService, runId: string, timeoutMs = 2000): Promise<RunDto> {
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      const dto = await service.getRun(runId as `wr_${string}`, PROJECT, CONTENT);
+      if (dto.agent && dto.agent.status !== 'running') return dto;
+      if (Date.now() > deadline) throw new Error('agent did not reach a terminal status in time');
+      await new Promise((r) => setTimeout(r, 5));
+    }
+  }
+
+  function agentDeps(decide: (input: unknown) => Promise<unknown>): WriterRunDependencies {
+    return { ...recordingDeps().deps, agent: { decide } };
+  }
+
+  it('starts a bounded agent from review_ready and rests again on the safe progress', async () => {
+    const decided: unknown[] = [];
+    const deps = agentDeps(async (input) => {
+      decided.push(input);
+      return { action: 'finish', reason: 'The draft already looks complete.' };
+    });
+    const service = makeService(deps);
+    const runId = await restingReviewReady(service);
+
+    const started = await service.agent(
+      runId,
+      { goal: 'improve_clarity', maxSteps: 5, instruction: null, sections: [] },
+      PROJECT,
+      CONTENT,
+    );
+    expect(started.status).toBe('review_ready');
+    expect(started.agent?.status).toBe('running');
+    expect(started.agent?.goal).toBe('improve_clarity');
+
+    const rested = await waitForAgent(service, runId);
+    expect(rested.status).toBe('review_ready');
+    expect(rested.agent?.status).toBe('completed');
+    expect(rested.agent?.stepCount).toBe(1);
+    expect(rested.agent?.steps[0].action).toBe('finish');
+    expect(decided).toHaveLength(1);
+  });
+
+  it('stops at the step limit and reports limit_reached (never silent continuation)', async () => {
+    let researchCalls = 0;
+    const deps: WriterRunDependencies = {
+      ...recordingDeps().deps,
+      research: {
+        async research(input) {
+          researchCalls += 1;
+          return {
+            purpose: input.purpose,
+            knowledge: { status: 'available', note: null, chunks: [{ sourceId: 'k1', title: 'Doc', text: 'Text.' }] },
+            existingContent: { status: 'not_configured', note: null, items: [] },
+            intelligence: { status: 'not_configured', note: null, keywords: [] },
+            search: { status: 'not_configured', note: null, items: [] },
+          };
+        },
+      },
+      agent: {
+        async decide() {
+          return { action: 'research', reason: 'keep gathering' };
+        },
+      },
+    };
+    const service = makeService(deps);
+    const runId = await restingReviewReady(service);
+
+    await service.agent(runId, { goal: 'deep_research', maxSteps: 1, instruction: null, sections: [] }, PROJECT, CONTENT);
+    const rested = await waitForAgent(service, runId);
+    expect(rested.status).toBe('review_ready');
+    expect(rested.agent?.status).toBe('limit_reached');
+    expect(rested.agent?.stepCount).toBe(1);
+    expect(rested.agent?.steps[0].action).toBe('research');
+    expect(researchCalls).toBe(1);
+  });
+
+  it('enforces the per-action budget (research capped at 2)', async () => {
+    let researchCalls = 0;
+    const deps: WriterRunDependencies = {
+      ...recordingDeps().deps,
+      research: {
+        async research(input) {
+          researchCalls += 1;
+          return {
+            purpose: input.purpose,
+            knowledge: { status: 'empty', note: null, chunks: [] },
+            existingContent: { status: 'not_configured', note: null, items: [] },
+            intelligence: { status: 'not_configured', note: null, keywords: [] },
+            search: { status: 'not_configured', note: null, items: [] },
+          };
+        },
+      },
+      agent: {
+        async decide() {
+          return { action: 'research', reason: 'more' };
+        },
+      },
+    };
+    const service = makeService(deps);
+    const runId = await restingReviewReady(service);
+
+    await service.agent(runId, { goal: 'deep_research', maxSteps: 5, instruction: null, sections: [] }, PROJECT, CONTENT);
+    const rested = await waitForAgent(service, runId);
+    expect(rested.agent?.status).toBe('limit_reached');
+    expect(rested.agent?.actionCounts.research).toBe(2);
+    expect(researchCalls).toBe(2);
+  });
+
+  it('fails the agent honestly when a decision proposes an unknown action', async () => {
+    const deps = agentDeps(async () => ({ action: 'publish', reason: 'ship it' }));
+    const service = makeService(deps);
+    const runId = await restingReviewReady(service);
+
+    await service.agent(runId, { goal: 'improve_seo', maxSteps: 5, instruction: null, sections: [] }, PROJECT, CONTENT);
+    const rested = await waitForAgent(service, runId);
+    expect(rested.status).toBe('review_ready');
+    expect(rested.agent?.status).toBe('failed');
+    expect(rested.agent?.note).toMatch(/rejected/i);
+  });
+
+  it('only starts from a review_ready run', async () => {
+    const service = makeService(agentDeps(async () => ({ action: 'finish', reason: 'done' })));
+    const started = await service.start(PROJECT, CONTENT, { topic: 'SEO ops' });
+    await expect(
+      service.agent(
+        started.runId as `wr_${string}`,
+        { goal: 'improve_seo', maxSteps: 5, instruction: null, sections: [] },
+        PROJECT,
+        CONTENT,
+      ),
+    ).rejects.toMatchObject({ status: 409, code: 'writer_run_not_review_ready' });
+  });
+
+  it('rejects an out-of-range step budget even before it reaches the graph', async () => {
+    const service = makeService(agentDeps(async () => ({ action: 'finish', reason: 'done' })));
+    const runId = await restingReviewReady(service);
+    await expect(
+      service.agent(runId, { goal: 'improve_seo', maxSteps: 99, instruction: null, sections: [] }, PROJECT, CONTENT),
+    ).rejects.toMatchObject({ status: 400, code: 'agent_step_limit_invalid' });
+  });
+
+  it('rejects starting a second agent while one is running', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let decideCalls = 0;
+    const deps = agentDeps(async () => {
+      decideCalls += 1;
+      if (decideCalls === 1) await gate;
+      return { action: 'finish', reason: 'done' };
+    });
+    const service = makeService(deps);
+    const runId = await restingReviewReady(service);
+
+    await service.agent(runId, { goal: 'improve_seo', maxSteps: 5, instruction: null, sections: [] }, PROJECT, CONTENT);
+    await expect(
+      service.agent(runId, { goal: 'improve_seo', maxSteps: 5, instruction: null, sections: [] }, PROJECT, CONTENT),
+    ).rejects.toMatchObject({ status: 409, code: 'writer_agent_busy' });
+    release();
+    const rested = await waitForAgent(service, runId);
+    expect(rested.agent?.status).toBe('completed');
+  });
+
+  it('recovers a committed-but-unresumed agent start after a restart and does not duplicate the step', async () => {
+    let decideCalls = 0;
+    const deps = agentDeps(async () => {
+      decideCalls += 1;
+      return { action: 'finish', reason: 'complete' };
+    });
+    const repository = new InMemoryWriterRunRepository();
+    const checkpointer = new MemorySaver();
+
+    const serviceOne = makeService(deps, { repository, checkpointer });
+    const runId = await restingReviewReady(serviceOne);
+    const resting = await repository.getBound(runId, PROJECT, CONTENT);
+
+    // Process 1 dies right after committing the agent start: the row carries the
+    // running agent, but the thread never received the resume Command.
+    await repository.transition({
+      runId,
+      projectId: PROJECT,
+      contentId: CONTENT,
+      from: ['review_ready'],
+      to: 'review_ready',
+      snapshot: agentCommittedSnapshot(
+        resting!.snapshot,
+        initialWriterAgent(
+          { goal: 'improve_seo', maxSteps: 5, instruction: null, sections: [] },
+          '2026-02-01T00:00:00.000Z',
+        ),
+      ),
+      completedAt: null,
+    });
+
+    const serviceTwo = makeService(deps, { repository, checkpointer });
+    const rested = await waitForAgent(serviceTwo, runId);
+    expect(rested.status).toBe('review_ready');
+    expect(rested.agent?.status).toBe('completed');
+    expect(rested.agent?.stepCount).toBe(1);
+    expect(decideCalls).toBe(1);
+  });
+
+  it('fails the agent honestly when the checkpoint is lost after a restart', async () => {
+    const deps = agentDeps(async () => ({ action: 'finish', reason: 'complete' }));
+    const repository = new InMemoryWriterRunRepository();
+    const serviceOne = makeService(deps, { repository, checkpointer: new MemorySaver() });
+    const runId = await restingReviewReady(serviceOne);
+    const resting = await repository.getBound(runId, PROJECT, CONTENT);
+    await repository.transition({
+      runId,
+      projectId: PROJECT,
+      contentId: CONTENT,
+      from: ['review_ready'],
+      to: 'review_ready',
+      snapshot: agentCommittedSnapshot(
+        resting!.snapshot,
+        initialWriterAgent(
+          { goal: 'improve_seo', maxSteps: 5, instruction: null, sections: [] },
+          '2026-02-01T00:00:00.000Z',
+        ),
+      ),
+      completedAt: null,
+    });
+
+    // Process 2 restarts with an EMPTY checkpointer: the thread is gone. The
+    // committed agent start must fail honestly, never fabricate progress.
+    const serviceTwo = makeService(deps, { repository, checkpointer: new MemorySaver() });
+    const done = (await waitForTerminal(serviceTwo, runId, 2000, ['review_ready'])) as {
+      status: string;
+      note: string | null;
+      agent: { status: string } | null;
+    };
+    expect(done.status).toBe('failed');
+    expect(done.note).toContain('checkpoint was lost');
   });
 });

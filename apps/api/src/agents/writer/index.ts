@@ -32,6 +32,7 @@
 
 import { ApiError } from '../../apiErrors.js';
 import { emptyWriterContext, type WriterContextDependencies } from './context.js';
+import type { WriterAgentDependencies } from './agent.js';
 import type { WriterResearchDependencies } from './evidence.js';
 import type { WriterIntelligenceDependencies } from './intelligence.js';
 import { createWriterGraph } from './graph.js';
@@ -52,6 +53,7 @@ import type { WriterState } from './state.js';
 
 export {
   createWriterGraph,
+  WRITER_AGENT_NODE,
   WRITER_APPROVAL_NODE,
   WRITER_BEGIN_WRITING_NODE,
   WRITER_GATHER_EVIDENCE_NODE,
@@ -64,6 +66,7 @@ export {
   WRITER_REVISE_SECTIONS_NODE,
   WRITER_WRITE_SECTIONS_NODE,
 } from './graph.js';
+export * from './agent.js';
 export * from './approval.js';
 export * from './context.js';
 export * from './evidence.js';
@@ -194,6 +197,7 @@ export interface WriterRunDependencies {
   revisionWriter?: WriterRevisionDependencies;
   research?: WriterResearchDependencies;
   intelligence?: WriterIntelligenceDependencies;
+  agent?: WriterAgentDependencies;
   review?: WriterReviewDependencies;
 }
 
@@ -262,6 +266,8 @@ export function parseWriterRunRequest(input: WriterRunRequest): WriterState {
     evidenceRequest: null,
     intelligence: null,
     intelligenceRequest: null,
+    agent: null,
+    agentRequest: null,
   };
 }
 

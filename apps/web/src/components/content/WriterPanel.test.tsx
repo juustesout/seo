@@ -14,6 +14,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, fireEvent, within } from '@testing-library/react';
 import { asTipDoc, evaluateSeo, tiptapEmptyDoc } from '@seo/contracts';
 import type {
+  WriterAgentDto,
   WriterEvidenceDto,
   WriterIntelligenceDto,
   WriterRunDto,
@@ -98,6 +99,7 @@ function run(over: Partial<WriterRunDto>): WriterRunDto {
     magicAction: null,
     evidence: null,
     intelligence: null,
+    agent: null,
     createdAt: '2026-01-01T00:00:00.000Z',
     ...over,
   };
@@ -727,5 +729,114 @@ describe('WriterPanel - W10.3 combined intelligence', () => {
     await screen.findAllByText(/0 findings/i, {}, { timeout: 2000 });
     expect(screen.getAllByText(/No findings gathered from this source/i)).toHaveLength(5);
     expect(screen.getByText(/No intelligence sources are configured for this project yet/i)).toBeTruthy();
+  });
+});
+
+function runningAgent(): WriterAgentDto {
+  return {
+    status: 'running',
+    goal: 'improve_seo',
+    instruction: null,
+    maxSteps: 5,
+    stepCount: 0,
+    steps: [],
+    actionCounts: { research: 0, intelligence: 0, magic: 0, revision: 0, review: 0, finish: 0 },
+    note: null,
+    startedAt: '2026-01-01T00:00:00.000Z',
+    finishedAt: null,
+  };
+}
+
+function completedAgent(): WriterAgentDto {
+  return {
+    ...runningAgent(),
+    status: 'completed',
+    stepCount: 1,
+    steps: [{ index: 0, action: 'finish', status: 'completed', summary: 'The draft already looks complete.' }],
+    actionCounts: { research: 0, intelligence: 0, magic: 0, revision: 0, review: 0, finish: 1 },
+    note: 'The draft already looks complete.',
+    finishedAt: '2026-01-01T00:00:05.000Z',
+  };
+}
+
+describe('WriterPanel advanced agent (W10.4)', () => {
+  it('starts the bounded agent only on an explicit click, shows step progress and never auto-applies', async () => {
+    window.localStorage.setItem(BOOKMARK_KEY, 'run-1');
+    const base = run({ status: 'review_ready', review: REVIEW });
+    const fake = fakeApi(base);
+    let phase = 0;
+    const original = apiMock.api.getMockImplementation();
+    apiMock.api.mockImplementation(async (path: string, opts: { method?: string; body?: unknown } = {}) => {
+      const method = opts.method ?? 'GET';
+      if (method === 'POST' && path.endsWith('/agent')) {
+        phase = 1;
+        fake.setCurrent(run({ status: 'review_ready', review: REVIEW, agent: runningAgent() }));
+      } else if (method === 'GET' && phase === 1) {
+        phase = 2;
+        fake.setCurrent(run({ status: 'review_ready', review: REVIEW, agent: completedAgent() }));
+      }
+      return original!(path, opts);
+    });
+    render(<WriterPanel projectId={PROJECT} contentId={CONTENT} defaultTopic="On-Page SEO" pollMs={5} />);
+
+    await screen.findByText(/review-ready draft/i);
+
+    // The agent is inert until the human opens and starts it.
+    fireEvent.click(screen.getByRole('button', { name: /^start agent$/i }));
+    fireEvent.change(screen.getByLabelText(/agent goal/i), { target: { value: 'improve_seo' } });
+    fireEvent.click(screen.getByRole('button', { name: /^start agent$/i }));
+
+    // Progress then terminal, both honest, and the draft is still not saved.
+    const done = await screen.findAllByText(/The draft already looks complete/i, {}, { timeout: 2000 });
+    expect(done.length).toBeGreaterThan(0);
+    expect(screen.getAllByText('completed').length).toBeGreaterThan(0);
+    expect(screen.getByText(/NOT saved to this document/i)).toBeTruthy();
+
+    const post = fake.calls.find((c) => c.method === 'POST' && c.path.endsWith('/agent'));
+    expect(post).toBeTruthy();
+    expect(post!.body).toEqual({ goal: 'improve_seo' });
+    expect(fake.calls.some((c) => c.method === 'PUT')).toBe(false);
+  });
+
+  it('surfaces a limit_reached agent honestly and never auto-restarts it', async () => {
+    window.localStorage.setItem(BOOKMARK_KEY, 'run-1');
+    const base = run({ status: 'review_ready', review: REVIEW });
+    const fake = fakeApi(base);
+    const original = apiMock.api.getMockImplementation();
+    apiMock.api.mockImplementation(async (path: string, opts: { method?: string; body?: unknown } = {}) => {
+      if ((opts.method ?? 'GET') === 'POST' && path.endsWith('/agent')) {
+        fake.setCurrent(
+          run({
+            status: 'review_ready',
+            review: REVIEW,
+            agent: {
+              ...runningAgent(),
+              status: 'limit_reached',
+              stepCount: 1,
+              steps: [
+                { index: 0, action: 'research', status: 'completed', summary: 'Research gathered 2 item(s).' },
+              ],
+              actionCounts: { research: 1, intelligence: 0, magic: 0, revision: 0, review: 0, finish: 0 },
+              note: 'Agent reached its configured step limit.',
+              finishedAt: '2026-01-01T00:00:05.000Z',
+            },
+          }),
+        );
+      }
+      return original!(path, opts);
+    });
+    render(<WriterPanel projectId={PROJECT} contentId={CONTENT} defaultTopic="On-Page SEO" pollMs={5} />);
+
+    await screen.findByText(/review-ready draft/i);
+    fireEvent.click(screen.getByRole('button', { name: /^start agent$/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^start agent$/i }));
+
+    await screen.findByText(/Agent reached its configured step limit/i);
+    expect(screen.getByText('limit_reached')).toBeTruthy();
+    expect(screen.getByText(/Research gathered 2 item/i)).toBeTruthy();
+
+    // No automatic second agent run, and nothing was applied.
+    expect(fake.calls.filter((c) => c.method === 'POST' && c.path.endsWith('/agent'))).toHaveLength(1);
+    expect(screen.getByText(/NOT saved to this document/i)).toBeTruthy();
   });
 });

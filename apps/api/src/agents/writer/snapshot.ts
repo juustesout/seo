@@ -23,6 +23,20 @@
 
 import { z } from 'zod';
 import { ApiError } from '../../apiErrors.js';
+import {
+  WRITER_AGENT_ACTIONS,
+  WRITER_AGENT_GOALS,
+  WRITER_AGENT_MAX_INSTRUCTION_CHARS,
+  WRITER_AGENT_MAX_NOTE_CHARS,
+  WRITER_AGENT_MAX_SECTIONS,
+  WRITER_AGENT_MAX_STEP_SUMMARY_CHARS,
+  WRITER_AGENT_MAX_STEPS,
+  WRITER_AGENT_MAX_STEPS_STORED,
+  WRITER_AGENT_MIN_STEPS,
+  WRITER_AGENT_STATUSES,
+  WRITER_AGENT_STEP_STATUSES,
+  type WriterAgentState,
+} from './agent.js';
 import type { WriterEvidence, WriterEvidenceSource, WriterEvidenceStatus } from './evidence.js';
 import {
   WRITER_MAX_EVIDENCE_ITEM_TEXT_CHARS,
@@ -93,6 +107,10 @@ export interface WriterRunSnapshot {
    *  null until an intelligence operation has run. Persisted so a restart keeps
    *  it clear which combined signals were available. */
   intelligence: WriterIntelligence | null;
+  /** W10.4 agent progress record, or null until an agent run is started.
+   *  Persisted so an in-flight agent survives a restart and its consumed steps
+   *  are never re-run. */
+  agent: WriterAgentState | null;
 }
 
 const writerRelatedContentSchema = z.object({
@@ -256,12 +274,84 @@ export const writerIntelligenceSchema = z
     }
   });
 
+const writerAgentStepSchema = z
+  .object({
+    index: z.number().int().nonnegative(),
+    action: z.enum(WRITER_AGENT_ACTIONS),
+    status: z.enum(WRITER_AGENT_STEP_STATUSES),
+    summary: z.string().max(WRITER_AGENT_MAX_STEP_SUMMARY_CHARS).nullable(),
+  })
+  .strict();
+
+/** Strict schema for the persisted W10.4 agent progress record. `.strict()`
+ *  fails closed on anything we did not intend to persist (prompts, reasoning,
+ *  tools, credentials...). Step indices, counts and the step cap are re-checked
+ *  so a corrupt snapshot that does not match its own counters fails closed. */
+export const writerAgentSchema = z
+  .object({
+    status: z.enum(WRITER_AGENT_STATUSES),
+    goal: z.enum(WRITER_AGENT_GOALS),
+    instruction: z.string().max(WRITER_AGENT_MAX_INSTRUCTION_CHARS).nullable(),
+    maxSteps: z.number().int().min(WRITER_AGENT_MIN_STEPS).max(WRITER_AGENT_MAX_STEPS),
+    stepCount: z.number().int().nonnegative(),
+    steps: z.array(writerAgentStepSchema).max(WRITER_AGENT_MAX_STEPS_STORED),
+    actionCounts: z.record(z.enum(WRITER_AGENT_ACTIONS), z.number().int().nonnegative()),
+    preferredSections: z.array(z.string().regex(/^section_\d+$/)).max(WRITER_AGENT_MAX_SECTIONS),
+    note: z.string().max(WRITER_AGENT_MAX_NOTE_CHARS).nullable(),
+    startedAt: z.string().nullable(),
+    finishedAt: z.string().nullable(),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    if (value.stepCount !== value.steps.length) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['stepCount'],
+        message: 'Agent stepCount does not match the stored step count.',
+      });
+    }
+    if (value.steps.length > value.maxSteps) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['steps'],
+        message: 'Agent stored more steps than its configured step budget.',
+      });
+    }
+    for (let i = 0; i < value.steps.length; i += 1) {
+      if (value.steps[i].index !== i) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['steps'],
+          message: 'Agent step indices are not a contiguous ordered sequence.',
+        });
+        break;
+      }
+    }
+    for (const action of WRITER_AGENT_ACTIONS) {
+      const completed = value.steps.filter((step) => step.action === action && step.status === 'completed').length;
+      if ((value.actionCounts[action] ?? 0) !== completed) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['actionCounts'],
+          message: `Agent ${action} count does not match its completed steps.`,
+        });
+      }
+    }
+    if (value.status === 'idle' && (value.steps.length > 0 || value.startedAt !== null)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['status'],
+        message: 'An idle agent cannot carry steps or a start timestamp.',
+      });
+    }
+  });
+
 /** Strict top-level schema for a persisted snapshot. `.strict()` fails closed
  *  on any field we did not intend to persist (context, secrets, internal
  *  handles...). Parsed values are narrowed to the WriterRunSnapshot shape by
  *  the parse helpers below (the schema itself infers plain strings for the
- *  branded runId). Revision fields are W8 additions: they default so older rows
- *  persisted before W8 still parse. */
+ *  branded runId). Revision/evidence/intelligence/agent fields are later
+ *  additions: they default so older rows persisted earlier still parse. */
 export const writerRunSnapshotSchema = z
   .object({
     runId: z.string(),
@@ -301,6 +391,7 @@ export const writerRunSnapshotSchema = z
     revisionRequest: writerRevisionRequestSchema.nullable().default(null),
     evidence: writerEvidenceSchema.nullable().default(null),
     intelligence: writerIntelligenceSchema.nullable().default(null),
+    agent: writerAgentSchema.nullable().default(null),
   })
   .strict();
 
@@ -348,6 +439,24 @@ function assertSnapshotConsistency(snapshot: WriterRunSnapshot, runId: string, p
   }
   if (snapshot.intelligence !== null && snapshot.intelligence.gatheredAt === null) {
     writerSnapshotInvalid(runId, 'intelligence exists without a gather timestamp');
+  }
+  if (snapshot.agent !== null) {
+    const agent = snapshot.agent;
+    if (agent.status !== 'idle' && agent.startedAt === null) {
+      writerSnapshotInvalid(runId, 'a started agent has no start timestamp');
+    }
+    if (agent.status === 'running' && agent.finishedAt !== null) {
+      writerSnapshotInvalid(runId, 'a running agent must not carry a finish timestamp');
+    }
+    if (agent.status === 'running' && snapshot.status !== 'review_ready') {
+      writerSnapshotInvalid(runId, 'a running agent requires the run to rest on review_ready');
+    }
+    if (
+      (agent.status === 'completed' || agent.status === 'limit_reached' || agent.status === 'failed') &&
+      agent.finishedAt === null
+    ) {
+      writerSnapshotInvalid(runId, 'a finished agent has no finish timestamp');
+    }
   }
 }
 
@@ -397,6 +506,7 @@ export function snapshotFromResult(
     revisionRequest: opts.revisionRequest ?? null,
     evidence: result.evidence ?? null,
     intelligence: result.intelligence ?? null,
+    agent: result.agent ?? null,
   });
   if (!parsed.success) {
     throw new Error(`writer result for run ${result.runId} did not serialize to a valid snapshot`);
@@ -417,9 +527,38 @@ export function failedSnapshot(snapshot: WriterRunSnapshot, note: string): Write
     reviewNote: null,
     revisionStatus: 'failed',
     revisionRequest: null,
+    agent:
+      snapshot.agent && snapshot.agent.status === 'running'
+        ? {
+            ...snapshot.agent,
+            status: 'failed',
+            note: note.slice(0, WRITER_AGENT_MAX_NOTE_CHARS),
+            finishedAt: new Date().toISOString(),
+          }
+        : snapshot.agent,
   });
   if (!parsed.success) {
     throw new Error(`could not build failed snapshot for run ${snapshot.runId}`);
+  }
+  return parsed.data as WriterRunSnapshot;
+}
+
+/** Builds the snapshot that records the committed start of an agent run on a
+ *  review_ready row: the run stays review_ready (the agent is a bounded loop on
+ *  top of the resting state) while the safe agent intent is persisted as
+ *  `running`, so a crash before/while the thread resumes can be recovered and
+ *  the consumed steps are never re-run. */
+export function agentCommittedSnapshot(
+  snapshot: WriterRunSnapshot,
+  agent: WriterAgentState,
+): WriterRunSnapshot {
+  const parsed = writerRunSnapshotSchema.safeParse({
+    ...snapshot,
+    status: 'review_ready',
+    agent,
+  });
+  if (!parsed.success) {
+    throw new Error(`could not build agent snapshot for run ${snapshot.runId}`);
   }
   return parsed.data as WriterRunSnapshot;
 }

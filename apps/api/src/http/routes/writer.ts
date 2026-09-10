@@ -52,6 +52,7 @@ import {
   parseWriterSessionDecision,
   parseWriterMagicRequest,
   parseWriterIntelligenceRequest,
+  parseWriterAgentRequest,
   type WriterRunId,
 } from '../../agents/writer/index.js';
 
@@ -272,6 +273,36 @@ writerRouter.post(
 
     const svc = new WriterRunService(container);
     const run = await svc.intelligence(runId, parsed.request, projectId, contentId);
+    res.json({ data: run });
+  }),
+);
+
+/** Start one bounded advanced-agent coordination run on a review_ready run
+ *  (editor+, W10.4). The strict body is `{ goal, max_steps?, instruction?,
+ *  sections? }` with max_steps server-bounded and sections re-validated against
+ *  the approved plan. The coordinator only ever chooses from the fixed action
+ *  allowlist and executes through existing safe boundaries; it can never apply
+ *  or publish. The response is the resting DTO with `agent.status` set to
+ *  `running` (poll GET /:runId until the agent reaches a terminal status).
+ *  Unknown workflow-control fields, invalid goals/steps and wrong-state / busy /
+ *  unknown runs fail closed. */
+writerRouter.post(
+  '/:runId/agent',
+  asyncHandler(async (req, res) => {
+    const projectId = parseProjectId(req);
+    const { container, user } = req;
+    await container.access.requireRole(user!.sub, projectId, 'editor');
+    const contentId = parseId(req, 'contentId');
+    await new ContentService(container.sb).get(projectId, contentId);
+    const runId = parseRunId(req.params.runId);
+
+    const parsed = parseWriterAgentRequest(req.body);
+    if (!parsed.ok) {
+      throw new ApiError(400, 'invalid_agent_request', parsed.note, { runId });
+    }
+
+    const svc = new WriterRunService(container);
+    const run = await svc.agent(runId, parsed.request, projectId, contentId);
     res.json({ data: run });
   }),
 );
