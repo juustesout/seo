@@ -74,6 +74,7 @@ import {
   magicResumeFromRequest,
   validateRevisionSectionIds,
   type WriterResearchPurpose,
+  type WriterIntelligencePurpose,
   type WriterRunDependencies,
   type WriterRunId,
   type WriterRunResult,
@@ -87,6 +88,7 @@ import {
 } from '../agents/writer/durable.js';
 import { createWriterContextDependencies } from '../agents/writer/contextDependencies.js';
 import { createWriterResearchDependencies } from '../agents/writer/researchDependencies.js';
+import { createWriterIntelligenceDependencies } from '../agents/writer/intelligenceDependencies.js';
 import { createAiWriterPlanner, type WriterAiResolver } from '../agents/writer/planner.js';
 import { createAiWriterRevisionWriter } from '../agents/writer/revisionWriter.js';
 import { createAiWriterSectionWriter } from '../agents/writer/sectionWriter.js';
@@ -110,12 +112,14 @@ export function writerDependenciesFor(container: ServiceContainer): WriterRunDep
     const resolved = await ai.resolve(projectId);
     return { provider: resolved.provider, configured: resolved.configured };
   };
+  const context = createWriterContextDependencies(container);
   return {
-    context: createWriterContextDependencies(container),
+    context,
     planner: createAiWriterPlanner(resolve),
     sectionWriter: createAiWriterSectionWriter(resolve),
     revisionWriter: createAiWriterRevisionWriter(resolve),
-    research: createWriterResearchDependencies(createWriterContextDependencies(container)),
+    research: createWriterResearchDependencies(context),
+    intelligence: createWriterIntelligenceDependencies(container, context),
   };
 }
 
@@ -204,6 +208,32 @@ function toEvidenceDto(evidence: WriterRunRow['snapshot']['evidence']): WriterRu
   };
 }
 
+/** Maps the stored, bounded intelligence snapshot onto the safe API DTO
+ *  (W10.3). Only the already-sanitized fields travel; no raw provider output. */
+function toIntelligenceDto(
+  intelligence: WriterRunRow['snapshot']['intelligence'],
+): WriterRunDto['intelligence'] {
+  if (!intelligence) return null;
+  return {
+    gatheredAt: intelligence.gatheredAt,
+    status: intelligence.status,
+    findings: intelligence.findings.map((finding) => ({
+      id: finding.id,
+      type: finding.type,
+      summary: finding.summary,
+      evidenceIds: finding.evidenceIds,
+      trust: finding.trust,
+    })),
+    sources: intelligence.sources.map((section) => ({
+      source: section.source,
+      status: section.status,
+      note: section.note,
+      findingCount: section.findingCount,
+    })),
+    note: intelligence.note,
+  };
+}
+
 /** Human note for the UI, derived from the safe snapshot only: the rejection
  *  reason, an honest failure message or null while a run is progressing. */
 function noteForRow(row: WriterRunRow): string | null {
@@ -249,6 +279,7 @@ function rowToDto(row: WriterRunRow): WriterRunDto {
     lastRevisionAt: row.snapshot.lastRevisionAt,
     magicAction: magicActionForRow(row),
     evidence: toEvidenceDto(row.snapshot.evidence),
+    intelligence: toIntelligenceDto(row.snapshot.intelligence),
     createdAt: row.createdAt,
   };
 }
@@ -917,6 +948,106 @@ export class WriterRunService {
         // Another writer operation moved the row while we gathered (unexpected
         // while holding the in-flight slot, but stay honest): report the current
         // row instead of overwriting it.
+        return rowToDto(stored);
+      }
+      return rowToDto(stored);
+    } finally {
+      this.inFlight.delete(runId);
+    }
+  }
+
+  /** Gathers bounded, combined intelligence for a run resting on review_ready
+   *  (W10.3). Like research, intelligence is an explicit, read-only gather: the
+   *  review_ready thread is resumed with a validated intelligence decision, the
+   *  graph's read-only combiner calls the injected allowlist, bounds + labels
+   *  (untrusted) the findings and rests again on the review session; the row
+   *  catches up to the same `review_ready` status carrying the fresh
+   *  intelligence snapshot. No lifecycle status is added, the article is never
+   *  mutated and the run never leaves review_ready. `sections` are re-validated
+   *  against the approved plan before anything is committed (unknown or
+   *  duplicate ids -> 400). The response is the resting DTO with `intelligence`
+   *  populated (honest per-source status - empty / not configured / unavailable
+   *  are reported, never fabricated). Wrong-state / unknown runs fail closed. */
+  async intelligence(
+    runId: WriterRunId,
+    request: { purpose: WriterIntelligencePurpose; focus: string | null; sections: string[] },
+    projectId: string,
+    contentId: string,
+  ): Promise<WriterRunDto> {
+    const row = await this.requireBoundRow(runId, projectId, contentId);
+    if (row.status !== 'review_ready') {
+      throw new ApiError(
+        409,
+        'writer_run_not_review_ready',
+        `Writer run ${runId} is ${row.status}; only a run resting on review_ready can gather intelligence.`,
+        { runId, status: row.status },
+      );
+    }
+    const plan = row.snapshot.plan;
+    if (!plan) {
+      throw new ApiError(
+        500,
+        'writer_run_state_invalid',
+        'A review_ready writer run has no approved plan to gather intelligence for.',
+        { runId },
+      );
+    }
+    let sections: string[] = [];
+    if (request.sections.length > 0) {
+      const sectionValidation = validateRevisionSectionIds(plan, request.sections);
+      if (!sectionValidation.ok) {
+        throw new ApiError(400, 'invalid_intelligence_sections', sectionValidation.note, { runId });
+      }
+      sections = sectionValidation.sectionIds;
+    }
+    if (this.inFlight.has(runId)) {
+      throw new ApiError(
+        409,
+        'writer_run_busy',
+        `Writer run ${runId} is already being updated; wait until it rests before gathering intelligence.`,
+        { runId },
+      );
+    }
+
+    this.inFlight.add(runId);
+    try {
+      const saver = await this.checkpointer();
+      const result = await resumeDurableReviewSession(
+        {
+          runId,
+          decision: {
+            action: 'intelligence',
+            purpose: request.purpose,
+            ...(request.focus !== null ? { focus: request.focus } : {}),
+            ...(sections.length > 0 ? { sections } : {}),
+          },
+        },
+        this.depsFor(),
+        saver,
+      );
+      const status = resultToRowStatus(result);
+      if (status !== 'review_ready') {
+        // An intelligence resume must always rest back on review_ready. Anything
+        // else is an honest internal inconsistency: keep the row authoritative
+        // and never overwrite it with a state the review session cannot read.
+        throw new ApiError(
+          500,
+          'writer_run_state_invalid',
+          'Intelligence did not rest on review_ready after gathering.',
+          { runId },
+        );
+      }
+      const persisted = await this.repository.transition({
+        runId,
+        projectId,
+        contentId,
+        from: ['review_ready'],
+        to: 'review_ready',
+        snapshot: snapshotFromResult(result),
+        completedAt: null,
+      });
+      const stored = await this.requireBoundRow(runId, projectId, contentId);
+      if (!persisted) {
         return rowToDto(stored);
       }
       return rowToDto(stored);

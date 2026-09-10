@@ -33,6 +33,7 @@
 import { ApiError } from '../../apiErrors.js';
 import { emptyWriterContext, type WriterContextDependencies } from './context.js';
 import type { WriterResearchDependencies } from './evidence.js';
+import type { WriterIntelligenceDependencies } from './intelligence.js';
 import { createWriterGraph } from './graph.js';
 import type { WriterPlannerDependencies } from './planner.js';
 import type { WriterReviewDependencies } from './review.js';
@@ -54,6 +55,7 @@ export {
   WRITER_APPROVAL_NODE,
   WRITER_BEGIN_WRITING_NODE,
   WRITER_GATHER_EVIDENCE_NODE,
+  WRITER_GATHER_INTELLIGENCE_NODE,
   WRITER_GATHER_NODE,
   WRITER_INITIALIZE_NODE,
   WRITER_PLAN_NODE,
@@ -65,6 +67,54 @@ export {
 export * from './approval.js';
 export * from './context.js';
 export * from './evidence.js';
+export {
+  WRITER_INTELLIGENCE_SOURCES,
+  WRITER_INTELLIGENCE_SOURCE_STATUSES,
+  WRITER_INTELLIGENCE_FINDING_TYPES,
+  WRITER_INTELLIGENCE_STATUSES,
+  WRITER_INTELLIGENCE_PURPOSES,
+  WRITER_INTELLIGENCE_TRUST,
+  WRITER_MAX_INTELLIGENCE_SOURCE_FINDINGS,
+  WRITER_MAX_INTELLIGENCE_FINDINGS,
+  WRITER_MAX_INTELLIGENCE_SUMMARY_CHARS,
+  WRITER_MAX_INTELLIGENCE_NOTE_CHARS,
+  WRITER_MAX_INTELLIGENCE_FOCUS_CHARS,
+  WRITER_MAX_INTELLIGENCE_EVIDENCE_IDS,
+  WRITER_MAX_INTELLIGENCE_EVIDENCE_ID_CHARS,
+  WRITER_MAX_INTELLIGENCE_SECTIONS,
+  WRITER_INTELLIGENCE_SOURCE_ORDER,
+  WRITER_MAX_INTELLIGENCE_SOURCES,
+  emptyWriterIntelligence,
+  NO_INTELLIGENCE_DEPENDENCIES,
+  degradedIntelligenceReading,
+  intelligenceSourceReading,
+  writerIntelligenceRequestBodySchema,
+  parseWriterIntelligenceRequest,
+  writerIntelligenceSessionSchema,
+  isWriterIntelligenceSessionDecision,
+  intelligenceFindingCount,
+  isNotConfiguredIntelligence,
+  intelligenceSourceLabel,
+  intelligenceFindingTypeLabel,
+  intelligenceNoteFromError,
+  boundIntelligence as boundWriterIntelligence,
+  type WriterIntelligenceSource,
+  type WriterIntelligenceSourceStatus,
+  type WriterIntelligenceFindingType,
+  type WriterIntelligencePurpose,
+  type WriterIntelligenceTrust,
+  type WriterIntelligenceFinding,
+  type WriterIntelligenceSourceSection,
+  type WriterIntelligence,
+  type WriterIntelligenceRequest,
+  type WriterIntelligenceRawFinding,
+  type WriterIntelligenceSourceReading,
+  type WriterIntelligenceReading,
+  type WriterIntelligenceDependencies,
+  type WriterIntelligenceRequestBody,
+  type WriterIntelligenceRequestParse,
+  type WriterIntelligenceSessionDecision,
+} from './intelligence.js';
 export * from './magic.js';
 export * from './planner.js';
 export * from './review.js';
@@ -143,6 +193,7 @@ export interface WriterRunDependencies {
   sectionWriter?: WriterSectionDependencies;
   revisionWriter?: WriterRevisionDependencies;
   research?: WriterResearchDependencies;
+  intelligence?: WriterIntelligenceDependencies;
   review?: WriterReviewDependencies;
 }
 
@@ -209,6 +260,8 @@ export function parseWriterRunRequest(input: WriterRunRequest): WriterState {
     lastRevisionAt: null,
     evidence: null,
     evidenceRequest: null,
+    intelligence: null,
+    intelligenceRequest: null,
   };
 }
 

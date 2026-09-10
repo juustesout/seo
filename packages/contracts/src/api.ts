@@ -293,6 +293,12 @@ export interface WriterRunDto {
    *  rounds as untrusted reference material only - it is never applied
    *  automatically and never changes the workflow. */
   evidence: WriterEvidenceDto | null;
+  /** Bounded, durable "intelligence" the human explicitly gathered for this run
+   *  (W10.3): combined, project-scoped signals (knowledge, existing content,
+   *  keyword demand, Search Console, Phase G intelligence). Null until an
+   *  intelligence operation runs; once gathered it is reference material only -
+   *  never applied automatically and never a workflow command. */
+  intelligence: WriterIntelligenceDto | null;
   createdAt: string;
 }
 
@@ -352,6 +358,72 @@ export interface WriterEvidenceDto {
   /** ISO timestamp of the gather, or null when nothing was ever gathered. */
   gatheredAt: string | null;
   sources: WriterEvidenceSourceDto[];
+}
+
+// ---------------------------------------------------------------------------
+// Writer intelligence / deeper research (W10.3) - bounded, untrusted signals
+// ---------------------------------------------------------------------------
+
+/** Overall honesty of an intelligence gather. `partial` means at least one
+ *  source produced usable findings while another relevant source was empty /
+ *  not configured / unavailable; `not_configured` means no source is wired and
+ *  `unavailable` means every wired source failed - never a fabricated result. */
+export type WriterIntelligenceStatus = 'available' | 'partial' | 'empty' | 'not_configured' | 'unavailable';
+
+/** Safe, project-scoped reads a piece of intelligence may be combined from.
+ *  `content_intelligence` is the Phase G deterministic report; `gsc` is its
+ *  Search Console signal; `dataforseo` is tracked keyword demand. */
+export type WriterIntelligenceSource =
+  | 'knowledge'
+  | 'existing_content'
+  | 'dataforseo'
+  | 'gsc'
+  | 'content_intelligence';
+
+/** The kind of signal a finding represents. */
+export type WriterIntelligenceFindingType = 'keyword' | 'opportunity' | 'overlap' | 'knowledge' | 'content';
+
+/**
+ * One bounded, sanitized intelligence finding. It is reference material, never
+ * truth and never an instruction: every finding is labelled `untrusted`, carries
+ * a capped summary and stable evidence references, and never contains
+ * credentials, raw provider responses or internal state.
+ */
+export interface WriterIntelligenceFindingDto {
+  /** Stable id within the run, e.g. `keyword:0`. */
+  id: string;
+  type: WriterIntelligenceFindingType;
+  /** Capped, single-block summary of the signal. */
+  summary: string;
+  /** Stable references to the source rows the finding was derived from. */
+  evidenceIds: string[];
+  /** Retrieved/derived intelligence is data, never instructions. */
+  trust: 'untrusted';
+}
+
+/** One intelligence source with its honest status and finding count. */
+export interface WriterIntelligenceSourceDto {
+  source: WriterIntelligenceSource;
+  status: WriterEvidenceStatus;
+  note: string | null;
+  findingCount: number;
+}
+
+/**
+ * The durable intelligence snapshot of a writer run (W10.3): the combined,
+ * bounded signals from the project's own sources. Absent (null on
+ * WriterRunDto.intelligence) until the human explicitly runs an intelligence
+ * gather; once gathered it is shown as "intelligence" - reference material, not
+ * verified facts - and later revision/magic rounds may use it only as
+ * untrusted context. It never changes the workflow automatically.
+ */
+export interface WriterIntelligenceDto {
+  /** ISO timestamp of the gather, or null when nothing was ever gathered. */
+  gatheredAt: string | null;
+  status: WriterIntelligenceStatus;
+  findings: WriterIntelligenceFindingDto[];
+  sources: WriterIntelligenceSourceDto[];
+  note: string | null;
 }
 
 /** Start a writer run for one content item. `instruction` (optional) becomes

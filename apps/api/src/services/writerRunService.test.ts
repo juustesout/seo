@@ -442,6 +442,162 @@ describe('WriterRunService research & evidence (W10.2)', () => {
   });
 });
 
+describe('WriterRunService combined intelligence (W10.3)', () => {
+  async function restingReviewReady(service: WriterRunService): Promise<`wr_${string}`> {
+    const started = await service.start(PROJECT, CONTENT, { topic: 'SEO ops', targetKeyword: 'langgraph' });
+    const runId = started.runId as `wr_${string}`;
+    await service.decide(runId, { decision: 'approve' }, PROJECT, CONTENT);
+    const resting = (await waitForTerminal(service, runId)) as { status: string };
+    expect(resting.status).toBe('review_ready');
+    return runId;
+  }
+
+  it('combines sources on an explicit intelligence call, stays on review_ready and labels findings untrusted', async () => {
+    const requests: Array<{
+      projectId: string;
+      contentId: string;
+      purpose: string;
+      focus: string | null;
+      sections: string[];
+    }> = [];
+    const deps: WriterRunDependencies = {
+      ...recordingDeps().deps,
+      intelligence: {
+        async gather(input) {
+          requests.push({
+            projectId: input.projectId,
+            contentId: input.contentId,
+            purpose: input.purpose,
+            focus: input.focus,
+            sections: input.sections,
+          });
+          return {
+            knowledge: {
+              status: 'available',
+              note: null,
+              findings: [{ type: 'knowledge', summary: 'Knowledge fact', evidenceIds: ['k1'] }],
+            },
+            existingContent: { status: 'empty', note: null, findings: [] },
+            dataforseo: {
+              status: 'available',
+              note: null,
+              findings: [{ type: 'keyword', summary: 'langgraph volume:1200', evidenceIds: ['langgraph'] }],
+            },
+            gsc: { status: 'not_configured', note: 'not wired', findings: [] },
+            contentIntelligence: { status: 'unavailable', note: 'failed', findings: [] },
+          };
+        },
+      },
+    };
+    const service = makeService(deps);
+    const runId = await restingReviewReady(service);
+
+    const gathered = await service.intelligence(
+      runId,
+      { purpose: 'deep_research', focus: 'keyword gaps', sections: ['section_0'] },
+      PROJECT,
+      CONTENT,
+    );
+    expect(gathered.status).toBe('review_ready');
+    expect(gathered.intelligence).not.toBeNull();
+    expect(gathered.intelligence!.gatheredAt).toBeTruthy();
+    expect(gathered.intelligence!.status).toBe('partial');
+    expect(gathered.intelligence!.findings).toHaveLength(2);
+    expect(gathered.intelligence!.findings.every((f) => f.trust === 'untrusted')).toBe(true);
+    const knowledge = gathered.intelligence!.sources.find((s) => s.source === 'knowledge')!;
+    expect(knowledge.status).toBe('available');
+    expect(knowledge.findingCount).toBe(1);
+    const gsc = gathered.intelligence!.sources.find((s) => s.source === 'gsc')!;
+    expect(gsc.status).toBe('not_configured');
+    expect(gsc.findingCount).toBe(0);
+
+    // The gather reached the allowlist with the run's immutable binding and the
+    // plan-validated section focus.
+    expect(requests).toEqual([
+      {
+        projectId: PROJECT,
+        contentId: CONTENT,
+        purpose: 'deep_research',
+        focus: 'keyword gaps',
+        sections: ['section_0'],
+      },
+    ]);
+
+    // The article itself is never mutated by gathering intelligence.
+    expect(gathered.review).not.toBeNull();
+  });
+
+  it('degrades honestly when no intelligence source is wired and persists it durably across a restart', async () => {
+    const { deps } = recordingDeps();
+    const repository = new InMemoryWriterRunRepository();
+    const checkpointer = new MemorySaver();
+    const serviceOne = makeService(deps, { repository, checkpointer });
+    const runId = await restingReviewReady(serviceOne);
+
+    const gathered = await serviceOne.intelligence(
+      runId,
+      { purpose: 'planning', focus: null, sections: [] },
+      PROJECT,
+      CONTENT,
+    );
+    expect(gathered.status).toBe('review_ready');
+    expect(gathered.intelligence!.status).toBe('not_configured');
+    expect(gathered.intelligence!.sources).toHaveLength(5);
+    for (const source of gathered.intelligence!.sources) {
+      expect(source.status).toBe('not_configured');
+      expect(source.findingCount).toBe(0);
+    }
+    const row = await repository.getBound(runId, PROJECT, CONTENT);
+    expect(row?.snapshot.intelligence?.gatheredAt).toBeTruthy();
+
+    const serviceTwo = makeService(deps, { repository, checkpointer });
+    const reloaded = await serviceTwo.getRun(runId, PROJECT, CONTENT);
+    expect(reloaded.status).toBe('review_ready');
+    expect(reloaded.intelligence?.gatheredAt).toBeTruthy();
+    expect(reloaded.intelligence!.sources).toHaveLength(5);
+  });
+
+  it('rejects an unknown section focus against the approved plan', async () => {
+    const service = makeService();
+    const runId = await restingReviewReady(service);
+
+    await expect(
+      service.intelligence(runId, { purpose: 'revision', focus: null, sections: ['section_9'] }, PROJECT, CONTENT),
+    ).rejects.toMatchObject({ status: 400, code: 'invalid_intelligence_sections' });
+  });
+
+  it('refuses intelligence on a run not resting on review_ready', async () => {
+    const service = makeService();
+    const started = await service.start(PROJECT, CONTENT, { topic: 'SEO ops' });
+    const runId = started.runId as `wr_${string}`;
+
+    await expect(
+      service.intelligence(runId, { purpose: 'revision', focus: null, sections: [] }, PROJECT, CONTENT),
+    ).rejects.toMatchObject({ status: 409, code: 'writer_run_not_review_ready' });
+  });
+
+  it('refuses intelligence while the run is already being updated (busy)', async () => {
+    const { deps } = recordingDeps();
+    const inFlight = new Set<WriterRunId>();
+    const service = makeService(deps, { inFlight });
+    const runId = await restingReviewReady(service);
+    inFlight.add(runId);
+
+    await expect(
+      service.intelligence(runId, { purpose: 'revision', focus: null, sections: [] }, PROJECT, CONTENT),
+    ).rejects.toMatchObject({ status: 409, code: 'writer_run_busy' });
+  });
+
+  it('never satisfies a cross-project address for an intelligence gather', async () => {
+    const service = makeService();
+    const runId = await restingReviewReady(service);
+
+    await expect(
+      service.intelligence(runId, { purpose: 'revision', focus: null, sections: [] }, OTHER_PROJECT, CONTENT),
+    ).rejects.toMatchObject({ status: 404, code: 'writer_run_not_found' });
+  });
+});
+
 describe('WriterRunService run binding + fail closed', () => {
   it('404 for an unknown runId', async () => {
     const service = makeService();
@@ -665,6 +821,7 @@ describe('WriterRunService API-safe DTO', () => {
         'contentId',
         'createdAt',
         'evidence',
+        'intelligence',
         'lastRevisionAt',
         'magicAction',
         'note',

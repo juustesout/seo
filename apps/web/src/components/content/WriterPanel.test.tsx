@@ -15,6 +15,7 @@ import { render, screen, fireEvent, within } from '@testing-library/react';
 import { asTipDoc, evaluateSeo, tiptapEmptyDoc } from '@seo/contracts';
 import type {
   WriterEvidenceDto,
+  WriterIntelligenceDto,
   WriterRunDto,
   WriterRunPlanDto,
   WriterRunReviewDto,
@@ -96,6 +97,7 @@ function run(over: Partial<WriterRunDto>): WriterRunDto {
     lastRevisionAt: null,
     magicAction: null,
     evidence: null,
+    intelligence: null,
     createdAt: '2026-01-01T00:00:00.000Z',
     ...over,
   };
@@ -628,5 +630,102 @@ describe('WriterPanel - W10.2 research & evidence', () => {
     expect(screen.getAllByText(/No items gathered from this source/i)).toHaveLength(4);
     // With no usable items the magic note stays off: nothing to offer.
     expect(screen.queryByText(/will be offered to the writer as untrusted reference material/i)).toBeNull();
+  });
+});
+
+describe('WriterPanel - W10.3 combined intelligence', () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+    apiMock.api.mockReset();
+  });
+
+  const INTELLIGENCE: WriterIntelligenceDto = {
+    gatheredAt: '2026-01-03T00:00:00.000Z',
+    status: 'partial',
+    findings: [
+      { id: 'keyword:0', type: 'keyword', summary: 'langgraph volume:1200', evidenceIds: ['langgraph'], trust: 'untrusted' },
+    ],
+    sources: [
+      { source: 'knowledge', status: 'available', note: null, findingCount: 1 },
+      { source: 'existing_content', status: 'empty', note: null, findingCount: 0 },
+      { source: 'dataforseo', status: 'not_configured', note: null, findingCount: 0 },
+      { source: 'gsc', status: 'unavailable', note: null, findingCount: 0 },
+      { source: 'content_intelligence', status: 'not_configured', note: null, findingCount: 0 },
+    ],
+    note: 'Intelligence gathered from some sources; other sources were empty or unavailable.',
+  };
+
+  it('gathers intelligence only on the explicit human click and shows findings as untrusted reference material', async () => {
+    window.localStorage.setItem(BOOKMARK_KEY, 'run-1');
+    const base = run({ status: 'review_ready', review: REVIEW });
+    const fake = fakeApi(base);
+    const original = apiMock.api.getMockImplementation();
+    apiMock.api.mockImplementation(async (path: string, opts: { method?: string; body?: unknown } = {}) => {
+      if ((opts.method ?? 'GET') === 'POST' && path.endsWith('/intelligence')) {
+        fake.setCurrent(run({ status: 'review_ready', review: REVIEW, intelligence: INTELLIGENCE }));
+      }
+      return original!(path, opts);
+    });
+    render(<WriterPanel projectId={PROJECT} contentId={CONTENT} defaultTopic="On-Page SEO" pollMs={5} />);
+
+    await screen.findByText(/review-ready draft/i);
+
+    // The intelligence controls are inert until the human opens them.
+    fireEvent.click(screen.getByRole('button', { name: /deep research/i }));
+    expect(screen.getByRole('button', { name: /gather intelligence/i })).toBeTruthy();
+    expect(screen.queryByText(/1 finding/i)).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: /gather intelligence/i }));
+
+    const summary = await screen.findByText(/langgraph volume:1200/i, {}, { timeout: 2000 });
+    expect(summary).toBeTruthy();
+    expect(screen.getByText('Intelligence')).toBeTruthy();
+    expect(screen.getAllByText(/1 finding/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/untrusted reference/i).length).toBeGreaterThan(0);
+    expect(screen.getByText(/partial/)).toBeTruthy();
+    expect(screen.getAllByText(/not_configured/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/unavailable/i).length).toBeGreaterThan(0);
+    expect(screen.getByRole('button', { name: /gather again/i })).toBeTruthy();
+    // The draft is still only previewed: gathering intelligence never saves it.
+    expect(screen.getByText(/NOT saved to this document/i)).toBeTruthy();
+
+    const call = fake.calls.find((c) => c.method === 'POST' && c.path.endsWith('/intelligence'));
+    expect(call).toBeTruthy();
+    expect(call!.body).toEqual({ purpose: 'deep_research' });
+  });
+
+  it('reports a gathered-but-empty intelligence result honestly (no fabricated fallback)', async () => {
+    window.localStorage.setItem(BOOKMARK_KEY, 'run-1');
+    const EMPTY: WriterIntelligenceDto = {
+      gatheredAt: '2026-01-03T00:00:00.000Z',
+      status: 'not_configured',
+      findings: [],
+      sources: [
+        { source: 'knowledge', status: 'not_configured', note: null, findingCount: 0 },
+        { source: 'existing_content', status: 'not_configured', note: null, findingCount: 0 },
+        { source: 'dataforseo', status: 'not_configured', note: null, findingCount: 0 },
+        { source: 'gsc', status: 'not_configured', note: null, findingCount: 0 },
+        { source: 'content_intelligence', status: 'not_configured', note: null, findingCount: 0 },
+      ],
+      note: 'No intelligence sources are configured for this project yet.',
+    };
+    const base = run({ status: 'review_ready', review: REVIEW });
+    const fake = fakeApi(base);
+    const original = apiMock.api.getMockImplementation();
+    apiMock.api.mockImplementation(async (path: string, opts: { method?: string; body?: unknown } = {}) => {
+      if ((opts.method ?? 'GET') === 'POST' && path.endsWith('/intelligence')) {
+        fake.setCurrent(run({ status: 'review_ready', review: REVIEW, intelligence: EMPTY }));
+      }
+      return original!(path, opts);
+    });
+    render(<WriterPanel projectId={PROJECT} contentId={CONTENT} defaultTopic="On-Page SEO" pollMs={5} />);
+
+    await screen.findByText(/review-ready draft/i);
+    fireEvent.click(screen.getByRole('button', { name: /deep research/i }));
+    fireEvent.click(screen.getByRole('button', { name: /gather intelligence/i }));
+
+    await screen.findAllByText(/0 findings/i, {}, { timeout: 2000 });
+    expect(screen.getAllByText(/No findings gathered from this source/i)).toHaveLength(5);
+    expect(screen.getByText(/No intelligence sources are configured for this project yet/i)).toBeTruthy();
   });
 });

@@ -141,6 +141,14 @@ import {
   type WriterResearchResult,
 } from './evidence.js';
 import {
+  boundIntelligence,
+  degradedIntelligenceReading,
+  NO_INTELLIGENCE_DEPENDENCIES,
+  type WriterIntelligenceDependencies,
+  type WriterIntelligenceRequest,
+  type WriterIntelligenceReading,
+} from './intelligence.js';
+import {
   NO_PLANNER_DEPENDENCIES,
   type WriterPlanInput,
   type WriterPlannerDependencies,
@@ -185,6 +193,7 @@ export const WRITER_REVIEW_NODE = 'reviewContent';
 export const WRITER_REVIEW_SESSION_NODE = 'awaitReviewSession';
 export const WRITER_REVISE_SECTIONS_NODE = 'reviseSections';
 export const WRITER_GATHER_EVIDENCE_NODE = 'gatherEvidence';
+export const WRITER_GATHER_INTELLIGENCE_NODE = 'gatherIntelligence';
 
 /** Marks the run as started; later phases assemble per-project context here. */
 function initializeNode(_state: WriterState): WriterStateUpdate {
@@ -273,6 +282,44 @@ async function gatherEvidenceNode(
     result = degradedResearchResult(request.purpose);
   }
   return { evidence: boundEvidence(new Date().toISOString(), result), evidenceRequest: null };
+}
+
+/**
+ * The W10.3 intelligence node. It runs only from a review_ready rest after an
+ * explicit `{ action: "intelligence" }` session resume (intelligenceRequest
+ * set) and is a read-only combiner exactly like gatherEvidence: it calls the
+ * injected intelligence allowlist (never SQL/providers directly), bounds,
+ * sanitizes and deduplicates the raw per-source readings through
+ * boundIntelligence and stores them as durable intelligence. A throwing gather
+ * degrades to honest per-source unavailable readings instead of failing the
+ * run, and the run always returns to the review-session rest with whatever was
+ * honestly gathered - never a fabricated finding.
+ */
+async function gatherIntelligenceNode(
+  deps: WriterIntelligenceDependencies,
+  state: WriterState,
+): Promise<WriterStateUpdate> {
+  const request = state.intelligenceRequest;
+  if (!request) {
+    return { intelligenceRequest: null };
+  }
+  const input: WriterIntelligenceRequest = {
+    projectId: state.projectId,
+    contentId: state.requestId,
+    topic: state.topic,
+    targetKeyword: state.targetKeyword ?? null,
+    purpose: request.purpose,
+    focus: request.focus,
+    sections: request.sections,
+  };
+  let reading: WriterIntelligenceReading;
+  try {
+    reading = await deps.gather(input);
+  } catch (err) {
+    logger.error({ err, projectId: state.projectId }, 'writer intelligence threw unexpectedly');
+    reading = degradedIntelligenceReading();
+  }
+  return { intelligence: boundIntelligence(new Date().toISOString(), reading), intelligenceRequest: null };
 }
 
 /** Maps a planner outcome onto the run state. A proposed plan rests on
@@ -543,6 +590,34 @@ function awaitReviewSessionNode(
     // to this same review-session rest. Nothing is written or published.
     return { evidenceRequest: { purpose: resume.purpose ?? 'revision' } };
   }
+  if (resume.action === 'intelligence') {
+    // W10.3 explicit intelligence gather. Same rest-preserving shape as
+    // research: the transient intelligenceRequest marker routes to the
+    // read-only combiner, which stores bounded untrusted findings and returns
+    // to this same review-session rest. It never runs automatically and never
+    // mutates the article. Section focus is re-validated against the approved
+    // plan here so a stale/unknown id fails closed instead of gathering for a
+    // section that does not exist.
+    let sections: string[] = [];
+    if (resume.sections && resume.sections.length > 0) {
+      const validated = validateRevisionSectionIds(plan, resume.sections);
+      if (!validated.ok) {
+        return {
+          status: 'failed',
+          reviewStatus: 'failed',
+          reviewNote: `The intelligence request was invalid: ${validated.note}`,
+        };
+      }
+      sections = validated.sectionIds;
+    }
+    return {
+      intelligenceRequest: {
+        purpose: resume.purpose,
+        focus: resume.focus ?? null,
+        sections,
+      },
+    };
+  }
   if (resume.action === 'magic') {
     const built = buildMagicRevisionRequest(plan, magicSessionToRequest(resume));
     if (!built.ok) {
@@ -686,6 +761,7 @@ async function reviseSectionsNode(
     currentContent: existing.content,
     context: state.context,
     evidence: state.evidence ?? null,
+    intelligence: state.intelligence ?? null,
     ...(request.magic !== undefined ? { magic: request.magic } : {}),
   };
   let outcome: Awaited<ReturnType<WriterRevisionDependencies['reviseSection']>>;
@@ -741,6 +817,7 @@ export function createWriterGraph(options: {
   sectionWriter?: WriterSectionDependencies;
   revisionWriter?: WriterRevisionDependencies;
   research?: WriterResearchDependencies;
+  intelligence?: WriterIntelligenceDependencies;
   review?: WriterReviewDependencies;
   checkpointer?: BaseCheckpointSaver;
 } = {}) {
@@ -749,6 +826,7 @@ export function createWriterGraph(options: {
   const sectionWriterDeps = options.sectionWriter ?? NO_SECTION_WRITER_DEPENDENCIES;
   const revisionWriterDeps = options.revisionWriter ?? NO_REVISION_WRITER_DEPENDENCIES;
   const researchDeps = options.research ?? NO_RESEARCH_DEPENDENCIES;
+  const intelligenceDeps = options.intelligence ?? NO_INTELLIGENCE_DEPENDENCIES;
   const reviewDeps = options.review ?? DEFAULT_WRITER_REVIEW_DEPENDENCIES;
   return new StateGraph(WriterStateAnnotation)
     .addNode(WRITER_INITIALIZE_NODE, initializeNode)
@@ -761,6 +839,7 @@ export function createWriterGraph(options: {
     .addNode(WRITER_REVIEW_SESSION_NODE, (state: WriterState, config) => awaitReviewSessionNode(state, config))
     .addNode(WRITER_REVISE_SECTIONS_NODE, (state: WriterState) => reviseSectionsNode(revisionWriterDeps, state))
     .addNode(WRITER_GATHER_EVIDENCE_NODE, (state: WriterState) => gatherEvidenceNode(researchDeps, state))
+    .addNode(WRITER_GATHER_INTELLIGENCE_NODE, (state: WriterState) => gatherIntelligenceNode(intelligenceDeps, state))
     .addEdge(START, WRITER_INITIALIZE_NODE)
     .addEdge(WRITER_INITIALIZE_NODE, WRITER_GATHER_NODE)
     .addEdge(WRITER_GATHER_NODE, WRITER_PLAN_NODE)
@@ -784,10 +863,17 @@ export function createWriterGraph(options: {
         ? WRITER_REVISE_SECTIONS_NODE
         : state.evidenceRequest
           ? WRITER_GATHER_EVIDENCE_NODE
-          : END,
+          : state.intelligenceRequest
+            ? WRITER_GATHER_INTELLIGENCE_NODE
+            : END,
     )
     .addConditionalEdges(WRITER_GATHER_EVIDENCE_NODE, (state: WriterState) =>
       state.status === 'review_ready' && state.evidenceRequest === null
+        ? WRITER_REVIEW_SESSION_NODE
+        : END,
+    )
+    .addConditionalEdges(WRITER_GATHER_INTELLIGENCE_NODE, (state: WriterState) =>
+      state.status === 'review_ready' && state.intelligenceRequest === null
         ? WRITER_REVIEW_SESSION_NODE
         : END,
     )

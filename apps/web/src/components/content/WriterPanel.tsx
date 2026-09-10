@@ -40,6 +40,8 @@ import type {
   WriterEvidenceDto,
   WriterEvidenceSource,
   WriterEvidenceStatus,
+  WriterIntelligenceDto,
+  WriterIntelligenceSource,
   WriterRunDto,
   WriterRunStatus,
   WriterMagicAction,
@@ -61,8 +63,7 @@ const MAGIC_ACTIONS: Array<{ value: WriterMagicAction; label: string }> = [
   { value: 'custom', label: 'Custom' },
 ];
 
-const MAGIC_TONES: Array<{ value: WriterMagicTone; label: string }> = [
-  { value: 'professional', label: 'Professional' },
+const MAGIC_TONES: Array<{ value: WriterMagicTone; label: string }> = [  { value: 'professional', label: 'Professional' },
   { value: 'friendly', label: 'Friendly' },
   { value: 'authoritative', label: 'Authoritative' },
   { value: 'conversational', label: 'Conversational' },
@@ -70,6 +71,14 @@ const MAGIC_TONES: Array<{ value: WriterMagicTone; label: string }> = [
   { value: 'persuasive', label: 'Persuasive' },
   { value: 'practical', label: 'Practical' },
   { value: 'casual', label: 'Casual' },
+];
+
+/** Canonical W10.3 intelligence purposes, mirroring the API vocabulary. */
+const INTELLIGENCE_PURPOSES: Array<{ value: string; label: string }> = [
+  { value: 'deep_research', label: 'Deep research' },
+  { value: 'planning', label: 'Planning' },
+  { value: 'section_magic', label: 'Section magic' },
+  { value: 'revision', label: 'Revision' },
 ];
 
 function magicActionLabel(value: WriterMagicAction): string {
@@ -151,6 +160,10 @@ export function WriterPanel({ projectId, contentId, defaultTopic, defaultKeyword
   const [magicTone, setMagicTone] = useState<WriterMagicTone>('professional');
   const [magicInstruction, setMagicInstruction] = useState('');
   const [researchBusy, setResearchBusy] = useState(false);
+  const [intelligenceBusy, setIntelligenceBusy] = useState(false);
+  const [intelligencePurpose, setIntelligencePurpose] = useState('deep_research');
+  const [intelligenceFocus, setIntelligenceFocus] = useState('');
+  const [intelligenceSections, setIntelligenceSections] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [fatal, setFatal] = useState<string | null>(null);
   const runRef = useRef<WriterRunDto | null>(null);
@@ -341,6 +354,42 @@ export function WriterPanel({ projectId, contentId, defaultTopic, defaultKeyword
     }
   };
 
+  /** W10.3 intelligence gather: posts to the intelligence endpoint so the
+   *  writer combines this project's existing sources into bounded, untrusted
+   *  findings for this draft. It is an honest, synchronous gather - the response
+   *  carries the resting review_ready DTO with `intelligence` filled in. It
+   *  never changes the article, never applies a finding and never leaves
+   *  review_ready; it does nothing automatically. */
+  const gatherIntelligence = async () => {
+    const current = runRef.current;
+    if (!current || actionBusy || intelligenceBusy) return;
+    setIntelligenceBusy(true);
+    setError(null);
+    setFatal(null);
+    try {
+      const focus = intelligenceFocus.trim();
+      const next = await api<WriterRunDto>(`${runPath(projectId, contentId, current.runId)}/intelligence`, {
+        method: 'POST',
+        body: {
+          purpose: intelligencePurpose,
+          ...(focus ? { focus } : {}),
+          ...(intelligenceSections.length > 0 ? { sections: intelligenceSections } : {}),
+        },
+      });
+      setRun(next);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setIntelligenceBusy(false);
+    }
+  };
+
+  const toggleIntelligenceSection = (sectionId: string) => {
+    setIntelligenceSections((prev) =>
+      prev.includes(sectionId) ? prev.filter((s) => s !== sectionId) : [...prev, sectionId],
+    );
+  };
+
   const reset = () => {
     setRun(null);
     setError(null);
@@ -349,6 +398,8 @@ export function WriterPanel({ projectId, contentId, defaultTopic, defaultKeyword
     setReviseSections([]);
     setReviseInstruction('');
     setMagicInstruction('');
+    setIntelligenceFocus('');
+    setIntelligenceSections([]);
     window.localStorage.removeItem(storageKey(projectId, contentId));
   };
 
@@ -396,7 +447,7 @@ export function WriterPanel({ projectId, contentId, defaultTopic, defaultKeyword
     );
   }
 
-  const { status, plan, review, note, evidence } = run;
+  const { status, plan, review, note, evidence, intelligence } = run;
 
   return (
     <div className="writer-panel">
@@ -447,6 +498,18 @@ export function WriterPanel({ projectId, contentId, defaultTopic, defaultKeyword
         <>
           <ReviewResult review={review} planTitle={plan.title} revisionCount={run.revisionCount} />
           <ResearchControls evidence={evidence} busy={actionBusy || researchBusy} onGather={() => void gatherResearch()} />
+          <IntelligenceControls
+            intelligence={intelligence}
+            sections={plan.sections}
+            purpose={intelligencePurpose}
+            focus={intelligenceFocus}
+            selected={intelligenceSections}
+            busy={actionBusy || intelligenceBusy}
+            onPurposeChange={setIntelligencePurpose}
+            onFocusChange={setIntelligenceFocus}
+            onToggleSection={toggleIntelligenceSection}
+            onGather={() => void gatherIntelligence()}
+          />
           <ReviewSessionControls
             sections={plan.sections}
             selected={reviseSections}
@@ -729,6 +792,196 @@ function statusClassFromEvidence(status: WriterEvidenceStatus): string {
     default:
       return '';
   }
+}
+
+/** W10.3 combined-intelligence block. Explicit, honest and inert: it combines
+ *  this project's existing sources into untrusted reference findings, reports
+ *  every source status exactly (available / empty / not configured /
+ *  unavailable - nothing fabricated) and never auto-applies a finding or
+ *  changes the workflow. A later revision/magic may use it only as explicit
+ *  untrusted context. */
+function IntelligenceControls({
+  intelligence,
+  sections,
+  purpose,
+  focus,
+  selected,
+  busy,
+  onPurposeChange,
+  onFocusChange,
+  onToggleSection,
+  onGather,
+}: {
+  intelligence: WriterIntelligenceDto | null;
+  sections: Array<{ heading: string }>;
+  purpose: string;
+  focus: string;
+  selected: string[];
+  busy: boolean;
+  onPurposeChange: (value: string) => void;
+  onFocusChange: (value: string) => void;
+  onToggleSection: (sectionId: string) => void;
+  onGather: () => void;
+}) {
+  const findingCount = intelligence ? intelligence.findings.length : 0;
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="writer-intelligence" style={{ marginTop: 14 }}>
+      <div className="writer-proposal">
+        <span className="pill busy">Intelligence</span>
+        <span className="muted" style={{ fontSize: 12 }}>
+          Combined signals from this project's own sources. They are not verified facts, they are never applied
+          automatically, and later revisions may use them only as untrusted reference material.
+        </span>
+        <button className="btn sm" style={{ marginLeft: 'auto' }} onClick={() => setOpen((v) => !v)}>
+          {open ? 'Hide intelligence' : intelligence ? `Intelligence (${findingCount})` : 'Deep research'}
+        </button>
+      </div>
+
+      {open && (
+        <>
+      <div className="row" style={{ marginTop: 8, alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+        <select
+          value={purpose}
+          onChange={(e) => onPurposeChange(e.target.value)}
+          disabled={busy}
+          aria-label="Intelligence purpose"
+        >
+          {INTELLIGENCE_PURPOSES.map((p) => (
+            <option key={p.value} value={p.value}>
+              {p.label}
+            </option>
+          ))}
+        </select>
+        <input
+          type="text"
+          value={focus}
+          placeholder="Focus (optional)"
+          onChange={(e) => onFocusChange(e.target.value)}
+          disabled={busy}
+          style={{ minWidth: 220 }}
+        />
+        <button className="btn" onClick={onGather} disabled={busy}>
+          {busy ? 'Gathering intelligence…' : intelligence ? 'Gather again' : 'Gather intelligence'}
+        </button>
+      </div>
+
+      {sections.length > 0 && (
+        <div className="row" style={{ marginTop: 6, flexWrap: 'wrap', gap: 8 }}>
+          <span className="muted" style={{ fontSize: 12 }}>
+            Focus sections (optional):
+          </span>
+          {sections.map((section, index) => {
+            const sectionId = `section_${index}`;
+            const active = selected.includes(sectionId);
+            return (
+              <label key={sectionId} className="muted" style={{ fontSize: 12, display: 'flex', gap: 4, alignItems: 'center' }}>
+                <input
+                  type="checkbox"
+                  checked={active}
+                  disabled={busy}
+                  onChange={() => onToggleSection(sectionId)}
+                />
+                {section.heading}
+              </label>
+            );
+          })}
+        </div>
+      )}
+
+      {busy && (
+        <p className="muted" style={{ marginTop: 8 }}>
+          Gathering intelligence…
+        </p>
+      )}
+
+      {!busy && !intelligence && (
+        <p className="muted" style={{ marginTop: 8 }}>
+          No combined intelligence has been gathered for this draft yet.
+        </p>
+      )}
+
+      {!busy && intelligence && (
+        <div style={{ marginTop: 8 }}>
+          <div className="row" style={{ alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
+            <span className={`pill ${statusClassFromEvidence(intelligence.status === 'available' || intelligence.status === 'partial' ? 'available' : intelligence.status === 'unavailable' ? 'unavailable' : 'empty')}`}>
+              {intelligence.status}
+            </span>
+            <span className="pill ok">
+              {findingCount} finding{findingCount === 1 ? '' : 's'}
+            </span>
+            <span className="muted" style={{ fontSize: 12 }}>
+              Gathered {intelligence.gatheredAt ? new Date(intelligence.gatheredAt).toLocaleString() : ''}
+            </span>
+          </div>
+          {intelligence.note && (
+            <p className="muted" style={{ fontSize: 12 }}>
+              {intelligence.note}
+            </p>
+          )}
+          {intelligence.sources.map((source) => (
+            <IntelligenceSourceSection key={source.source} source={source.source} status={source.status} note={source.note} findingCount={source.findingCount} />
+          ))}
+          {intelligence.findings.map((finding) => (
+            <div key={finding.id} className="writer-section" style={{ marginTop: 8 }}>
+              <div className="row" style={{ alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                <span className="pill">{finding.type}</span>
+                <span className="muted" style={{ fontSize: 12 }}>
+                  untrusted reference
+                </span>
+              </div>
+              <p className="sub" style={{ margin: '4px 0' }}>
+                {finding.summary}
+              </p>
+            </div>
+          ))}
+        </div>
+      )}
+        </>
+      )}
+    </div>
+  );
+}
+
+function IntelligenceSourceSection({
+  source,
+  status,
+  note,
+  findingCount,
+}: {
+  source: WriterIntelligenceSource;
+  status: WriterIntelligenceDto['sources'][number]['status'];
+  note: string | null;
+  findingCount: number;
+}) {
+  const label: Record<WriterIntelligenceSource, string> = {
+    knowledge: 'Knowledge',
+    existing_content: 'Existing content',
+    dataforseo: 'Keyword demand',
+    gsc: 'Search Console',
+    content_intelligence: 'Content intelligence',
+  };
+  return (
+    <div className="writer-section" style={{ marginTop: 8 }}>
+      <div className="row" style={{ alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+        <strong style={{ fontSize: 13 }}>{label[source]}</strong>
+        <span className={`pill ${statusClassFromEvidence(status)}`}>{status}</span>
+        <span className="muted" style={{ fontSize: 12 }}>
+          {findingCount} finding{findingCount === 1 ? '' : 's'}
+        </span>
+      </div>
+      {note && (
+        <p className="muted" style={{ fontSize: 12, margin: '2px 0' }}>
+          {note}
+        </p>
+      )}
+      {findingCount === 0 && status !== 'available' && (
+        <p className="muted" style={{ fontSize: 12, margin: '4px 0' }}>
+          No findings gathered from this source.
+        </p>
+      )}
+    </div>
+  );
 }
 
 /** W8 review-session controls: the human picks exactly the approved sections to

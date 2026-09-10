@@ -55,6 +55,7 @@ function dto(overrides: Partial<Record<string, unknown>> = {}) {
     lastRevisionAt: null,
     magicAction: null,
     evidence: null,
+    intelligence: null,
     createdAt: '2026-09-08T00:00:00.000Z',
     ...overrides,
   };
@@ -124,6 +125,9 @@ beforeEach(() => {
   vi.spyOn(WriterRunService.prototype, 'research').mockResolvedValue(
     dto({ status: 'review_ready' }) as never,
   );
+  vi.spyOn(WriterRunService.prototype, 'intelligence').mockResolvedValue(
+    dto({ status: 'review_ready' }) as never,
+  );
 });
 
 afterEach(() => {
@@ -131,7 +135,7 @@ afterEach(() => {
 });
 
 describe('writer API - authorization', () => {
-  it.each(['POST /', 'GET /:runId', 'POST /:runId/approval', 'POST /:runId/magic', 'POST /:runId/research'])(
+  it.each(['POST /', 'GET /:runId', 'POST /:runId/approval', 'POST /:runId/magic', 'POST /:runId/research', 'POST /:runId/intelligence'])(
     '401 when unauthenticated',
     async (route) => {
       const [method, pathTemplate] = route.split(' ') as [string, string];
@@ -144,7 +148,9 @@ describe('writer API - authorization', () => {
               ? `/${RUN}/approval`
               : pathTemplate === '/:runId/magic'
                 ? `/${RUN}/magic`
-                : `/${RUN}/research`;
+                : pathTemplate === '/:runId/research'
+                  ? `/${RUN}/research`
+                  : `/${RUN}/intelligence`;
       const res = await request(path, { method, body: {} });
       expect(res.status).toBe(401);
       expect((res.json as { error: { code: string } }).error.code).toBe('unauthorized');
@@ -177,6 +183,15 @@ describe('writer API - authorization', () => {
 
   it('403: viewer cannot gather research evidence', async () => {
     const res = await request(`/${RUN}/research`, { method: 'POST', token: 'viewer-token', body: {} });
+    expect(res.status).toBe(403);
+  });
+
+  it('403: viewer cannot gather combined intelligence', async () => {
+    const res = await request(`/${RUN}/intelligence`, {
+      method: 'POST',
+      token: 'viewer-token',
+      body: { purpose: 'revision' },
+    });
     expect(res.status).toBe(403);
   });
 
@@ -356,6 +371,77 @@ describe('writer API - lifecycle + errors', () => {
     expect(res.status).toBe(409);
     expect((res.json as { error: { code: string } }).error.code).toBe('writer_run_not_review_ready');
   });
+
+  it('gathers combined intelligence as an editor (200) forwarding the bounded request and never touching content writes', async () => {
+    const intelligenceSpy = vi.mocked(WriterRunService.prototype.intelligence);
+    const updateSpy = vi.spyOn(ContentService.prototype, 'update');
+    const createSpy = vi.spyOn(ContentService.prototype, 'create');
+    const removeSpy = vi.spyOn(ContentService.prototype, 'remove');
+
+    const res = await request(`/${RUN}/intelligence`, {
+      method: 'POST',
+      token: 'editor-token',
+      body: { purpose: 'deep_research', focus: 'keyword gaps', sections: ['section_0'] },
+    });
+    expect(res.status).toBe(200);
+    expect((res.json as { data: { status: string } }).data.status).toBe('review_ready');
+    expect(intelligenceSpy).toHaveBeenCalledWith(
+      RUN,
+      { purpose: 'deep_research', focus: 'keyword gaps', sections: ['section_0'] },
+      PROJECT,
+      CONTENT,
+    );
+
+    const defaulted = await request(`/${RUN}/intelligence`, {
+      method: 'POST',
+      token: 'editor-token',
+      body: { purpose: 'planning' },
+    });
+    expect(defaulted.status).toBe(200);
+    expect(intelligenceSpy).toHaveBeenCalledWith(
+      RUN,
+      { purpose: 'planning', focus: null, sections: [] },
+      PROJECT,
+      CONTENT,
+    );
+
+    expect(updateSpy).not.toHaveBeenCalled();
+    expect(createSpy).not.toHaveBeenCalled();
+    expect(removeSpy).not.toHaveBeenCalled();
+  });
+
+  it('400 for an invalid intelligence request and never reaches the service', async () => {
+    const intelligenceSpy = vi.mocked(WriterRunService.prototype.intelligence);
+    const bad = await request(`/${RUN}/intelligence`, {
+      method: 'POST',
+      token: 'editor-token',
+      body: { purpose: 'browse_the_web' },
+    });
+    expect(bad.status).toBe(400);
+    expect((bad.json as { error: { code: string } }).error.code).toBe('invalid_intelligence_request');
+    expect(intelligenceSpy).not.toHaveBeenCalled();
+
+    const workflowControl = await request(`/${RUN}/intelligence`, {
+      method: 'POST',
+      token: 'editor-token',
+      body: { purpose: 'revision', approve: true },
+    });
+    expect(workflowControl.status).toBe(400);
+    expect(intelligenceSpy).not.toHaveBeenCalled();
+  });
+
+  it('409 when intelligence runs on a run not resting on review_ready', async () => {
+    vi.mocked(WriterRunService.prototype.intelligence).mockRejectedValue(
+      new ApiError(409, 'writer_run_not_review_ready', 'Writer run is writing; only a run resting on review_ready can gather intelligence.') as never,
+    );
+    const res = await request(`/${RUN}/intelligence`, {
+      method: 'POST',
+      token: 'editor-token',
+      body: { purpose: 'revision' },
+    });
+    expect(res.status).toBe(409);
+    expect((res.json as { error: { code: string } }).error.code).toBe('writer_run_not_review_ready');
+  });
 });
 
 describe('writer API - safe response envelope', () => {
@@ -363,13 +449,46 @@ describe('writer API - safe response envelope', () => {
     const res = await request('', { method: 'POST', token: 'editor-token', body: { instruction: 'Write' } });
     const json = res.json as { data: Record<string, unknown> };
     expect(Object.keys(json.data).sort()).toEqual(
-      ['contentId', 'createdAt', 'evidence', 'lastRevisionAt', 'magicAction', 'note', 'plan', 'projectId', 'review', 'revisionCount', 'runId', 'status'].sort(),
+      ['contentId', 'createdAt', 'evidence', 'intelligence', 'lastRevisionAt', 'magicAction', 'note', 'plan', 'projectId', 'review', 'revisionCount', 'runId', 'status'].sort(),
     );
     const text = JSON.stringify(json).toLowerCase();
     expect(text).not.toContain('authorization');
     expect(text).not.toContain('checkpoint');
     expect(text).not.toContain('api_key');
     expect(text).not.toContain('token');
+  });
+
+  it('intelligence response carries only the safe untrusted DTO (no raw provider payloads)', async () => {
+    vi.mocked(WriterRunService.prototype.intelligence).mockResolvedValue(
+      dto({
+        status: 'review_ready',
+        intelligence: {
+          gatheredAt: '2026-09-08T00:00:00.000Z',
+          status: 'partial',
+          findings: [
+            { id: 'keyword:0', type: 'keyword', summary: 'langgraph volume:1200', evidenceIds: ['langgraph'], trust: 'untrusted' },
+          ],
+          sources: [
+            { source: 'dataforseo', status: 'available', note: null, findingCount: 1 },
+            { source: 'gsc', status: 'not_configured', note: 'not wired', findingCount: 0 },
+          ],
+          note: 'Intelligence gathered from some sources.',
+        },
+      }) as never,
+    );
+    const res = await request(`/${RUN}/intelligence`, {
+      method: 'POST',
+      token: 'editor-token',
+      body: { purpose: 'deep_research' },
+    });
+    expect(res.status).toBe(200);
+    const data = (res.json as { data: { intelligence: { findings: Array<{ trust: string }>; status: string } } }).data;
+    expect(data.intelligence.status).toBe('partial');
+    expect(data.intelligence.findings[0].trust).toBe('untrusted');
+    const text = JSON.stringify(res.json).toLowerCase();
+    expect(text).not.toContain('api_key');
+    expect(text).not.toContain('provider_response');
+    expect(text).not.toContain('checkpoint');
   });
 
   it('reject decision flows through the approval endpoint', async () => {

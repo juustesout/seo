@@ -18,6 +18,7 @@
  *   POST /:runId/revise    revise sections (editor+) -> WriterRunDto (revising)
  *   POST /:runId/magic     Section Magic transform (editor+) -> WriterRunDto (revising)
  *   POST /:runId/research  gather research evidence (editor+) -> WriterRunDto (review_ready)
+ *   POST /:runId/intelligence  gather combined intelligence (editor+) -> WriterRunDto (review_ready)
  *
  * Error semantics reuse the W3 writer boundary: malformed runId -> 400, an
  * invalid approval decision -> 400 invalid_approval_decision, an invalid
@@ -50,6 +51,7 @@ import {
   parseWriterApprovalDecision,
   parseWriterSessionDecision,
   parseWriterMagicRequest,
+  parseWriterIntelligenceRequest,
   type WriterRunId,
 } from '../../agents/writer/index.js';
 
@@ -240,6 +242,36 @@ writerRouter.post(
 
     const svc = new WriterRunService(container);
     const run = await svc.research(runId, purpose.data ?? 'revision', projectId, contentId);
+    res.json({ data: run });
+  }),
+);
+
+/** Explicit combined-intelligence gather for a review_ready run (editor+,
+ *  W10.3). Intelligence is a read-only, synchronous operation that combines the
+ *  project's existing sources into bounded, untrusted findings: the run rests on
+ *  review_ready the whole time and the response is the resting DTO carrying the
+ *  fresh `intelligence` (honest per-source status - never fabricated, never
+ *  auto-applied, never written to the article). The strict body is
+ *  `{ purpose, focus?, sections? }` with sections re-validated against the
+ *  approved plan; unknown workflow-control fields are rejected. Wrong-state /
+ *  unknown runs fail closed exactly like revise/magic/research. */
+writerRouter.post(
+  '/:runId/intelligence',
+  asyncHandler(async (req, res) => {
+    const projectId = parseProjectId(req);
+    const { container, user } = req;
+    await container.access.requireRole(user!.sub, projectId, 'editor');
+    const contentId = parseId(req, 'contentId');
+    await new ContentService(container.sb).get(projectId, contentId);
+    const runId = parseRunId(req.params.runId);
+
+    const parsed = parseWriterIntelligenceRequest(req.body);
+    if (!parsed.ok) {
+      throw new ApiError(400, 'invalid_intelligence_request', parsed.note, { runId });
+    }
+
+    const svc = new WriterRunService(container);
+    const run = await svc.intelligence(runId, parsed.request, projectId, contentId);
     res.json({ data: run });
   }),
 );

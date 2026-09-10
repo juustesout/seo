@@ -33,6 +33,16 @@ import {
   WRITER_MAX_EVIDENCE_SOURCES,
   WRITER_MAX_EVIDENCE_TITLE_CHARS,
 } from './evidence.js';
+import type { WriterIntelligence } from './intelligence.js';
+import {
+  WRITER_MAX_INTELLIGENCE_EVIDENCE_ID_CHARS,
+  WRITER_MAX_INTELLIGENCE_EVIDENCE_IDS,
+  WRITER_MAX_INTELLIGENCE_FINDINGS,
+  WRITER_MAX_INTELLIGENCE_NOTE_CHARS,
+  WRITER_MAX_INTELLIGENCE_SOURCE_FINDINGS,
+  WRITER_MAX_INTELLIGENCE_SOURCES,
+  WRITER_MAX_INTELLIGENCE_SUMMARY_CHARS,
+} from './intelligence.js';
 import { writerMagicIntentSchema } from './magic.js';
 import type { WriterRunId } from './runtime.js';
 import type { WriterRunResult } from './runtime.js';
@@ -79,6 +89,10 @@ export interface WriterRunSnapshot {
    *  null until a research operation has run. Persisted so a restart keeps it
    *  clear which evidence was available. */
   evidence: WriterEvidence | null;
+  /** W10.3 intelligence snapshot the human explicitly gathered for this run, or
+   *  null until an intelligence operation has run. Persisted so a restart keeps
+   *  it clear which combined signals were available. */
+  intelligence: WriterIntelligence | null;
 }
 
 const writerRelatedContentSchema = z.object({
@@ -188,6 +202,60 @@ export const writerEvidenceSchema = z
     }
   });
 
+const writerIntelligenceFindingSchema = z
+  .object({
+    id: z.string().min(1).max(120),
+    type: z.enum(['keyword', 'opportunity', 'overlap', 'knowledge', 'content']),
+    summary: z.string().min(1).max(WRITER_MAX_INTELLIGENCE_SUMMARY_CHARS),
+    evidenceIds: z
+      .array(z.string().min(1).max(WRITER_MAX_INTELLIGENCE_EVIDENCE_ID_CHARS))
+      .max(WRITER_MAX_INTELLIGENCE_EVIDENCE_IDS),
+    trust: z.literal('untrusted'),
+  })
+  .strict();
+
+const writerIntelligenceSourceSchema = z
+  .object({
+    source: z.enum(['knowledge', 'existing_content', 'dataforseo', 'gsc', 'content_intelligence']),
+    status: z.enum(['available', 'empty', 'not_configured', 'unavailable']),
+    note: z.string().max(WRITER_MAX_INTELLIGENCE_NOTE_CHARS).nullable(),
+    findingCount: z.number().int().nonnegative().max(WRITER_MAX_INTELLIGENCE_SOURCE_FINDINGS),
+  })
+  .strict();
+
+/** Strict schema for the persisted W10.3 intelligence snapshot. `.strict()`
+ *  fails closed on anything we did not intend to persist (raw provider
+ *  responses, credentials, tokens, internals...). Counts and the total finding
+ *  cap are re-validated here so a corrupt snapshot fails closed. */
+export const writerIntelligenceSchema = z
+  .object({
+    gatheredAt: z.string().min(1).max(100).nullable(),
+    status: z.enum(['available', 'partial', 'empty', 'not_configured', 'unavailable']),
+    findings: z.array(writerIntelligenceFindingSchema).max(WRITER_MAX_INTELLIGENCE_FINDINGS),
+    sources: z.array(writerIntelligenceSourceSchema).max(WRITER_MAX_INTELLIGENCE_SOURCES),
+    note: z.string().max(WRITER_MAX_INTELLIGENCE_NOTE_CHARS).nullable(),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    const declared = value.sources.reduce((sum, source) => sum + source.findingCount, 0);
+    if (declared !== value.findings.length) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['findings'],
+        message: 'Intelligence source finding counts do not match the findings array.',
+      });
+    }
+    for (const source of value.sources) {
+      if (source.status === 'not_configured' && source.findingCount > 0) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['sources'],
+          message: 'A not_configured intelligence source cannot carry findings.',
+        });
+      }
+    }
+  });
+
 /** Strict top-level schema for a persisted snapshot. `.strict()` fails closed
  *  on any field we did not intend to persist (context, secrets, internal
  *  handles...). Parsed values are narrowed to the WriterRunSnapshot shape by
@@ -232,6 +300,7 @@ export const writerRunSnapshotSchema = z
     revisionNote: z.string().nullable().default(null),
     revisionRequest: writerRevisionRequestSchema.nullable().default(null),
     evidence: writerEvidenceSchema.nullable().default(null),
+    intelligence: writerIntelligenceSchema.nullable().default(null),
   })
   .strict();
 
@@ -276,6 +345,9 @@ function assertSnapshotConsistency(snapshot: WriterRunSnapshot, runId: string, p
   }
   if (snapshot.evidence !== null && snapshot.evidence.gatheredAt === null) {
     writerSnapshotInvalid(runId, 'evidence exists without a gather timestamp');
+  }
+  if (snapshot.intelligence !== null && snapshot.intelligence.gatheredAt === null) {
+    writerSnapshotInvalid(runId, 'intelligence exists without a gather timestamp');
   }
 }
 
@@ -324,6 +396,7 @@ export function snapshotFromResult(
     revisionNote: result.revisionNote,
     revisionRequest: opts.revisionRequest ?? null,
     evidence: result.evidence ?? null,
+    intelligence: result.intelligence ?? null,
   });
   if (!parsed.success) {
     throw new Error(`writer result for run ${result.runId} did not serialize to a valid snapshot`);

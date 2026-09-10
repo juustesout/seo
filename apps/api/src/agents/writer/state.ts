@@ -88,6 +88,7 @@ import { Annotation } from '@langchain/langgraph';
 import type { SeoResult, TipDoc } from '@seo/contracts';
 import { emptyWriterContext, type WriterContext } from './context.js';
 import type { WriterEvidence, WriterResearchPurpose } from './evidence.js';
+import type { WriterIntelligence, WriterIntelligencePurpose } from './intelligence.js';
 import type { WriterMagicIntent } from './magic.js';
 
 /** All statuses a writer run can ever be in; empty transition lists mean the
@@ -297,6 +298,27 @@ export interface WriterEvidenceRequest {
   purpose: WriterResearchPurpose;
 }
 
+// --- intelligence artifact (W10.3) --------------------------------------------
+//
+// The W10.3 intelligence surface lets the human explicitly combine the project's
+// existing sources into a bounded, deduplicated set of findings for the
+// review_ready draft. The intelligence channel holds the durable, sanitized
+// result (bounds/labels applied in intelligence.ts before it is written) and is
+// offered to later revision/magic rounds as untrusted context only; the
+// intelligenceRequest channel is a transient routing marker set by the review
+// session on an intelligence resume and cleared by the gather node when the
+// snapshot is stored - it never rests.
+
+/** Transient marker that routes an intelligence resume to the gather node. */
+export interface WriterIntelligenceIntent {
+  /** Why the human gathered intelligence (vocabulary only; never steers work). */
+  purpose: WriterIntelligencePurpose;
+  /** Optional bounded focus for the gather. */
+  focus: string | null;
+  /** Validated, plan-scoped section ids the gather is focused on (empty = all). */
+  sections: string[];
+}
+
 // --- review artifact (W5) ----------------------------------------------------
 //
 // The W5 review phase is a deterministic, local conveyor: it reassembles the
@@ -360,6 +382,16 @@ export const WriterStateAnnotation = Annotation.Root({
   /** Transient W10.2 routing marker set by a research session resume and
    *  cleared by the gather node; never observed at rest. */
   evidenceRequest: Annotation<WriterEvidenceRequest | null>({ reducer: replaceReducer, default: () => null }),
+  /** Durable W10.3 intelligence snapshot gathered for this run, or null until
+   *  the human triggers an intelligence operation. Bounded + labelled in
+   *  intelligence.ts. */
+  intelligence: Annotation<WriterIntelligence | null>({ reducer: replaceReducer, default: () => null }),
+  /** Transient W10.3 routing marker set by an intelligence session resume and
+   *  cleared by the gather node; never observed at rest. */
+  intelligenceRequest: Annotation<WriterIntelligenceIntent | null>({
+    reducer: replaceReducer,
+    default: () => null,
+  }),
 });
 
 /** Full typed state a node receives. */
