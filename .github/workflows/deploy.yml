@@ -20,7 +20,7 @@ jobs:
       github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.head_branch == 'main'
     runs-on: ubuntu-latest
-    environment: production
+    environment: Production
     env:
       DEPLOY_ROOT: /opt/seo-api
       SERVICE_USER: ${{ secrets.VPS_SERVICE_USER || 'root' }}
