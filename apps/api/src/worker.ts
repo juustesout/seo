@@ -10,6 +10,8 @@
  * depends on the JobStore interface and job types.
  */
 
+import { realpathSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { getContainer } from './context.js';
 import { logger } from './logger.js';
 import { SeoWriter } from './persistence/seoWriter.js';
@@ -172,7 +174,23 @@ export async function runWorker(): Promise<void> {
   await container.pgPool?.end().catch(() => undefined);
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+/**
+ * Only run when this module is the process entrypoint. Deploys run node
+ * against a `current` symlink, so process.argv[1] keeps the symlink path while
+ * import.meta.url is the realpath Node resolved; compare realpaths so the
+ * worker still starts under the release symlink layout.
+ */
+function isMainModule(): boolean {
+  const entry = process.argv[1];
+  if (!entry) return false;
+  try {
+    return fileURLToPath(import.meta.url) === realpathSync(entry);
+  } catch {
+    return false;
+  }
+}
+
+if (isMainModule()) {
   void runWorker().catch((err) => {
     logger.fatal({ err }, 'worker crashed');
     process.exit(1);
