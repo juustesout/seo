@@ -49,6 +49,24 @@ SQL
 
 echo "==> applying migrations"
 for f in "${MIGRATIONS_DIR}"/*.sql; do
+  # Pause before the KB1 canonical-vocabulary migration to seed legacy rows so
+  # the data remap itself is validated, not only the fresh-schema path.
+  if [ "$(basename "${f}")" = "20260101000021_knowledge_source_lifecycle.sql" ]; then
+    echo "   - seeding legacy knowledge rows before canonical-vocabulary migration"
+    PSQL -d "${DB_NAME}" <<'SQL'
+set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-000000000001"}';
+insert into auth.users (id, email) values ('00000000-0000-0000-0000-000000000001', 'owner@example.com') on conflict (id) do nothing;
+select public.seo_create_project('Legacy KB project', 'legacy-kb', 'https://legacy.example', 'legacy kb seed');
+insert into public.seo_knowledge_sources (project_id, source_type, name, status, chunk_count)
+select id, 'note', 'Legacy seeded note', 'pending', 2 from public.seo_projects where slug = 'legacy-kb';
+insert into public.seo_knowledge_sources (project_id, source_type, name, status, chunk_count)
+select id, 'reference', 'Legacy seeded ref', 'indexing', 0 from public.seo_projects where slug = 'legacy-kb';
+insert into public.seo_knowledge_sources (project_id, source_type, name, status, chunk_count)
+select id, 'url', 'Legacy seeded url', 'indexed', 3 from public.seo_projects where slug = 'legacy-kb';
+insert into public.seo_knowledge_sources (project_id, source_type, name, status, chunk_count)
+select id, 'note', 'Legacy seeded error', 'error', 0 from public.seo_projects where slug = 'legacy-kb';
+SQL
+  fi
   echo "   - $(basename "${f}")"
   PSQL -d "${DB_NAME}" -f "${f}" >/dev/null
 done
@@ -260,26 +278,68 @@ begin
 end $$;
 SQL
 
-echo "==> smoke test: knowledge sources (phase E) + cross-project isolation"
+echo "==> smoke test: knowledge sources (phase E) + canonical vocabulary + isolation"
 PSQL -d "${DB_NAME}" <<'SQL'
 set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-000000000001"}';
 do $$
 declare
   v_project uuid;
   v_source uuid;
+  v_url_source uuid;
 begin
   select id into v_project from public.seo_projects where slug = 'demo' limit 1;
   if v_project is null then raise exception 'smoke: demo project missing for knowledge sources'; end if;
 
   insert into public.seo_knowledge_sources (project_id, source_type, name, url, content_text, status, chunk_count)
-  values (v_project, 'note', 'Smoke note', null, 'A short project note about phase E ingestion.', 'pending', 0)
+  values (v_project, 'text', 'Smoke note', null, 'A short project note about phase E ingestion.', 'queued', 0)
   returning id into v_source;
   if v_source is null then raise exception 'smoke: knowledge source row was not created'; end if;
 
-  update public.seo_knowledge_sources set status = 'indexed', chunk_count = 1 where id = v_source;
-  if not exists (select 1 from public.seo_knowledge_sources where id = v_source and status = 'indexed' and chunk_count = 1) then
+  update public.seo_knowledge_sources set status = 'ready', chunk_count = 1 where id = v_source;
+  if not exists (select 1 from public.seo_knowledge_sources where id = v_source and status = 'ready' and chunk_count = 1) then
     raise exception 'smoke: source status transition failed';
   end if;
+
+  -- A URL-only source is stored as draft; fetching is not part of KB1.
+  insert into public.seo_knowledge_sources (project_id, source_type, name, url, status)
+  values (v_project, 'url', 'Smoke url', 'https://example.com/ref', 'draft')
+  returning id into v_url_source;
+  if v_url_source is null then raise exception 'smoke: url knowledge source was not created'; end if;
+
+  -- The legacy vocabulary is rejected by the canonical checks.
+  begin
+    insert into public.seo_knowledge_sources (project_id, source_type, name)
+    values (v_project, 'note', 'Legacy type');
+    raise exception 'smoke: legacy knowledge source_type unexpectedly allowed';
+  exception when check_violation then
+    null;
+  end;
+
+  begin
+    insert into public.seo_knowledge_sources (project_id, source_type, name, status)
+    values (v_project, 'text', 'Legacy status', 'indexed');
+    raise exception 'smoke: legacy knowledge status unexpectedly allowed';
+  exception when check_violation then
+    null;
+  end;
+
+  -- The KB1 migration remapped the rows seeded before it onto the canonical set.
+  if not exists (
+    select 1 from public.seo_knowledge_sources
+    where name = 'Legacy seeded note' and source_type = 'text' and status = 'queued'
+  ) then raise exception 'smoke: legacy note row was not remapped'; end if;
+  if not exists (
+    select 1 from public.seo_knowledge_sources
+    where name = 'Legacy seeded ref' and source_type = 'text' and status = 'processing'
+  ) then raise exception 'smoke: legacy reference row was not remapped'; end if;
+  if not exists (
+    select 1 from public.seo_knowledge_sources
+    where name = 'Legacy seeded url' and source_type = 'url' and status = 'ready'
+  ) then raise exception 'smoke: legacy url row was not remapped'; end if;
+  if not exists (
+    select 1 from public.seo_knowledge_sources
+    where name = 'Legacy seeded error' and source_type = 'text' and status = 'failed'
+  ) then raise exception 'smoke: legacy error row was not remapped'; end if;
 
   raise notice 'smoke: knowledge source insert + status transition OK';
 end $$;

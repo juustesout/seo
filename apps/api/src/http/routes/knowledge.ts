@@ -19,7 +19,7 @@ import { requireAuth } from '../middleware.js';
 import { asyncHandler } from '../asyncHandler.js';
 import { ApiError } from '../../apiErrors.js';
 import { parseId, parseProjectId } from './utils.js';
-import { KnowledgeService, KNOWLEDGE_MAX_CHARS } from '../../services/knowledgeService.js';
+import { KnowledgeService, KNOWLEDGE_MAX_CHARS, normalizeSourceTypeInput } from '../../services/knowledgeService.js';
 
 export const knowledgeRouter: Router = Router({ mergeParams: true });
 
@@ -80,14 +80,24 @@ knowledgeRouter.get(
 // Knowledge sources (user-managed, project-scoped items)
 // ---------------------------------------------------------------------------
 
+/**
+ * Boundary schema. Input accepts the canonical vocabulary plus the legacy
+ * `note`/`reference` values for backwards compatibility; they are normalized to
+ * canonical `text` before the service ever sees them. `file` is accepted here
+ * so the service can report a precise "not available" capability error.
+ */
 const createSourceSchema = z
   .object({
     name: z.string().min(1).max(200),
-    source_type: z.enum(['note', 'reference', 'url']).optional(),
+    source_type: z.enum(['text', 'url', 'file', 'note', 'reference']).optional(),
     url: z.string().max(2000).nullable().optional(),
     text: z.string().max(KNOWLEDGE_MAX_CHARS).nullable().optional(),
   })
-  .passthrough();
+  .passthrough()
+  .transform((value) => ({
+    ...value,
+    source_type: value.source_type ? normalizeSourceTypeInput(value.source_type) : undefined,
+  }));
 
 /** List this project's sources + whether the server can index/search them. */
 knowledgeRouter.get(

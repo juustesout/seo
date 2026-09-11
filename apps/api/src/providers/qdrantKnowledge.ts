@@ -25,13 +25,10 @@ import type {
 } from '@seo/contracts';
 import { QdrantClient, matchOn } from './knowledge/qdrantClient.js';
 import { embedderFromConfig, type Embedder } from './knowledge/embedding.js';
+import { chunkKnowledgeText } from './knowledge/chunker.js';
 
 /** Shared vector collection name (project separation is by payload, not name). */
 const COLLECTION = 'seo_knowledge';
-/** Target characters per chunk - small enough to embed well, large enough to stay coherent. */
-const CHUNK_TARGET = 900;
-/** Characters of overlap so sentence boundaries near a cut are not lost. */
-const CHUNK_OVERLAP = 100;
 
 /**
  * Stable UUID for one chunk of one external document. sha256 over the triple
@@ -44,31 +41,6 @@ export function deterministicId(projectId: string, externalId: string, chunk: nu
     .digest();
   const hex = digest.toString('hex').slice(0, 32);
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
-}
-
-/**
- * Split text into overlapping chunks. Whitespace runs are collapsed first so
- * chunking treats rendered text (newlines/indentation) as one surface; cuts
- * prefer the last space boundary near the target so words are not torn. The
- * overlap window plus boundary preference keeps each chunk self-contained for
- * embedding quality.
- */
-function chunkText(text: string, target = CHUNK_TARGET, overlap = CHUNK_OVERLAP): string[] {
-  const clean = text.replace(/\s+/g, ' ').trim();
-  if (clean.length <= target) return clean ? [clean] : [];
-  const chunks: string[] = [];
-  let start = 0;
-  while (start < clean.length) {
-    let end = Math.min(start + target, clean.length);
-    if (end < clean.length) {
-      const boundary = clean.lastIndexOf(' ', end);
-      if (boundary > start + target * 0.6) end = boundary;
-    }
-    chunks.push(clean.slice(start, end).trim());
-    if (end >= clean.length) break;
-    start = Math.max(end - overlap, start + 1);
-  }
-  return chunks.filter(Boolean);
 }
 
 /**
@@ -122,7 +94,7 @@ export class QdrantKnowledgeProvider implements KnowledgeProvider {
     this.assertConfigured();
     const points: Array<{ id: string; vector: number[]; payload: Record<string, unknown> }> = [];
     for (const doc of documents) {
-      const chunks = chunkText(doc.text);
+      const chunks = chunkKnowledgeText(doc.text);
       if (chunks.length === 0) continue;
       const embeddings = await this.embedder!.embed(chunks);
       const indexedAt = new Date().toISOString();

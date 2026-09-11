@@ -428,13 +428,12 @@ const knowledgeDelete: JobExecutor = async ({ container, job }) => {
     logger: logger.child({ projectId: job.project_id, provider: 'qdrant' }) as unknown as ProviderContext['logger'],
   };
   await provider.deleteProject(ctx);
-  // The source rows describe the state of their vectors; after a full wipe they
-  // are honest again only as 'pending' (they can be re-ingested on demand).
-  const { error: resetError } = await container.sb
-    .from('seo_knowledge_sources')
-    .update({ status: 'pending', chunk_count: 0, error: null })
-    .eq('project_id', job.project_id);
-  if (resetError) throw new ApiError(502, 'knowledge_provider_error', 'Knowledge cleared but source flags could not be reset');
+  // The source rows describe the state of their vectors; after a full wipe only
+  // sources with captured text become 'queued' again (re-ingestable on demand).
+  // A bare URL source has no text to index, so it returns to 'draft' rather
+  // than claiming to be queued for work that cannot run. The status writes live
+  // in KnowledgeService so the lifecycle stays centralized.
+  await new KnowledgeService(container).resetStatusesAfterProjectWipe(job.project_id);
   return { message: 'Project knowledge base cleared' };
 };
 

@@ -715,13 +715,28 @@ export interface KnowledgeStatusResponse {
 // Knowledge sources (Content Studio Phase E) - user-managed, project-scoped
 // ---------------------------------------------------------------------------
 
-export type KnowledgeSourceStatus = 'pending' | 'indexing' | 'indexed' | 'error' | 'deleting';
-
-export type KnowledgeSourceType = 'note' | 'reference' | 'url';
+/**
+ * Canonical lifecycle of a knowledge source. Postgres is the source of truth:
+ *   draft      -> stored but not yet ingestable (e.g. a URL awaiting fetch)
+ *   queued     -> an ingest job is pending
+ *   processing -> an ingest job is running
+ *   ready      -> vectors exist for this source
+ *   failed     -> the last ingest failed; see the source's `error`
+ *   deleted    -> the source is being torn down (vectors + row)
+ */
+export type KnowledgeSourceStatus = 'draft' | 'queued' | 'processing' | 'ready' | 'failed' | 'deleted';
 
 /**
- * Logical model of one indexed knowledge item. Vectors live in Qdrant under
- * external_id `source:<id>`; the row is the traceability record + status.
+ * Canonical kind of knowledge source. `text` is pasted/typed content, `url` is
+ * a reference awaiting fetch (KB3), `file` is uploaded content (KB4). Only
+ * capabilities that actually exist are accepted by the server.
+ */
+export type KnowledgeSourceType = 'text' | 'url' | 'file';
+
+/**
+ * Logical model of one indexed knowledge item. Postgres is the source of truth
+ * (ownership, lifecycle, metadata); vectors live in Qdrant under external_id
+ * `source:<id>` and are only a retrieval index, never the record.
  */
 export interface KnowledgeSourceDto {
   id: string;
@@ -748,11 +763,11 @@ export interface KnowledgeSourcesResponse {
 }
 
 export interface KnowledgeSourceCreateInput {
-  /** note | reference | url (defaults to 'note'). */
+  /** text | url | file (defaults to 'text'). Legacy note/reference map to text at the API boundary. */
   source_type?: KnowledgeSourceType;
   name: string;
   url?: string | null;
-  /** Body text to index. Optional when a URL is supplied. */
+  /** Body text to index. Required for a text source; URL-only sources stay draft until fetched. */
   text?: string | null;
 }
 

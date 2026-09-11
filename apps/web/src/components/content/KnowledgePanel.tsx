@@ -44,8 +44,7 @@ export function KnowledgePanel({ projectId, canEdit }: { projectId: string; canE
   }, [load]);
 
   const busy = useMemo(
-    () =>
-      (state?.sources ?? []).some((s) => s.status === 'pending' || s.status === 'indexing' || s.status === 'deleting'),
+    () => (state?.sources ?? []).some((s) => s.status === 'queued' || s.status === 'processing' || s.status === 'deleted'),
     [state],
   );
 
@@ -63,12 +62,16 @@ export function KnowledgePanel({ projectId, canEdit }: { projectId: string; canE
   const addSource = async (e: FormEvent) => {
     e.preventDefault();
     if (!name.trim() || busyAction) return;
+    const trimmedText = text.trim();
+    const trimmedUrl = url.trim();
+    const sourceType = trimmedText ? 'text' : 'url';
+    if (sourceType === 'url' && !trimmedUrl) return;
     setBusyAction(true);
     setErr(null);
     try {
       await api(`/projects/${projectId}/knowledge/sources`, {
         method: 'POST',
-        body: { name: name.trim(), source_type: 'note', url: url.trim() || null, text: text.trim() || null },
+        body: { name: name.trim(), source_type: sourceType, url: trimmedUrl || null, text: trimmedText || null },
       });
       setName('');
       setUrl('');
@@ -104,10 +107,11 @@ export function KnowledgePanel({ projectId, canEdit }: { projectId: string; canE
 
   const configured = state?.configured ?? false;
   const statusPill = (status: string) => {
-    if (status === 'indexed') return <Badge variant="success">indexed</Badge>;
-    if (status === 'error') return <Badge variant="destructive">error</Badge>;
-    if (status === 'deleting') return <Badge variant="warning">deleting…</Badge>;
-    if (status === 'indexing') return <Badge variant="warning">indexing…</Badge>;
+    if (status === 'ready') return <Badge variant="success">ready</Badge>;
+    if (status === 'failed') return <Badge variant="destructive">failed</Badge>;
+    if (status === 'deleted') return <Badge variant="warning">deleting…</Badge>;
+    if (status === 'processing') return <Badge variant="warning">indexing…</Badge>;
+    if (status === 'draft') return <Badge variant="outline">draft</Badge>;
     return <Badge variant="warning">queued…</Badge>;
   };
 
@@ -159,7 +163,7 @@ export function KnowledgePanel({ projectId, canEdit }: { projectId: string; canE
             maxLength={100000}
           />
           <div>
-            <Button type="submit" size="sm" disabled={busyAction || !name.trim()}>
+            <Button type="submit" size="sm" disabled={busyAction || !name.trim() || (!text.trim() && !url.trim())}>
               {busyAction ? 'Adding…' : 'Add source'}
             </Button>
           </div>
@@ -168,7 +172,9 @@ export function KnowledgePanel({ projectId, canEdit }: { projectId: string; canE
 
       {sources.length === 0 && (
         <p className="text-[13px] text-muted-foreground">
-          {configured ? 'No sources yet. Add a note or reference document above - it will be embedded in the background.' : 'No sources yet.'}
+          {configured
+            ? 'No sources yet. Add text or a URL above - pasted text is embedded in the background; a URL is stored as draft until fetching is available.'
+            : 'No sources yet.'}
         </p>
       )}
 
@@ -191,12 +197,22 @@ export function KnowledgePanel({ projectId, canEdit }: { projectId: string; canE
                   {s.url ? ` · ${s.url}` : ''}
                 </div>
               )}
+              {s.status === 'draft' && (
+                <div className="mt-1 text-xs text-muted-foreground">
+                  Stored as a reference. Fetching page content is not available yet, so this source is not searchable.
+                </div>
+              )}
               {s.error && <div className="mt-1 whitespace-pre-wrap text-xs text-destructive">{s.error}</div>}
               {canEdit && (
                 <div className="mt-1.5 flex gap-1.5">
-                  {(s.status === 'error' || s.status === 'pending') && (
+                  {s.status === 'failed' && (
                     <Button variant="outline" size="sm" onClick={() => void retrySource(s.id)}>
                       Retry
+                    </Button>
+                  )}
+                  {s.status === 'ready' && (
+                    <Button variant="outline" size="sm" onClick={() => void retrySource(s.id)}>
+                      Reindex
                     </Button>
                   )}
                   <Button
