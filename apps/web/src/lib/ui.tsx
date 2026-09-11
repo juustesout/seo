@@ -10,6 +10,8 @@
  * into a `busy` flag and polls only while work is actually running.
  */
 import { useEffect, useRef, useState } from 'react';
+import { Badge } from '@/components/ui/badge';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 
 export interface AsyncState<T> {
   data: T | null;
@@ -91,20 +93,20 @@ export function fmtNum(v: unknown): string {
  */
 export function StatusPill({ status }: { status: unknown }) {
   const s = str(status);
-  const cls =
+  const variant =
     s === 'connected' || s === 'active' || s === 'success' || s === 'completed' || s === 'published'
-      ? 'ok'
+      ? 'success'
       : s === 'error' || s === 'failed' || s === 'inactive'
-        ? 'err'
+        ? 'destructive'
         : s === 'running' || s === 'queued' || s === 'pending'
-          ? 'busy'
-          : '';
-  return <span className={`pill ${cls}`}>{s || '—'}</span>;
+          ? 'warning'
+          : 'outline';
+  return <Badge variant={variant}>{s || '—'}</Badge>;
 }
 
 /** Empty-state placeholder with an optional custom message. */
 export function Empty({ children }: { children?: React.ReactNode }) {
-  return <div className="empty">{children ?? 'Nothing here yet'}</div>;
+  return <div className="py-6 text-center text-sm text-muted-foreground">{children ?? 'Nothing here yet'}</div>;
 }
 
 /**
@@ -135,29 +137,29 @@ export function useJobs(projectId: string, enabled: boolean, ms = 4000) {
 export function JobTable({ jobs }: { jobs: any[] }) {
   if (!jobs.length) return <Empty>No background jobs yet</Empty>;
   return (
-    <table>
-      <thead>
-        <tr>
-          <th>Type</th>
-          <th>Status</th>
-          <th>Progress</th>
-          <th>Message</th>
-          <th>Created</th>
-        </tr>
-      </thead>
-      <tbody>
+    <Table>
+      <TableHeader>
+        <TableRow>
+          <TableHead>Type</TableHead>
+          <TableHead>Status</TableHead>
+          <TableHead>Progress</TableHead>
+          <TableHead>Message</TableHead>
+          <TableHead>Created</TableHead>
+        </TableRow>
+      </TableHeader>
+      <TableBody>
         {jobs.map((j: any) => (
-          <tr key={j.id}>
-            <td className="mono">{j.job_type}</td>
-            <td>
+          <TableRow key={j.id}>
+            <TableCell className="font-mono text-xs">{j.job_type}</TableCell>
+            <TableCell>
               <StatusPill status={j.status} />
-            </td>
-            <td className="num">{j.progress != null ? `${num(j.progress)}%` : '—'}</td>
-            <td className="muted">{j.message || (j.error ? `error: ${j.error}` : '')}</td>
-            <td className="muted">{fmtDate(j.created_at)}</td>
-          </tr>
+            </TableCell>
+            <TableCell className="tabular-nums">{j.progress != null ? `${num(j.progress)}%` : '—'}</TableCell>
+            <TableCell className="text-muted-foreground">{j.message || (j.error ? `error: ${j.error}` : '')}</TableCell>
+            <TableCell className="text-muted-foreground">{fmtDate(j.created_at)}</TableCell>
+          </TableRow>
         ))}
-      </tbody>
-    </table>
+      </TableBody>
+    </Table>
   );
 }

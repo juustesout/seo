@@ -9,6 +9,8 @@
 import type { ScheduleDto } from '@seo/contracts';
 import { StatusPill } from '../../lib/ui';
 import { fmtDateTime, isCancellable, isReschedulable, parseDate } from './scheduleMeta';
+import { Button } from '@/components/ui/button';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 
 interface ScheduleListProps {
   schedules: ScheduleDto[];
@@ -24,55 +26,61 @@ export function ScheduleList({ schedules, canManage, onOpen, onReschedule, onCan
   const showActions = canManage && rows.some((r) => isReschedulable(r) || isCancellable(r));
 
   return (
-    <table>
-      <thead>
-        <tr>
-          <th>Scheduled for</th>
-          <th>Article</th>
-          <th>Publisher</th>
-          <th>Status</th>
-          {showActions && <th>Actions</th>}
-        </tr>
-      </thead>
-      <tbody>
+    <Table>
+      <TableHeader>
+        <TableRow>
+          <TableHead>Scheduled for</TableHead>
+          <TableHead>Article</TableHead>
+          <TableHead>Publisher</TableHead>
+          <TableHead>Status</TableHead>
+          {showActions && <TableHead>Actions</TableHead>}
+        </TableRow>
+      </TableHeader>
+      <TableBody>
         {rows.map((s) => {
           const when = parseDate(s.scheduled_at);
           const cancelled = s.status === 'cancelled';
           const editable = isReschedulable(s) || isCancellable(s);
           return (
-            <tr key={s.id} className={cancelled ? 'sch-row-cancelled' : ''} onClick={() => onOpen(s)}>
-              <td className="num">
+            <TableRow
+              key={s.id}
+              className={cancelled ? 'cursor-pointer opacity-[.68]' : 'cursor-pointer'}
+              onClick={() => onOpen(s)}
+            >
+              <TableCell className="tabular-nums">
                 <div>{when ? fmtDateTime(when) : '—'}</div>
-                {cancelled && <div className="sch-cancelled-note">cancelled</div>}
-              </td>
-              <td>
-                <div className={cancelled ? 'sch-title-cancelled' : ''}>{s.content_title ?? 'Untitled'}</div>
-              </td>
-              <td className="muted">{s.publisher_name ?? '—'}</td>
-              <td>
+                {cancelled && <div className="text-[11.5px] text-muted-foreground">cancelled</div>}
+              </TableCell>
+              <TableCell>
+                <div className={cancelled ? 'line-through opacity-[.72]' : ''}>{s.content_title ?? 'Untitled'}</div>
+              </TableCell>
+              <TableCell className="text-muted-foreground">{s.publisher_name ?? '—'}</TableCell>
+              <TableCell>
                 <StatusPill status={s.status} />
-              </td>
+              </TableCell>
               {showActions &&
                 (editable ? (
-                  <td onClick={(e) => e.stopPropagation()}>
-                    {isReschedulable(s) && (
-                      <button type="button" className="btn sm" onClick={() => onReschedule(s)}>
-                        Reschedule
-                      </button>
-                    )}
-                    {isCancellable(s) && (
-                      <button type="button" className="btn sm danger" onClick={() => onCancel(s)}>
-                        Cancel
-                      </button>
-                    )}
-                  </td>
+                  <TableCell onClick={(e) => e.stopPropagation()}>
+                    <div className="flex gap-1.5">
+                      {isReschedulable(s) && (
+                        <Button variant="outline" size="sm" onClick={() => onReschedule(s)}>
+                          Reschedule
+                        </Button>
+                      )}
+                      {isCancellable(s) && (
+                        <Button variant="outline" size="sm" className="text-destructive" onClick={() => onCancel(s)}>
+                          Cancel
+                        </Button>
+                      )}
+                    </div>
+                  </TableCell>
                 ) : (
-                  <td />
+                  <TableCell />
                 ))}
-            </tr>
+            </TableRow>
           );
         })}
-      </tbody>
-    </table>
+      </TableBody>
+    </Table>
   );
 }

@@ -13,6 +13,12 @@ import { useState } from 'react';
 import { useAsync, fmtDate, StatusPill } from '../lib/ui';
 import { api } from '../lib/api';
 import { connectGoogle } from '../lib/gsc';
+import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
+import { PageHeader } from '@/components/ui/page-header';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 
 interface GscConnection {
   connected: boolean;
@@ -64,8 +70,14 @@ export function AccountIntegrations({ onOpenProject }: { onOpenProject: (id: str
   const [aiKeyInput, setAiKeyInput] = useState('');
   const [aiErr, setAiErr] = useState<string | null>(null);
 
-  if (account.loading) return <p className="muted">Loading…</p>;
-  if (account.error) return <div className="banner error">{account.error}</div>;
+  if (account.loading) return <p className="text-sm text-muted-foreground">Loading…</p>;
+  if (account.error) {
+    return (
+      <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+        {account.error}
+      </div>
+    );
+  }
   const g = account.data!.google;
 
   const disconnect = async () => {
@@ -118,15 +130,17 @@ export function AccountIntegrations({ onOpenProject }: { onOpenProject: (id: str
   };
 
   return (
-    <div>
-      <h1>Integrations</h1>
-      <p className="sub">Provider connections live on your account. Credentials stay server-side, encrypted.</p>
+    <div className="grid gap-5">
+      <PageHeader
+        title="Integrations"
+        description="Provider connections live on your account. Credentials stay server-side, encrypted."
+      />
 
-      <div className="card">
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
-          <div>
-            <h2 style={{ margin: 0 }}>Google Search Console</h2>
-            <p className="sub" style={{ margin: '4px 0 0' }}>
+      <Card>
+        <CardContent className="flex flex-wrap items-center justify-between gap-3">
+          <div className="grid gap-1">
+            <h2 className="text-sm font-semibold">Google Search Console</h2>
+            <p className="text-sm text-muted-foreground">
               {g.connected
                 ? `Connected${g.last_sync_at ? ` · last sync ${fmtDate(g.last_sync_at)}` : ''}`
                 : g.status === 'connecting'
@@ -135,161 +149,180 @@ export function AccountIntegrations({ onOpenProject }: { onOpenProject: (id: str
                     ? `Connection error${g.error ? `: ${g.error}` : ''}`
                     : 'Not connected'}
             </p>
-            {g.connected && <div className="mt" style={{ marginTop: 8 }}><StatusPill status="connected" /></div>}
+            {g.connected && <StatusPill status="connected" />}
+            {err && <span className="text-sm text-destructive">{err}</span>}
           </div>
-          <div style={{ display: 'flex', gap: 8 }}>
+          <div className="flex gap-2">
             {!g.connected ? (
-              <button className="btn primary" onClick={() => void connect()} disabled={busy !== null}>
+              <Button onClick={() => void connect()} disabled={busy !== null}>
                 {busy === 'connect' ? 'Redirecting to Google…' : 'Connect Google Account'}
-              </button>
+              </Button>
             ) : (
-              <button className="btn" onClick={() => void disconnect()} disabled={busy !== null}>
+              <Button variant="outline" onClick={() => void disconnect()} disabled={busy !== null}>
                 {busy === 'disconnect' ? 'Disconnecting…' : 'Disconnect'}
-              </button>
+              </Button>
             )}
           </div>
-        </div>
-        {err && <div className="error-line">{err}</div>}
-      </div>
+        </CardContent>
+      </Card>
 
-      <div className="card mt">
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
-          <div>
-            <h2 style={{ margin: 0 }}>AI & writing</h2>
-            <p className="sub" style={{ margin: '4px 0 0' }}>
-              OpenAI powers the in-editor AI actions in Content Studio. The key is stored encrypted on the server and
-              every project in this account can use it — it is never shown in the browser.
-            </p>
-          </div>
-        </div>
-        {ai.loading ? (
-          <p className="muted">Loading…</p>
-        ) : ai.error ? (
-          <div className="error-line">{ai.error}</div>
-        ) : (ai.data?.providers.length ?? 0) === 0 ? (
-          <p className="muted">No AI providers available.</p>
-        ) : (
-          <div className="mt">
-            {ai.data!.providers.map((p) => (
-              <div key={p.id} className="ai-row">
-                <div style={{ minWidth: 0 }}>
-                  <strong>{p.name}</strong>
-                  {p.description && (
-                    <div className="muted" style={{ fontSize: 12 }}>
-                      {p.description}
-                    </div>
-                  )}
-                  {p.error && (
-                    <div className="muted" style={{ fontSize: 12, color: 'var(--danger, #b91c1c)' }}>
-                      {p.error}
-                    </div>
+      <Card>
+        <CardHeader>
+          <CardTitle>AI &amp; writing</CardTitle>
+          <p className="text-sm text-muted-foreground">
+            OpenAI powers the in-editor AI actions in Content Studio. The key is stored encrypted on the server and every
+            project in this account can use it — it is never shown in the browser.
+          </p>
+        </CardHeader>
+        <CardContent>
+          {ai.loading ? (
+            <p className="text-sm text-muted-foreground">Loading…</p>
+          ) : ai.error ? (
+            <span className="text-sm text-destructive">{ai.error}</span>
+          ) : (ai.data?.providers.length ?? 0) === 0 ? (
+            <p className="text-sm text-muted-foreground">No AI providers available.</p>
+          ) : (
+            <div className="divide-y">
+              {ai.data!.providers.map((p) => (
+                <div key={p.id} className="flex flex-wrap items-center justify-between gap-3 py-3">
+                  <div className="min-w-0">
+                    <div className="font-medium">{p.name}</div>
+                    {p.description && <div className="text-xs text-muted-foreground">{p.description}</div>}
+                    {p.error && <div className="text-xs text-destructive">{p.error}</div>}
+                  </div>
+                  <Badge variant={p.configured ? 'success' : 'destructive'}>
+                    {p.configured ? 'Configured' : 'Not configured'}
+                  </Badge>
+                  <div className="flex items-center gap-2">
+                    {p.configured && aiKeyProvider !== p.id && (
+                      <>
+                        <Button size="sm" variant="outline" onClick={() => setAiKeyProvider(p.id)} disabled={busy !== null}>
+                          Update key
+                        </Button>
+                        <Button size="sm" variant="outline" className="text-destructive" onClick={() => void removeAiKey(p.id)} disabled={busy !== null}>
+                          Remove
+                        </Button>
+                      </>
+                    )}
+                    {!p.configured && aiKeyProvider !== p.id && (
+                      <Button size="sm" onClick={() => setAiKeyProvider(p.id)} disabled={busy !== null}>
+                        Add key
+                      </Button>
+                    )}
+                  </div>
+                  {aiKeyProvider === p.id && (
+                    <form
+                      className="flex w-full flex-wrap items-center gap-2"
+                      onSubmit={(e) => {
+                        e.preventDefault();
+                        if (aiKeyInput.trim().length >= 8) void saveAiKey(p.id);
+                      }}
+                    >
+                      <Input
+                        type="password"
+                        autoComplete="off"
+                        placeholder={`${p.name} API key`}
+                        value={aiKeyInput}
+                        onChange={(e) => setAiKeyInput(e.target.value)}
+                        className="min-w-[260px] flex-1"
+                      />
+                      <Button size="sm" type="submit" disabled={aiKeyInput.trim().length < 8}>
+                        Save key
+                      </Button>
+                      <Button
+                        size="sm"
+                        type="button"
+                        variant="outline"
+                        onClick={() => {
+                          setAiKeyProvider(null);
+                          setAiKeyInput('');
+                        }}
+                      >
+                        Cancel
+                      </Button>
+                    </form>
                   )}
                 </div>
-                <span className={`pill ${p.configured ? 'ok' : 'err'}`}>{p.configured ? 'Configured' : 'Not configured'}</span>
-                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                  {p.configured && aiKeyProvider !== p.id && (
-                    <>
-                      <button className="btn sm" onClick={() => setAiKeyProvider(p.id)} disabled={busy !== null}>
-                        Update key
-                      </button>
-                      <button className="btn sm danger" onClick={() => void removeAiKey(p.id)} disabled={busy !== null}>
-                        Remove
-                      </button>
-                    </>
-                  )}
-                  {!p.configured && aiKeyProvider !== p.id && (
-                    <button className="btn sm primary" onClick={() => setAiKeyProvider(p.id)} disabled={busy !== null}>
-                      Add key
-                    </button>
-                  )}
-                </div>
-                {aiKeyProvider === p.id && (
-                  <form
-                    className="row mt"
-                    style={{ flexBasis: '100%' }}
-                    onSubmit={(e) => {
-                      e.preventDefault();
-                      if (aiKeyInput.trim().length >= 8) void saveAiKey(p.id);
-                    }}
-                  >
-                    <input
-                      type="password"
-                      autoComplete="off"
-                      placeholder={`${p.name} API key`}
-                      value={aiKeyInput}
-                      onChange={(e) => setAiKeyInput(e.target.value)}
-                      style={{ minWidth: 260 }}
-                    />
-                    <button className="btn primary sm" type="submit" disabled={aiKeyInput.trim().length < 8}>
-                      Save key
-                    </button>
-                    <button className="btn sm" type="button" onClick={() => { setAiKeyProvider(null); setAiKeyInput(''); }}>
-                      Cancel
-                    </button>
-                  </form>
-                )}
-              </div>
-            ))}
-            {aiErr && <div className="error-line">{aiErr}</div>}
-          </div>
-        )}
-      </div>
+              ))}
+              {aiErr && <div className="pt-2 text-sm text-destructive">{aiErr}</div>}
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
       {g.connected && (
-        <div className="card mt">
-          <h2>
-            Property registry{' '}
-            <span className="pill">{account.data?.registry_count ?? 0}</span>
-          </h2>
-          <p className="sub">
-            The Google properties this account can use. Attach one to a project from that project's <b>Settings</b>{' '}
-            {account.data && account.data.attached_projects === 0 && '— none are used by a project yet.'}
-          </p>
-          {registry.loading ? (
-            <p className="muted">Loading…</p>
-          ) : (registry.data?.properties.length ?? 0) === 0 ? (
-            <div className="empty">No properties registered yet. Open a project and attach a property to register it.</div>
-          ) : (
-            <table>
-              <thead>
-                <tr>
-                  <th>Property</th>
-                  <th>Permission</th>
-                  <th>Used by</th>
-                  <th />
-                </tr>
-              </thead>
-              <tbody>
-                {registry.data!.properties.map((p) => (
-                  <tr key={p.id}>
-                    <td className="mono">{p.site_url}</td>
-                    <td className="muted">{p.permission_level ?? '—'}</td>
-                    <td>
-                      {p.linked_project ? (
-                        <a href="#" onClick={(e) => { e.preventDefault(); onOpenProject(p.linked_project!.id, 'settings'); }}>
-                          {p.linked_project.name}
-                        </a>
-                      ) : (
-                        <span className="muted">unattached</span>
-                      )}
-                    </td>
-                    <td className="num">
-                      {p.linked_project ? (
-                        <button className="btn sm" onClick={() => onOpenProject(p.linked_project!.id, 'settings')}>
-                          Settings
-                        </button>
-                      ) : (
-                        <button className="btn sm" onClick={() => (account.data!.projects[0] ? onOpenProject(account.data!.projects[0].id, 'settings') : undefined)}>
-                          Open a project
-                        </button>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </div>
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              Property registry <Badge variant="secondary">{account.data?.registry_count ?? 0}</Badge>
+            </CardTitle>
+            <p className="text-sm text-muted-foreground">
+              The Google properties this account can use. Attach one to a project from that project's <b>Settings</b>
+              {account.data && account.data.attached_projects === 0 && ' — none are used by a project yet.'}
+            </p>
+          </CardHeader>
+          <CardContent>
+            {registry.loading ? (
+              <p className="text-sm text-muted-foreground">Loading…</p>
+            ) : (registry.data?.properties.length ?? 0) === 0 ? (
+              <p className="py-6 text-center text-sm text-muted-foreground">
+                No properties registered yet. Open a project and attach a property to register it.
+              </p>
+            ) : (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Property</TableHead>
+                    <TableHead>Permission</TableHead>
+                    <TableHead>Used by</TableHead>
+                    <TableHead />
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {registry.data!.properties.map((p) => (
+                    <TableRow key={p.id}>
+                      <TableCell className="font-mono text-xs">{p.site_url}</TableCell>
+                      <TableCell className="text-muted-foreground">{p.permission_level ?? '—'}</TableCell>
+                      <TableCell>
+                        {p.linked_project ? (
+                          <a
+                            href="#"
+                            className="text-primary hover:underline"
+                            onClick={(e) => {
+                              e.preventDefault();
+                              onOpenProject(p.linked_project!.id, 'settings');
+                            }}
+                          >
+                            {p.linked_project.name}
+                          </a>
+                        ) : (
+                          <span className="text-muted-foreground">unattached</span>
+                        )}
+                      </TableCell>
+                      <TableCell className="text-right">
+                        {p.linked_project ? (
+                          <Button size="sm" variant="outline" onClick={() => onOpenProject(p.linked_project!.id, 'settings')}>
+                            Settings
+                          </Button>
+                        ) : (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() =>
+                              account.data!.projects[0] ? onOpenProject(account.data!.projects[0].id, 'settings') : undefined
+                            }
+                          >
+                            Open a project
+                          </Button>
+                        )}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            )}
+          </CardContent>
+        </Card>
       )}
     </div>
   );

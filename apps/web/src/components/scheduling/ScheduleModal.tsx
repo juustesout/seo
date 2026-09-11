@@ -14,6 +14,8 @@ import { api } from '../../lib/api';
 import { useAsync } from '../../lib/ui';
 import { fmtDateTime, fromLocalInput, parseDate, toLocalInput } from './scheduleMeta';
 import { defaultPublishKind, PUBLISH_KIND_LABELS, supportedPublishKinds } from '../../lib/publishers';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 
 interface ContentOption {
   id: string;
@@ -156,20 +158,37 @@ export function ScheduleModal({
     applyDefaultKind(idValue);
   };
 
+  const selectClass =
+    'h-9 w-full rounded-md border border-input bg-background px-3 text-sm shadow-xs outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50';
+
   return (
-    <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal card" role="dialog" aria-modal="true" aria-label={creating ? 'Schedule publication' : 'Reschedule'} onClick={(e) => e.stopPropagation()}>
-        <div className="modal-head">
-          <h3>{creating ? 'Schedule a publication' : 'Reschedule'}</h3>
-          <button type="button" className="modal-x" onClick={onClose} aria-label="Close">
+    <div
+      className="fixed inset-0 z-[60] flex items-start justify-center overflow-y-auto bg-black/45 px-4 pb-4 pt-[8vh]"
+      onClick={onClose}
+    >
+      <div
+        className="w-full max-w-[520px] rounded-xl border bg-card p-4 text-card-foreground shadow-sm"
+        role="dialog"
+        aria-modal="true"
+        aria-label={creating ? 'Schedule publication' : 'Reschedule'}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="mb-1 flex items-center justify-between">
+          <h3 className="m-0 text-[15px] font-semibold">{creating ? 'Schedule a publication' : 'Reschedule'}</h3>
+          <button
+            type="button"
+            className="cursor-pointer border-none bg-transparent px-1 text-xl leading-none text-muted-foreground hover:text-destructive"
+            onClick={onClose}
+            aria-label="Close"
+          >
             ×
           </button>
         </div>
 
         {!creating && schedule && (
-          <div className="modal-context">
-            <div className="sch-detail-title">{schedule.content_title ?? 'Untitled'}</div>
-            <div className="muted">
+          <div className="my-1 mb-2">
+            <div className="my-1.5 text-[15px] font-semibold">{schedule.content_title ?? 'Untitled'}</div>
+            <div className="text-muted-foreground">
               {schedule.publisher_name ?? 'Unknown publisher'} · currently{' '}
               {parseDate(schedule.scheduled_at) ? fmtDateTime(parseDate(schedule.scheduled_at)!) : '—'}
             </div>
@@ -177,14 +196,16 @@ export function ScheduleModal({
         )}
 
         {creating && (
-          <>
-            <label className="fld">Article</label>
-            {content.loading && content.data === null && <p className="muted">Loading articles…</p>}
+          <div className="grid gap-2">
+            <label className="text-sm font-medium" htmlFor="sch-article">
+              Article
+            </label>
+            {content.loading && content.data === null && <p className="text-muted-foreground">Loading articles…</p>}
             {!content.loading && content.data !== null && contentRows.length === 0 && (
-              <p className="muted">No articles in this project yet. Create one in Content Studio first.</p>
+              <p className="text-muted-foreground">No articles in this project yet. Create one in Content Studio first.</p>
             )}
             {contentRows.length > 0 && (
-              <select value={contentId} onChange={(e) => setContentId(e.target.value)}>
+              <select id="sch-article" className={selectClass} value={contentId} onChange={(e) => setContentId(e.target.value)}>
                 {contentRows.map((c) => (
                   <option key={c.id} value={c.id}>
                     {c.title ?? 'Untitled'} {c.status ? `(${c.status})` : ''}
@@ -193,13 +214,15 @@ export function ScheduleModal({
               </select>
             )}
 
-            <label className="fld">Publisher</label>
-            {pubs.loading && pubs.data === null && <p className="muted">Loading publishers…</p>}
+            <label className="text-sm font-medium" htmlFor="sch-publisher">
+              Publisher
+            </label>
+            {pubs.loading && pubs.data === null && <p className="text-muted-foreground">Loading publishers…</p>}
             {!pubs.loading && pubs.data !== null && connected.length === 0 && (
-              <p className="muted">No connected publisher. Connect and test one in Publishing first.</p>
+              <p className="text-muted-foreground">No connected publisher. Connect and test one in Publishing first.</p>
             )}
             {connected.length > 0 && (
-              <select value={publisherId} onChange={(e) => selectPublisher(e.target.value)}>
+              <select id="sch-publisher" className={selectClass} value={publisherId} onChange={(e) => selectPublisher(e.target.value)}>
                 {connected.map((p) => (
                   <option key={p.publisher.id} value={p.publisher.id}>
                     {p.descriptor?.name ?? p.publisher.name}
@@ -210,10 +233,10 @@ export function ScheduleModal({
 
             {selectedKinds.length > 1 ? (
               <>
-                <label className="fld">Publish as</label>
-                <div className="row" style={{ gap: 16, flexWrap: 'wrap' }}>
+                <label className="text-sm font-medium">Publish as</label>
+                <div className="flex flex-wrap gap-4">
                   {selectedKinds.map((k) => (
-                    <label key={k} style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+                    <label key={k} className="inline-flex items-center gap-1.5">
                       <input
                         type="radio"
                         name="publish-kind"
@@ -227,30 +250,32 @@ export function ScheduleModal({
                 </div>
               </>
             ) : (
-              <p className="muted" style={{ fontSize: 13, marginTop: 6 }}>
+              <p className="mt-1.5 text-[13px] text-muted-foreground">
                 Will publish as {PUBLISH_KIND_LABELS[publishKind]} ({publishKind}).
               </p>
             )}
-          </>
+          </div>
         )}
 
-        <label className="fld">When</label>
-        <input type="datetime-local" value={whenLocal} onChange={(e) => setWhenLocal(e.target.value)} />
+        <div className="mt-2 grid gap-2">
+          <label className="text-sm font-medium" htmlFor="sch-when">
+            When
+          </label>
+          <Input id="sch-when" type="datetime-local" value={whenLocal} onChange={(e) => setWhenLocal(e.target.value)} />
+        </div>
 
-        {err && <div className="error-line">{err}</div>}
+        {err && <div className="mt-2 text-[13px] text-destructive">{err}</div>}
 
-        <div className="modal-actions">
-          <button type="button" className="btn" onClick={onClose} disabled={busy}>
+        <div className="mt-4 flex items-center gap-2">
+          <Button variant="outline" onClick={onClose} disabled={busy}>
             Cancel
-          </button>
-          <button
-            type="button"
-            className="btn primary"
+          </Button>
+          <Button
             disabled={busy || (creating && (contentRows.length === 0 || connected.length === 0))}
             onClick={() => void submit()}
           >
             {busy ? 'Saving…' : creating ? 'Schedule' : 'Reschedule'}
-          </button>
+          </Button>
         </div>
       </div>
     </div>

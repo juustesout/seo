@@ -12,6 +12,12 @@
 import { useState } from 'react';
 import { useAsync, StatusPill, fmtDate, Empty } from '../lib/ui';
 import { api } from '../lib/api';
+import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
+import { PageHeader } from '@/components/ui/page-header';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 
 interface KeyRow {
   id: string;
@@ -98,129 +104,180 @@ export function AccountApiKeys() {
   };
 
   return (
-    <div>
-      <h1>API keys</h1>
-      <p className="sub">
-        Account (master) keys let an external agent reach every project you are a member of through the REST and MCP APIs. A master key is
-        never stronger than your role in the project it touches: reads need your membership, writes need at least editor.
-      </p>
-      {err && <div className="banner error">{err}</div>}
-      {ok && <div className="banner ok">{ok}</div>}
+    <div className="grid gap-5">
+      <PageHeader
+        title="API keys"
+        description="Account (master) keys let an external agent reach every project you are a member of through the REST and MCP APIs. A master key is never stronger than your role in the project it touches: reads need your membership, writes need at least editor."
+      />
 
-      {created && (
-        <div className="banner info">
-          <div className="label">{created.name} created — copy this key now, it will not be shown again.</div>
-          <div className="mono" style={{ wordBreak: 'break-all', fontSize: 13 }}>
-            {created.key}
-          </div>
-          <button className="btn sm mt" onClick={() => void copy()} disabled={copied}>
-            {copied ? 'Copied' : 'Copy key'}
-          </button>
+      {err && (
+        <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+          {err}
         </div>
       )}
+      {ok && (
+        <div className="rounded-md border border-success/30 bg-success/5 px-3 py-2 text-sm text-success">{ok}</div>
+      )}
 
-      <div className="card">
-        <h2>Create a master key</h2>
-        <p className="sub">
-          Name it after the agent or job it belongs to (for example <span className="mono">hermes-agent</span>) and pick the maximum scopes it
-          may use anywhere.
-        </p>
-        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-end' }}>
-          <div style={{ flex: '1 1 220px' }}>
-            <div className="label">Name</div>
-            <input
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="hermes-agent"
-              maxLength={120}
-              disabled={busy !== null}
-            />
-          </div>
-          <div>
-            <div className="label">Scopes</div>
-            <div style={{ display: 'flex', gap: 14 }}>
-              <label style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
-                <input type="checkbox" checked={sel.includes('read')} onChange={() => toggle('read')} disabled={busy !== null} /> read
-              </label>
-              <label style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
-                <input type="checkbox" checked={sel.includes('write')} onChange={() => toggle('write')} disabled={busy !== null} /> write
-              </label>
+      {created && (
+        <Card className="border-primary/30 bg-accent">
+          <CardContent className="grid gap-3">
+            <p className="text-sm font-medium text-accent-foreground">
+              {created.name} created — copy this key now, it will not be shown again.
+            </p>
+            <code className="block break-all rounded-md border bg-background px-3 py-2 font-mono text-xs">
+              {created.key}
+            </code>
+            <div>
+              <Button size="sm" variant="outline" onClick={() => void copy()} disabled={copied}>
+                {copied ? 'Copied' : 'Copy key'}
+              </Button>
             </div>
+          </CardContent>
+        </Card>
+      )}
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Create a master key</CardTitle>
+          <p className="text-sm text-muted-foreground">
+            Name it after the agent or job it belongs to (for example{' '}
+            <span className="font-mono">hermes-agent</span>) and pick the maximum scopes it may use anywhere.
+          </p>
+        </CardHeader>
+        <CardContent className="grid gap-4">
+          <div className="flex flex-wrap items-end gap-4">
+            <div className="grid min-w-[220px] flex-1 gap-1.5">
+              <label className="text-sm font-medium" htmlFor="key-name">
+                Name
+              </label>
+              <Input
+                id="key-name"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="hermes-agent"
+                maxLength={120}
+                disabled={busy !== null}
+              />
+            </div>
+            <div className="grid gap-1.5">
+              <span className="text-sm font-medium">Scopes</span>
+              <div className="flex items-center gap-4 pb-2">
+                <label className="inline-flex items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    className="size-4 accent-primary"
+                    checked={sel.includes('read')}
+                    onChange={() => toggle('read')}
+                    disabled={busy !== null}
+                  />{' '}
+                  read
+                </label>
+                <label className="inline-flex items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    className="size-4 accent-primary"
+                    checked={sel.includes('write')}
+                    onChange={() => toggle('write')}
+                    disabled={busy !== null}
+                  />{' '}
+                  write
+                </label>
+              </div>
+            </div>
+            <Button onClick={() => void create()} disabled={busy !== null || !name.trim()}>
+              {busy === 'create' ? 'Creating…' : 'Create key'}
+            </Button>
           </div>
-          <button className="btn primary" onClick={() => void create()} disabled={busy !== null || !name.trim()}>
-            {busy === 'create' ? 'Creating…' : 'Create key'}
-          </button>
-        </div>
-        <div className="muted mt" style={{ fontSize: 12 }}>
-          Key format: <span className="mono">seo_live_…</span>. Only the SHA-256 hash is stored server-side.
-        </div>
-      </div>
+          <p className="text-xs text-muted-foreground">
+            Key format: <span className="font-mono">seo_live_…</span>. Only the SHA-256 hash is stored server-side.
+          </p>
+        </CardContent>
+      </Card>
 
-      <div className="card mt">
-        <h2>Your master keys</h2>
-        {state.loading && !state.data ? (
-          <p className="muted">Loading…</p>
-        ) : state.error ? (
-          <div className="banner error">{state.error}</div>
-        ) : !state.data || state.data.keys.length === 0 ? (
-          <Empty>No master keys yet. Create one above to connect an agent or CLI.</Empty>
-        ) : (
-          <table>
-            <thead>
-              <tr>
-                <th>Name</th>
-                <th>Scopes</th>
-                <th>Last used</th>
-                <th>Created</th>
-                <th />
-              </tr>
-            </thead>
-            <tbody>
-              {state.data.keys.map((k) => (
-                <tr key={k.id}>
-                  <td>
-                    <div>{k.name}</div>
-                    <div className="mono muted">{k.key_prefix}…</div>
-                  </td>
-                  <td>
-                    <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
-                      {k.scopes.map((s) => (
-                        <span key={s} className="pill">
-                          {s}
-                        </span>
-                      ))}
-                      {k.revoked_at ? <StatusPill status="revoked" /> : <StatusPill status="active" />}
-                    </span>
-                  </td>
-                  <td className="muted">{k.last_used_at ? fmtDate(k.last_used_at) : '—'}</td>
-                  <td className="muted">{fmtDate(k.created_at)}</td>
-                  <td className="num">
-                    {!k.revoked_at && (
-                      <button className="btn sm" disabled={busy !== null} onClick={() => void revoke(k)}>
-                        {busy === k.id ? 'Revoking…' : 'Revoke'}
-                      </button>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
+      <Card>
+        <CardHeader>
+          <CardTitle>Your master keys</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {state.loading && !state.data ? (
+            <p className="text-sm text-muted-foreground">Loading…</p>
+          ) : state.error ? (
+            <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+              {state.error}
+            </div>
+          ) : !state.data || state.data.keys.length === 0 ? (
+            <Empty>No master keys yet. Create one above to connect an agent or CLI.</Empty>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Name</TableHead>
+                  <TableHead>Scopes</TableHead>
+                  <TableHead>Last used</TableHead>
+                  <TableHead>Created</TableHead>
+                  <TableHead />
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {state.data.keys.map((k) => (
+                  <TableRow key={k.id}>
+                    <TableCell>
+                      <div>{k.name}</div>
+                      <div className="font-mono text-xs text-muted-foreground">{k.key_prefix}…</div>
+                    </TableCell>
+                    <TableCell>
+                      <span className="inline-flex flex-wrap items-center gap-1.5">
+                        {k.scopes.map((s) => (
+                          <Badge key={s} variant="outline">
+                            {s}
+                          </Badge>
+                        ))}
+                        {k.revoked_at ? <StatusPill status="revoked" /> : <StatusPill status="active" />}
+                      </span>
+                    </TableCell>
+                    <TableCell className="text-muted-foreground">{k.last_used_at ? fmtDate(k.last_used_at) : '—'}</TableCell>
+                    <TableCell className="text-muted-foreground">{fmtDate(k.created_at)}</TableCell>
+                    <TableCell className="text-right">
+                      {!k.revoked_at && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          disabled={busy !== null}
+                          onClick={() => void revoke(k)}
+                        >
+                          {busy === k.id ? 'Revoking…' : 'Revoke'}
+                        </Button>
+                      )}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
 
-      <div className="card mt">
-        <h2>Where a master key works</h2>
-        <ul style={{ margin: 0, paddingLeft: 18, lineHeight: 1.8 }}>
-          <li>
-            REST v1: <span className="mono">GET/PATCH /api/v1/projects/:projectId/content…</span> with{' '}
-            <span className="mono">Authorization: Bearer seo_live_…</span>
-          </li>
-          <li>
-            MCP over streamable HTTP: <span className="mono">/api/mcp</span> (pass project_id to every tool call)
-          </li>
-          <li>Read tools require your membership; write tools require editor (or admin/owner). A viewer role is read-only even for a write key.</li>
-        </ul>
-      </div>
+      <Card>
+        <CardHeader>
+          <CardTitle>Where a master key works</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <ul className="list-disc space-y-1 pl-5 text-sm leading-relaxed">
+            <li>
+              REST v1: <span className="font-mono">GET/PATCH /api/v1/projects/:projectId/content…</span> with{' '}
+              <span className="font-mono">Authorization: Bearer seo_live_…</span>
+            </li>
+            <li>
+              MCP over streamable HTTP: <span className="font-mono">/api/mcp</span> (pass project_id to every tool call)
+            </li>
+            <li>
+              Read tools require your membership; write tools require editor (or admin/owner). A viewer role is read-only
+              even for a write key.
+            </li>
+          </ul>
+        </CardContent>
+      </Card>
     </div>
   );
 }

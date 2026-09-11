@@ -19,6 +19,8 @@ import { ScheduleFilters } from '../components/scheduling/ScheduleFilters';
 import { ScheduleModal } from '../components/scheduling/ScheduleModal';
 import { ScheduleDetails } from '../components/scheduling/ScheduleDetails';
 import { canManage, fmtLocalDate, parseDate } from '../components/scheduling/scheduleMeta';
+import { Button } from '@/components/ui/button';
+import { PageHeader } from '@/components/ui/page-header';
 
 type ViewMode = 'month' | 'week' | 'list';
 
@@ -135,60 +137,72 @@ export function ContentSchedule({
   };
 
   return (
-    <div>
-      <h1>Content Calendar</h1>
-      <p className="sub">
-        Plan article publications on your connected publishers. Times are absolute and shown in your local timezone;
-        cancelled schedules stay visible for review.
-      </p>
+    <div className="grid gap-5">
+      <PageHeader
+        title="Content Calendar"
+        description="Plan article publications on your connected publishers. Times are absolute and shown in your local timezone; cancelled schedules stay visible for review."
+      />
 
-      {err && <div className="banner error">{err}</div>}
-      {notice && <div className="banner ok">{notice}</div>}
+      {err && (
+        <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+          {err}
+        </div>
+      )}
+      {notice && (
+        <div className="rounded-md border border-success/30 bg-success/5 px-3 py-2 text-sm text-success">{notice}</div>
+      )}
 
-      <div className="sch-toolbar">
-        <div className="sch-nav">
+      <div className="flex flex-wrap items-center justify-between gap-2.5">
+        <div className="flex flex-wrap items-center gap-1.5">
           {mode !== 'list' && (
             <>
-              <button type="button" className="btn sm" onClick={() => stepCursor(-1)} aria-label="Previous">
+              <Button variant="outline" size="sm" onClick={() => stepCursor(-1)} aria-label="Previous">
                 ‹
-              </button>
-              <button type="button" className="btn sm" onClick={() => setCursor(new Date())}>
+              </Button>
+              <Button variant="outline" size="sm" onClick={() => setCursor(new Date())}>
                 Today
-              </button>
-              <button type="button" className="btn sm" onClick={() => stepCursor(1)} aria-label="Next">
+              </Button>
+              <Button variant="outline" size="sm" onClick={() => stepCursor(1)} aria-label="Next">
                 ›
-              </button>
-              <span className="sch-range">{rangeLabel}</span>
+              </Button>
+              <span className="ml-1 font-semibold">{rangeLabel}</span>
             </>
           )}
         </div>
-        <div className="sch-view">
+        <div className="flex flex-wrap items-center gap-1.5">
           {MODES.map((m) => (
-            <button key={m.id} type="button" className={`btn sm ${mode === m.id ? 'primary' : ''}`} onClick={() => setMode(m.id)}>
+            <Button
+              key={m.id}
+              variant={mode === m.id ? 'default' : 'outline'}
+              size="sm"
+              onClick={() => setMode(m.id)}
+            >
               {m.label}
-            </button>
+            </Button>
           ))}
           {manage && (
-            <button type="button" className="btn sm primary sch-new" onClick={() => setCreating(true)}>
+            <Button size="sm" className="ml-1.5" onClick={() => setCreating(true)}>
               + Schedule
-            </button>
+            </Button>
           )}
         </div>
       </div>
 
-      <div className="sch-filterbar">
+      <div className="flex flex-wrap items-center gap-2">
         <ScheduleFilters status={status} onStatus={setStatus} query={query} onQuery={setQuery} />
-        <button type="button" className="btn sm" onClick={reload} disabled={state.loading}>
+        <Button variant="outline" size="sm" onClick={reload} disabled={state.loading}>
           Refresh
-        </button>
+        </Button>
       </div>
 
       {state.error && (
-        <div className="banner error" style={{ marginTop: 8 }}>
+        <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
           Could not load schedules: {state.error}
         </div>
       )}
-      {!state.error && state.loading && state.data === null && <p className="muted">Loading schedules…</p>}
+      {!state.error && state.loading && state.data === null && (
+        <p className="text-sm text-muted-foreground">Loading schedules…</p>
+      )}
       {state.data && schedules.length === 0 && (
         <Empty>
           {hadAny ? 'No schedules match the current filters.' : manage ? 'No schedules yet. Use “+ Schedule” to plan a publication.' : 'No schedules yet.'}
@@ -211,7 +225,9 @@ export function ContentSchedule({
       )}
 
       {!manage && state.data && schedules.length > 0 && (
-        <p className="muted sch-note">Read-only project access — schedules can be viewed but not changed.</p>
+        <p className="mt-3 text-xs text-muted-foreground">
+          Read-only project access — schedules can be viewed but not changed.
+        </p>
       )}
 
       {selected && (

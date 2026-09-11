@@ -10,6 +10,8 @@ import type { ReactNode } from 'react';
 import type { Editor } from '@tiptap/react';
 import type { ContentAiAction } from '@seo/contracts';
 import { AI_ACTION_LABELS, SELECTION_ACTIONS } from './contentAi';
+import { Button } from '@/components/ui/button';
+import { cn } from '@/lib/utils';
 
 interface ToolbarButtonProps {
   title: string;
@@ -21,7 +23,16 @@ interface ToolbarButtonProps {
 
 function ToolbarButton({ title, label, active, disabled, onClick }: ToolbarButtonProps) {
   return (
-    <button type="button" className={`tb${active ? ' active' : ''}`} title={title} disabled={disabled} onClick={onClick}>
+    <button
+      type="button"
+      className={cn(
+        'rounded-[5px] border border-transparent px-1.5 py-0.5 text-xs leading-[1.4] hover:border-primary disabled:cursor-not-allowed disabled:opacity-40',
+        active && 'border-primary bg-primary font-bold text-primary-foreground',
+      )}
+      title={title}
+      disabled={disabled}
+      onClick={onClick}
+    >
       {label}
     </button>
   );
@@ -42,41 +53,49 @@ function AiMenu({ ai }: { ai: ContentAiToolbar }) {
       : ''
     : 'AI is not configured — add an OpenAI key under Account → Integrations.';
   return (
-    <details className="ai-dd">
-      <summary className={`tb ai-dd-toggle${ai.configured ? '' : ' muted'}`} title={disabledReason || 'AI actions'}>
+    <details className="relative ml-auto inline-block">
+      <summary
+        className={cn(
+          'cursor-pointer list-none rounded-[5px] border border-transparent px-1.5 py-0.5 text-xs leading-[1.4] hover:border-primary [&::-webkit-details-marker]:hidden',
+          !ai.configured && 'text-muted-foreground',
+        )}
+        title={disabledReason || 'AI actions'}
+      >
         {ai.busy ? '…' : 'AI'}
       </summary>
-      <div className="ai-dd-menu">
+      <div className="absolute right-0 top-[calc(100%+6px)] z-20 flex min-w-[240px] flex-col gap-1.5 rounded-lg border bg-card p-2.5 shadow-lg">
         {!ai.configured && (
-          <p className="muted" style={{ fontSize: 12, margin: 0, maxWidth: 260 }}>
+          <p className="m-0 max-w-[260px] text-xs text-muted-foreground">
             AI is not configured for this account. Add an OpenAI key under Account → Integrations.
           </p>
         )}
         {ai.configured && (
-          <p className="muted" style={{ fontSize: 12, margin: 0, maxWidth: 260 }}>
+          <p className="m-0 max-w-[260px] text-xs text-muted-foreground">
             Select text to edit it with AI, or generate a new section. Suggestions are previewed before you apply them.
           </p>
         )}
         {SELECTION_ACTIONS.map((action) => (
-          <button
+          <Button
             key={action}
-            type="button"
-            className="btn sm ai-dd-item"
+            variant="outline"
+            size="sm"
+            className="justify-between text-left"
             disabled={ai.busy || !ai.configured || !ai.hasSelection}
             onClick={() => ai.onAction(action)}
           >
             {AI_ACTION_LABELS[action]}
-            {!ai.hasSelection && <span className="muted ai-dd-hint">select text</span>}
-          </button>
+            {!ai.hasSelection && <span className="ml-2 text-[10px] text-muted-foreground">select text</span>}
+          </Button>
         ))}
-        <button
-          type="button"
-          className="btn sm ai-dd-item"
+        <Button
+          variant="outline"
+          size="sm"
+          className="justify-between text-left"
           disabled={ai.busy || !ai.configured}
           onClick={() => ai.onAction('generate_section')}
         >
           {AI_ACTION_LABELS.generate_section}
-        </button>
+        </Button>
       </div>
     </details>
   );
@@ -88,7 +107,12 @@ function AiMenu({ ai }: { ai: ContentAiToolbar }) {
  * descriptor that, when present, adds the AI dropdown.
  */
 export function ContentToolbar({ editor, ai }: { editor: Editor | null; ai?: ContentAiToolbar }) {
-  if (!editor) return <div className="etoolbar muted">Loading editor…</div>;
+  if (!editor)
+    return (
+      <div className="flex flex-wrap items-center gap-0.5 border-b bg-muted/40 px-2 py-1.5 text-xs text-muted-foreground">
+        Loading editor…
+      </div>
+    );
 
   const cmd = (fn: (chain: ReturnType<Editor['chain']>) => ReturnType<Editor['chain']>) => {
     fn(editor.chain().focus()).run();
@@ -114,26 +138,27 @@ export function ContentToolbar({ editor, ai }: { editor: Editor | null; ai?: Con
   };
 
   const run = (fn: () => void) => () => fn();
+  const sep = <span className="mx-1 h-[18px] w-px bg-border" />;
 
   return (
-    <div className="etoolbar">
+    <div className="flex flex-wrap items-center gap-0.5 border-b bg-muted/40 px-2 py-1.5">
       <ToolbarButton title="Bold" label={<strong>B</strong>} active={editor.isActive('bold')} onClick={run(() => cmd((c) => c.toggleBold()))} />
       <ToolbarButton title="Italic" label={<em>I</em>} active={editor.isActive('italic')} onClick={run(() => cmd((c) => c.toggleItalic()))} />
       <ToolbarButton title="Strikethrough" label={<s>S</s>} active={editor.isActive('strike')} onClick={run(() => cmd((c) => c.toggleStrike()))} />
-      <span className="tb-sep" />
+      {sep}
       <ToolbarButton title="Heading 1" label="H1" active={editor.isActive('heading', { level: 1 })} onClick={run(() => setHeading(1))} />
       <ToolbarButton title="Heading 2" label="H2" active={editor.isActive('heading', { level: 2 })} onClick={run(() => setHeading(2))} />
       <ToolbarButton title="Heading 3" label="H3" active={editor.isActive('heading', { level: 3 })} onClick={run(() => setHeading(3))} />
       <ToolbarButton title="Heading 4" label="H4" active={editor.isActive('heading', { level: 4 })} onClick={run(() => setHeading(4))} />
-      <span className="tb-sep" />
+      {sep}
       <ToolbarButton title="Bullet list" label="• list" active={editor.isActive('bulletList')} onClick={run(() => cmd((c) => c.toggleBulletList()))} />
       <ToolbarButton title="Numbered list" label="1. list" active={editor.isActive('orderedList')} onClick={run(() => cmd((c) => c.toggleOrderedList()))} />
       <ToolbarButton title="Blockquote" label={'"quote"'} active={editor.isActive('blockquote')} onClick={run(() => cmd((c) => c.toggleBlockquote()))} />
       <ToolbarButton title="Code block" label="</>" active={editor.isActive('codeBlock')} onClick={run(() => cmd((c) => c.toggleCodeBlock()))} />
-      <span className="tb-sep" />
+      {sep}
       <ToolbarButton title="Link" label="Link" active={editor.isActive('link')} onClick={setLink} />
       <ToolbarButton title="Horizontal rule" label="—" onClick={run(() => cmd((c) => c.setHorizontalRule()))} />
-      <span className="tb-sep" />
+      {sep}
       <ToolbarButton title="Undo" label="undo" disabled={!editor.can().undo()} onClick={run(() => cmd((c) => c.undo()))} />
       <ToolbarButton title="Redo" label="redo" disabled={!editor.can().redo()} onClick={run(() => cmd((c) => c.redo()))} />
       {ai && <AiMenu ai={ai} />}

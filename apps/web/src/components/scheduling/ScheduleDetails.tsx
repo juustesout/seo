@@ -10,6 +10,7 @@
 import type { ScheduleDto } from '@seo/contracts';
 import { StatusPill } from '../../lib/ui';
 import { fmtDateTime, isCancellable, isReschedulable, parseDate } from './scheduleMeta';
+import { Button } from '@/components/ui/button';
 
 interface ScheduleDetailsProps {
   schedule: ScheduleDto;
@@ -27,31 +28,49 @@ export function ScheduleDetails({ schedule, canManage, onClose, onReschedule, on
   const createdAt = parseDate(schedule.created_at);
 
   return (
-    <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal card" role="dialog" aria-modal="true" aria-label="Schedule details" onClick={(e) => e.stopPropagation()}>
-        <div className="modal-head">
-          <h3>Schedule</h3>
-          <button type="button" className="modal-x" onClick={onClose} aria-label="Close">
+    <div
+      className="fixed inset-0 z-[60] flex items-start justify-center overflow-y-auto bg-black/45 px-4 pb-4 pt-[8vh]"
+      onClick={onClose}
+    >
+      <div
+        className="w-full max-w-[520px] rounded-xl border bg-card p-4 text-card-foreground shadow-sm"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Schedule details"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="mb-1 flex items-center justify-between">
+          <h3 className="m-0 text-[15px] font-semibold">Schedule</h3>
+          <button
+            type="button"
+            className="cursor-pointer border-none bg-transparent px-1 text-xl leading-none text-muted-foreground hover:text-destructive"
+            onClick={onClose}
+            aria-label="Close"
+          >
             ×
           </button>
         </div>
 
-        <div className="sch-detail-title">{schedule.content_title ?? 'Untitled'}</div>
-        <div className="sch-detail-status">
+        <div className="my-1.5 text-[15px] font-semibold">{schedule.content_title ?? 'Untitled'}</div>
+        <div className="my-1 mb-2 flex flex-wrap items-center gap-2">
           <StatusPill status={schedule.status} />
-          {schedule.status === 'cancelled' && <span className="sch-cancelled-note">This schedule was cancelled and will not publish.</span>}
+          {schedule.status === 'cancelled' && (
+            <span className="text-[11.5px] text-muted-foreground">This schedule was cancelled and will not publish.</span>
+          )}
           {schedule.status === 'failed' && (
-            <span className="muted sch-cancelled-note">Publishing failed. The article and history are kept; schedule again to retry.</span>
+            <span className="text-[11.5px] text-muted-foreground">
+              Publishing failed. The article and history are kept; schedule again to retry.
+            </span>
           )}
         </div>
 
-        <dl className="sch-detail-grid">
+        <dl className="my-2 grid grid-cols-[120px_1fr] gap-x-2.5 gap-y-1.5 text-[13px] [&_dd]:m-0 [&_dd]:min-w-0 [&_dd]:break-words [&_dt]:text-muted-foreground">
           <dt>Scheduled for</dt>
           <dd>{when ? fmtDateTime(when) : '—'}</dd>
           <dt>Publisher</dt>
           <dd>{schedule.publisher_name ?? '—'}</dd>
           <dt>Content id</dt>
-          <dd className="mono">{schedule.content_id}</dd>
+          <dd className="font-mono">{schedule.content_id}</dd>
           <dt>Created</dt>
           <dd>{createdAt ? fmtDateTime(createdAt) : '—'}</dd>
           {cancelledAt && (
@@ -62,27 +81,29 @@ export function ScheduleDetails({ schedule, canManage, onClose, onReschedule, on
           )}
         </dl>
 
-        <div className="modal-actions">
+        <div className="mt-4 flex items-center gap-2">
           {onViewPublication && (
-            <button type="button" className="btn primary" onClick={onViewPublication} title="Open the resulting publication in the history page">
+            <Button onClick={onViewPublication} title="Open the resulting publication in the history page">
               View publication
-            </button>
+            </Button>
           )}
           {canManage && isReschedulable(schedule) && (
-            <button type="button" className="btn" onClick={() => onReschedule(schedule)}>
+            <Button variant="outline" onClick={() => onReschedule(schedule)}>
               Reschedule…
-            </button>
+            </Button>
           )}
           {canManage && isCancellable(schedule) && (
-            <button type="button" className="btn danger" onClick={() => onCancel(schedule)}>
+            <Button variant="destructive" onClick={() => onCancel(schedule)}>
               Cancel schedule
-            </button>
+            </Button>
           )}
-          {!canManage && <span className="muted sch-note">Read-only project access — schedules cannot be changed.</span>}
-          <span className="spacer" />
-          <button type="button" className="btn" onClick={onClose}>
+          {!canManage && (
+            <span className="text-xs text-muted-foreground">Read-only project access — schedules cannot be changed.</span>
+          )}
+          <span className="flex-1" />
+          <Button variant="outline" onClick={onClose}>
             Close
-          </button>
+          </Button>
         </div>
       </div>
     </div>

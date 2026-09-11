@@ -13,8 +13,26 @@
  * workspace renders - children assume `me.projects` is already loaded.
  */
 import { useEffect, useState } from 'react';
+import {
+  BookOpen,
+  CalendarDays,
+  FolderKanban,
+  KeyRound,
+  LayoutDashboard,
+  LineChart,
+  Loader2,
+  Newspaper,
+  PenSquare,
+  Plug,
+  Send,
+  Settings,
+} from 'lucide-react';
 import { supabase, configured as supabaseConfigured, currentUser, sessionToken } from './lib/supabase';
 import { api } from './lib/api';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
+import { cn } from '@/lib/utils';
 import { Dashboard } from './views/Dashboard';
 import { Integrations } from './views/Integrations';
 import { DataViews } from './views/Data';
@@ -52,6 +70,8 @@ type Route =
   | { area: TopArea }
   | { area: 'project'; projectId: string; view: string };
 
+type NavIcon = React.ComponentType<{ className?: string }>;
+
 /** Derive the current Route from window.location.pathname. */
 function parseRoute(): Route {
   const seg = window.location.pathname.split('/').filter(Boolean);
@@ -66,23 +86,23 @@ function routePath(r: Route): string {
   return `/${r.area === 'overview' ? 'overview' : r.area}`;
 }
 
-const TOP_NAV: Array<{ id: TopArea; label: string }> = [
-  { id: 'overview', label: 'Overview' },
-  { id: 'projects', label: 'Projects' },
-  { id: 'integrations', label: 'Integrations' },
-  { id: 'keys', label: 'API keys' },
+const TOP_NAV: Array<{ id: TopArea; label: string; icon: NavIcon }> = [
+  { id: 'overview', label: 'Overview', icon: LayoutDashboard },
+  { id: 'projects', label: 'Projects', icon: FolderKanban },
+  { id: 'integrations', label: 'Integrations', icon: Plug },
+  { id: 'keys', label: 'API keys', icon: KeyRound },
 ];
 
-const PROJECT_NAV = [
-  { id: 'dashboard', label: 'Dashboard', dot: true },
-  { id: 'data', label: 'Keywords & Rankings', dot: true },
-  { id: 'integrations', label: 'Integrations', dot: true },
-  { id: 'knowledge', label: 'Knowledge Base', dot: false },
-  { id: 'content', label: 'Content Studio', dot: false },
-  { id: 'calendar', label: 'Calendar', dot: false },
-  { id: 'publications', label: 'Publications', dot: false },
-  { id: 'publishing', label: 'Publishing', dot: false },
-  { id: 'settings', label: 'Settings', dot: false },
+const PROJECT_NAV: Array<{ id: string; label: string; icon: NavIcon }> = [
+  { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
+  { id: 'data', label: 'Keywords & Rankings', icon: LineChart },
+  { id: 'integrations', label: 'Integrations', icon: Plug },
+  { id: 'knowledge', label: 'Knowledge Base', icon: BookOpen },
+  { id: 'content', label: 'Content Studio', icon: PenSquare },
+  { id: 'calendar', label: 'Calendar', icon: CalendarDays },
+  { id: 'publications', label: 'Publications', icon: Newspaper },
+  { id: 'publishing', label: 'Publishing', icon: Send },
+  { id: 'settings', label: 'Settings', icon: Settings },
 ];
 
 /**
@@ -166,13 +186,21 @@ export function App() {
 
   if (bootError && authed === false) {
     return (
-      <div className="content" style={{ maxWidth: 520, margin: '10vh auto' }}>
-        <div className="card">
-          <h1>SEO Operating Platform</h1>
-          <div className="banner error">{bootError}</div>
-          <p className="muted">Configure Supabase keys, then reload. The API server must be running on :3001 for /api calls.</p>
-        </div>
-      </div>
+      <CenteredCard>
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">SEO Operating Platform</CardTitle>
+            <CardDescription>
+              Configure Supabase keys, then reload. The API server must be running on :3001 for /api calls.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+              {bootError}
+            </div>
+          </CardContent>
+        </Card>
+      </CenteredCard>
     );
   }
 
@@ -182,12 +210,23 @@ export function App() {
 
   if (authed === null || !me) {
     return (
-      <div className="content" style={{ maxWidth: 520, margin: '10vh auto' }}>
-        <div className="card">
-          <h1>Loading…</h1>
-          {bootError && <div className="banner error">{bootError}</div>}
-        </div>
-      </div>
+      <CenteredCard>
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <Loader2 className="size-4 animate-spin" />
+              Loading…
+            </CardTitle>
+          </CardHeader>
+          {bootError && (
+            <CardContent>
+              <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+                {bootError}
+              </div>
+            </CardContent>
+          )}
+        </Card>
+      </CenteredCard>
     );
   }
 
@@ -210,24 +249,48 @@ export function App() {
     const project = me.projects.find((p) => p.id === route.projectId) ?? null;
     if (!project) {
       return (
-        <TopBar meEmail={meEmail} onSignOut={() => void signOut()} active={activeTop} onArea={goArea} projects={me.projects} currentProjectId={null} onOpenProject={goProject} />
+        <div className="flex min-h-screen flex-col">
+          <AppHeader
+            meEmail={meEmail}
+            onSignOut={() => void signOut()}
+            active={activeTop}
+            onArea={goArea}
+            projects={me.projects}
+            currentProjectId={null}
+            onOpenProject={goProject}
+          />
+          <main className="mx-auto w-full max-w-3xl flex-1 px-6 py-10">
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-base">Project not found</CardTitle>
+                <CardDescription>This project is not in your account, or you no longer have access to it.</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <Button variant="outline" size="sm" onClick={() => goArea('projects')}>
+                  Back to projects
+                </Button>
+              </CardContent>
+            </Card>
+          </main>
+        </div>
       );
     }
     const pid = project.id;
     const view = route.view;
     return (
-      <div>
-        <TopBar meEmail={meEmail} onSignOut={() => void signOut()} active={activeTop} onArea={goArea} projects={me.projects} currentProjectId={pid} onOpenProject={goProject} />
-        <div className="layout">
-          <nav className="side">
-            {PROJECT_NAV.map((n) => (
-              <div key={n.id} className={`nav-item ${view === n.id ? 'active' : ''}`} onClick={() => goProject(pid, n.id)}>
-                {n.dot ? <span className="dot" /> : <span style={{ width: 6 }} />}
-                {n.label}
-              </div>
-            ))}
-          </nav>
-          <main className="content">
+      <div className="flex min-h-screen flex-col">
+        <AppHeader
+          meEmail={meEmail}
+          onSignOut={() => void signOut()}
+          active={activeTop}
+          onArea={goArea}
+          projects={me.projects}
+          currentProjectId={pid}
+          onOpenProject={goProject}
+        />
+        <div className="flex flex-1">
+          <ProjectSidebar projectId={pid} view={view} onNavigate={goProject} />
+          <main className="min-w-0 flex-1 px-6 py-6">
             {view === 'dashboard' && <Dashboard projectId={pid} onOpenSettings={() => goProject(pid, 'settings')} />}
             {view === 'data' && <DataViews projectId={pid} />}
             {view === 'integrations' && <Integrations projectId={pid} />}
@@ -244,14 +307,22 @@ export function App() {
   }
 
   return (
-    <div>
-      <TopBar meEmail={meEmail} onSignOut={() => void signOut()} active={activeTop} onArea={goArea} projects={me.projects} currentProjectId={null} onOpenProject={goProject} />
-      <div className="content" style={{ maxWidth: 1040 }}>
+    <div className="flex min-h-screen flex-col">
+      <AppHeader
+        meEmail={meEmail}
+        onSignOut={() => void signOut()}
+        active={activeTop}
+        onArea={goArea}
+        projects={me.projects}
+        currentProjectId={null}
+        onOpenProject={goProject}
+      />
+      <main className="mx-auto w-full max-w-5xl flex-1 px-6 py-6">
         {route.area === 'overview' && <Overview onOpenProject={goProject} onGoProjects={() => goArea('projects')} />}
         {route.area === 'projects' && <ProjectsPage onOpenProject={goProject} />}
         {route.area === 'integrations' && <AccountIntegrations onOpenProject={goProject} />}
         {route.area === 'keys' && <AccountApiKeys />}
-      </div>
+      </main>
     </div>
   );
 }
@@ -262,12 +333,17 @@ async function signOut() {
   window.location.href = '/';
 }
 
+/** Center a narrow card in the viewport for boot/loading/error screens. */
+function CenteredCard({ children, className }: { children: React.ReactNode; className?: string }) {
+  return <div className={cn('mx-auto w-full max-w-md px-4 py-16', className)}>{children}</div>;
+}
+
 /**
  * Account-level navigation bar shown above every screen. Switches between
  * account areas, shows the current user, and offers a project switcher that
  * routes straight into any project the user belongs to (via onOpenProject).
  */
-function TopBar({
+function AppHeader({
   meEmail,
   onSignOut,
   active,
@@ -285,24 +361,39 @@ function TopBar({
   onOpenProject: (id: string, view: string) => void;
 }) {
   return (
-    <div className="topbar">
-      <span className="brand" onClick={() => onArea('overview')} style={{ cursor: 'pointer' }}>
-        SEO Ops
-      </span>
-      <nav className="topnav">
-        {TOP_NAV.map((n) => (
-          <button
-            key={n.id}
-            className={`topnav-item ${active === n.id ? 'active' : ''}`}
-            onClick={() => onArea(n.id)}
-          >
-            {n.label}
-          </button>
-        ))}
+    <header className="sticky top-0 z-30 flex h-14 items-center gap-2 border-b bg-background/85 px-4 backdrop-blur">
+      <button
+        type="button"
+        onClick={() => onArea('overview')}
+        className="flex shrink-0 items-center gap-2 rounded-md px-1 py-1 text-sm font-semibold tracking-tight text-foreground"
+      >
+        <span className="flex size-7 items-center justify-center rounded-md bg-primary text-primary-foreground">
+          <LineChart className="size-4" />
+        </span>
+        <span className="hidden sm:inline">SEO Ops</span>
+      </button>
+      <nav className="ml-1 flex items-center gap-0.5">
+        {TOP_NAV.map((n) => {
+          const Icon = n.icon;
+          const isActive = active === n.id;
+          return (
+            <Button
+              key={n.id}
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => onArea(n.id)}
+              className={cn('gap-1.5 text-muted-foreground', isActive && 'bg-secondary text-foreground')}
+            >
+              <Icon className="size-4" />
+              <span className="hidden md:inline">{n.label}</span>
+            </Button>
+          );
+        })}
       </nav>
       {projects.length > 0 && (
         <select
-          className="project-select"
+          className="ml-1 h-8 max-w-[180px] rounded-md border border-input bg-background px-2 text-sm shadow-xs outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
           value={currentProjectId ?? ''}
           onChange={(e) => {
             const id = e.target.value;
@@ -319,12 +410,50 @@ function TopBar({
           ))}
         </select>
       )}
-      <div className="spacer" />
-      <span className="muted">{meEmail}</span>
-      <button className="btn sm" onClick={onSignOut}>
+      <div className="flex-1" />
+      <span className="hidden text-sm text-muted-foreground lg:inline">{meEmail}</span>
+      <Button type="button" variant="outline" size="sm" onClick={onSignOut}>
         Sign out
-      </button>
-    </div>
+      </Button>
+    </header>
+  );
+}
+
+/** Project workspace sidebar: one entry per project view, icon + label. */
+function ProjectSidebar({
+  projectId,
+  view,
+  onNavigate,
+}: {
+  projectId: string;
+  view: string;
+  onNavigate: (id: string, view: string) => void;
+}) {
+  return (
+    <aside className="hidden w-60 shrink-0 border-r bg-sidebar md:block">
+      <nav className="flex flex-col gap-0.5 p-3">
+        {PROJECT_NAV.map((n) => {
+          const Icon = n.icon;
+          const isActive = view === n.id;
+          return (
+            <button
+              key={n.id}
+              type="button"
+              onClick={() => onNavigate(projectId, n.id)}
+              className={cn(
+                'flex items-center gap-2.5 rounded-md px-3 py-2 text-left text-sm transition-colors',
+                isActive
+                  ? 'bg-sidebar-accent font-medium text-sidebar-accent-foreground'
+                  : 'text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground',
+              )}
+            >
+              <Icon className="size-4 shrink-0" />
+              {n.label}
+            </button>
+          );
+        })}
+      </nav>
+    </aside>
   );
 }
 
@@ -363,36 +492,59 @@ function CreateProject({ email, onCreated }: { email: string | null; onCreated: 
   };
 
   return (
-    <div>
-      <div className="topbar">
-        <span className="brand">SEO Ops</span>
-        <div className="spacer" />
-        <span className="muted">{email}</span>
-        <button className="btn sm" onClick={() => void signOut()}>
+    <div className="flex min-h-screen flex-col">
+      <header className="flex h-14 items-center gap-2 border-b bg-background px-4">
+        <span className="flex size-7 items-center justify-center rounded-md bg-primary text-primary-foreground">
+          <LineChart className="size-4" />
+        </span>
+        <span className="text-sm font-semibold tracking-tight">SEO Ops</span>
+        <div className="flex-1" />
+        <span className="hidden text-sm text-muted-foreground sm:inline">{email}</span>
+        <Button type="button" variant="outline" size="sm" onClick={() => void signOut()}>
           Sign out
-        </button>
-      </div>
-      <div className="content" style={{ maxWidth: 560 }}>
-        <div className="card">
-          <h1>Create your first project</h1>
-          <p className="sub">
-            A project is your isolated SEO workspace: provider connections, tracked keywords, rankings and content live here.
-            Search Console connects once at the account level and each project attaches its own property.
-          </p>
-          <label className="fld">Project name</label>
-          <input type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder="Acme marketing site" style={{ width: '100%' }} />
-          <label className="fld">Website URL (optional)</label>
-          <input type="text" value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://example.com" style={{ width: '100%' }} />
-          <label className="fld">Description (optional)</label>
-          <input type="text" value={desc} onChange={(e) => setDesc(e.target.value)} style={{ width: '100%' }} />
-          {err && <div className="error-line">{err}</div>}
-          <div className="mt">
-            <button className="btn primary" onClick={() => void create()} disabled={busy || !name.trim()}>
-              {busy ? 'Creating…' : 'Create project'}
-            </button>
-          </div>
-        </div>
-      </div>
+        </Button>
+      </header>
+      <CenteredCard className="max-w-lg">
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Create your first project</CardTitle>
+            <CardDescription>
+              A project is your isolated SEO workspace: provider connections, tracked keywords, rankings and content
+              live here. Search Console connects once at the account level and each project attaches its own property.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="grid gap-4">
+            <div className="grid gap-1.5">
+              <label className="text-sm font-medium" htmlFor="project-name">
+                Project name
+              </label>
+              <Input id="project-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="Acme marketing site" />
+            </div>
+            <div className="grid gap-1.5">
+              <label className="text-sm font-medium" htmlFor="project-url">
+                Website URL (optional)
+              </label>
+              <Input id="project-url" value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://example.com" />
+            </div>
+            <div className="grid gap-1.5">
+              <label className="text-sm font-medium" htmlFor="project-desc">
+                Description (optional)
+              </label>
+              <Input id="project-desc" value={desc} onChange={(e) => setDesc(e.target.value)} />
+            </div>
+            {err && (
+              <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+                {err}
+              </div>
+            )}
+            <div>
+              <Button type="button" onClick={() => void create()} disabled={busy || !name.trim()}>
+                {busy ? 'Creating…' : 'Create project'}
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      </CenteredCard>
     </div>
   );
 }
@@ -458,58 +610,78 @@ function AuthScreen() {
   };
 
   return (
-    <div className="content" style={{ maxWidth: 460, margin: '8vh auto' }}>
-      <div className="card">
-        <h1>SEO Operating Platform</h1>
-        <p className="sub">Modular SEO platform: Search Console data, SERP tracking, keyword research and publishing in one workspace.</p>
-        {!supabaseConfigured && <div className="banner error">Missing VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY.</div>}
-        <label className="fld">Email</label>
-        <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} style={{ width: '100%' }} />
-        {mode !== 'code' && (
-          <>
-            <label className="fld">Password</label>
-            <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} style={{ width: '100%' }} />
-          </>
-        )}
-        {mode === 'code' && (
-          <>
-            <label className="fld">One-time code</label>
-            <input type="text" value={code} onChange={(e) => setCode(e.target.value)} style={{ width: '100%' }} />
-          </>
-        )}
-        {err && <div className="error-line">{err}</div>}
-        {info && <div className="ok-line">{info}</div>}
-        <div className="mt" style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          {mode !== 'code' ? (
-            <button
-              className="btn primary"
-              onClick={() => void submit()}
-              disabled={busy || !email || !password}
-            >
-              {busy ? '…' : mode === 'login' ? 'Log in' : 'Create account'}
-            </button>
-          ) : (
-            <button className="btn primary" onClick={() => void submit()} disabled={busy || !code.trim()}>
-              {busy ? '…' : 'Verify code'}
-            </button>
+    <CenteredCard>
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">SEO Operating Platform</CardTitle>
+          <CardDescription>
+            Modular SEO platform: Search Console data, SERP tracking, keyword research and publishing in one workspace.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-4">
+          {!supabaseConfigured && (
+            <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+              Missing VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY.
+            </div>
           )}
-          <button className="btn" onClick={() => setMode(mode === 'login' ? 'signup' : 'login')}>
-            {mode === 'login' ? 'Create account instead' : 'Log in instead'}
-          </button>
-          {mode === 'code' && (
-            <button className="btn" onClick={() => void magic()} disabled={busy || !email}>
-              Re-send code
-            </button>
-          )}
-        </div>
-        {mode !== 'code' && (
-          <div className="mt">
-            <button className="btn" onClick={() => void magic()} disabled={busy || !email}>
-              Email me a magic link instead
-            </button>
+          <div className="grid gap-1.5">
+            <label className="text-sm font-medium" htmlFor="auth-email">
+              Email
+            </label>
+            <Input id="auth-email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} />
           </div>
-        )}
-      </div>
-    </div>
+          {mode !== 'code' && (
+            <div className="grid gap-1.5">
+              <label className="text-sm font-medium" htmlFor="auth-password">
+                Password
+              </label>
+              <Input id="auth-password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} />
+            </div>
+          )}
+          {mode === 'code' && (
+            <div className="grid gap-1.5">
+              <label className="text-sm font-medium" htmlFor="auth-code">
+                One-time code
+              </label>
+              <Input id="auth-code" value={code} onChange={(e) => setCode(e.target.value)} />
+            </div>
+          )}
+          {err && (
+            <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+              {err}
+            </div>
+          )}
+          {info && (
+            <div className="rounded-md border border-success/30 bg-success/5 px-3 py-2 text-sm text-success">{info}</div>
+          )}
+          <div className="flex flex-wrap gap-2">
+            {mode !== 'code' ? (
+              <Button type="button" onClick={() => void submit()} disabled={busy || !email || !password}>
+                {busy ? '…' : mode === 'login' ? 'Log in' : 'Create account'}
+              </Button>
+            ) : (
+              <Button type="button" onClick={() => void submit()} disabled={busy || !code.trim()}>
+                {busy ? '…' : 'Verify code'}
+              </Button>
+            )}
+            <Button type="button" variant="outline" onClick={() => setMode(mode === 'login' ? 'signup' : 'login')}>
+              {mode === 'login' ? 'Create account instead' : 'Log in instead'}
+            </Button>
+            {mode === 'code' && (
+              <Button type="button" variant="outline" onClick={() => void magic()} disabled={busy || !email}>
+                Re-send code
+              </Button>
+            )}
+          </div>
+          {mode !== 'code' && (
+            <div>
+              <Button type="button" variant="ghost" onClick={() => void magic()} disabled={busy || !email}>
+                Email me a magic link instead
+              </Button>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    </CenteredCard>
   );
 }

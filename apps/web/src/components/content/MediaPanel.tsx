@@ -11,6 +11,9 @@ import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
 import type { Editor } from '@tiptap/react';
 import type { MediaItemDto, MediaListResponse, MediaMimeType } from '@seo/contracts';
 import { api, apiRaw } from '../../lib/api';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 
 const MAX_BYTES = 8 * 1024 * 1024;
 
@@ -143,58 +146,64 @@ export function MediaPanel({
   };
 
   return (
-    <section className="media-panel">
-      <div className="media-head">
+    <section className="rounded-[10px] border bg-card p-3">
+      <div className="flex items-center justify-between gap-2">
         <strong>Media library</strong>
-        <span className="pill ok">{items.length} item{items.length === 1 ? '' : 's'}</span>
+        <Badge variant="success">
+          {items.length} item{items.length === 1 ? '' : 's'}
+        </Badge>
       </div>
-      <p className="sub muted" style={{ margin: '4px 0 8px', fontSize: 12 }}>
+      <p className="my-1 mb-2 text-xs text-muted-foreground">
         Images are stored in this project's library. Use Insert to add one at the caret as a mediaId node.
       </p>
 
-      {err && <div className="banner error" style={{ marginBottom: 8 }}>{err}</div>}
-      {state && state.note && items.length === 0 && <p className="muted" style={{ fontSize: 12 }}>{state.note}</p>}
+      {err && (
+        <div className="mb-2 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+          {err}
+        </div>
+      )}
+      {state && state.note && items.length === 0 && <p className="text-xs text-muted-foreground">{state.note}</p>}
 
       {canEdit && (
-        <div className="media-upload">
-          <button type="button" className="btn sm" disabled={uploading} onClick={pickFile}>
+        <div className="mb-1 mt-2">
+          <Button variant="outline" size="sm" disabled={uploading} onClick={pickFile}>
             {uploading ? 'Uploading…' : '+ Upload PNG/JPEG/WebP'}
-          </button>
+          </Button>
           <input
             ref={fileRef}
             type="file"
             accept="image/png,image/jpeg,image/webp"
-            style={{ display: 'none' }}
+            className="hidden"
             onChange={onPick}
           />
         </div>
       )}
 
       {items.length > 0 && (
-        <ul className="media-list">
+        <ul className="mt-1.5 grid max-h-[46vh] list-none gap-2.5 overflow-y-auto p-0">
           {items.map((m) => (
-            <li key={m.id} className="media-row">
-              <div className="media-thumb">
-                <img src={m.url} alt={m.alt_text || m.filename} loading="lazy" />
+            <li key={m.id} className="flex items-start gap-2.5 rounded-lg border bg-muted/40 p-2">
+              <div className="flex size-16 shrink-0 items-center justify-center overflow-hidden rounded-md border bg-card">
+                <img src={m.url} alt={m.alt_text || m.filename} loading="lazy" className="max-h-full max-w-full object-cover" />
               </div>
-              <div className="media-info">
-                <div className="media-name" title={m.filename}>
+              <div className="grid min-w-0 flex-1 gap-1">
+                <div className="truncate text-[12.5px] font-semibold" title={m.filename}>
                   {m.filename}
                 </div>
-                <div className="media-meta muted">
+                <div className="text-[11px] text-muted-foreground">
                   {m.width && m.height ? `${m.width}×${m.height} · ` : ''}
                   {fmtSize(m.size)} · {m.usage_count} use{m.usage_count === 1 ? '' : 's'}
                 </div>
                 {canEdit && (
                   <form
-                    className="media-alt-form"
                     onSubmit={(e) => {
                       e.preventDefault();
                       void saveAlt(m);
                     }}
                   >
-                    <input
+                    <Input
                       type="text"
+                      className="h-7 px-1.5 text-[11.5px]"
                       placeholder="Alt text (descriptive, not 'image')"
                       value={pendingAlt(m)}
                       maxLength={500}
@@ -202,20 +211,25 @@ export function MediaPanel({
                     />
                   </form>
                 )}
-                <div className="media-actions">
-                  <button
-                    type="button"
-                    className="btn sm primary"
+                <div className="flex gap-1.5">
+                  <Button
+                    size="sm"
                     disabled={!editor}
                     title={editor ? 'Insert this image at the caret in the document' : 'Open a document to insert into'}
                     onClick={() => insert(m)}
                   >
                     Insert
-                  </button>
+                  </Button>
                   {canDelete && (
-                    <button type="button" className="btn sm danger" title="Delete from the library (refused while used by a document)" onClick={() => void remove(m)}>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="text-destructive"
+                      title="Delete from the library (refused while used by a document)"
+                      onClick={() => void remove(m)}
+                    >
                       Delete
-                    </button>
+                    </Button>
                   )}
                 </div>
               </div>

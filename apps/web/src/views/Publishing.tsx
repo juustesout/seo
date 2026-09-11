@@ -16,6 +16,13 @@ import { api } from '../lib/api';
 import { useAsync, fmtDate, useJobs, JobTable, StatusPill, Empty } from '../lib/ui';
 import { defaultPublishKind, PUBLISH_KIND_LABELS, publisherCapabilityChips, supportedPublishKinds, categoryLabel } from '../lib/publishers';
 import type { PublishContentKind } from '@seo/contracts';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
+import { PageHeader } from '@/components/ui/page-header';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { Textarea } from '@/components/ui/textarea';
 
 interface SetupField {
   key: string;
@@ -138,24 +145,34 @@ export function Publishing({ projectId }: { projectId: string }) {
   );
 
   return (
-    <div>
-      <h1>Publishing</h1>
-      <p className="sub">Connect output channels (websites and social) and publish project content to them.</p>
-      {err && <div className="banner error">{err}</div>}
-      {notice && <div className="banner">{notice}</div>}
+    <div className="grid gap-5">
+      <PageHeader
+        title="Publishing"
+        description="Connect output channels (websites and social) and publish project content to them."
+      />
+      {err && (
+        <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+          {err}
+        </div>
+      )}
+      {notice && (
+        <div className="rounded-md border border-warning/30 bg-warning/5 px-3 py-2 text-sm text-warning">{notice}</div>
+      )}
 
-      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 16 }}>
+      <div className="flex flex-wrap gap-2">
         {catalogProviders.map((d) => (
-          <button key={d.id} className="btn primary" onClick={() => void addPublisher(d.id)}>
+          <Button key={d.id} onClick={() => void addPublisher(d.id)}>
             + Add {d.name}
-          </button>
+          </Button>
         ))}
-        {catalogProviders.length === 0 && <span className="muted">No publisher plugins registered on this server.</span>}
+        {catalogProviders.length === 0 && (
+          <span className="text-sm text-muted-foreground">No publisher plugins registered on this server.</span>
+        )}
       </div>
 
       {grouped.map(({ category, wraps }) => (
-        <section key={category || 'other'} className="mb">
-          {category && <h3 className="sub" style={{ textTransform: 'capitalize' }}>{categoryLabel(category)}</h3>}
+        <section key={category || 'other'} className="grid gap-3">
+          {category && <h3 className="text-sm font-medium capitalize text-muted-foreground">{categoryLabel(category)}</h3>}
           {wraps.map(({ publisher, descriptor }) => (
             <PublisherCard key={publisher.id} projectId={projectId} publisher={publisher} descriptor={descriptor} onChanged={reload} onError={setErr} />
           ))}
@@ -167,48 +184,66 @@ export function Publishing({ projectId }: { projectId: string }) {
         <NewPublication projectId={projectId} publishers={connectedCapable} onDone={reload} onError={setErr} />
       )}
 
-      <div className="card mt">
-        <h2>Publications</h2>
-        {(list.data ?? []).length === 0 && <Empty>Nothing published yet.</Empty>}
-        {(list.data ?? []).length > 0 && (
-          <table>
-            <thead>
-              <tr>
-                <th>Title</th>
-                <th>Status</th>
-                <th>URL</th>
-                <th>Created</th>
-                <th />
-              </tr>
-            </thead>
-            <tbody>
-              {list.data!.map((p) => (
-                <tr key={p.id}>
-                  <td>{p.content_title ?? 'Untitled'}</td>
-                  <td>
-                    <StatusPill status={p.status} />
-                  </td>
-                  <td className="mono muted">{p.target_url || '—'}</td>
-                  <td className="muted">{p.published_at ? fmtDate(p.published_at) : fmtDate(p.created_at)}</td>
-                  <td>
-                    <button
-                      className="btn sm"
-                      onClick={() => void action(() => api(`/projects/${projectId}/publications/${p.id}/actions`, { method: 'POST', body: { action: 'publish', remote_status: 'publish' } }))}
-                    >
-                      Publish
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
+      <Card>
+        <CardHeader>
+          <CardTitle>Publications</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {(list.data ?? []).length === 0 && <Empty>Nothing published yet.</Empty>}
+          {(list.data ?? []).length > 0 && (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Title</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead>URL</TableHead>
+                  <TableHead>Created</TableHead>
+                  <TableHead />
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {list.data!.map((p) => (
+                  <TableRow key={p.id}>
+                    <TableCell>{p.content_title ?? 'Untitled'}</TableCell>
+                    <TableCell>
+                      <StatusPill status={p.status} />
+                    </TableCell>
+                    <TableCell className="font-mono text-muted-foreground">{p.target_url || '—'}</TableCell>
+                    <TableCell className="text-muted-foreground">
+                      {p.published_at ? fmtDate(p.published_at) : fmtDate(p.created_at)}
+                    </TableCell>
+                    <TableCell>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() =>
+                          void action(() =>
+                            api(`/projects/${projectId}/publications/${p.id}/actions`, {
+                              method: 'POST',
+                              body: { action: 'publish', remote_status: 'publish' },
+                            }),
+                          )
+                        }
+                      >
+                        Publish
+                      </Button>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
 
-      <div className="card mt">
-        <h2>Publish jobs</h2>
-        <JobTable jobs={jobs.filter((j) => String(j.job_type).startsWith('publish_') || j.job_type === 'publish')} />
-      </div>
+      <Card>
+        <CardHeader>
+          <CardTitle>Publish jobs</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <JobTable jobs={jobs.filter((j) => String(j.job_type).startsWith('publish_') || j.job_type === 'publish')} />
+        </CardContent>
+      </Card>
     </div>
   );
 }
@@ -299,108 +334,112 @@ function PublisherCard({
   };
 
   return (
-    <div className="card mb">
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-        <b>{descriptor?.name ?? publisher.name}</b>
-        <StatusPill status={publisher.status} />
-        <span className="muted mono" style={{ fontSize: 12 }}>
-          {publisher.provider}
-        </span>
-        {categoryLabel(setup?.category) && <span className="pill">{categoryLabel(setup?.category)}</span>}
-        <span style={{ flex: 1 }} />
-        {busy && <span className="pill busy">{busy}…</span>}
-      </div>
-
-      {chips.length > 0 && (
-        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', margin: '8px 0' }}>
-          {chips.map((c) => (
-            <span key={c} className="pill" title="Capability this channel supports">
-              {c}
-            </span>
-          ))}
+    <Card>
+      <CardContent className="grid gap-3">
+        <div className="flex flex-wrap items-center gap-3">
+          <b>{descriptor?.name ?? publisher.name}</b>
+          <StatusPill status={publisher.status} />
+          <span className="font-mono text-xs text-muted-foreground">{publisher.provider}</span>
+          {categoryLabel(setup?.category) && <Badge variant="outline">{categoryLabel(setup?.category)}</Badge>}
+          <span className="flex-1" />
+          {busy && <Badge variant="warning">{busy}…</Badge>}
         </div>
-      )}
 
-      {setup?.note && <p className="muted" style={{ fontSize: 13 }}>{setup.note}</p>}
+        {chips.length > 0 && (
+          <div className="flex flex-wrap gap-1.5">
+            {chips.map((c) => (
+              <Badge key={c} variant="outline" title="Capability this channel supports">
+                {c}
+              </Badge>
+            ))}
+          </div>
+        )}
 
-      {configFields.length > 0 && (
-        <>
-          <label className="fld">Site settings</label>
-          {configFields.map((f) => (
-            <div key={f.key} className="row">
-              <input
+        {setup?.note && <p className="text-[13px] text-muted-foreground">{setup.note}</p>}
+
+        {configFields.length > 0 && (
+          <div className="grid gap-2">
+            <label className="text-sm font-medium">Site settings</label>
+            {configFields.map((f) => (
+              <Input
+                key={f.key}
                 type={f.type ?? 'text'}
                 value={values[f.key] ?? ''}
                 onChange={(e) => setValues((prev) => ({ ...prev, [f.key]: e.target.value }))}
                 placeholder={f.placeholder ?? f.label}
-                style={{ flex: 1 }}
-              />
-            </div>
-          ))}
-          <div className="row">
-            <button className="btn" disabled={busy !== null} onClick={() => void action('config', () => saveConfig())}>
-              Save settings
-            </button>
-          </div>
-        </>
-      )}
-
-      {credFields.length > 0 && (
-        <>
-          <label className="fld">Credentials (encrypted at rest)</label>
-          <div className="row" style={{ flexWrap: 'wrap' }}>
-            {credFields.map((f) => (
-              <input
-                key={f.key}
-                type={f.type ?? 'password'}
-                value={creds[f.key] ?? ''}
-                onChange={(e) => setCreds((prev) => ({ ...prev, [f.key]: e.target.value }))}
-                placeholder={f.placeholder ?? f.label}
               />
             ))}
-            <button
-              className="btn"
-              disabled={busy !== null || !credFields.some((f) => (creds[f.key] ?? '').trim().length > 0)}
-              onClick={() => void action('creds', saveCredentials)}
-            >
-              Save credentials
-            </button>
+            <div>
+              <Button variant="outline" disabled={busy !== null} onClick={() => void action('config', () => saveConfig())}>
+                Save settings
+              </Button>
+            </div>
           </div>
-        </>
-      )}
+        )}
 
-      {oauthMode && (
-        <div className="row" style={{ marginTop: 8, flexWrap: 'wrap' }}>
-          {connected ? (
-            <>
-              <span className="muted" style={{ fontSize: 13, marginRight: 8 }}>
-                {connectedLabel ? `Connected as ${connectedLabel}` : 'Connected'}
-              </span>
-              <button className="btn sm" disabled={busy !== null} onClick={() => void action('disconnect', disconnect)}>
-                Disconnect
-              </button>
-            </>
-          ) : (
-            <button className="btn primary" disabled={busy !== null} onClick={() => void action('connect', connectOauth)}>
-              Connect with {descriptor?.name ?? publisher.name}
-            </button>
-          )}
+        {credFields.length > 0 && (
+          <div className="grid gap-2">
+            <label className="text-sm font-medium">Credentials (encrypted at rest)</label>
+            <div className="flex flex-wrap gap-2">
+              {credFields.map((f) => (
+                <Input
+                  key={f.key}
+                  className="w-[220px]"
+                  type={f.type ?? 'password'}
+                  value={creds[f.key] ?? ''}
+                  onChange={(e) => setCreds((prev) => ({ ...prev, [f.key]: e.target.value }))}
+                  placeholder={f.placeholder ?? f.label}
+                />
+              ))}
+              <Button
+                variant="outline"
+                disabled={busy !== null || !credFields.some((f) => (creds[f.key] ?? '').trim().length > 0)}
+                onClick={() => void action('creds', saveCredentials)}
+              >
+                Save credentials
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {oauthMode && (
+          <div className="flex flex-wrap items-center gap-2">
+            {connected ? (
+              <>
+                <span className="text-[13px] text-muted-foreground">
+                  {connectedLabel ? `Connected as ${connectedLabel}` : 'Connected'}
+                </span>
+                <Button variant="outline" size="sm" disabled={busy !== null} onClick={() => void action('disconnect', disconnect)}>
+                  Disconnect
+                </Button>
+              </>
+            ) : (
+              <Button disabled={busy !== null} onClick={() => void action('connect', connectOauth)}>
+                Connect with {descriptor?.name ?? publisher.name}
+              </Button>
+            )}
+          </div>
+        )}
+
+        <div className="flex flex-wrap gap-2">
+          <Button
+            disabled={busy !== null || (oauthMode && !connected)}
+            onClick={() => void action('test', () => api(`/projects/${projectId}/publishers/${id}/test`, { method: 'POST' }))}
+          >
+            {connected ? 'Re-test connection' : 'Test connection'}
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            className="text-destructive"
+            disabled={busy !== null}
+            onClick={() => void action('del', () => api(`/projects/${projectId}/publishers/${id}`, { method: 'DELETE' }))}
+          >
+            Delete publisher
+          </Button>
         </div>
-      )}
-
-      <div className="row" style={{ marginTop: 8 }}>
-        <button
-          className="btn primary"
-          disabled={busy !== null || (oauthMode && !connected)}
-          onClick={() => void action('test', () => api(`/projects/${projectId}/publishers/${id}/test`, { method: 'POST' }))}
-        >
-          {connected ? 'Re-test connection' : 'Test connection'}
-        </button>
-        <button className="btn sm danger" disabled={busy !== null} onClick={() => void action('del', () => api(`/projects/${projectId}/publishers/${id}`, { method: 'DELETE' }))}>
-          Delete publisher
-        </button>
-      </div>
-    </div>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -476,50 +515,71 @@ function NewPublication({
   };
 
   return (
-    <div className="card mt">
-      <h2>New publication</h2>
-      <label className="fld">Publisher</label>
-      <select value={publisherId} onChange={(e) => selectPublisher(e.target.value)}>
-        {publishers.map((p) => (
-          <option key={p.publisher.id} value={p.publisher.id}>
-            {p.descriptor?.name ?? p.publisher.name}
-          </option>
-        ))}
-      </select>
-      {selectedKinds.length > 1 && (
-        <>
-          <label className="fld">Publish as</label>
-          <div className="row" style={{ gap: 16, flexWrap: 'wrap' }}>
-            {selectedKinds.map((k) => (
-              <label key={k} style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
-                <input
-                  type="radio"
-                  name="publish-kind"
-                  value={k}
-                  checked={publishKind === k}
-                  onChange={() => setPublishKind(k)}
-                />
-                {PUBLISH_KIND_LABELS[k]}
-              </label>
-            ))}
-          </div>
-        </>
-      )}
-      <label className="fld">Title</label>
-      <input type="text" value={title} onChange={(e) => setTitle(e.target.value)} style={{ width: '100%' }} />
-      <label className="fld">Content (markdown or plain text)</label>
-      <textarea value={content} onChange={(e) => setContent(e.target.value)} />
-      <label className="fld">Excerpt (optional)</label>
-      <input type="text" value={excerpt} onChange={(e) => setExcerpt(e.target.value)} style={{ width: '100%' }} />
-      <div className="row">
-        <select value={status} onChange={(e) => setStatus(e.target.value as 'publish' | 'draft')}>
-          <option value="publish">Publish now</option>
-          <option value="draft">Save as draft</option>
+    <Card>
+      <CardHeader>
+        <CardTitle>New publication</CardTitle>
+      </CardHeader>
+      <CardContent className="grid gap-2">
+        <label className="text-sm font-medium" htmlFor="pub-publisher">
+          Publisher
+        </label>
+        <select
+          id="pub-publisher"
+          className="h-9 rounded-md border border-input bg-background px-3 text-sm shadow-xs outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+          value={publisherId}
+          onChange={(e) => selectPublisher(e.target.value)}
+        >
+          {publishers.map((p) => (
+            <option key={p.publisher.id} value={p.publisher.id}>
+              {p.descriptor?.name ?? p.publisher.name}
+            </option>
+          ))}
         </select>
-        <button className="btn primary" disabled={busy || !title.trim() || !publisherId} onClick={() => void submit()}>
-          {busy ? 'Queuing…' : 'Queue publication'}
-        </button>
-      </div>
-    </div>
+        {selectedKinds.length > 1 && (
+          <>
+            <label className="text-sm font-medium">Publish as</label>
+            <div className="flex flex-wrap gap-4">
+              {selectedKinds.map((k) => (
+                <label key={k} className="inline-flex items-center gap-1.5">
+                  <input
+                    type="radio"
+                    name="publish-kind"
+                    value={k}
+                    checked={publishKind === k}
+                    onChange={() => setPublishKind(k)}
+                  />
+                  {PUBLISH_KIND_LABELS[k]}
+                </label>
+              ))}
+            </div>
+          </>
+        )}
+        <label className="text-sm font-medium" htmlFor="pub-title">
+          Title
+        </label>
+        <Input id="pub-title" type="text" value={title} onChange={(e) => setTitle(e.target.value)} />
+        <label className="text-sm font-medium" htmlFor="pub-content">
+          Content (markdown or plain text)
+        </label>
+        <Textarea id="pub-content" value={content} onChange={(e) => setContent(e.target.value)} />
+        <label className="text-sm font-medium" htmlFor="pub-excerpt">
+          Excerpt (optional)
+        </label>
+        <Input id="pub-excerpt" type="text" value={excerpt} onChange={(e) => setExcerpt(e.target.value)} />
+        <div className="flex flex-wrap gap-2">
+          <select
+            className="h-9 rounded-md border border-input bg-background px-3 text-sm shadow-xs outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+            value={status}
+            onChange={(e) => setStatus(e.target.value as 'publish' | 'draft')}
+          >
+            <option value="publish">Publish now</option>
+            <option value="draft">Save as draft</option>
+          </select>
+          <Button disabled={busy || !title.trim() || !publisherId} onClick={() => void submit()}>
+            {busy ? 'Queuing…' : 'Queue publication'}
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
   );
 }

@@ -8,6 +8,9 @@
  */
 import type { AutosaveStatus } from './useAutosave';
 import { fmtDate } from '../../lib/ui';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 
 export const SAVE_LABEL: Record<AutosaveStatus, string> = {
   saved: 'Saved',
@@ -49,65 +52,63 @@ export function ContentEditorHeader({
   onDelete,
   onViewPublications,
 }: ContentEditorHeaderProps) {
-  const pillClass =
-    saveState === 'saving' ? 'busy' : saveState === 'failed' ? 'err' : saveState === 'saved' ? 'ok' : '';
+  const saveVariant =
+    saveState === 'saving' ? 'warning' : saveState === 'failed' ? 'destructive' : saveState === 'saved' ? 'success' : 'outline';
   const savedLabel =
     saveState === 'saved' && savedAt
       ? `Saved ${fmtDate(savedAt)}`
       : SAVE_LABEL[saveState] ?? SAVE_LABEL.saved;
 
   return (
-    <div className="ce-header">
-      <div className="ce-row">
-        <div className="ce-title-wrap">
-          <input
+    <div className="mb-3 grid gap-2">
+      <div className="flex flex-wrap items-center gap-2.5">
+        <div className="flex min-w-[260px] flex-1 flex-wrap items-center gap-2.5">
+          <Input
             type="text"
-            className="ce-title"
+            className="h-auto min-w-[240px] flex-1 border-transparent bg-transparent px-2 py-1.5 text-lg font-bold shadow-none focus-visible:border-ring focus-visible:bg-muted/40 focus-visible:ring-[3px]"
             value={title}
             disabled={!canEdit}
             placeholder="Untitled"
             onChange={(e) => onTitleChange(e.target.value)}
           />
-          <span className="pill">{status}</span>
-          <span className={`pill ${pillClass}`}>{savedLabel}</span>
+          <Badge variant="outline">{status}</Badge>
+          <Badge variant={saveVariant}>{savedLabel}</Badge>
         </div>
-        <div className="ce-actions">
+        <div className="flex flex-wrap items-center gap-1.5">
           {onViewPublications && (
-            <button type="button" className="btn" onClick={onViewPublications} title="See every publish attempt of this article">
+            <Button variant="outline" onClick={onViewPublications} title="See every publish attempt of this article">
               History
-            </button>
+            </Button>
           )}
-          <button type="button" className="btn" disabled={!canEdit || busy} onClick={onSaveNow}>
+          <Button variant="outline" disabled={!canEdit || busy} onClick={onSaveNow}>
             Save
-          </button>
+          </Button>
           {status !== 'published' && (
-            <button
-              type="button"
-              className="btn primary"
-              disabled={!canEdit || busy}
-              onClick={() => onStatusChange('published')}
-            >
+            <Button disabled={!canEdit || busy} onClick={() => onStatusChange('published')}>
               Publish
-            </button>
+            </Button>
           )}
           {canDelete && (
-            <button type="button" className="btn danger" disabled={busy} onClick={onDelete}>
+            <Button variant="destructive" disabled={busy} onClick={onDelete}>
               Delete
-            </button>
+            </Button>
           )}
         </div>
       </div>
-      <div className="ce-sub">
-        <span className="muted mono">{slug ? `/${slug}` : 'no slug yet'}</span>
-        <span className="muted">{wordCount} words</span>
-        {!canEdit && <span className="muted">Read-only project access.</span>}
+      <div className="flex flex-wrap gap-3.5 px-0.5">
+        <span className="font-mono text-xs text-muted-foreground">{slug ? `/${slug}` : 'no slug yet'}</span>
+        <span className="text-sm text-muted-foreground">{wordCount} words</span>
+        {!canEdit && <span className="text-sm text-muted-foreground">Read-only project access.</span>}
       </div>
       {canEdit && (
-        <div className="ce-statusrow">
-          <span className="muted" style={{ fontSize: 12 }}>
-            Status
-          </span>
-          <select value={status} disabled={busy} onChange={(e) => onStatusChange(e.target.value)}>
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-muted-foreground">Status</span>
+          <select
+            className="h-8 rounded-md border border-input bg-background px-2 text-sm shadow-xs outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+            value={status}
+            disabled={busy}
+            onChange={(e) => onStatusChange(e.target.value)}
+          >
             {['draft', 'in_review', 'published', 'archived'].map((s) => (
               <option key={s} value={s}>
                 {s}

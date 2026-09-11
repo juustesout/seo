@@ -10,6 +10,11 @@ import { useState } from 'react';
 import { useAsync, fmtNum, fmtDate } from '../lib/ui';
 import { api } from '../lib/api';
 import { supabase } from '../lib/supabase';
+import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
+import { PageHeader } from '@/components/ui/page-header';
 
 interface AccountProject {
   id: string;
@@ -57,67 +62,98 @@ export function ProjectsPage({ onOpenProject }: { onOpenProject: (id: string, vi
     }
   };
 
-  if (loading) return <p className="muted">Loading…</p>;
-  if (error) return <div className="banner error">{error}</div>;
+  if (loading) return <p className="text-sm text-muted-foreground">Loading…</p>;
+  if (error) {
+    return (
+      <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+        {error}
+      </div>
+    );
+  }
   const projects = data?.projects ?? [];
 
   return (
-    <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
-        <div>
-          <h1 style={{ margin: 0 }}>Projects</h1>
-          <p className="sub" style={{ margin: '4px 0 0' }}>
-            Isolated SEO workspaces: keywords, rankings, content and publishing live per project.
-          </p>
-        </div>
-        <button className="btn primary" onClick={() => setShowForm((s) => !s)}>
-          {showForm ? 'Cancel' : 'New project'}
-        </button>
-      </div>
+    <div className="grid gap-5">
+      <PageHeader
+        title="Projects"
+        description="Isolated SEO workspaces: keywords, rankings, content and publishing live per project."
+        actions={
+          <Button onClick={() => setShowForm((s) => !s)}>{showForm ? 'Cancel' : 'New project'}</Button>
+        }
+      />
 
       {showForm && (
-        <div className="card mt">
-          <h2>Create a project</h2>
-          <label className="fld">Project name</label>
-          <input type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder="Acme marketing site" style={{ width: '100%' }} />
-          <label className="fld">Website URL (optional)</label>
-          <input type="text" value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://example.com" style={{ width: '100%' }} />
-          {err && <div className="error-line">{err}</div>}
-          <div className="mt">
-            <button className="btn primary" onClick={() => void create()} disabled={busy || !name.trim()}>
-              {busy ? 'Creating…' : 'Create project'}
-            </button>
-          </div>
-        </div>
+        <Card>
+          <CardHeader>
+            <CardTitle>Create a project</CardTitle>
+          </CardHeader>
+          <CardContent className="grid gap-4">
+            <div className="grid gap-1.5">
+              <label className="text-sm font-medium" htmlFor="np-name">
+                Project name
+              </label>
+              <Input id="np-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="Acme marketing site" />
+            </div>
+            <div className="grid gap-1.5">
+              <label className="text-sm font-medium" htmlFor="np-url">
+                Website URL (optional)
+              </label>
+              <Input id="np-url" value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://example.com" />
+            </div>
+            {err && (
+              <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+                {err}
+              </div>
+            )}
+            <div>
+              <Button onClick={() => void create()} disabled={busy || !name.trim()}>
+                {busy ? 'Creating…' : 'Create project'}
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
       )}
 
       {projects.length === 0 ? (
-        <div className="card mt">
-          <p className="muted">No projects yet. Create one to start tracking keywords, rankings and content.</p>
-        </div>
+        <Card>
+          <CardContent>
+            <p className="text-sm text-muted-foreground">
+              No projects yet. Create one to start tracking keywords, rankings and content.
+            </p>
+          </CardContent>
+        </Card>
       ) : (
-        <div className="grid mt">
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {projects.map((p) => (
-            <div className="card" key={p.id}>
-              <div className="label" style={{ fontSize: 13 }}>
-                {p.property ? <span className="pill ok">{p.property.site_url}</span> : <span className="pill">no GSC property</span>}
-              </div>
-              <h3 style={{ margin: '6px 0' }}>{p.name}</h3>
-              <p className="muted" style={{ minHeight: 34 }}>
-                {p.website_url ?? 'No website set'} · {p.role}
-              </p>
-              <div className="muted" style={{ fontSize: 12, marginBottom: 10 }}>
-                {fmtNum(p.integration_count)} integrations · {fmtNum(p.connected_count)} connected · {fmtNum(p.content_count)} content · created {fmtDate(p.created_at)}
-              </div>
-              <div style={{ display: 'flex', gap: 8 }}>
-                <button className="btn sm primary" onClick={() => onOpenProject(p.id, 'dashboard')}>
-                  Open
-                </button>
-                <button className="btn sm" onClick={() => onOpenProject(p.id, 'settings')}>
-                  Settings
-                </button>
-              </div>
-            </div>
+            <Card key={p.id} className="flex flex-col">
+              <CardHeader>
+                {p.property ? (
+                  <Badge variant="success" className="max-w-full truncate">
+                    {p.property.site_url}
+                  </Badge>
+                ) : (
+                  <Badge variant="outline">no GSC property</Badge>
+                )}
+                <CardTitle className="text-base">{p.name}</CardTitle>
+              </CardHeader>
+              <CardContent className="flex flex-1 flex-col gap-3">
+                <p className="text-sm text-muted-foreground">
+                  {p.website_url ?? 'No website set'} · {p.role}
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  {fmtNum(p.integration_count)} integrations · {fmtNum(p.connected_count)} connected ·{' '}
+                  {fmtNum(p.content_count)} content · created {fmtDate(p.created_at)}
+                </p>
+                <div className="mt-auto flex gap-2">
+                  <Button size="sm" onClick={() => onOpenProject(p.id, 'dashboard')}>
+                    Open
+                  </Button>
+                  <Button size="sm" variant="outline" onClick={() => onOpenProject(p.id, 'settings')}>
+                    Settings
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
           ))}
         </div>
       )}

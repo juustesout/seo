@@ -269,7 +269,7 @@ describe('WriterPanel', () => {
     const { container } = render(<WriterPanel projectId={PROJECT} contentId={CONTENT} defaultTopic="On-Page SEO" />);
     await startRun();
 
-    const panel = container.querySelector('.writer-panel');
+    const panel = container.querySelector('[data-testid="writer-panel"]');
     expect(panel).toBeTruthy();
     const scope = within(panel as HTMLElement);
     expect(scope.queryByText(PLAN.title)).toBeTruthy();

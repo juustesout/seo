@@ -10,6 +10,13 @@
 import { useEffect, useState } from 'react';
 import { api } from '../lib/api';
 import { useAsync, num, fmtNum, fmtDate, useJobs, JobTable, Empty } from '../lib/ui';
+import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
+import { PageHeader } from '@/components/ui/page-header';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { Textarea } from '@/components/ui/textarea';
 
 type Tab = 'keywords' | 'pages' | 'rankings';
 
@@ -117,141 +124,193 @@ export function DataViews({ projectId }: { projectId: string }) {
   ];
 
   return (
-    <div>
-      <h1>Keywords & Rankings</h1>
-      <p className="sub">Research and track keywords against Google via DataForSEO; results land in this project only.</p>
-      {err && <div className="banner error">{err}</div>}
-      {notice && <div className="banner ok">{notice}</div>}
+    <div className="grid gap-5">
+      <PageHeader
+        title="Keywords & Rankings"
+        description="Research and track keywords against Google via DataForSEO; results land in this project only."
+      />
 
-      <div className="card mb">
-        <h2>Run jobs</h2>
-        <label className="fld">Keyword research seeds (one per line, max 20)</label>
-        <textarea value={seeds} onChange={(e) => setSeeds(e.target.value)} placeholder={'seo platform\nrank tracker'} />
-        <button className="btn primary" disabled={enqueuing !== null} onClick={() => void runResearch()}>
-          {enqueuing === 'dataforseo_keyword_research' ? 'Enqueuing…' : 'Research keywords (DataForSEO)'}
-        </button>
-        <label className="fld">Rank-tracking keywords (extra, comma separated; merges with tracked)</label>
-        <input type="text" value={extraKw} onChange={(e) => setExtraKw(e.target.value)} placeholder="local seo tools, seo audit" />
-        <button className="btn primary" disabled={enqueuing !== null} onClick={() => void runRankSync()}>
-          {enqueuing === 'serp_retrieval' ? 'Enqueuing…' : 'Track SERP positions'}
-        </button>
-      </div>
+      {err && (
+        <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+          {err}
+        </div>
+      )}
+      {notice && (
+        <div className="rounded-md border border-success/30 bg-success/5 px-3 py-2 text-sm text-success">{notice}</div>
+      )}
 
-      <div style={{ display: 'flex', gap: 6, marginBottom: 12 }}>
+      <Card>
+        <CardHeader>
+          <CardTitle>Run jobs</CardTitle>
+        </CardHeader>
+        <CardContent className="grid gap-4">
+          <div className="grid gap-1.5">
+            <label className="text-sm font-medium" htmlFor="data-seeds">
+              Keyword research seeds (one per line, max 20)
+            </label>
+            <Textarea
+              id="data-seeds"
+              value={seeds}
+              onChange={(e) => setSeeds(e.target.value)}
+              placeholder={'seo platform\nrank tracker'}
+            />
+            <div>
+              <Button disabled={enqueuing !== null} onClick={() => void runResearch()}>
+                {enqueuing === 'dataforseo_keyword_research' ? 'Enqueuing…' : 'Research keywords (DataForSEO)'}
+              </Button>
+            </div>
+          </div>
+          <div className="grid gap-1.5">
+            <label className="text-sm font-medium" htmlFor="data-extra">
+              Rank-tracking keywords (extra, comma separated; merges with tracked)
+            </label>
+            <Input
+              id="data-extra"
+              value={extraKw}
+              onChange={(e) => setExtraKw(e.target.value)}
+              placeholder="local seo tools, seo audit"
+            />
+            <div>
+              <Button disabled={enqueuing !== null} onClick={() => void runRankSync()}>
+                {enqueuing === 'serp_retrieval' ? 'Enqueuing…' : 'Track SERP positions'}
+              </Button>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      <div className="flex gap-1.5">
         {tabs.map((t) => (
-          <button key={t.id} className={`btn ${tab === t.id ? 'primary' : ''}`} onClick={() => setTab(t.id)}>
+          <Button
+            key={t.id}
+            variant={tab === t.id ? 'default' : 'outline'}
+            size="sm"
+            onClick={() => setTab(t.id)}
+          >
             {t.label}
-          </button>
+          </Button>
         ))}
       </div>
 
-      <div className="card">
-        {tab === 'keywords' && (
-          <>
-            {(keywords.data?.keywords ?? []).length === 0 && <Empty>No keywords yet — run a research job above.</Empty>}
-            {keywords.data && (keywords.data.keywords.length > 0) && (
-              <table>
-                <thead>
-                  <tr>
-                    <th>Keyword</th>
-                    <th className="num">Volume</th>
-                    <th className="num">Difficulty</th>
-                    <th className="num">CPC</th>
-                    <th>Intent</th>
-                    <th>Source</th>
-                    <th>Seen</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {keywords.data.keywords.map((k) => (
-                    <tr key={k.keyword}>
-                      <td>{k.keyword}</td>
-                      <td className="num">{k.volume != null ? fmtNum(k.volume) : '—'}</td>
-                      <td className="num">{k.difficulty != null ? num(k.difficulty).toFixed(0) : '—'}</td>
-                      <td className="num">{k.cpc != null ? `$${num(k.cpc).toFixed(2)}` : '—'}</td>
-                      <td>{k.intent || '—'}</td>
-                      <td className="mono">{k.source || '—'}</td>
-                      <td className="muted">{fmtDate(k.last_seen_at)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-          </>
-        )}
-        {tab === 'pages' && (
-          <>
-            {(pages.data?.pages ?? []).length === 0 && <Empty>No pages tracked yet.</Empty>}
-            {pages.data && pages.data.pages.length > 0 && (
-              <table>
-                <thead>
-                  <tr>
-                    <th>URL</th>
-                    <th className="num">Status</th>
-                    <th className="num">Words</th>
-                    <th>Indexable</th>
-                    <th>Seen</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {pages.data.pages.map((p) => (
-                    <tr key={p.url}>
-                      <td className="mono">{p.url}</td>
-                      <td className="num">{p.status_code ?? '—'}</td>
-                      <td className="num">{p.word_count != null ? fmtNum(p.word_count) : '—'}</td>
-                      <td>{p.is_indexable == null ? '—' : p.is_indexable ? 'yes' : 'no'}</td>
-                      <td className="muted">{fmtDate(p.last_seen_at)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-          </>
-        )}
-        {tab === 'rankings' && (
-          <>
-            {rankings.data && rankings.data.rankings.length === 0 && (
-              <Empty>No ranking snapshots yet. Run “Track SERP positions” above.</Empty>
-            )}
-            {rankings.data && rankings.data.rankings.length > 0 && (
-              <>
-                <p className="muted">Snapshot date: {rankings.data.date}</p>
-                <table>
-                  <thead>
-                    <tr>
-                      <th className="num">Pos</th>
-                      <th>Keyword</th>
-                      <th>URL</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {rankings.data.rankings.map((r, i) => (
-                      <tr key={`${r.keyword}-${i}`}>
-                        <td className="num">
-                          {r.position && r.position <= 3 ? (
-                            <b style={{ color: '#6ee7a0' }}>{r.position}</b>
-                          ) : (
-                            r.position ?? '—'
-                          )}
-                        </td>
-                        <td>{r.keyword}</td>
-                        <td className="mono muted">{r.url || '—'}</td>
-                      </tr>
+      <Card>
+        <CardContent>
+          {tab === 'keywords' && (
+            <>
+              {(keywords.data?.keywords ?? []).length === 0 && <Empty>No keywords yet — run a research job above.</Empty>}
+              {keywords.data && keywords.data.keywords.length > 0 && (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Keyword</TableHead>
+                      <TableHead className="text-right">Volume</TableHead>
+                      <TableHead className="text-right">Difficulty</TableHead>
+                      <TableHead className="text-right">CPC</TableHead>
+                      <TableHead>Intent</TableHead>
+                      <TableHead>Source</TableHead>
+                      <TableHead>Seen</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {keywords.data.keywords.map((k) => (
+                      <TableRow key={k.keyword}>
+                        <TableCell>{k.keyword}</TableCell>
+                        <TableCell className="text-right tabular-nums">{k.volume != null ? fmtNum(k.volume) : '—'}</TableCell>
+                        <TableCell className="text-right tabular-nums">
+                          {k.difficulty != null ? num(k.difficulty).toFixed(0) : '—'}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums">
+                          {k.cpc != null ? `$${num(k.cpc).toFixed(2)}` : '—'}
+                        </TableCell>
+                        <TableCell>{k.intent || '—'}</TableCell>
+                        <TableCell className="font-mono text-xs">{k.source || '—'}</TableCell>
+                        <TableCell className="text-muted-foreground">{fmtDate(k.last_seen_at)}</TableCell>
+                      </TableRow>
                     ))}
-                  </tbody>
-                </table>
-              </>
-            )}
-          </>
-        )}
-      </div>
+                  </TableBody>
+                </Table>
+              )}
+            </>
+          )}
+          {tab === 'pages' && (
+            <>
+              {(pages.data?.pages ?? []).length === 0 && <Empty>No pages tracked yet.</Empty>}
+              {pages.data && pages.data.pages.length > 0 && (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>URL</TableHead>
+                      <TableHead className="text-right">Status</TableHead>
+                      <TableHead className="text-right">Words</TableHead>
+                      <TableHead>Indexable</TableHead>
+                      <TableHead>Seen</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {pages.data.pages.map((p) => (
+                      <TableRow key={p.url}>
+                        <TableCell className="font-mono text-xs">{p.url}</TableCell>
+                        <TableCell className="text-right tabular-nums">{p.status_code ?? '—'}</TableCell>
+                        <TableCell className="text-right tabular-nums">
+                          {p.word_count != null ? fmtNum(p.word_count) : '—'}
+                        </TableCell>
+                        <TableCell>{p.is_indexable == null ? '—' : p.is_indexable ? 'yes' : 'no'}</TableCell>
+                        <TableCell className="text-muted-foreground">{fmtDate(p.last_seen_at)}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              )}
+            </>
+          )}
+          {tab === 'rankings' && (
+            <>
+              {rankings.data && rankings.data.rankings.length === 0 && (
+                <Empty>No ranking snapshots yet. Run “Track SERP positions” above.</Empty>
+              )}
+              {rankings.data && rankings.data.rankings.length > 0 && (
+                <>
+                  <p className="mb-2 text-sm text-muted-foreground">Snapshot date: {rankings.data.date}</p>
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead className="text-right">Pos</TableHead>
+                        <TableHead>Keyword</TableHead>
+                        <TableHead>URL</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {rankings.data.rankings.map((r, i) => (
+                        <TableRow key={`${r.keyword}-${i}`}>
+                          <TableCell className="text-right tabular-nums">
+                            {r.position && r.position <= 3 ? (
+                              <b className="text-success">{r.position}</b>
+                            ) : (
+                              r.position ?? '—'
+                            )}
+                          </TableCell>
+                          <TableCell>{r.keyword}</TableCell>
+                          <TableCell className="font-mono text-xs text-muted-foreground">{r.url || '—'}</TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </>
+              )}
+            </>
+          )}
+        </CardContent>
+      </Card>
 
-      <div className="card mt">
-        <h2>
-          Recent jobs {busy && <span className="pill busy">working…</span>}
-        </h2>
-        <JobTable jobs={jobs} />
-      </div>
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            Recent jobs {busy ? <Badge variant="warning">working…</Badge> : null}
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <JobTable jobs={jobs} />
+        </CardContent>
+      </Card>
     </div>
   );
 }

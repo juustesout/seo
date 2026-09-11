@@ -10,6 +10,10 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
 import type { KnowledgeSourcesResponse } from '@seo/contracts';
 import { api } from '../../lib/api';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
 
 /**
  * Small Content Studio knowledge panel (Phase E). Lists the project's
@@ -100,35 +104,39 @@ export function KnowledgePanel({ projectId, canEdit }: { projectId: string; canE
 
   const configured = state?.configured ?? false;
   const statusPill = (status: string) => {
-    if (status === 'indexed') return <span className="pill ok">indexed</span>;
-    if (status === 'error') return <span className="pill err">error</span>;
-    if (status === 'deleting') return <span className="pill busy">deleting…</span>;
-    if (status === 'indexing') return <span className="pill busy">indexing…</span>;
-    return <span className="pill busy">queued…</span>;
+    if (status === 'indexed') return <Badge variant="success">indexed</Badge>;
+    if (status === 'error') return <Badge variant="destructive">error</Badge>;
+    if (status === 'deleting') return <Badge variant="warning">deleting…</Badge>;
+    if (status === 'indexing') return <Badge variant="warning">indexing…</Badge>;
+    return <Badge variant="warning">queued…</Badge>;
   };
 
   return (
-    <section className="card kno-panel">
-      <div className="kno-head">
+    <section className="mt-3.5 rounded-[10px] border bg-card p-4">
+      <div className="flex items-center justify-between gap-2">
         <strong>Project knowledge</strong>
-        <span className={configured ? 'pill ok' : 'pill err'}>{configured ? 'configured' : 'not configured'}</span>
+        <Badge variant={configured ? 'success' : 'destructive'}>{configured ? 'configured' : 'not configured'}</Badge>
       </div>
-      <p className="sub muted kno-sub">
+      <p className="my-1 mb-2.5 text-xs text-muted-foreground">
         Reference notes and documents, indexed per project into the isolated vector base. They are offered as optional
         context to AI actions - never as the source of truth for your content.
       </p>
 
-      {err && <div className="banner error">{err}</div>}
+      {err && (
+        <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+          {err}
+        </div>
+      )}
 
       {state && !configured && (
-        <div className="banner" style={{ marginTop: 4 }}>
+        <div className="mt-1 rounded-md border border-warning/30 bg-warning/5 px-3 py-2 text-sm text-warning">
           Knowledge is not usable on this server yet. {state.note ?? ''}
         </div>
       )}
 
       {canEdit && configured && (
-        <form className="kno-form" onSubmit={addSource}>
-          <input
+        <form className="mb-2.5 grid gap-2" onSubmit={addSource}>
+          <Input
             type="text"
             placeholder="Title (e.g. Style guide, competitor note)"
             value={name}
@@ -136,58 +144,69 @@ export function KnowledgePanel({ projectId, canEdit }: { projectId: string; canE
             maxLength={200}
             required
           />
-          <input
+          <Input
             type="text"
             placeholder="URL of the reference (optional)"
             value={url}
             onChange={(e) => setUrl(e.target.value)}
             maxLength={2000}
           />
-          <textarea
+          <Textarea
             placeholder="Content to index (paste a reference document or write notes)…"
             value={text}
             onChange={(e) => setText(e.target.value)}
             rows={4}
             maxLength={100000}
           />
-          <button type="submit" className="btn primary sm" disabled={busyAction || !name.trim()}>
-            {busyAction ? 'Adding…' : 'Add source'}
-          </button>
+          <div>
+            <Button type="submit" size="sm" disabled={busyAction || !name.trim()}>
+              {busyAction ? 'Adding…' : 'Add source'}
+            </Button>
+          </div>
         </form>
       )}
 
       {sources.length === 0 && (
-        <p className="muted" style={{ fontSize: 13 }}>
+        <p className="text-[13px] text-muted-foreground">
           {configured ? 'No sources yet. Add a note or reference document above - it will be embedded in the background.' : 'No sources yet.'}
         </p>
       )}
 
       {sources.length > 0 && (
-        <ul className="kno-list">
+        <ul className="m-0 grid list-none gap-1.5 p-0">
           {sources.map((s) => (
-            <li key={s.id} className="kno-row">
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                <b style={{ fontSize: 13 }}>{s.name}</b>
+            <li key={s.id} className="rounded-lg border bg-muted/40 px-2.5 py-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <b className="text-[13px]">{s.name}</b>
                 {statusPill(s.status)}
-                {s.chunk_count > 0 && <span className="muted" style={{ fontSize: 12 }}>{s.chunk_count} chunk{s.chunk_count === 1 ? '' : 's'}</span>}
+                {s.chunk_count > 0 && (
+                  <span className="text-xs text-muted-foreground">
+                    {s.chunk_count} chunk{s.chunk_count === 1 ? '' : 's'}
+                  </span>
+                )}
               </div>
               {(s.url || s.source_type) && (
-                <div className="mono muted" style={{ fontSize: 12 }}>
+                <div className="font-mono text-xs text-muted-foreground">
                   {s.source_type}
                   {s.url ? ` · ${s.url}` : ''}
                 </div>
               )}
-              {s.error && <div className="kno-error">{s.error}</div>}
+              {s.error && <div className="mt-1 whitespace-pre-wrap text-xs text-destructive">{s.error}</div>}
               {canEdit && (
-                <div className="kno-actions">
+                <div className="mt-1.5 flex gap-1.5">
                   {(s.status === 'error' || s.status === 'pending') && (
-                    <button type="button" className="btn sm" onClick={() => void retrySource(s.id)}>
+                    <Button variant="outline" size="sm" onClick={() => void retrySource(s.id)}>
                       Retry
-                    </button>
+                    </Button>
                   )}
-                  <button type="button" className="btn sm danger" onClick={() => void removeSource(s.id, s.name)}>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="text-destructive"
+                    onClick={() => void removeSource(s.id, s.name)}
+                  >
                     Remove
-                  </button>
+                  </Button>
                 </div>
               )}
             </li>

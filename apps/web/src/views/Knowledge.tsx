@@ -10,6 +10,11 @@
 import { useState } from 'react';
 import { api } from '../lib/api';
 import { useAsync, num, useJobs, JobTable, Empty } from '../lib/ui';
+import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
+import { PageHeader } from '@/components/ui/page-header';
 
 interface Status {
   provider: { id: string; name: string; description: string } | null;
@@ -76,86 +81,116 @@ export function Knowledge({ projectId }: { projectId: string }) {
   const configured = status.data?.configured ?? false;
 
   return (
-    <div>
-      <h1>Knowledge Base</h1>
-      <p className="sub">
-        Semantic search over the content and data this project has collected (Qdrant, per-project isolated collection).
-      </p>
+    <div className="grid gap-5">
+      <PageHeader
+        title="Knowledge Base"
+        description="Semantic search over the content and data this project has collected (Qdrant, per-project isolated collection)."
+      />
 
-      {err && <div className="banner error">{err}</div>}
-      {notice && <div className="banner ok">{notice}</div>}
-
-      <div className="card mb">
-        <h2>Status</h2>
-        {status.loading ? (
-          <p className="muted">Loading…</p>
-        ) : status.data?.provider ? (
-          <>
-            <p>
-              Provider: <b>{status.data.provider.name}</b> · {configured ? <span className="pill ok">configured</span> : <span className="pill err">not configured</span>}
-            </p>
-            {!configured && (
-              <div className="banner">
-                Qdrant or the embedding key (EMBEDDINGS_API_KEY) is missing on the API server. Add them to run semantic search
-                and indexing.
-              </div>
-            )}
-            <p className="muted">{status.data.note}</p>
-            {configured && (
-              <button className="btn primary" disabled={enqueuing} onClick={() => void indexNow()}>
-                {enqueuing ? 'Queuing…' : 'Rebuild index (background job)'}
-              </button>
-            )}
-          </>
-        ) : (
-          <Empty>{status.data?.note ?? 'No knowledge provider.'}</Empty>
-        )}
-      </div>
-
-      {configured && (
-        <div className="card mb">
-          <h2>Search</h2>
-          <form
-            className="row"
-            onSubmit={(e) => {
-              e.preventDefault();
-              void search();
-            }}
-          >
-            <input type="text" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="What have we learned about…" style={{ flex: 1 }} />
-            <button className="btn primary" disabled={searching || !query.trim()}>
-              {searching ? 'Searching…' : 'Search'}
-            </button>
-          </form>
-          {results && (
-            <div>
-              {results.length === 0 && <Empty>No matches.</Empty>}
-              {results.map((h, i) => {
-                const p = h.payload ?? {};
-                return (
-                  <div key={String(h.id ?? i)} className="card" style={{ background: 'var(--panel-2)', marginBottom: 8 }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                      <b>{String(p.title ?? '(untitled)')}</b>
-                      <span className="pill">{h.score != null ? num(h.score).toFixed(3) : ''}</span>
-                    </div>
-                    <div className="mono muted" style={{ fontSize: 12, margin: '4px 0' }}>
-                      {String(p.url ?? p.source ?? p.kind ?? '')}
-                    </div>
-                    <p className="muted" style={{ margin: 0 }}>
-                      {String(p.text ?? p.excerpt ?? '').slice(0, 300)}
-                    </p>
-                  </div>
-                );
-              })}
-            </div>
-          )}
+      {err && (
+        <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+          {err}
         </div>
       )}
+      {notice && (
+        <div className="rounded-md border border-success/30 bg-success/5 px-3 py-2 text-sm text-success">{notice}</div>
+      )}
 
-      <div className="card">
-        <h2>Indexing jobs {busy && <span className="pill busy">running…</span>}</h2>
-        <JobTable jobs={jobs.filter((j) => j.job_type.startsWith('knowledge_'))} />
-      </div>
+      <Card>
+        <CardHeader>
+          <CardTitle>Status</CardTitle>
+        </CardHeader>
+        <CardContent className="grid gap-3">
+          {status.loading ? (
+            <p className="text-sm text-muted-foreground">Loading…</p>
+          ) : status.data?.provider ? (
+            <>
+              <p className="flex flex-wrap items-center gap-2 text-sm">
+                Provider: <b>{status.data.provider.name}</b>
+                {configured ? (
+                  <Badge variant="success">configured</Badge>
+                ) : (
+                  <Badge variant="destructive">not configured</Badge>
+                )}
+              </p>
+              {!configured && (
+                <div className="rounded-md border border-warning/30 bg-warning/5 px-3 py-2 text-sm text-warning">
+                  Qdrant or the embedding key (EMBEDDINGS_API_KEY) is missing on the API server. Add them to run semantic
+                  search and indexing.
+                </div>
+              )}
+              <p className="text-sm text-muted-foreground">{status.data.note}</p>
+              {configured && (
+                <div>
+                  <Button disabled={enqueuing} onClick={() => void indexNow()}>
+                    {enqueuing ? 'Queuing…' : 'Rebuild index (background job)'}
+                  </Button>
+                </div>
+              )}
+            </>
+          ) : (
+            <Empty>{status.data?.note ?? 'No knowledge provider.'}</Empty>
+          )}
+        </CardContent>
+      </Card>
+
+      {configured && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Search</CardTitle>
+          </CardHeader>
+          <CardContent className="grid gap-3">
+            <form
+              className="flex flex-wrap items-center gap-2"
+              onSubmit={(e) => {
+                e.preventDefault();
+                void search();
+              }}
+            >
+              <Input
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="What have we learned about…"
+                className="min-w-[240px] flex-1"
+              />
+              <Button type="submit" disabled={searching || !query.trim()}>
+                {searching ? 'Searching…' : 'Search'}
+              </Button>
+            </form>
+            {results && (
+              <div className="grid gap-2">
+                {results.length === 0 && <Empty>No matches.</Empty>}
+                {results.map((h, i) => {
+                  const p = h.payload ?? {};
+                  return (
+                    <div key={String(h.id ?? i)} className="rounded-lg border bg-muted/50 p-3">
+                      <div className="flex items-start justify-between gap-3">
+                        <span className="font-medium">{String(p.title ?? '(untitled)')}</span>
+                        <Badge variant="outline">{h.score != null ? num(h.score).toFixed(3) : ''}</Badge>
+                      </div>
+                      <div className="my-1 font-mono text-xs text-muted-foreground">
+                        {String(p.url ?? p.source ?? p.kind ?? '')}
+                      </div>
+                      <p className="text-sm text-muted-foreground">{String(p.text ?? p.excerpt ?? '').slice(0, 300)}</p>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            Indexing jobs {busy ? <Badge variant="warning">running…</Badge> : null}
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <JobTable jobs={jobs.filter((j) => j.job_type.startsWith('knowledge_'))} />
+        </CardContent>
+      </Card>
     </div>
   );
 }

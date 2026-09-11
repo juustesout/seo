@@ -51,6 +51,10 @@ import type {
   WriterMagicTone,
 } from '@seo/contracts';
 import { ApiRequestError, api } from '../../lib/api';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { cn } from '@/lib/utils';
 
 /** Canonical Section Magic actions surfaced in the picker, mirroring the API
  *  vocabulary. change_tone requires a tone; custom requires an instruction;
@@ -66,7 +70,8 @@ const MAGIC_ACTIONS: Array<{ value: WriterMagicAction; label: string }> = [
   { value: 'custom', label: 'Custom' },
 ];
 
-const MAGIC_TONES: Array<{ value: WriterMagicTone; label: string }> = [  { value: 'professional', label: 'Professional' },
+const MAGIC_TONES: Array<{ value: WriterMagicTone; label: string }> = [
+  { value: 'professional', label: 'Professional' },
   { value: 'friendly', label: 'Friendly' },
   { value: 'authoritative', label: 'Authoritative' },
   { value: 'conversational', label: 'Conversational' },
@@ -120,6 +125,29 @@ const TERMINAL: ReadonlySet<WriterRunStatus> = new Set(['completed', 'rejected',
 /** In-progress statuses that keep the panel polling for a resting state. */
 const PROGRESS: ReadonlySet<WriterRunStatus> = new Set(['writing', 'revising', 'reviewing']);
 
+const SELECT_CLASS =
+  'h-9 rounded-md border border-input bg-background px-3 text-sm shadow-xs outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-50';
+
+const CHECKBOX_CLASS = 'size-4 accent-primary';
+
+type PillVariant = 'default' | 'secondary' | 'destructive' | 'success' | 'warning' | 'outline';
+
+/** Map the panel's honest status vocabulary (ok/err/busy/neutral) to a Badge
+ *  variant. Anything unrecognized stays neutral so a status the UI has never
+ *  classified is never painted as success. */
+function pillVariant(cls: string): PillVariant {
+  switch (cls) {
+    case 'ok':
+      return 'success';
+    case 'err':
+      return 'destructive';
+    case 'busy':
+      return 'warning';
+    default:
+      return 'outline';
+  }
+}
+
 /**
  * Local bookmark of the run belonging to this project+content, so a browser
  * refresh reloads the SAME run instead of silently starting a new one. It is
@@ -161,6 +189,60 @@ function sortedSectionIds(sectionIds: string[]): string[] {
     const bi = Number(/^section_(\d+)$/.exec(b)?.[1]);
     return ai - bi;
   });
+}
+
+/** Root card that frames every writer surface, matching the AI-panel accent. */
+function WriterShell({ children }: { children: React.ReactNode }) {
+  return (
+    <div
+      data-testid="writer-panel"
+      className="my-3 flex flex-col rounded-[10px] border border-l-[3px] border-l-primary bg-card p-3.5 text-card-foreground"
+    >
+      {children}
+    </div>
+  );
+}
+
+/** Inset notice used for the honest error / success / neutral banners. */
+function Banner({
+  tone = 'info',
+  className,
+  children,
+}: {
+  tone?: 'info' | 'error' | 'success';
+  className?: string;
+  children: React.ReactNode;
+}) {
+  const tones = {
+    info: 'border-l-warning text-muted-foreground',
+    error: 'border-l-destructive text-destructive',
+    success: 'border-l-success text-foreground',
+  } as const;
+  return (
+    <div className={cn('rounded-md border border-l-[3px] bg-card px-3.5 py-2.5', tones[tone], className)}>
+      {children}
+    </div>
+  );
+}
+
+/** Shared proposal header: a badge, an honest description and an optional
+ *  action pinned to the end of the row. */
+function ProposalHead({
+  label,
+  description,
+  action,
+}: {
+  label: string;
+  description: React.ReactNode;
+  action?: React.ReactNode;
+}) {
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <Badge variant="warning">{label}</Badge>
+      <span className="text-xs text-muted-foreground">{description}</span>
+      {action ? <span className="ml-auto">{action}</span> : null}
+    </div>
+  );
 }
 
 interface WriterPanelProps {
@@ -479,45 +561,43 @@ export function WriterPanel({ projectId, contentId, defaultTopic, defaultKeyword
 
   if (!run && restoring) {
     return (
-      <div className="writer-panel">
-        <div className="ai-panel-head">
+      <WriterShell>
+        <div className="flex flex-wrap items-center justify-between gap-2">
           <strong>Writer</strong>
-          <span className="muted" style={{ fontSize: 12 }}>
-            Restoring the writer run for this article…
-          </span>
+          <span className="text-xs text-muted-foreground">Restoring the writer run for this article…</span>
         </div>
-      </div>
+      </WriterShell>
     );
   }
 
   if (!run) {
     return (
-      <div className="writer-panel">
-        <div className="ai-panel-head">
+      <WriterShell>
+        <div className="flex flex-wrap items-center justify-between gap-2">
           <strong>Writer</strong>
-          <span className="muted" style={{ fontSize: 12 }}>
+          <span className="text-xs text-muted-foreground">
             Drafts an article from this project's context, then waits for your approval.
           </span>
         </div>
-        <p className="sub">
+        <p className="mb-4 mt-2 text-[13px] text-muted-foreground">
           Leave the instruction empty to use this article's title as the topic. The result is a review-ready draft for
           this document - it is never saved or published automatically.
         </p>
-        <div className="row" style={{ marginTop: 8 }}>
-          <input
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          <Input
+            className="min-w-[320px] flex-1"
             type="text"
             placeholder={`Instruction (optional) — e.g. write about ${defaultTopic || 'this topic'}`}
             value={instruction}
             onChange={(e) => setInstruction(e.target.value)}
-            style={{ minWidth: 420 }}
             disabled={startBusy}
           />
-          <button className="btn primary" disabled={startBusy} onClick={() => void start()}>
+          <Button disabled={startBusy} onClick={() => void start()}>
             {startBusy ? 'Planning…' : 'Start writer run'}
-          </button>
+          </Button>
         </div>
-        {error && <div className="banner error" style={{ marginTop: 8 }}>{error}</div>}
-      </div>
+        {error && <Banner tone="error" className="mt-2">{error}</Banner>}
+      </WriterShell>
     );
   }
 
@@ -526,23 +606,21 @@ export function WriterPanel({ projectId, contentId, defaultTopic, defaultKeyword
   const agentBusyState = actionBusy || researchBusy || agentRunning;
 
   return (
-    <div className="writer-panel">
-      <div className="ai-panel-head">
+    <WriterShell>
+      <div className="flex flex-wrap items-center gap-2">
         <strong>Writer</strong>
-        <span className={`pill ${statusClass(status)}`}>{status}</span>
-        <span className="muted mono" style={{ fontSize: 12 }}>
-          {run.runId}
-        </span>
+        <Badge variant={pillVariant(statusClass(status))}>{status}</Badge>
+        <span className="ml-auto font-mono text-xs text-muted-foreground">{run.runId}</span>
       </div>
 
-      {error && <div className="banner error" style={{ marginTop: 8 }}>{error}</div>}
+      {error && <Banner tone="error" className="mt-2">{error}</Banner>}
       {fatal && (
-        <div className="banner error" style={{ marginTop: 8 }}>
+        <Banner tone="error" className="mt-2">
           {fatal}
-          <button className="btn sm" style={{ marginLeft: 10 }} onClick={reset}>
+          <Button variant="outline" size="sm" className="ml-2.5" onClick={reset}>
             Start a new run
-          </button>
-        </div>
+          </Button>
+        </Banner>
       )}
 
       {status === 'awaiting_approval' && plan && (
@@ -550,14 +628,14 @@ export function WriterPanel({ projectId, contentId, defaultTopic, defaultKeyword
       )}
 
       {status === 'writing' && (
-        <p className="muted" style={{ marginTop: 8 }}>
+        <p className="mt-2 text-sm text-muted-foreground">
           Writer is writing… the approved sections are being written and reviewed. This article is not saved until you
           decide what to do with the result.
         </p>
       )}
 
       {status === 'revising' && (
-        <p className="muted" style={{ marginTop: 8 }}>
+        <p className="mt-2 text-sm text-muted-foreground">
           {run.magicAction
             ? `Writer is applying ${magicActionLabel(run.magicAction)} to the selected section(s)… the result will be a fresh review-ready proposal and is never accepted or published automatically.`
             : 'Writer is revising the selected sections… this article is not saved until you decide what to do with the result.'}
@@ -565,7 +643,7 @@ export function WriterPanel({ projectId, contentId, defaultTopic, defaultKeyword
       )}
 
       {status === 'reviewing' && (
-        <p className="muted" style={{ marginTop: 8 }}>
+        <p className="mt-2 text-sm text-muted-foreground">
           Writer is re-reviewing the revised draft…
         </p>
       )}
@@ -628,23 +706,23 @@ export function WriterPanel({ projectId, contentId, defaultTopic, defaultKeyword
       )}
 
       {status === 'rejected' && (
-        <div className="banner" style={{ marginTop: 8 }}>
+        <Banner className="mt-2">
           The proposed plan was rejected{note ? ` — ${note}` : ''}. Nothing was written.
-          <button className="btn sm" style={{ marginLeft: 10 }} onClick={reset}>
+          <Button variant="outline" size="sm" className="ml-2.5" onClick={reset}>
             Start a new run
-          </button>
-        </div>
+          </Button>
+        </Banner>
       )}
 
       {status === 'failed' && (
-        <div className="banner error" style={{ marginTop: 8 }}>
+        <Banner tone="error" className="mt-2">
           {note ?? 'The writer run failed.'}
-          <button className="btn sm" style={{ marginLeft: 10 }} onClick={reset}>
+          <Button variant="outline" size="sm" className="ml-2.5" onClick={reset}>
             Start a new run
-          </button>
-        </div>
+          </Button>
+        </Banner>
       )}
-    </div>
+    </WriterShell>
   );
 }
 
@@ -666,49 +744,49 @@ function PlanReview({
   onReject: () => void;
 }) {
   return (
-    <div style={{ marginTop: 10 }}>
-      <div className="writer-proposal">
-        <span className="pill busy">AI-generated proposal</span>
-        <span className="muted" style={{ fontSize: 12 }}>
-          Review the proposed outline below - the article is only written after you approve it.
-        </span>
-      </div>
-      <h2 style={{ margin: '10px 0 4px' }}>{plan.title}</h2>
-      {plan.metaDescription && <p className="sub">{plan.metaDescription}</p>}
+    <div className="mt-2.5">
+      <ProposalHead
+        label="AI-generated proposal"
+        description="Review the proposed outline below - the article is only written after you approve it."
+      />
+      <h2 className="mb-1 mt-2.5 text-[15px] font-semibold">{plan.title}</h2>
+      {plan.metaDescription && <p className="mb-4 text-[13px] text-muted-foreground">{plan.metaDescription}</p>}
       {plan.sections.map((s, i) => (
-        <div key={i} className="writer-section">
-          <h3>{i + 1}. {s.heading}</h3>
+        <div key={i} className="mt-2 border-t pt-2">
+          <h3 className="mb-1 text-sm font-semibold">
+            {i + 1}. {s.heading}
+          </h3>
           {s.keyPoints.length > 0 && (
-            <ul className="sub">
+            <ul className="my-1 list-disc pl-5 text-[13px] text-muted-foreground">
               {s.keyPoints.map((k, j) => (
                 <li key={j}>{k}</li>
               ))}
             </ul>
           )}
           {s.suggestedKeywords.length > 0 && (
-            <p className="muted" style={{ fontSize: 12 }}>
+            <p className="text-xs text-muted-foreground">
               Suggested keywords: {s.suggestedKeywords.join(', ')}
             </p>
           )}
         </div>
       ))}
-      <div className="row" style={{ marginTop: 12, alignItems: 'center', flexWrap: 'wrap' }}>
-        <button className="btn primary" disabled={busy} onClick={onApprove}>
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <Button disabled={busy} onClick={onApprove}>
           Approve &amp; Write
-        </button>
-        <button className="btn danger" disabled={busy} onClick={onReject}>
+        </Button>
+        <Button variant="outline" className="text-destructive" disabled={busy} onClick={onReject}>
           Reject
-        </button>
-        <input
+        </Button>
+        <Input
+          className="min-w-[240px] flex-1"
           type="text"
           placeholder="Optional reason for rejection…"
           value={rejectReason}
           onChange={(e) => onReasonChange(e.target.value)}
           disabled={busy}
-          style={{ minWidth: 280 }}
         />
       </div>
-      {busy && <p className="muted" style={{ marginTop: 8 }}>Submitting your decision…</p>}
+      {busy && <p className="mt-2 text-sm text-muted-foreground">Submitting your decision…</p>}
     </div>
   );
 }
@@ -726,25 +804,25 @@ function ReviewResult({
 }) {
   const passed = review.seo.checks.filter((c) => c.status === 'pass').length;
   return (
-    <div style={{ marginTop: 10 }}>
-      <div className="banner ok">
+    <div className="mt-2.5">
+      <Banner tone="success">
         The writer produced a review-ready draft. It is previewed below and was NOT saved to this document or published
         anywhere.
-      </div>
-      <div className="row" style={{ alignItems: 'center', gap: 12, margin: '10px 0' }}>
-        <h2 style={{ margin: 0 }}>{planTitle}</h2>
-        <span className="pill ok">SEO {Math.round(review.seo.score)}/100</span>
+      </Banner>
+      <div className="my-2.5 flex flex-wrap items-center gap-3">
+        <h2 className="m-0 text-[15px] font-semibold">{planTitle}</h2>
+        <Badge variant="success">SEO {Math.round(review.seo.score)}/100</Badge>
         {typeof revisionCount === 'number' && revisionCount > 0 && (
-          <span className="pill">Revision {revisionCount}</span>
+          <Badge variant="outline">Revision {revisionCount}</Badge>
         )}
-        <span className="muted" style={{ fontSize: 12 }}>
+        <span className="text-xs text-muted-foreground">
           Deterministic evaluation — {passed} of {review.seo.checks.length} checks passing.
         </span>
       </div>
-      <div className="card">
+      <div className="rounded-lg border bg-card p-4">
         <div className="article-body" dangerouslySetInnerHTML={{ __html: review.contentHtml }} />
       </div>
-      <p className="muted" style={{ fontSize: 12 }}>
+      <p className="text-xs text-muted-foreground">
         To use this draft in the editor you would explicitly apply it as content - this panel does not do that for you.
       </p>
     </div>
@@ -767,35 +845,34 @@ function ResearchControls({
 }) {
   const itemCount = evidence ? evidence.sources.reduce((sum, s) => sum + s.items.length, 0) : 0;
   return (
-    <div className="writer-research" style={{ marginTop: 14 }}>
-      <div className="writer-proposal">
-        <span className="pill busy">Research context</span>
-        <span className="muted" style={{ fontSize: 12 }}>
-          Reference material gathered from this project for the draft - it is not verified facts, it is never applied
-          automatically, and it is offered to later revisions only as untrusted context.
-        </span>
-      </div>
-      {busy && <p className="muted" style={{ marginTop: 8 }}>Gathering evidence…</p>}
+    <div className="mt-3.5 flex flex-col">
+      <ProposalHead
+        label="Research context"
+        description="Reference material gathered from this project for the draft - it is not verified facts, it is never applied automatically, and it is offered to later revisions only as untrusted context."
+      />
+      {busy && <p className="mt-2 text-sm text-muted-foreground">Gathering evidence…</p>}
       {!busy && !evidence && (
-        <div className="row" style={{ marginTop: 8, alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
-          <p className="muted" style={{ margin: 0, flex: 1 }}>
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          <p className="m-0 flex-1 text-sm text-muted-foreground">
             No research context has been gathered for this draft yet.
           </p>
-          <button className="btn" onClick={onGather} disabled={busy}>
+          <Button variant="outline" onClick={onGather} disabled={busy}>
             Gather evidence
-          </button>
+          </Button>
         </div>
       )}
       {!busy && evidence && (
-        <div style={{ marginTop: 8 }}>
-          <div className="row" style={{ alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
-            <span className="pill ok">{itemCount} item{itemCount === 1 ? '' : 's'}</span>
-            <span className="muted" style={{ fontSize: 12 }}>
+        <div className="mt-2">
+          <div className="flex flex-wrap items-center gap-2.5">
+            <Badge variant="success">
+              {itemCount} item{itemCount === 1 ? '' : 's'}
+            </Badge>
+            <span className="text-xs text-muted-foreground">
               Gathered {evidence.gatheredAt ? new Date(evidence.gatheredAt).toLocaleString() : ''}
             </span>
-            <button className="btn sm" onClick={onGather} disabled={busy}>
+            <Button variant="outline" size="sm" onClick={onGather} disabled={busy}>
               Gather again
-            </button>
+            </Button>
           </div>
           {evidence.sources.map((source) => (
             <ResearchSourceSection key={source.source} source={source.source} status={source.status} note={source.note} items={source.items} />
@@ -824,41 +901,41 @@ function ResearchSourceSection({
     intelligence: 'Intelligence',
   };
   return (
-    <div className="writer-section" style={{ marginTop: 8 }}>
-      <div className="row" style={{ alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-        <strong style={{ fontSize: 13 }}>{label[source]}</strong>
-        <span className={`pill ${statusClassFromEvidence(status)}`}>{status}</span>
+    <div className="mt-2 border-t pt-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <strong className="text-[13px]">{label[source]}</strong>
+        <Badge variant={pillVariant(statusClassFromEvidence(status))}>{status}</Badge>
       </div>
       {note && (
-        <p className="muted" style={{ fontSize: 12, margin: '2px 0' }}>
+        <p className="my-0.5 text-xs text-muted-foreground">
           {note}
         </p>
       )}
       {items.length === 0 && status !== 'available' && (
-        <p className="muted" style={{ fontSize: 12, margin: '4px 0' }}>
+        <p className="my-1 text-xs text-muted-foreground">
           No items gathered from this source.
         </p>
       )}
       {items.map((item) => (
-        <div key={item.id} style={{ margin: '6px 0' }}>
-          <div className="row" style={{ alignItems: 'baseline', gap: 6, flexWrap: 'wrap' }}>
-            {item.title ? <strong style={{ fontSize: 13 }}>{item.title}</strong> : null}
+        <div key={item.id} className="my-1.5">
+          <div className="flex flex-wrap items-baseline gap-1.5">
+            {item.title ? <strong className="text-[13px]">{item.title}</strong> : null}
             {item.url ? (
-              <a className="muted" style={{ fontSize: 12 }} href={item.url} target="_blank" rel="noreferrer">
+              <a className="text-xs text-muted-foreground" href={item.url} target="_blank" rel="noreferrer">
                 source
               </a>
             ) : null}
             {item.source === 'intelligence' && item.metadata ? (
-              <span className="muted mono" style={{ fontSize: 12 }}>
+              <span className="font-mono text-xs text-muted-foreground">
                 {typeof item.metadata.volume === 'number' ? `vol ${item.metadata.volume}` : ''}
                 {typeof item.metadata.difficulty === 'number' ? ` diff ${item.metadata.difficulty}` : ''}
                 {typeof item.metadata.cpc === 'number' ? ` cpc ${item.metadata.cpc}` : ''}
               </span>
             ) : null}
           </div>
-          {item.text ? <p className="sub" style={{ margin: '2px 0' }}>{item.text}</p> : null}
+          {item.text ? <p className="my-0.5 text-[13px] text-muted-foreground">{item.text}</p> : null}
           {!item.text && item.source !== 'intelligence' && (
-            <p className="muted" style={{ fontSize: 12, margin: '2px 0' }}>
+            <p className="my-0.5 text-xs text-muted-foreground">
               Untrusted reference item — see its source above.
             </p>
           )}
@@ -914,117 +991,124 @@ function IntelligenceControls({
   const findingCount = intelligence ? intelligence.findings.length : 0;
   const [open, setOpen] = useState(false);
   return (
-    <div className="writer-intelligence" style={{ marginTop: 14 }}>
-      <div className="writer-proposal">
-        <span className="pill busy">Intelligence</span>
-        <span className="muted" style={{ fontSize: 12 }}>
-          Combined signals from this project's own sources. They are not verified facts, they are never applied
-          automatically, and later revisions may use them only as untrusted reference material.
-        </span>
-        <button className="btn sm" style={{ marginLeft: 'auto' }} onClick={() => setOpen((v) => !v)}>
-          {open ? 'Hide intelligence' : intelligence ? `Intelligence (${findingCount})` : 'Deep research'}
-        </button>
-      </div>
+    <div className="mt-3.5 flex flex-col">
+      <ProposalHead
+        label="Intelligence"
+        description="Combined signals from this project's own sources. They are not verified facts, they are never applied automatically, and later revisions may use them only as untrusted reference material."
+        action={
+          <Button variant="outline" size="sm" onClick={() => setOpen((v) => !v)}>
+            {open ? 'Hide intelligence' : intelligence ? `Intelligence (${findingCount})` : 'Deep research'}
+          </Button>
+        }
+      />
 
       {open && (
         <>
-      <div className="row" style={{ marginTop: 8, alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
-        <select
-          value={purpose}
-          onChange={(e) => onPurposeChange(e.target.value)}
-          disabled={busy}
-          aria-label="Intelligence purpose"
-        >
-          {INTELLIGENCE_PURPOSES.map((p) => (
-            <option key={p.value} value={p.value}>
-              {p.label}
-            </option>
-          ))}
-        </select>
-        <input
-          type="text"
-          value={focus}
-          placeholder="Focus (optional)"
-          onChange={(e) => onFocusChange(e.target.value)}
-          disabled={busy}
-          style={{ minWidth: 220 }}
-        />
-        <button className="btn" onClick={onGather} disabled={busy}>
-          {busy ? 'Gathering intelligence…' : intelligence ? 'Gather again' : 'Gather intelligence'}
-        </button>
-      </div>
-
-      {sections.length > 0 && (
-        <div className="row" style={{ marginTop: 6, flexWrap: 'wrap', gap: 8 }}>
-          <span className="muted" style={{ fontSize: 12 }}>
-            Focus sections (optional):
-          </span>
-          {sections.map((section, index) => {
-            const sectionId = `section_${index}`;
-            const active = selected.includes(sectionId);
-            return (
-              <label key={sectionId} className="muted" style={{ fontSize: 12, display: 'flex', gap: 4, alignItems: 'center' }}>
-                <input
-                  type="checkbox"
-                  checked={active}
-                  disabled={busy}
-                  onChange={() => onToggleSection(sectionId)}
-                />
-                {section.heading}
-              </label>
-            );
-          })}
-        </div>
-      )}
-
-      {busy && (
-        <p className="muted" style={{ marginTop: 8 }}>
-          Gathering intelligence…
-        </p>
-      )}
-
-      {!busy && !intelligence && (
-        <p className="muted" style={{ marginTop: 8 }}>
-          No combined intelligence has been gathered for this draft yet.
-        </p>
-      )}
-
-      {!busy && intelligence && (
-        <div style={{ marginTop: 8 }}>
-          <div className="row" style={{ alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
-            <span className={`pill ${statusClassFromEvidence(intelligence.status === 'available' || intelligence.status === 'partial' ? 'available' : intelligence.status === 'unavailable' ? 'unavailable' : 'empty')}`}>
-              {intelligence.status}
-            </span>
-            <span className="pill ok">
-              {findingCount} finding{findingCount === 1 ? '' : 's'}
-            </span>
-            <span className="muted" style={{ fontSize: 12 }}>
-              Gathered {intelligence.gatheredAt ? new Date(intelligence.gatheredAt).toLocaleString() : ''}
-            </span>
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <select
+              className={SELECT_CLASS}
+              value={purpose}
+              onChange={(e) => onPurposeChange(e.target.value)}
+              disabled={busy}
+              aria-label="Intelligence purpose"
+            >
+              {INTELLIGENCE_PURPOSES.map((p) => (
+                <option key={p.value} value={p.value}>
+                  {p.label}
+                </option>
+              ))}
+            </select>
+            <Input
+              className="min-w-[200px] flex-1"
+              type="text"
+              value={focus}
+              placeholder="Focus (optional)"
+              onChange={(e) => onFocusChange(e.target.value)}
+              disabled={busy}
+            />
+            <Button variant="outline" onClick={onGather} disabled={busy}>
+              {busy ? 'Gathering intelligence…' : intelligence ? 'Gather again' : 'Gather intelligence'}
+            </Button>
           </div>
-          {intelligence.note && (
-            <p className="muted" style={{ fontSize: 12 }}>
-              {intelligence.note}
+
+          {sections.length > 0 && (
+            <div className="mt-1.5 flex flex-wrap items-center gap-2">
+              <span className="text-xs text-muted-foreground">
+                Focus sections (optional):
+              </span>
+              {sections.map((section, index) => {
+                const sectionId = `section_${index}`;
+                const active = selected.includes(sectionId);
+                return (
+                  <label key={sectionId} className="flex items-center gap-1 text-xs text-muted-foreground">
+                    <input
+                      type="checkbox"
+                      className={CHECKBOX_CLASS}
+                      checked={active}
+                      disabled={busy}
+                      onChange={() => onToggleSection(sectionId)}
+                    />
+                    {section.heading}
+                  </label>
+                );
+              })}
+            </div>
+          )}
+
+          {busy && (
+            <p className="mt-2 text-sm text-muted-foreground">
+              Gathering intelligence…
             </p>
           )}
-          {intelligence.sources.map((source) => (
-            <IntelligenceSourceSection key={source.source} source={source.source} status={source.status} note={source.note} findingCount={source.findingCount} />
-          ))}
-          {intelligence.findings.map((finding) => (
-            <div key={finding.id} className="writer-section" style={{ marginTop: 8 }}>
-              <div className="row" style={{ alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                <span className="pill">{finding.type}</span>
-                <span className="muted" style={{ fontSize: 12 }}>
-                  untrusted reference
+
+          {!busy && !intelligence && (
+            <p className="mt-2 text-sm text-muted-foreground">
+              No combined intelligence has been gathered for this draft yet.
+            </p>
+          )}
+
+          {!busy && intelligence && (
+            <div className="mt-2">
+              <div className="flex flex-wrap items-center gap-2.5">
+                <Badge
+                  variant={pillVariant(
+                    statusClassFromEvidence(
+                      intelligence.status === 'available' || intelligence.status === 'partial' ? 'available' : intelligence.status === 'unavailable' ? 'unavailable' : 'empty',
+                    ),
+                  )}
+                >
+                  {intelligence.status}
+                </Badge>
+                <Badge variant="success">
+                  {findingCount} finding{findingCount === 1 ? '' : 's'}
+                </Badge>
+                <span className="text-xs text-muted-foreground">
+                  Gathered {intelligence.gatheredAt ? new Date(intelligence.gatheredAt).toLocaleString() : ''}
                 </span>
               </div>
-              <p className="sub" style={{ margin: '4px 0' }}>
-                {finding.summary}
-              </p>
+              {intelligence.note && (
+                <p className="text-xs text-muted-foreground">
+                  {intelligence.note}
+                </p>
+              )}
+              {intelligence.sources.map((source) => (
+                <IntelligenceSourceSection key={source.source} source={source.source} status={source.status} note={source.note} findingCount={source.findingCount} />
+              ))}
+              {intelligence.findings.map((finding) => (
+                <div key={finding.id} className="mt-2 border-t pt-2">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Badge variant="outline">{finding.type}</Badge>
+                    <span className="text-xs text-muted-foreground">
+                      untrusted reference
+                    </span>
+                  </div>
+                  <p className="my-1 text-[13px] text-muted-foreground">
+                    {finding.summary}
+                  </p>
+                </div>
+              ))}
             </div>
-          ))}
-        </div>
-      )}
+          )}
         </>
       )}
     </div>
@@ -1050,21 +1134,21 @@ function IntelligenceSourceSection({
     content_intelligence: 'Content intelligence',
   };
   return (
-    <div className="writer-section" style={{ marginTop: 8 }}>
-      <div className="row" style={{ alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-        <strong style={{ fontSize: 13 }}>{label[source]}</strong>
-        <span className={`pill ${statusClassFromEvidence(status)}`}>{status}</span>
-        <span className="muted" style={{ fontSize: 12 }}>
+    <div className="mt-2 border-t pt-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <strong className="text-[13px]">{label[source]}</strong>
+        <Badge variant={pillVariant(statusClassFromEvidence(status))}>{status}</Badge>
+        <span className="text-xs text-muted-foreground">
           {findingCount} finding{findingCount === 1 ? '' : 's'}
         </span>
       </div>
       {note && (
-        <p className="muted" style={{ fontSize: 12, margin: '2px 0' }}>
+        <p className="my-0.5 text-xs text-muted-foreground">
           {note}
         </p>
       )}
       {findingCount === 0 && status !== 'available' && (
-        <p className="muted" style={{ fontSize: 12, margin: '4px 0' }}>
+        <p className="my-1 text-xs text-muted-foreground">
           No findings gathered from this source.
         </p>
       )}
@@ -1113,23 +1197,22 @@ function AgentControls({
           ? 'busy'
           : '';
   return (
-    <div className="writer-agent" style={{ marginTop: 14 }}>
-      <div className="writer-proposal">
-        <span className="pill busy">Advanced Agent</span>
-        <span className="muted" style={{ fontSize: 12 }}>
-          A bounded coordinator that only chooses from a fixed allowlist (research, intelligence, Section Magic,
-          revision, review, finish). It never adds tools, never bypasses the step/action limits and never applies or
-          publishes the article.
-        </span>
-        <button className="btn sm" style={{ marginLeft: 'auto' }} onClick={() => setOpen((v) => !v)}>
-          {open ? 'Hide agent' : agent ? `Agent (${statusLabel})` : 'Start agent'}
-        </button>
-      </div>
+    <div className="mt-3.5 flex flex-col">
+      <ProposalHead
+        label="Advanced Agent"
+        description="A bounded coordinator that only chooses from a fixed allowlist (research, intelligence, Section Magic, revision, review, finish). It never adds tools, never bypasses the step/action limits and never applies or publishes the article."
+        action={
+          <Button variant="outline" size="sm" onClick={() => setOpen((v) => !v)}>
+            {open ? 'Hide agent' : agent ? `Agent (${statusLabel})` : 'Start agent'}
+          </Button>
+        }
+      />
 
       {open && (
         <>
-          <div className="row" style={{ marginTop: 8, alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+          <div className="mt-2 flex flex-wrap items-center gap-2">
             <select
+              className={SELECT_CLASS}
               value={goal}
               onChange={(e) => onGoalChange(e.target.value as WriterAgentGoal)}
               disabled={busy}
@@ -1141,32 +1224,33 @@ function AgentControls({
                 </option>
               ))}
             </select>
-            <input
+            <Input
+              className="min-w-[220px] flex-1"
               type="text"
               value={instruction}
               placeholder="Instruction (optional)"
               onChange={(e) => onInstructionChange(e.target.value)}
               disabled={busy}
               maxLength={500}
-              style={{ minWidth: 260 }}
             />
-            <button className="btn" onClick={onStart} disabled={busy || running}>
+            <Button variant="outline" onClick={onStart} disabled={busy || running}>
               {running ? 'Agent working…' : agent ? 'Run agent again' : 'Start agent'}
-            </button>
+            </Button>
           </div>
 
           {sections.length > 0 && (
-            <div className="row" style={{ marginTop: 6, flexWrap: 'wrap', gap: 8 }}>
-              <span className="muted" style={{ fontSize: 12 }}>
+            <div className="mt-1.5 flex flex-wrap items-center gap-2">
+              <span className="text-xs text-muted-foreground">
                 Focus sections (optional):
               </span>
               {sections.map((section, index) => {
                 const sectionId = `section_${index}`;
                 const active = selected.includes(sectionId);
                 return (
-                  <label key={sectionId} className="muted" style={{ fontSize: 12, display: 'flex', gap: 4, alignItems: 'center' }}>
+                  <label key={sectionId} className="flex items-center gap-1 text-xs text-muted-foreground">
                     <input
                       type="checkbox"
+                      className={CHECKBOX_CLASS}
                       checked={active}
                       disabled={busy}
                       onChange={() => onToggleSection(sectionId)}
@@ -1179,61 +1263,59 @@ function AgentControls({
           )}
 
           {running && (
-            <p className="muted" style={{ marginTop: 8 }}>
+            <p className="mt-2 text-sm text-muted-foreground">
               The agent is choosing bounded actions… it stops on its own within the step and action limits.
             </p>
           )}
 
           {!agent && (
-            <p className="muted" style={{ marginTop: 8 }}>
+            <p className="mt-2 text-sm text-muted-foreground">
               No advanced agent run has been started for this draft yet. Starting one runs only allowlisted actions on
               this run; nothing is ever applied or published automatically.
             </p>
           )}
 
           {agent && (
-            <div style={{ marginTop: 8 }}>
-              <div className="row" style={{ alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
-                <span className={`pill ${statusPill}`}>{statusLabel}</span>
-                <span className="pill">{agentGoalLabel(agent.goal)}</span>
-                <span className="muted" style={{ fontSize: 12 }}>
+            <div className="mt-2">
+              <div className="flex flex-wrap items-center gap-2.5">
+                <Badge variant={pillVariant(statusPill)}>{statusLabel}</Badge>
+                <Badge variant="outline">{agentGoalLabel(agent.goal)}</Badge>
+                <span className="text-xs text-muted-foreground">
                   step {agent.stepCount}/{agent.maxSteps}
                 </span>
                 {agent.startedAt && (
-                  <span className="muted" style={{ fontSize: 12 }}>
+                  <span className="text-xs text-muted-foreground">
                     Started {new Date(agent.startedAt).toLocaleString()}
                   </span>
                 )}
                 {agent.finishedAt && (
-                  <span className="muted" style={{ fontSize: 12 }}>
+                  <span className="text-xs text-muted-foreground">
                     Finished {new Date(agent.finishedAt).toLocaleString()}
                   </span>
                 )}
               </div>
               {agent.note && (
-                <p className="muted" style={{ fontSize: 12 }}>
+                <p className="text-xs text-muted-foreground">
                   {agent.note}
                 </p>
               )}
               {agent.steps.length > 0 && (
-                <div style={{ marginTop: 6 }}>
+                <div className="mt-1.5">
                   {agent.steps.map((step) => (
-                    <div key={step.index} className="writer-section" style={{ marginTop: 6 }}>
-                      <div className="row" style={{ alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                        <span className="pill">{AGENT_ACTION_LABELS[step.action]}</span>
-                        <span
-                          className={`pill ${
-                            step.status === 'failed' ? 'error' : step.status === 'completed' ? 'ok' : 'busy'
-                          }`}
+                    <div key={step.index} className="mt-1.5 border-t pt-2">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Badge variant="outline">{AGENT_ACTION_LABELS[step.action]}</Badge>
+                        <Badge
+                          variant={step.status === 'failed' ? 'destructive' : step.status === 'completed' ? 'success' : 'warning'}
                         >
                           {step.status}
-                        </span>
-                        <span className="muted" style={{ fontSize: 12 }}>
+                        </Badge>
+                        <span className="text-xs text-muted-foreground">
                           Step {step.index + 1}
                         </span>
                       </div>
                       {step.summary && (
-                        <p className="sub" style={{ margin: '4px 0' }}>
+                        <p className="my-1 text-[13px] text-muted-foreground">
                           {step.summary}
                         </p>
                       )}
@@ -1270,27 +1352,25 @@ function ReviewSessionControls({
 }) {
   const canRevise = selected.length > 0 && instruction.trim().length > 0 && !busy;
   return (
-    <div className="writer-revision" style={{ marginTop: 14 }}>
-      <div className="writer-proposal">
-        <span className="pill busy">Review session</span>
-        <span className="muted" style={{ fontSize: 12 }}>
-          Not happy yet? Select exactly the sections to rewrite and tell the writer what to change. The approved outline
-          stays fixed and untouched sections are kept as they are.
-        </span>
-      </div>
-      <div style={{ marginTop: 8 }}>
+    <div className="mt-3.5 flex flex-col">
+      <ProposalHead
+        label="Review session"
+        description="Not happy yet? Select exactly the sections to rewrite and tell the writer what to change. The approved outline stays fixed and untouched sections are kept as they are."
+      />
+      <div className="mt-2">
         {sections.map((s, i) => {
           const sectionId = s.sectionId ?? `section_${i}`;
           const checked = selected.includes(sectionId);
           return (
-            <label key={sectionId} className="row" style={{ alignItems: 'center', gap: 8, margin: '4px 0' }}>
+            <label key={sectionId} className="my-1 flex flex-wrap items-center gap-2">
               <input
                 type="checkbox"
+                className={CHECKBOX_CLASS}
                 checked={checked}
                 disabled={busy}
                 onChange={() => onToggle(sectionId)}
               />
-              <span className="muted mono" style={{ fontSize: 12 }}>
+              <span className="font-mono text-xs text-muted-foreground">
                 {i + 1}.
               </span>
               <span>{s.heading}</span>
@@ -1298,20 +1378,20 @@ function ReviewSessionControls({
           );
         })}
       </div>
-      <div className="row" style={{ marginTop: 10, alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
-        <input
+      <div className="mt-2.5 flex flex-wrap items-center gap-2">
+        <Input
+          className="min-w-[320px] flex-1"
           type="text"
           placeholder="What should change? (e.g. make the intro sharper, add concrete examples)"
           value={instruction}
           onChange={(e) => onInstructionChange(e.target.value)}
           disabled={busy}
-          style={{ minWidth: 380, flex: 1 }}
         />
-        <button className="btn primary" disabled={!canRevise} onClick={onRevise}>
+        <Button disabled={!canRevise} onClick={onRevise}>
           Revise selected sections
-        </button>
+        </Button>
       </div>
-      {busy && <p className="muted" style={{ marginTop: 8 }}>Requesting the revision…</p>}
+      {busy && <p className="mt-2 text-sm text-muted-foreground">Requesting the revision…</p>}
     </div>
   );
 }
@@ -1359,31 +1439,28 @@ function MagicControls({
     .filter((s, i) => selected.includes(s.sectionId ?? `section_${i}`))
     .map((s) => s.heading);
   return (
-    <div className="writer-magic" style={{ marginTop: 10 }}>
-      <div className="writer-proposal">
-        <span className="pill busy">Section Magic</span>
-        <span className="muted" style={{ fontSize: 12 }}>
-          Want to improve a section without writing a full revision? Select sections above (shared with the revision
-          flow), pick an action here, and the writer transforms exactly those sections into a fresh review-ready
-          proposal. Nothing is accepted or published automatically.
-        </span>
-      </div>
-      <p className="sub" style={{ margin: '8px 0 4px' }}>
+    <div className="mt-2.5 flex flex-col">
+      <ProposalHead
+        label="Section Magic"
+        description="Want to improve a section without writing a full revision? Select sections above (shared with the revision flow), pick an action here, and the writer transforms exactly those sections into a fresh review-ready proposal. Nothing is accepted or published automatically."
+      />
+      <p className="mb-1 mt-2 text-[13px] text-muted-foreground">
         {selected.length === 0
           ? 'No sections selected yet.'
           : `Will transform: ${selectedHeadings.join('; ')}`}
       </p>
       {hasResearch && (
-        <p className="muted" style={{ fontSize: 12, margin: '4px 0' }}>
+        <p className="my-1 text-xs text-muted-foreground">
           Gathered research context will be offered to the writer as untrusted reference material for these sections —
           it is never applied verbatim.
         </p>
       )}
-      <div className="row" style={{ marginTop: 8, alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
-        <label className="muted" style={{ fontSize: 12 }}>
+      <div className="mt-2 flex flex-wrap items-center gap-2">
+        <label className="text-xs text-muted-foreground">
           Action
         </label>
         <select
+          className={SELECT_CLASS}
           value={action}
           disabled={busy}
           onChange={(e) => onActionChange(e.target.value as WriterMagicAction)}
@@ -1396,10 +1473,11 @@ function MagicControls({
         </select>
         {usesTone ? (
           <>
-            <label className="muted" style={{ fontSize: 12 }}>
+            <label className="text-xs text-muted-foreground">
               Tone
             </label>
             <select
+              className={SELECT_CLASS}
               value={tone}
               disabled={busy}
               onChange={(e) => onToneChange(e.target.value as WriterMagicTone)}
@@ -1412,20 +1490,20 @@ function MagicControls({
             </select>
           </>
         ) : (
-          <input
+          <Input
+            className="min-w-[220px] flex-1"
             type="text"
             placeholder={needsInstruction ? 'Describe the change (required for custom)' : 'Optional instruction…'}
             value={instruction}
             onChange={(e) => onInstructionChange(e.target.value)}
             disabled={busy}
-            style={{ minWidth: 260, flex: 1 }}
           />
         )}
-        <button className="btn primary" disabled={!canApply} onClick={onApply}>
+        <Button disabled={!canApply} onClick={onApply}>
           Apply magic to selected sections
-        </button>
+        </Button>
       </div>
-      {busy && <p className="muted" style={{ marginTop: 8 }}>Requesting the transformation…</p>}
+      {busy && <p className="mt-2 text-sm text-muted-foreground">Requesting the transformation…</p>}
     </div>
   );
 }

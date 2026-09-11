@@ -10,6 +10,7 @@
 import type { ScheduleDto } from '@seo/contracts';
 import { addDays, parseDate, sameLocalDay, sameLocalMonth, startOfMonth } from './scheduleMeta';
 import { ScheduleEvent } from './ScheduleEvent';
+import { cn } from '@/lib/utils';
 
 const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const MONTH_CELLS = 42;
@@ -29,9 +30,17 @@ function MonthGrid({ cursor, schedules, onOpen }: { cursor: Date; schedules: Sch
   for (let i = 0; i < MONTH_CELLS; i += 1) cells.push(addDays(anchor, i));
 
   return (
-    <div className="sch-grid" role="grid" aria-label={`Month view ${cursor.toLocaleDateString(undefined, { month: 'long', year: 'numeric' })}`}>
+    <div
+      className="grid grid-cols-7 overflow-hidden rounded-[10px] border bg-card"
+      role="grid"
+      aria-label={`Month view ${cursor.toLocaleDateString(undefined, { month: 'long', year: 'numeric' })}`}
+    >
       {DOW.map((d) => (
-        <div key={d} className="sch-dow" role="columnheader">
+        <div
+          key={d}
+          className="border-b px-2 py-1.5 text-[11px] uppercase tracking-wide text-muted-foreground"
+          role="columnheader"
+        >
           {d}
         </div>
       ))}
@@ -40,14 +49,23 @@ function MonthGrid({ cursor, schedules, onOpen }: { cursor: Date; schedules: Sch
         const inMonth = sameLocalMonth(day, cursor);
         const isToday = sameLocalDay(day, today);
         return (
-          <div key={day.toISOString()} role="gridcell" className={`sch-day ${inMonth ? '' : 'sch-day-out'}`}>
-            <div className={`sch-day-num ${isToday ? 'sch-day-today' : ''}`}>{day.getDate()}</div>
-            <div className="sch-day-events">
+          <div
+            key={day.toISOString()}
+            role="gridcell"
+            className={cn(
+              'min-h-24 overflow-hidden border-r border-b px-1.5 py-1 text-xs [&:nth-child(7n)]:border-r-0',
+              !inMonth && 'opacity-[.42]',
+            )}
+          >
+            <div className={cn('mb-[3px] text-[11px] text-muted-foreground', isToday && 'font-bold text-primary')}>
+              {day.getDate()}
+            </div>
+            <div className="flex flex-col gap-[3px]">
               {events.slice(0, 4).map((s) => (
                 <ScheduleEvent key={s.id} schedule={s} onOpen={onOpen} />
               ))}
               {events.length > 4 && (
-                <span className="sch-more" aria-label={`${events.length - 4} more schedules this day`}>
+                <span className="px-0.5 text-[10.5px] text-muted-foreground" aria-label={`${events.length - 4} more schedules this day`}>
                   +{events.length - 4} more
                 </span>
               )}
@@ -67,17 +85,19 @@ function WeekGrid({ cursor, schedules, onOpen }: { cursor: Date; schedules: Sche
   for (let i = 0; i < 7; i += 1) days.push(addDays(monday, i));
 
   return (
-    <div className="sch-week" role="grid" aria-label="Week view">
+    <div className="grid grid-cols-7 overflow-hidden rounded-[10px] border bg-card" role="grid" aria-label="Week view">
       {days.map((day) => {
         const events = dayEvents(schedules, day).sort((a, b) => String(a.scheduled_at).localeCompare(String(b.scheduled_at)));
         const isToday = sameLocalDay(day, today);
         return (
-          <div key={day.toISOString()} role="gridcell" className="sch-wcol">
-            <div className={`sch-day-num ${isToday ? 'sch-day-today' : ''}`}>
+          <div key={day.toISOString()} role="gridcell" className="flex min-w-0 flex-col gap-1.5 border-r p-1.5 last:border-r-0">
+            <div className={cn('mb-1.5 text-[11px] text-muted-foreground', isToday && 'font-bold text-primary')}>
               {DOW[day.getDay()]} {day.getDate()} {day.toLocaleDateString(undefined, { month: 'short' })}
             </div>
-            <div className="sch-wcol-events">
-              {events.length === 0 && <div className="sch-wempty muted">No schedules</div>}
+            <div className="flex max-h-[62vh] flex-col gap-1 overflow-y-auto">
+              {events.length === 0 && (
+                <div className="py-2 text-center text-[11px] text-muted-foreground">No schedules</div>
+              )}
               {events.map((s) => (
                 <ScheduleEvent key={s.id} schedule={s} onOpen={onOpen} />
               ))}

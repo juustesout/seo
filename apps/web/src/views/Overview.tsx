@@ -13,6 +13,11 @@ import { useState } from 'react';
 import { useAsync, fmtNum, fmtDate, StatusPill } from '../lib/ui';
 import { api } from '../lib/api';
 import { connectGoogle } from '../lib/gsc';
+import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { PageHeader } from '@/components/ui/page-header';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 
 interface GscConnection {
   connected: boolean;
@@ -81,11 +86,29 @@ interface AccountOverviewDto {
 function Sparkline({ values, height = 44 }: { values: number[]; height?: number }) {
   const max = Math.max(...values, 1);
   return (
-    <div className="spark" style={{ height }}>
+    <div className="flex items-end gap-0.5" style={{ height }}>
       {values.map((v, i) => (
-        <i key={i} style={{ height: `${Math.max((v / max) * 100, 3)}%` }} title={String(v)} />
+        <i
+          key={i}
+          className="min-h-0.5 flex-1 rounded-t-sm bg-primary/80"
+          style={{ height: `${Math.max((v / max) * 100, 3)}%` }}
+          title={String(v)}
+        />
       ))}
     </div>
+  );
+}
+
+/** Compact labelled metric card shared by the overall dashboard grids. */
+function Stat({ label, value, hint }: { label: string; value: React.ReactNode; hint?: React.ReactNode }) {
+  return (
+    <Card className="gap-0 py-4">
+      <CardContent className="px-4">
+        <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{label}</div>
+        <div className="mt-1 text-2xl font-semibold tabular-nums">{value}</div>
+        {hint ? <div className="mt-0.5 text-xs text-muted-foreground">{hint}</div> : null}
+      </CardContent>
+    </Card>
   );
 }
 
@@ -108,8 +131,14 @@ export function Overview({
   // OAuth return target, so it must be reachable while signed in.
   const justConnected = typeof window !== 'undefined' && window.location.search.includes('gsc=connected');
 
-  if (loading || account.loading) return <p className="muted">Loading…</p>;
-  if (error) return <div className="banner error">{error}</div>;
+  if (loading || account.loading) return <p className="text-sm text-muted-foreground">Loading…</p>;
+  if (error) {
+    return (
+      <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+        {error}
+      </div>
+    );
+  }
 
   const connected = data?.connected === true;
   const showOverall = Boolean(data?.totals);
@@ -119,66 +148,75 @@ export function Overview({
   }
 
   return (
-    <div>
-      <h1>Welcome{(account.data?.account.name ? ` to ${account.data.account.name}` : '')}</h1>
-      {justConnected && <div className="banner ok">Google Search Console connected.</div>}
-      <p className="sub">Manage your SEO projects from one place. Projects keep their own keywords, content and publishing; Search Console connects at the account level.</p>
+    <div className="grid gap-5">
+      <PageHeader
+        title={`Welcome${account.data?.account.name ? ` to ${account.data.account.name}` : ''}`}
+        description="Manage your SEO projects from one place. Projects keep their own keywords, content and publishing; Search Console connects at the account level."
+      />
+
+      {justConnected && (
+        <div className="rounded-md border border-success/30 bg-success/5 px-3 py-2 text-sm text-success">
+          Google Search Console connected.
+        </div>
+      )}
 
       {!connected && <GoogleNotConnected />}
 
       {connected && data && data.attached_count === 0 && (
-        <div className="banner info" style={{ marginBottom: 12 }}>
-          Google Search Console is connected, but no project uses a Search Console property yet.
-          Open a project below and attach a property from its <b>Settings</b> to start pulling real data.
+        <div className="rounded-lg border border-primary/20 bg-accent px-4 py-3 text-sm text-accent-foreground">
+          Google Search Console is connected, but no project uses a Search Console property yet. Open a project below
+          and attach a property from its <b>Settings</b> to start pulling real data.
         </div>
       )}
 
       <ProjectGrid projects={account.data?.projects ?? []} onOpenProject={onOpenProject} />
 
       {(account.data?.recent_activity?.length ?? 0) > 0 && (
-        <div className="card mt">
-          <h2>Recent activity</h2>
-          <table>
-            <thead>
-              <tr>
-                <th>Project</th>
-                <th>Action</th>
-                <th>What</th>
-                <th>When</th>
-              </tr>
-            </thead>
-            <tbody>
-              {account.data!.recent_activity.map((a) => (
-                <tr key={a.id}>
-                  <td>{a.project_name ?? '—'}</td>
-                  <td>
-                    <StatusPill status={a.action} />
-                  </td>
-                  <td className="muted">{a.entity_type.replace(/^seo_/, '')}</td>
-                  <td className="muted">{fmtDate(a.created_at)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <Card>
+          <CardHeader>
+            <CardTitle>Recent activity</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Project</TableHead>
+                  <TableHead>Action</TableHead>
+                  <TableHead>What</TableHead>
+                  <TableHead>When</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {account.data!.recent_activity.map((a) => (
+                  <TableRow key={a.id}>
+                    <TableCell>{a.project_name ?? '—'}</TableCell>
+                    <TableCell>
+                      <StatusPill status={a.action} />
+                    </TableCell>
+                    <TableCell className="text-muted-foreground">{a.entity_type.replace(/^seo_/, '')}</TableCell>
+                    <TableCell className="text-muted-foreground">{fmtDate(a.created_at)}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </CardContent>
+        </Card>
       )}
 
       {(account.data?.projects?.length ?? 0) === 0 && (
-        <div className="card">
-          <EmptyState />
-          <div className="mt">
-            <button className="btn primary" onClick={onGoProjects}>
-              Create your first project
-            </button>
-          </div>
-        </div>
+        <Card>
+          <CardContent className="grid gap-4">
+            <p className="text-sm text-muted-foreground">
+              You have no projects yet. Create one to start tracking keywords, rankings and content.
+            </p>
+            <div>
+              <Button onClick={onGoProjects}>Create your first project</Button>
+            </div>
+          </CardContent>
+        </Card>
       )}
     </div>
   );
-}
-
-function EmptyState() {
-  return <p className="muted">You have no projects yet. Create one to start tracking keywords, rankings and content.</p>;
 }
 
 /** CTA card that starts the account-level Google OAuth flow in a new tab. */
@@ -196,19 +234,23 @@ function GoogleNotConnected() {
     }
   };
   return (
-    <div className="card">
-      <h2>Connect Google Search Console</h2>
-      <p className="sub">
-        Your Search Console connection is owned by your account. Once connected you can attach any of your Google
-        properties to a project and pull real clicks, impressions and ranking data.
-      </p>
-      <div className="mt">
-        <button className="btn primary" onClick={() => void start()} disabled={busy}>
-          {busy ? 'Redirecting to Google…' : 'Connect Google Account'}
-        </button>
-      </div>
-      {err && <div className="error-line">{err}</div>}
-    </div>
+    <Card>
+      <CardHeader>
+        <CardTitle>Connect Google Search Console</CardTitle>
+        <p className="text-sm text-muted-foreground">
+          Your Search Console connection is owned by your account. Once connected you can attach any of your Google
+          properties to a project and pull real clicks, impressions and ranking data.
+        </p>
+      </CardHeader>
+      <CardContent className="grid gap-3">
+        <div>
+          <Button onClick={() => void start()} disabled={busy}>
+            {busy ? 'Redirecting to Google…' : 'Connect Google Account'}
+          </Button>
+        </div>
+        {err && <div className="text-sm text-destructive">{err}</div>}
+      </CardContent>
+    </Card>
   );
 }
 
@@ -222,32 +264,40 @@ function ProjectGrid({
 }) {
   if (projects.length === 0) return null;
   return (
-    <div className="mt">
-      <h2>Projects</h2>
-      <div className="grid">
+    <div className="grid gap-3">
+      <h2 className="text-base font-semibold">Projects</h2>
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {projects.map((p) => (
-          <div className="card" key={p.id}>
-            <div className="label" style={{ fontSize: 13 }}>
-              {p.property ? <span className="pill ok">{p.property.site_url}</span> : <span className="pill">no GSC property</span>}
-            </div>
-            <h3 style={{ margin: '6px 0' }}>{p.name}</h3>
-            <p className="muted" style={{ minHeight: 36 }}>
-              {p.website_url ?? 'No website set'} · role {p.role}
-            </p>
-            <div className="muted" style={{ fontSize: 12, marginBottom: 8 }}>
-              {p.connected_count} connected · last sync {p.last_sync_at ? fmtDate(p.last_sync_at) : 'never'}
-            </div>
-            <div style={{ display: 'flex', gap: 8 }}>
-              <button className="btn sm primary" onClick={() => onOpenProject(p.id, 'dashboard')}>
-                Open dashboard
-              </button>
-              {!p.property && (
-                <button className="btn sm" onClick={() => onOpenProject(p.id, 'settings')}>
-                  Attach property
-                </button>
+          <Card key={p.id} className="flex flex-col">
+            <CardHeader>
+              {p.property ? (
+                <Badge variant="success" className="max-w-full truncate">
+                  {p.property.site_url}
+                </Badge>
+              ) : (
+                <Badge variant="outline">no GSC property</Badge>
               )}
-            </div>
-          </div>
+              <CardTitle className="text-base">{p.name}</CardTitle>
+            </CardHeader>
+            <CardContent className="flex flex-1 flex-col gap-3">
+              <p className="text-sm text-muted-foreground">
+                {p.website_url ?? 'No website set'} · role {p.role}
+              </p>
+              <p className="text-xs text-muted-foreground">
+                {p.connected_count} connected · last sync {p.last_sync_at ? fmtDate(p.last_sync_at) : 'never'}
+              </p>
+              <div className="mt-auto flex gap-2">
+                <Button size="sm" onClick={() => onOpenProject(p.id, 'dashboard')}>
+                  Open dashboard
+                </Button>
+                {!p.property && (
+                  <Button size="sm" variant="outline" onClick={() => onOpenProject(p.id, 'settings')}>
+                    Attach property
+                  </Button>
+                )}
+              </div>
+            </CardContent>
+          </Card>
         ))}
       </div>
     </div>
@@ -266,109 +316,118 @@ function OverallDashboard({
 }) {
   const totals = data.totals;
   const series = data.series ?? [];
-  return (
-    <div>
-      <h1>Overall dashboard</h1>
-      <p className="sub">
-        Aggregated across {data.attached_count} project(s) · {data.registry_count} Search Console propert
-        {data.registry_count === 1 ? 'y' : 'ies'} on this account
-      </p>
+  const first = series[0];
+  const last = series[series.length - 1];
+  const range = first && last ? `${first.date} → ${last.date}` : '';
 
-      <div className="grid">
-        <div className="card stat">
-          <div className="label">Clicks</div>
-          <div className="value">{fmtNum(totals?.clicks ?? 0)}</div>
-          <div className="muted" style={{ fontSize: 12 }}>
-            {totals?.clicks_trend != null ? `${totals.clicks_trend > 0 ? '+' : ''}${totals.clicks_trend}% vs prev` : 'no prior period'}
-          </div>
-        </div>
-        <div className="card stat">
-          <div className="label">Impressions</div>
-          <div className="value">{fmtNum(totals?.impressions ?? 0)}</div>
-          <div className="muted" style={{ fontSize: 12 }}>
-            {totals?.impressions_trend != null ? `${totals.impressions_trend > 0 ? '+' : ''}${totals.impressions_trend}% vs prev` : 'no prior period'}
-          </div>
-        </div>
-        <div className="card stat">
-          <div className="label">CTR</div>
-          <div className="value">{fmtNum(totals?.ctr ?? 0)}%</div>
-        </div>
-        <div className="card stat">
-          <div className="label">Avg position</div>
-          <div className="value">{totals?.position ?? '—'}</div>
-        </div>
-        <div className="card stat">
-          <div className="label">Properties</div>
-          <div className="value">{fmtNum(data.properties?.length ?? 0)}</div>
-        </div>
+  return (
+    <div className="grid gap-5">
+      <PageHeader
+        title="Overall dashboard"
+        description={`Aggregated across ${data.attached_count} project(s) · ${data.registry_count} Search Console propert${
+          data.registry_count === 1 ? 'y' : 'ies'
+        } on this account`}
+      />
+
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5">
+        <Stat
+          label="Clicks"
+          value={fmtNum(totals?.clicks ?? 0)}
+          hint={totals?.clicks_trend != null ? `${totals.clicks_trend > 0 ? '+' : ''}${totals.clicks_trend}% vs prev` : 'no prior period'}
+        />
+        <Stat
+          label="Impressions"
+          value={fmtNum(totals?.impressions ?? 0)}
+          hint={totals?.impressions_trend != null ? `${totals.impressions_trend > 0 ? '+' : ''}${totals.impressions_trend}% vs prev` : 'no prior period'}
+        />
+        <Stat label="CTR" value={`${fmtNum(totals?.ctr ?? 0)}%`} />
+        <Stat label="Avg position" value={totals?.position ?? '—'} />
+        <Stat label="Properties" value={fmtNum(data.properties?.length ?? 0)} />
       </div>
 
-      <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
-        <div className="card" style={{ flex: '1 1 340px' }}>
-          <h2>Impressions trend</h2>
-          {series.length > 0 ? <Sparkline values={series.map((s) => s.impressions)} /> : <p className="muted">No daily data yet</p>}
-          <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>
-            {(() => {
-            const first = series[0];
-            const last = series[series.length - 1];
-            return first && last ? `${first.date} → ${last.date}` : '';
-          })()}
-          </div>
-        </div>
-        <div className="card" style={{ flex: '1 1 340px' }}>
-          <h2>Clicks trend</h2>
-          {series.length > 0 ? <Sparkline values={series.map((s) => s.clicks)} /> : <p className="muted">No daily data yet</p>}
-        </div>
+      <div className="grid gap-4 lg:grid-cols-2">
+        <Card>
+          <CardHeader>
+            <CardTitle>Impressions trend</CardTitle>
+          </CardHeader>
+          <CardContent>
+            {series.length > 0 ? <Sparkline values={series.map((s) => s.impressions)} /> : <p className="text-sm text-muted-foreground">No daily data yet</p>}
+            {range && <div className="mt-1.5 text-xs text-muted-foreground">{range}</div>}
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader>
+            <CardTitle>Clicks trend</CardTitle>
+          </CardHeader>
+          <CardContent>
+            {series.length > 0 ? <Sparkline values={series.map((s) => s.clicks)} /> : <p className="text-sm text-muted-foreground">No daily data yet</p>}
+          </CardContent>
+        </Card>
       </div>
 
       {(data.properties?.length ?? 0) > 0 && (
-        <div className="card mt">
-          <h2>By property</h2>
-          <table>
-            <thead>
-              <tr>
-                <th>Property</th>
-                <th>Project</th>
-                <th className="num">Clicks</th>
-                <th className="num">Impr.</th>
-                <th className="num">CTR</th>
-                <th className="num">Pos</th>
-              </tr>
-            </thead>
-            <tbody>
-              {data.properties!.map((pr) => (
-                <tr key={pr.property_id}>
-                  <td className="mono">{pr.site_url}</td>
-                  <td>
-                    <a href="#" onClick={(e) => { e.preventDefault(); onOpenProject(pr.project_id, 'dashboard'); }}>
-                      {pr.project_name}
-                    </a>
-                  </td>
-                  <td className="num">{fmtNum(pr.clicks)}</td>
-                  <td className="num">{fmtNum(pr.impressions)}</td>
-                  <td className="num">{pr.ctr}%</td>
-                  <td className="num">{pr.position ?? '—'}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <Card>
+          <CardHeader>
+            <CardTitle>By property</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Property</TableHead>
+                  <TableHead>Project</TableHead>
+                  <TableHead className="text-right">Clicks</TableHead>
+                  <TableHead className="text-right">Impr.</TableHead>
+                  <TableHead className="text-right">CTR</TableHead>
+                  <TableHead className="text-right">Pos</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {data.properties!.map((pr) => (
+                  <TableRow key={pr.property_id}>
+                    <TableCell className="font-mono text-xs">{pr.site_url}</TableCell>
+                    <TableCell>
+                      <a
+                        href="#"
+                        className="text-primary hover:underline"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          onOpenProject(pr.project_id, 'dashboard');
+                        }}
+                      >
+                        {pr.project_name}
+                      </a>
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums">{fmtNum(pr.clicks)}</TableCell>
+                    <TableCell className="text-right tabular-nums">{fmtNum(pr.impressions)}</TableCell>
+                    <TableCell className="text-right tabular-nums">{pr.ctr}%</TableCell>
+                    <TableCell className="text-right tabular-nums">{pr.position ?? '—'}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </CardContent>
+        </Card>
       )}
 
       {(account?.projects?.length ?? 0) > 0 && (
-        <div className="card mt">
-          <h2>Projects</h2>
-          {account!.projects.map((p) => (
-            <div key={p.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 0', borderBottom: '1px solid var(--border, #eee)' }}>
-              <span>
-                {p.name} <span className="muted">· {p.role}</span>
-              </span>
-              <button className="btn sm" onClick={() => onOpenProject(p.id, 'dashboard')}>
-                Open
-              </button>
-            </div>
-          ))}
-        </div>
+        <Card>
+          <CardHeader>
+            <CardTitle>Projects</CardTitle>
+          </CardHeader>
+          <CardContent className="divide-y">
+            {account!.projects.map((p) => (
+              <div key={p.id} className="flex items-center justify-between gap-3 py-2">
+                <span className="text-sm">
+                  {p.name} <span className="text-muted-foreground">· {p.role}</span>
+                </span>
+                <Button size="sm" variant="outline" onClick={() => onOpenProject(p.id, 'dashboard')}>
+                  Open
+                </Button>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
       )}
     </div>
   );

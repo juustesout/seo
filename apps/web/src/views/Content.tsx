@@ -15,6 +15,7 @@
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Editor } from '@tiptap/react';
+import { ArrowLeft } from 'lucide-react';
 import {
   asTipDoc,
   docHeadings,
@@ -42,6 +43,12 @@ import { KnowledgePanel } from '../components/content/KnowledgePanel';
 import { IntelligencePanel } from '../components/content/IntelligencePanel';
 import { textToBlocksHtml } from '../components/content/contentAi';
 import { useAutosave } from '../components/content/useAutosave';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
+import { PageHeader } from '@/components/ui/page-header';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 
 interface ContentRow {
   meta_title: string | null;
@@ -401,87 +408,96 @@ export function Content({
 
   if (!creating && editingId === null) {
     return (
-      <div>
-        <h1>Content Studio</h1>
-        <p className="sub">
-          Structured articles edited as a Tiptap document. content_json is the source of truth; HTML and the outline
-          are rendered from it — no raw HTML editing.
-        </p>
-        <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start', flexWrap: 'wrap', justifyContent: 'space-between' }}>
-          {canEdit ? (
-            <form
-              className="row"
-              onSubmit={(e) => {
-                e.preventDefault();
-                if (!newTitle.trim()) return;
-                startNew();
-              }}
-            >
-              <input
-                type="text"
-                placeholder="New article title…"
-                value={newTitle}
-                onChange={(e) => setNewTitle(e.target.value)}
-                style={{ minWidth: 320 }}
-              />
-              <button className="btn primary" disabled={!newTitle.trim()}>
-                Start article
-              </button>
-            </form>
-          ) : (
-            <p className="muted">You have read-only access to this project's content.</p>
-          )}
-          {onOpenCalendar && (
-            <button className="btn" onClick={onOpenCalendar} title="View and manage publication schedules">
-              Schedule calendar
-            </button>
-          )}
-        </div>
-        {notice && <div className="banner ok">{notice}</div>}
-        {err && <div className="banner error">{err}</div>}
-        {list.data && list.data.content.length === 0 && <Empty>No content yet{canEdit ? '. Start your first article above.' : '.'}</Empty>}
+      <div className="grid gap-5">
+        <PageHeader
+          title="Content Studio"
+          description="Structured articles edited as a Tiptap document. content_json is the source of truth; HTML and the outline are rendered from it — no raw HTML editing."
+          actions={
+            <>
+              {canEdit ? (
+                <form
+                  className="flex flex-wrap items-center gap-2"
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    if (!newTitle.trim()) return;
+                    startNew();
+                  }}
+                >
+                  <Input
+                    type="text"
+                    placeholder="New article title…"
+                    value={newTitle}
+                    onChange={(e) => setNewTitle(e.target.value)}
+                    className="w-[320px]"
+                  />
+                  <Button disabled={!newTitle.trim()}>Start article</Button>
+                </form>
+              ) : (
+                <p className="text-sm text-muted-foreground">You have read-only access to this project's content.</p>
+              )}
+              {onOpenCalendar && (
+                <Button variant="outline" onClick={onOpenCalendar} title="View and manage publication schedules">
+                  Schedule calendar
+                </Button>
+              )}
+            </>
+          }
+        />
+        {notice && (
+          <div className="rounded-md border border-success/30 bg-success/5 px-3 py-2 text-sm text-success">{notice}</div>
+        )}
+        {err && (
+          <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+            {err}
+          </div>
+        )}
+        {list.data && list.data.content.length === 0 && (
+          <Empty>No content yet{canEdit ? '. Start your first article above.' : '.'}</Empty>
+        )}
         {list.data && list.data.content.length > 0 && (
-          <table>
-            <thead>
-              <tr>
-                <th>Title</th>
-                <th>Status</th>
-                <th>Target keyword</th>
-                <th>Score</th>
-                <th>Updated</th>
-                {canDelete && <th>Actions</th>}
-              </tr>
-            </thead>
-            <tbody>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Title</TableHead>
+                <TableHead>Status</TableHead>
+                <TableHead>Target keyword</TableHead>
+                <TableHead>Score</TableHead>
+                <TableHead>Updated</TableHead>
+                {canDelete && <TableHead>Actions</TableHead>}
+              </TableRow>
+            </TableHeader>
+            <TableBody>
               {list.data.content.map((c) => (
-                <tr key={c.id} style={{ cursor: 'pointer' }} onClick={() => open(c.id)}>
-                  <td>
+                <TableRow key={c.id} className="cursor-pointer" onClick={() => open(c.id)}>
+                  <TableCell>
                     <div>{c.title}</div>
-                    <div className="muted mono">{c.slug ?? '—'}</div>
-                  </td>
-                  <td>
-                    <span className={`pill ${c.status === 'published' ? 'ok' : ''}`}>{c.status}</span>
-                  </td>
-                  <td className="muted">{c.target_keyword ?? '—'}</td>
-                  <td className="num">{c.seo_score != null ? Math.round(c.seo_score) : '—'}</td>
-                  <td className="muted">{fmtDate(c.updated_at)}</td>
+                    <div className="font-mono text-xs text-muted-foreground">{c.slug ?? '—'}</div>
+                  </TableCell>
+                  <TableCell>
+                    <Badge variant={c.status === 'published' ? 'success' : 'outline'}>{c.status}</Badge>
+                  </TableCell>
+                  <TableCell className="text-muted-foreground">{c.target_keyword ?? '—'}</TableCell>
+                  <TableCell className="tabular-nums">{c.seo_score != null ? Math.round(c.seo_score) : '—'}</TableCell>
+                  <TableCell className="text-muted-foreground">{fmtDate(c.updated_at)}</TableCell>
                   {canDelete && (
-                    <td>
-                      <button
-                        className="btn sm danger"
+                    <TableCell>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="text-destructive"
                         onClick={(e) => {
                           e.stopPropagation();
                           void remove(c.id);
                         }}
                       >
                         Delete
-                      </button>
-                    </td>
+                      </Button>
+                    </TableCell>
                   )}
-                </tr>
+                </TableRow>
               ))}
-            </tbody>
-          </table>
+            </TableBody>
+          </Table>
         )}
       </div>
     );
@@ -489,9 +505,8 @@ export function Content({
 
   if (editingId && !detail.data) {
     return (
-      <div>
-        <h1>Content Studio</h1>
-        <p className="sub">Loading…</p>
+      <div className="grid gap-5">
+        <PageHeader title="Content Studio" description="Loading…" />
       </div>
     );
   }
@@ -501,20 +516,20 @@ export function Content({
   if (!canEdit && detail.data) {
     const d = detail.data;
     return (
-      <div>
-        <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-          <button className="btn" onClick={goList}>
-            ← Back
-          </button>
-          <h1 style={{ margin: 0 }}>{d.title}</h1>
-          <span className={`pill ${d.status === 'published' ? 'ok' : ''}`}>{d.status}</span>
+      <div className="grid gap-4">
+        <div className="flex flex-wrap items-center gap-2.5">
+          <Button variant="outline" size="sm" onClick={goList}>
+            <ArrowLeft /> Back
+          </Button>
+          <h1 className="text-xl font-semibold tracking-tight">{d.title}</h1>
+          <Badge variant={d.status === 'published' ? 'success' : 'outline'}>{d.status}</Badge>
         </div>
-        <p className="sub muted">
+        <p className="text-sm text-muted-foreground">
           {d.updated_at ? `Updated ${fmtDate(d.updated_at)}` : ''}
           {d.target_keyword ? ` · Target keyword: ${d.target_keyword}` : ''}
         </p>
         {viewerSeo && (
-          <div style={{ maxWidth: 460, marginBottom: 16 }}>
+          <div className="max-w-[460px]">
             <SeoPanel
               result={viewerSeo}
               editable={false}
@@ -525,28 +540,28 @@ export function Content({
           </div>
         )}
         {editingId && (
-          <div style={{ maxWidth: 460, marginBottom: 16 }}>
+          <div className="max-w-[460px]">
             <IntelligencePanel projectId={projectId} contentId={editingId} />
           </div>
         )}
         {d.content_html ? (
-          <div className="card">
-            <div className="article-body" dangerouslySetInnerHTML={{ __html: d.content_html }} />
-          </div>
+          <Card>
+            <CardContent>
+              <div className="article-body" dangerouslySetInnerHTML={{ __html: d.content_html }} />
+            </CardContent>
+          </Card>
         ) : (
-          <p className="muted">This document has no content yet.</p>
+          <p className="text-sm text-muted-foreground">This document has no content yet.</p>
         )}
-        <p className="muted" style={{ fontSize: 12 }}>
-          Read-only view — you do not have edit access to this project.
-        </p>
+        <p className="text-xs text-muted-foreground">Read-only view — you do not have edit access to this project.</p>
       </div>
     );
   }
 
   if (!canEdit) {
     return (
-      <div>
-        <p className="sub">Loading…</p>
+      <div className="grid gap-5">
+        <p className="text-sm text-muted-foreground">Loading…</p>
       </div>
     );
   }
@@ -554,15 +569,21 @@ export function Content({
   const initialDoc = creating ? tiptapEmptyDoc() : asTipDoc(detail.data?.content_json);
 
   return (
-    <div>
-      <div style={{ marginBottom: 10 }}>
-        <button className="btn sm" onClick={goList}>
-          ← Back to list
-        </button>
+    <div className="grid gap-3">
+      <div>
+        <Button variant="outline" size="sm" onClick={goList}>
+          <ArrowLeft /> Back to list
+        </Button>
       </div>
 
-      {err && <div className="banner error">{err}</div>}
-      {notice && <div className="banner ok">{notice}</div>}
+      {err && (
+        <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+          {err}
+        </div>
+      )}
+      {notice && (
+        <div className="rounded-md border border-success/30 bg-success/5 px-3 py-2 text-sm text-success">{notice}</div>
+      )}
 
       <ContentEditorHeader
         title={title}
@@ -582,31 +603,33 @@ export function Content({
       />
 
       {auto.status === 'failed' && (
-        <div className="banner error" style={{ marginTop: 8 }}>
+        <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
           Could not save your changes. Check your connection and press Save to retry.
         </div>
       )}
 
       {aiError && (
-        <div className="banner error" style={{ marginTop: 8 }}>
+        <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
           {aiError}
         </div>
       )}
 
       {aiConfigured && (
-        <label className="ce-ai-opt">
+        <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
           <input type="checkbox" checked={useKnowledge} onChange={(e) => setUseKnowledge(e.target.checked)} />
           <span>Include this project's knowledge as context when available</span>
         </label>
       )}
 
-      <div className="row" style={{ marginTop: 8, gap: 8, alignItems: 'center' }}>
-        <button className="btn sm" disabled={!editingId} onClick={() => setWriterOpen((v) => !v)}>
+      <div className="flex flex-wrap items-center gap-2">
+        <Button variant="outline" size="sm" disabled={!editingId} onClick={() => setWriterOpen((v) => !v)}>
           {writerOpen ? 'Close writer' : 'Writer'}
-        </button>
-        {!editingId && <span className="muted" style={{ fontSize: 12 }}>Save this draft first to run the writer on it.</span>}
+        </Button>
+        {!editingId && (
+          <span className="text-xs text-muted-foreground">Save this draft first to run the writer on it.</span>
+        )}
         {writerOpen && editingId && (
-          <span className="muted" style={{ fontSize: 12 }}>
+          <span className="text-xs text-muted-foreground">
             Runs the approved writer flow against this article's saved context; results are previewed, never saved automatically.
           </span>
         )}
@@ -621,9 +644,9 @@ export function Content({
         />
       )}
 
-      <div className="ce-grid">
-        <div className="ce-main">
-          <div className="rt-shell">
+      <div className="mt-1 grid grid-cols-1 items-start gap-3.5 lg:grid-cols-[minmax(0,1fr)_250px]">
+        <div className="min-w-0">
+          <div className="overflow-hidden rounded-[10px] border bg-card">
             <ContentToolbar
               editor={editor}
               ai={
@@ -646,17 +669,17 @@ export function Content({
             />
           </div>
           {aiBusy && (
-            <p className="muted" style={{ marginTop: 8 }}>
+            <p className="mt-2 text-sm text-muted-foreground">
               Generating with AI… suggestions are previewed before they touch the document.
             </p>
           )}
           {aiSuggestion && (
-            <div style={{ marginTop: 12 }}>
+            <div className="mt-3">
               <ContentAiPanel suggestion={aiSuggestion} onApply={applyAi} onReject={rejectAi} />
             </div>
           )}
         </div>
-        <aside className="ce-aside">
+        <aside className="flex min-w-0 flex-col gap-3.5">
           <SeoPanel
             result={seo}
             editable={canEdit}

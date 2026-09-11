@@ -9,7 +9,12 @@
  * polled while busy via lib/ui useJobs.
  */
 import { api } from '../lib/api';
-import { useAsync, num, fmtNum, str, fmtDate, useJobs, JobTable, StatusPill, Empty } from '../lib/ui';
+import { useAsync, fmtNum, fmtDate, useJobs, JobTable, Empty } from '../lib/ui';
+import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { PageHeader } from '@/components/ui/page-header';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 
 interface Dash {
   performance: { last_7d: number; last_28d: number; impressions_28d: number; days: number };
@@ -29,29 +34,15 @@ function GscAttachCta({ projectId, onOpenSettings }: { projectId: string; onOpen
   const { data } = useAsync<GscState>(() => api(`/projects/${projectId}/gsc/state`), [projectId]);
   if (!data || data.current) return null;
   return (
-    <div className="banner info" style={{ marginBottom: 12 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
-        <span>
-          {data.google.connected
-            ? 'This project has no Google Search Console property connected.'
-            : 'This project is not connected to Google Search Console yet.'}
-        </span>
-        <button className="btn sm primary" onClick={onOpenSettings}>
-          {data.google.connected ? 'Attach GSC Property' : 'Set up Search Console'}
-        </button>
-      </div>
-    </div>
-  );
-}
-
-/** Tiny pure bar sparkline; bar heights are normalized to the max value. */
-function Sparkline({ values, height = 40 }: { values: number[]; height?: number }) {
-  const max = Math.max(...values, 1);
-  return (
-    <div className="spark" style={{ height }}>
-      {values.map((v, i) => (
-        <i key={i} style={{ height: `${Math.max((v / max) * 100, 4)}%` }} title={String(v)} />
-      ))}
+    <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-primary/20 bg-accent px-4 py-3 text-sm text-accent-foreground">
+      <span>
+        {data.google.connected
+          ? 'This project has no Google Search Console property connected.'
+          : 'This project is not connected to Google Search Console yet.'}
+      </span>
+      <Button size="sm" onClick={onOpenSettings}>
+        {data.google.connected ? 'Attach GSC Property' : 'Set up Search Console'}
+      </Button>
     </div>
   );
 }
@@ -68,103 +59,124 @@ export function Dashboard({ projectId, onOpenSettings }: { projectId: string; on
   );
   const { jobs, busy } = useJobs(projectId, Boolean(data));
 
-  if (loading && !data) return <p className="muted">Loading…</p>;
-  if (error) return <div className="banner error">{error}</div>;
+  if (loading && !data) return <p className="text-sm text-muted-foreground">Loading…</p>;
+  if (error) {
+    return (
+      <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+        {error}
+      </div>
+    );
+  }
   if (!data) return null;
 
   const perf = data.performance;
-  const feats = Object.entries(data.features).filter(([, on]) => on).map(([k]) => k);
+  const feats = Object.entries(data.features)
+    .filter(([, on]) => on)
+    .map(([k]) => k);
+
+  const stats = [
+    { label: 'Clicks (7d)', value: fmtNum(perf.last_7d) },
+    { label: 'Clicks (28d)', value: fmtNum(perf.last_28d) },
+    { label: 'Impressions (28d)', value: fmtNum(perf.impressions_28d) },
+    { label: 'Tracked keywords', value: fmtNum(data.counts.keywords) },
+    { label: 'Pages', value: fmtNum(data.counts.pages) },
+    { label: 'Ranking rows (28d)', value: fmtNum(data.counts.ranking_rows_28d) },
+  ];
 
   return (
-    <div>
-      <h1>Dashboard</h1>
-      <p className="sub">
-        Last sync {data.sources.last_sync_at ? fmtDate(data.sources.last_sync_at) : 'never'} ·{' '}
-        {data.sources.integrations.length} integrations · {data.sources.data_sources.length} data source(s)
-      </p>
-      <GscAttachCta projectId={projectId} onOpenSettings={onOpenSettings} />
-      <div className="grid">
-        <div className="card stat">
-          <div className="label">Clicks (7d)</div>
-          <div className="value">{fmtNum(perf.last_7d)}</div>
-        </div>
-        <div className="card stat">
-          <div className="label">Clicks (28d)</div>
-          <div className="value">{fmtNum(perf.last_28d)}</div>
-        </div>
-        <div className="card stat">
-          <div className="label">Impressions (28d)</div>
-          <div className="value">{fmtNum(perf.impressions_28d)}</div>
-        </div>
-        <div className="card stat">
-          <div className="label">Tracked keywords</div>
-          <div className="value">{fmtNum(data.counts.keywords)}</div>
-        </div>
-        <div className="card stat">
-          <div className="label">Pages</div>
-          <div className="value">{fmtNum(data.counts.pages)}</div>
-        </div>
-        <div className="card stat">
-          <div className="label">Ranking rows (28d)</div>
-          <div className="value">{fmtNum(data.counts.ranking_rows_28d)}</div>
-        </div>
+    <div className="grid gap-5">
+      <div className="grid gap-3">
+        <PageHeader
+          title="Dashboard"
+          description={
+            <>
+              Last sync {data.sources.last_sync_at ? fmtDate(data.sources.last_sync_at) : 'never'} ·{' '}
+              {data.sources.integrations.length} integrations · {data.sources.data_sources.length} data source(s)
+            </>
+          }
+        />
+        <GscAttachCta projectId={projectId} onOpenSettings={onOpenSettings} />
       </div>
 
-      <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
-        <div className="card" style={{ flex: '1 1 320px' }}>
-          <h2>Active capabilities</h2>
-          {feats.length === 0 ? (
-            <Empty>
-              No data sources connected yet. Open <b>Integrations</b> to connect Search Console or DataForSEO.
-            </Empty>
-          ) : (
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-              {feats.map((f) => (
-                <span className="pill ok" key={f}>
-                  {f}
-                </span>
-              ))}
-            </div>
-          )}
-        </div>
-        <div className="card" style={{ flex: '1 1 320px' }}>
-          <h2>Top queries (28d)</h2>
-          {data.top_queries.length === 0 ? (
-            <Empty>No search query data yet</Empty>
-          ) : (
-            <table>
-              <thead>
-                <tr>
-                  <th>Query</th>
-                  <th className="num">Clicks</th>
-                  <th className="num">Impr.</th>
-                  <th className="num">Pos</th>
-                </tr>
-              </thead>
-              <tbody>
-                {data.top_queries.map((q) => (
-                  <tr key={q.query}>
-                    <td>{q.query}</td>
-                    <td className="num">{fmtNum(q.clicks)}</td>
-                    <td className="num">{fmtNum(q.impressions)}</td>
-                    <td className="num">{q.position ?? '—'}</td>
-                  </tr>
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
+        {stats.map((s) => (
+          <Card key={s.label} className="gap-0 py-4">
+            <CardContent className="px-4">
+              <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{s.label}</div>
+              <div className="mt-1 text-2xl font-semibold tabular-nums">{s.value}</div>
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+
+      <div className="grid gap-4 lg:grid-cols-2">
+        <Card>
+          <CardHeader>
+            <CardTitle>Active capabilities</CardTitle>
+          </CardHeader>
+          <CardContent>
+            {feats.length === 0 ? (
+              <Empty>
+                No data sources connected yet. Open <b>Integrations</b> to connect Search Console or DataForSEO.
+              </Empty>
+            ) : (
+              <div className="flex flex-wrap gap-2">
+                {feats.map((f) => (
+                  <Badge key={f} variant="success">
+                    {f}
+                  </Badge>
                 ))}
-              </tbody>
-            </table>
-          )}
-        </div>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Top queries (28d)</CardTitle>
+          </CardHeader>
+          <CardContent>
+            {data.top_queries.length === 0 ? (
+              <Empty>No search query data yet</Empty>
+            ) : (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Query</TableHead>
+                    <TableHead className="text-right">Clicks</TableHead>
+                    <TableHead className="text-right">Impr.</TableHead>
+                    <TableHead className="text-right">Pos</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {data.top_queries.map((q) => (
+                    <TableRow key={q.query}>
+                      <TableCell>{q.query}</TableCell>
+                      <TableCell className="text-right tabular-nums">{fmtNum(q.clicks)}</TableCell>
+                      <TableCell className="text-right tabular-nums">{fmtNum(q.impressions)}</TableCell>
+                      <TableCell className="text-right tabular-nums">{q.position ?? '—'}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            )}
+          </CardContent>
+        </Card>
       </div>
 
-      <div className="card mt">
-        <h2>
-          Background jobs {busy && <span className="pill busy">running…</span>}
-          <button className="btn sm" style={{ float: 'right' }} onClick={reload}>
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between">
+          <CardTitle className="flex items-center gap-2">
+            Background jobs {busy ? <Badge variant="warning">running…</Badge> : null}
+          </CardTitle>
+          <Button variant="outline" size="sm" onClick={reload}>
             Refresh
-          </button>
-        </h2>
-        <JobTable jobs={jobs} />
-      </div>
+          </Button>
+        </CardHeader>
+        <CardContent>
+          <JobTable jobs={jobs} />
+        </CardContent>
+      </Card>
     </div>
   );
 }

@@ -3,6 +3,11 @@ import type { PublicationDto, PublicationStatus } from '@seo/contracts';
 import { api } from '../lib/api';
 import { useAsync, StatusPill, Empty } from '../lib/ui';
 import { fmtDateTime, parseDate } from '../components/scheduling/scheduleMeta';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent } from '@/components/ui/card';
+import { PageHeader } from '@/components/ui/page-header';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 
 /**
  * Publication history (Content Studio Phase H3). This page answers "what
@@ -137,17 +142,24 @@ export function Publications({ projectId }: { projectId: string }) {
   const publisherOptions = showAll.map((w) => w.publisher);
 
   return (
-    <div>
-      <h1>Publications</h1>
-      <p className="sub">
-        History of every publish attempt in this project — who it went to, when, and whether it worked. Planning is done
-        on the Calendar; this page shows what happened.
-      </p>
+    <div className="grid gap-5">
+      <PageHeader
+        title="Publications"
+        description="History of every publish attempt in this project — who it went to, when, and whether it worked. Planning is done on the Calendar; this page shows what happened."
+      />
 
-      {error && <div className="banner error">{error}</div>}
+      {error && (
+        <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+          {error}
+        </div>
+      )}
 
-      <div className="row" style={{ gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
-        <select value={filters.status ?? 'all'} onChange={(e) => change({ status: e.target.value as Filters['status'] })}>
+      <div className="flex flex-wrap items-center gap-2">
+        <select
+          className="h-9 rounded-md border border-input bg-background px-3 text-sm shadow-xs outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+          value={filters.status ?? 'all'}
+          onChange={(e) => change({ status: e.target.value as Filters['status'] })}
+        >
           <option value="all">All statuses</option>
           {PUBLICATION_STATUSES.map((s) => (
             <option key={s} value={s}>
@@ -155,7 +167,11 @@ export function Publications({ projectId }: { projectId: string }) {
             </option>
           ))}
         </select>
-        <select value={filters.publisher_id ?? ''} onChange={(e) => change({ publisher_id: e.target.value || undefined })}>
+        <select
+          className="h-9 rounded-md border border-input bg-background px-3 text-sm shadow-xs outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+          value={filters.publisher_id ?? ''}
+          onChange={(e) => change({ publisher_id: e.target.value || undefined })}
+        >
           <option value="">All publishers</option>
           {publisherOptions.map((p) => (
             <option key={p.id} value={p.id}>
@@ -163,23 +179,47 @@ export function Publications({ projectId }: { projectId: string }) {
             </option>
           ))}
         </select>
-        <button type="button" className="btn sm" onClick={() => setTick((x) => x + 1)} disabled={loading}>
+        <Button variant="outline" size="sm" onClick={() => setTick((x) => x + 1)} disabled={loading}>
           Refresh
-        </button>
+        </Button>
       </div>
 
       {(filters.content_id || filters.schedule_id) && (
-        <div className="row" style={{ gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
+        <div className="flex flex-wrap items-center gap-2">
           {filters.content_id && (
-            <span className="pill">Content: {filters.content_id.slice(0, 8)}… <a href="#" onClick={(e) => { e.preventDefault(); change({ content_id: undefined }); }}>clear</a></span>
+            <Badge variant="outline">
+              Content: {filters.content_id.slice(0, 8)}…{' '}
+              <a
+                href="#"
+                className="underline"
+                onClick={(e) => {
+                  e.preventDefault();
+                  change({ content_id: undefined });
+                }}
+              >
+                clear
+              </a>
+            </Badge>
           )}
           {filters.schedule_id && (
-            <span className="pill">From a calendar schedule <a href="#" onClick={(e) => { e.preventDefault(); change({ schedule_id: undefined }); }}>clear</a></span>
+            <Badge variant="outline">
+              From a calendar schedule{' '}
+              <a
+                href="#"
+                className="underline"
+                onClick={(e) => {
+                  e.preventDefault();
+                  change({ schedule_id: undefined });
+                }}
+              >
+                clear
+              </a>
+            </Badge>
           )}
         </div>
       )}
 
-      {!error && loading && rows.length === 0 && <p className="muted">Loading publications…</p>}
+      {!error && loading && rows.length === 0 && <p className="text-sm text-muted-foreground">Loading publications…</p>}
       {!error && !loading && rows.length === 0 && (
         <Empty>
           {filters.content_id || filters.schedule_id
@@ -188,51 +228,63 @@ export function Publications({ projectId }: { projectId: string }) {
         </Empty>
       )}
       {rows.length > 0 && (
-        <div className="card">
-          <table>
-            <thead>
-              <tr>
-                <th>Title</th>
-                <th>Status</th>
-                <th>Publisher</th>
-                <th>When</th>
-                <th>Live URL</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((p) => (
-                <tr key={p.id} style={{ cursor: 'pointer' }} onClick={() => setSelectedId(p.id)}>
-                  <td>
-                    <div>{p.content_title ?? 'Untitled'}</div>
-                    <div className="muted" style={{ fontSize: 12 }}>
-                      {p.schedule_id ? 'Via calendar schedule' : 'Published directly'}
-                    </div>
-                  </td>
-                  <td>
-                    <StatusPill status={p.status} />
-                  </td>
-                  <td>{p.publisher_name ?? '—'}</td>
-                  <td className="muted">{fmtWhen(p)}</td>
-                  <td className="mono muted" style={{ fontSize: 12 }}>
-                    {p.target_url ? <a href={p.target_url} target="_blank" rel="noreferrer">{p.target_url}</a> : '—'}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          {hasMore && (
-            <div className="row" style={{ justifyContent: 'center', padding: 10 }}>
-              <button type="button" className="btn" onClick={() => setOffset((o) => o + PAGE)} disabled={loading}>
-                {loading ? 'Loading…' : 'Load more'}
-              </button>
-            </div>
-          )}
-        </div>
+        <Card>
+          <CardContent>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Title</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead>Publisher</TableHead>
+                  <TableHead>When</TableHead>
+                  <TableHead>Live URL</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {rows.map((p) => (
+                  <TableRow key={p.id} className="cursor-pointer" onClick={() => setSelectedId(p.id)}>
+                    <TableCell>
+                      <div>{p.content_title ?? 'Untitled'}</div>
+                      <div className="text-xs text-muted-foreground">
+                        {p.schedule_id ? 'Via calendar schedule' : 'Published directly'}
+                      </div>
+                    </TableCell>
+                    <TableCell>
+                      <StatusPill status={p.status} />
+                    </TableCell>
+                    <TableCell>{p.publisher_name ?? '—'}</TableCell>
+                    <TableCell className="text-muted-foreground">{fmtWhen(p)}</TableCell>
+                    <TableCell className="font-mono text-xs text-muted-foreground">
+                      {p.target_url ? (
+                        <a href={p.target_url} target="_blank" rel="noreferrer" className="underline">
+                          {p.target_url}
+                        </a>
+                      ) : (
+                        '—'
+                      )}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+            {hasMore && (
+              <div className="flex justify-center p-2.5">
+                <Button variant="outline" onClick={() => setOffset((o) => o + PAGE)} disabled={loading}>
+                  {loading ? 'Loading…' : 'Load more'}
+                </Button>
+              </div>
+            )}
+          </CardContent>
+        </Card>
       )}
 
-      {rows.length > 0 && !hasMore && <p className="muted sch-note">End of publication history.</p>}
+      {rows.length > 0 && !hasMore && (
+        <p className="mt-3 text-xs text-muted-foreground">End of publication history.</p>
+      )}
 
-      {selectedId && <PublicationDetail projectId={projectId} publicationId={selectedId} onClose={() => setSelectedId(null)} />}
+      {selectedId && (
+        <PublicationDetail projectId={projectId} publicationId={selectedId} onClose={() => setSelectedId(null)} />
+      )}
     </div>
   );
 }
@@ -253,33 +305,53 @@ function PublicationDetail({ projectId, publicationId, onClose }: { projectId: s
   const p = detail.data;
 
   return (
-    <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal card" role="dialog" aria-modal="true" aria-label="Publication details" onClick={(e) => e.stopPropagation()}>
-        <div className="modal-head">
-          <h3>Publication</h3>
-          <button type="button" className="modal-x" onClick={onClose} aria-label="Close">
+    <div
+      className="fixed inset-0 z-[60] flex items-start justify-center overflow-y-auto bg-black/45 px-4 pb-4 pt-[8vh]"
+      onClick={onClose}
+    >
+      <div
+        className="w-full max-w-[520px] rounded-xl border bg-card p-4 text-card-foreground shadow-sm"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Publication details"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="mb-1 flex items-center justify-between">
+          <h3 className="m-0 text-[15px] font-semibold">Publication</h3>
+          <button
+            type="button"
+            className="cursor-pointer border-none bg-transparent px-1 text-xl leading-none text-muted-foreground hover:text-destructive"
+            onClick={onClose}
+            aria-label="Close"
+          >
             ×
           </button>
         </div>
 
-        {detail.loading && !p && <p className="muted">Loading…</p>}
-        {detail.error && <div className="banner error">{detail.error}</div>}
+        {detail.loading && !p && <p className="text-sm text-muted-foreground">Loading…</p>}
+        {detail.error && (
+          <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+            {detail.error}
+          </div>
+        )}
 
         {p && (
           <>
-            <div className="sch-detail-title">{p.content_title ?? 'Untitled'}</div>
-            <div className="sch-detail-status">
+            <div className="my-1.5 text-[15px] font-semibold">{p.content_title ?? 'Untitled'}</div>
+            <div className="my-1 mb-2 flex flex-wrap items-center gap-2">
               <StatusPill status={p.status} />
-              <span className="pill">{p.schedule_id ? 'via calendar schedule' : 'direct'}</span>
-              {p.status === 'failed' && p.error && <span className="muted sch-cancelled-note">Failure: {p.error}</span>}
+              <Badge variant="outline">{p.schedule_id ? 'via calendar schedule' : 'direct'}</Badge>
+              {p.status === 'failed' && p.error && (
+                <span className="text-[11.5px] text-muted-foreground">Failure: {p.error}</span>
+              )}
               {p.status === 'published' && p.target_url && (
-                <span className="muted sch-cancelled-note">Live at the URL below.</span>
+                <span className="text-[11.5px] text-muted-foreground">Live at the URL below.</span>
               )}
             </div>
 
-            <dl className="sch-detail-grid">
+            <dl className="my-2 grid grid-cols-[120px_1fr] gap-x-2.5 gap-y-1.5 text-[13px] [&_dd]:m-0 [&_dd]:min-w-0 [&_dd]:break-words [&_dt]:text-muted-foreground">
               <dt>Status</dt>
-              <dd className="mono">{p.status}</dd>
+              <dd className="font-mono">{p.status}</dd>
               {p.published_at && (
                 <>
                   <dt>Published</dt>
@@ -297,29 +369,35 @@ function PublicationDetail({ projectId, publicationId, onClose }: { projectId: s
               <dt>Content</dt>
               <dd>{p.content_title ?? '—'}</dd>
               <dt>Content id</dt>
-              <dd className="mono">{p.content_id ?? '—'}</dd>
+              <dd className="font-mono">{p.content_id ?? '—'}</dd>
               <dt>Remote id</dt>
-              <dd className="mono">{p.remote_id ?? '—'}</dd>
+              <dd className="font-mono">{p.remote_id ?? '—'}</dd>
               <dt>Updated</dt>
               <dd>{fmtDateTime(parseDate(p.updated_at) ?? new Date())}</dd>
             </dl>
 
             {p.target_url && (
-              <div style={{ marginBottom: 12 }}>
-                <a className="btn" href={p.target_url} target="_blank" rel="noreferrer">
-                  Open live URL
-                </a>
+              <div className="mb-3">
+                <Button variant="outline" asChild>
+                  <a href={p.target_url} target="_blank" rel="noreferrer">
+                    Open live URL
+                  </a>
+                </Button>
               </div>
             )}
-            {p.error && p.status === 'failed' && <div className="banner error">Publishing failed: {p.error}</div>}
+            {p.error && p.status === 'failed' && (
+              <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+                Publishing failed: {p.error}
+              </div>
+            )}
           </>
         )}
 
-        <div className="modal-actions">
-          <span className="spacer" />
-          <button type="button" className="btn" onClick={onClose}>
+        <div className="mt-4 flex items-center gap-2">
+          <span className="flex-1" />
+          <Button variant="outline" onClick={onClose}>
             Close
-          </button>
+          </Button>
         </div>
       </div>
     </div>

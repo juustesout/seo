@@ -12,6 +12,11 @@ import { useState } from 'react';
 import { useAsync, StatusPill } from '../lib/ui';
 import { api } from '../lib/api';
 import { connectGoogle } from '../lib/gsc';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { PageHeader } from '@/components/ui/page-header';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 
 interface GscConnection {
   connected: boolean;
@@ -52,8 +57,9 @@ export function ProjectSettings({ projectId }: { projectId: string }) {
   const [err, setErr] = useState<string | null>(null);
   const [ok, setOk] = useState<string | null>(null);
 
-  if (state.loading && !state.data) return <p className="muted">Loading…</p>;
-  if (state.error) return <div className="banner error">{state.error}</div>;
+  if (state.loading && !state.data) return <p className="text-sm text-muted-foreground">Loading…</p>;
+  if (state.error)
+    return <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">{state.error}</div>;
   if (!state.data) return null;
 
   const connected = state.data.google.connected;
@@ -89,155 +95,190 @@ export function ProjectSettings({ projectId }: { projectId: string }) {
   const current = state.data.current;
 
   return (
-    <div>
-      <h1>Project settings</h1>
-      <p className="sub">Manage this project's Google Search Console property. The Google connection itself is owned by your account.</p>
-      {err && <div className="banner error">{err}</div>}
-      {ok && <div className="banner ok">{ok}</div>}
+    <div className="grid gap-5">
+      <PageHeader
+        title="Project settings"
+        description="Manage this project's Google Search Console property. The Google connection itself is owned by your account."
+      />
+      {err && (
+        <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+          {err}
+        </div>
+      )}
+      {ok && (
+        <div className="rounded-md border border-success/30 bg-success/5 px-3 py-2 text-sm text-success">{ok}</div>
+      )}
 
-      <div className="card">
-        <h2>Google Search Console</h2>
-        {!connected ? (
-          <div>
-            <p className="sub">
-              {state.data.google.status === 'connecting'
-                ? 'Waiting for Google authorization…'
-                : 'This project has no Search Console connection. Connecting authorizes your account (once) so any project can attach its properties.'}
-            </p>
-            {state.data.google.error && <div className="banner error">{state.data.google.error}</div>}
-            <button className="btn primary" onClick={() => void run('connect', connectGoogle, 'Redirecting to Google…')} disabled={busy !== null}>
-              {busy === 'connect' ? 'Redirecting to Google…' : 'Connect Google Account'}
-            </button>
-          </div>
-        ) : (
-          <div>
-            <p className="sub">
-              Account connected. <StatusPill status="connected" />
-            </p>
-            <div className="mt">
+      <Card>
+        <CardHeader>
+          <CardTitle>Google Search Console</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {!connected ? (
+            <div className="grid gap-3">
+              <p className="text-sm text-muted-foreground">
+                {state.data.google.status === 'connecting'
+                  ? 'Waiting for Google authorization…'
+                  : 'This project has no Search Console connection. Connecting authorizes your account (once) so any project can attach its properties.'}
+              </p>
+              {state.data.google.error && (
+                <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+                  {state.data.google.error}
+                </div>
+              )}
+              <div>
+                <Button onClick={() => void run('connect', connectGoogle, 'Redirecting to Google…')} disabled={busy !== null}>
+                  {busy === 'connect' ? 'Redirecting to Google…' : 'Connect Google Account'}
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <div className="grid gap-3">
+              <p className="flex items-center gap-2 text-sm text-muted-foreground">
+                Account connected. <StatusPill status="connected" />
+              </p>
               {current ? (
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
+                <div className="flex flex-wrap items-center justify-between gap-3">
                   <div>
-                    <div className="label">Attached property</div>
-                    <div className="mono" style={{ fontSize: 15 }}>
-                      {current.site_url}
-                    </div>
-                    <div className="muted" style={{ fontSize: 12 }}>
+                    <div className="text-xs font-medium text-muted-foreground">Attached property</div>
+                    <div className="font-mono text-[15px]">{current.site_url}</div>
+                    <div className="text-xs text-muted-foreground">
                       Dashboard and Search Console sync use this property.
                     </div>
                   </div>
-                  <button
-                    className="btn"
+                  <Button
+                    variant="outline"
                     disabled={busy !== null}
-                    onClick={() => void run('unlink', () => api(`/projects/${projectId}/gsc/attach`, { method: 'DELETE', body: {} }), 'Property unlinked.')}
+                    onClick={() =>
+                      void run(
+                        'unlink',
+                        () => api(`/projects/${projectId}/gsc/attach`, { method: 'DELETE', body: {} }),
+                        'Property unlinked.',
+                      )
+                    }
                   >
                     {busy === 'unlink' ? 'Unlinking…' : 'Unlink property'}
-                  </button>
+                  </Button>
                 </div>
               ) : (
-                <div className="banner info">This project has no Google Search Console property connected. Attach one below to start pulling data.</div>
+                <div className="rounded-md border border-warning/30 bg-warning/5 px-3 py-2 text-sm text-warning">
+                  This project has no Google Search Console property connected. Attach one below to start pulling data.
+                </div>
               )}
             </div>
-          </div>
-        )}
-      </div>
+          )}
+        </CardContent>
+      </Card>
 
       {connected && (
         <>
           {state.data.candidates.length > 0 && (
-            <div className="card mt">
-              <h2>Attach a property</h2>
-              {current && <p className="sub">Switching replaces the current property for this project.</p>}
-              <table>
-                <thead>
-                  <tr>
-                    <th>Property</th>
-                    <th>Permission</th>
-                    <th />
-                  </tr>
-                </thead>
-                <tbody>
-                  {state.data.candidates.map((c) => (
-                    <tr key={c.id}>
-                      <td className="mono">{c.site_url}</td>
-                      <td className="muted">{c.permission_level ?? '—'}</td>
-                      <td className="num">
-                        <button
-                          className="btn sm primary"
-                          disabled={busy !== null}
-                          onClick={() =>
-                            void run(
-                              'attach',
-                              () => api(`/projects/${projectId}/gsc/attach`, { method: 'POST', body: { property_id: c.id } }),
-                              `Attached ${c.site_url}.`,
-                            )
-                          }
-                        >
-                          {busy === 'attach' ? 'Attaching…' : 'Attach'}
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <Card>
+              <CardHeader>
+                <CardTitle>Attach a property</CardTitle>
+                {current && <p className="text-sm text-muted-foreground">Switching replaces the current property for this project.</p>}
+              </CardHeader>
+              <CardContent>
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Property</TableHead>
+                      <TableHead>Permission</TableHead>
+                      <TableHead />
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {state.data.candidates.map((c) => (
+                      <TableRow key={c.id}>
+                        <TableCell className="font-mono">{c.site_url}</TableCell>
+                        <TableCell className="text-muted-foreground">{c.permission_level ?? '—'}</TableCell>
+                        <TableCell className="text-right">
+                          <Button
+                            size="sm"
+                            disabled={busy !== null}
+                            onClick={() =>
+                              void run(
+                                'attach',
+                                () => api(`/projects/${projectId}/gsc/attach`, { method: 'POST', body: { property_id: c.id } }),
+                                `Attached ${c.site_url}.`,
+                              )
+                            }
+                          >
+                            {busy === 'attach' ? 'Attaching…' : 'Attach'}
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </CardContent>
+            </Card>
           )}
 
-          <div className="card mt">
-            <h2>Add a property from Google</h2>
-            <p className="sub">Load the Search Console properties your Google account can access, then attach one to this project.</p>
-            <button className="btn" onClick={() => void discover()} disabled={busy !== null}>
-              {busy === 'discover' ? 'Loading properties…' : 'Load properties from Google'}
-            </button>
-            {discovered && (
-              <table className="mt">
-                <thead>
-                  <tr>
-                    <th>Property</th>
-                    <th>Permission</th>
-                    <th />
-                  </tr>
-                </thead>
-                <tbody>
-                  {discovered.length === 0 && (
-                    <tr>
-                      <td colSpan={3} className="muted">
-                        No Search Console properties found for this Google account.
-                      </td>
-                    </tr>
-                  )}
-                  {discovered.map((d) => {
-                    const isCurrent = current?.site_url === d.siteUrl;
-                    return (
-                      <tr key={d.siteUrl}>
-                        <td className="mono">{d.siteUrl}</td>
-                        <td className="muted">{d.permissionLevel ?? '—'}</td>
-                        <td className="num">
-                          {isCurrent ? (
-                            <span className="pill ok">current</span>
-                          ) : (
-                            <button
-                              className="btn sm"
-                              disabled={busy !== null}
-                              onClick={() =>
-                                void run(
-                                  'attach',
-                                  () => api(`/projects/${projectId}/gsc/attach`, { method: 'POST', body: { siteUrl: d.siteUrl } }),
-                                  `Attached ${d.siteUrl}.`,
-                                )
-                              }
-                            >
-                              {busy === 'attach' ? 'Attaching…' : 'Attach'}
-                            </button>
-                          )}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            )}
-          </div>
+          <Card>
+            <CardHeader>
+              <CardTitle>Add a property from Google</CardTitle>
+            </CardHeader>
+            <CardContent className="grid gap-3">
+              <p className="text-sm text-muted-foreground">
+                Load the Search Console properties your Google account can access, then attach one to this project.
+              </p>
+              <div>
+                <Button variant="outline" onClick={() => void discover()} disabled={busy !== null}>
+                  {busy === 'discover' ? 'Loading properties…' : 'Load properties from Google'}
+                </Button>
+              </div>
+              {discovered && (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Property</TableHead>
+                      <TableHead>Permission</TableHead>
+                      <TableHead />
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {discovered.length === 0 && (
+                      <TableRow>
+                        <TableCell colSpan={3} className="text-muted-foreground">
+                          No Search Console properties found for this Google account.
+                        </TableCell>
+                      </TableRow>
+                    )}
+                    {discovered.map((d) => {
+                      const isCurrent = current?.site_url === d.siteUrl;
+                      return (
+                        <TableRow key={d.siteUrl}>
+                          <TableCell className="font-mono">{d.siteUrl}</TableCell>
+                          <TableCell className="text-muted-foreground">{d.permissionLevel ?? '—'}</TableCell>
+                          <TableCell className="text-right">
+                            {isCurrent ? (
+                              <Badge variant="success">current</Badge>
+                            ) : (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                disabled={busy !== null}
+                                onClick={() =>
+                                  void run(
+                                    'attach',
+                                    () => api(`/projects/${projectId}/gsc/attach`, { method: 'POST', body: { siteUrl: d.siteUrl } }),
+                                    `Attached ${d.siteUrl}.`,
+                                  )
+                                }
+                              >
+                                {busy === 'attach' ? 'Attaching…' : 'Attach'}
+                              </Button>
+                            )}
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
+                  </TableBody>
+                </Table>
+              )}
+            </CardContent>
+          </Card>
         </>
       )}
     </div>
