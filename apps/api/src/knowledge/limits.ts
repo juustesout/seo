@@ -23,3 +23,10 @@ export const MAX_NORMALIZED_CHARS = 200_000;
 
 /** Hard cap on chunks per source; exceeding it fails rather than partially index. */
 export const MAX_CHUNKS = 400;
+
+/** Largest uploaded file accepted for a knowledge source (bytes), enforced at
+ *  the HTTP boundary before storage and re-checked before extraction. */
+export const KNOWLEDGE_MAX_FILE_BYTES = 10 * 1024 * 1024;
+
+/** Largest extracted text kept from an uploaded file, before normalization. */
+export const KNOWLEDGE_MAX_EXTRACTED_CHARS = 200_000;

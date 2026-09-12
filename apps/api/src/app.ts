@@ -119,6 +119,12 @@ export function createApp(): Express {
   app.use('/api/projects/:projectId/publishers', publishersRouter);
   app.use('/api/projects/:projectId/publications', publicationsRouter);
   app.use('/api/projects/:projectId/schedules', schedulesRouter);
+  // Knowledge file uploads are raw bytes (never JSON); parsed only for the
+  // upload path so the global 1mb JSON limit does not constrain them.
+  app.use(
+    '/api/projects/:projectId/knowledge/sources/upload',
+    express.raw({ type: () => true, limit: '12mb' }),
+  );
   app.use('/api/projects/:projectId/knowledge', knowledgeRouter);
   app.use('/api/projects/:projectId/ai', aiSettingsRouter);
   app.use('/api/projects/:projectId/content', contentRouter);

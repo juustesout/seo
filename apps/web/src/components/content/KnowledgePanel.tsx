@@ -7,13 +7,34 @@
  * and remove sources; the panel polls only while a source is busy indexing or
  * deleting so statuses stay live without a permanent interval.
  */
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent } from 'react';
 import { knowledgeErrorMessage, type KnowledgeSourcesResponse } from '@seo/contracts';
-import { api } from '../../lib/api';
+import { api, apiRaw } from '../../lib/api';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
+
+/** Accepted upload types (kept in sync with the server allow-list). */
+const KNOWLEDGE_FILE_ACCEPT = '.txt,.md,.markdown,.pdf,.docx';
+
+/** Human label for a file source, derived from its stored MIME/extension. */
+function fileLabel(contentType: string | null, filename: string | null): string {
+  const type = (contentType ?? '').toLowerCase();
+  if (type === 'application/pdf' || /\.pdf$/i.test(filename ?? '')) return 'PDF';
+  if (type.includes('wordprocessingml') || /\.docx$/i.test(filename ?? '')) return 'DOCX';
+  if (type === 'text/markdown' || type === 'text/x-markdown' || /\.markdown?$/i.test(filename ?? '')) return 'Markdown';
+  if (type === 'text/plain') return 'Text';
+  return (filename?.split('.').pop() ?? 'File').toUpperCase();
+}
+
+/** Compact byte size for the source list (e.g. "1.2 MB"). */
+function formatBytes(bytes: number | null): string | null {
+  if (bytes == null || bytes <= 0) return null;
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
 
 /**
  * Small Content Studio knowledge panel (Phase E). Lists the project's
@@ -28,6 +49,7 @@ export function KnowledgePanel({ projectId, canEdit }: { projectId: string; canE
   const [name, setName] = useState('');
   const [url, setUrl] = useState('');
   const [text, setText] = useState('');
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -76,6 +98,22 @@ export function KnowledgePanel({ projectId, canEdit }: { projectId: string; canE
       setName('');
       setUrl('');
       setText('');
+      await load();
+    } catch (e2) {
+      setErr(e2 instanceof Error ? e2.message : String(e2));
+    } finally {
+      setBusyAction(false);
+    }
+  };
+
+  const uploadFile = async (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file || busyAction) return;
+    setBusyAction(true);
+    setErr(null);
+    try {
+      await apiRaw(`/projects/${projectId}/knowledge/sources/upload`, file, { filename: file.name });
       await load();
     } catch (e2) {
       setErr(e2 instanceof Error ? e2.message : String(e2));
@@ -172,18 +210,35 @@ export function KnowledgePanel({ projectId, canEdit }: { projectId: string; canE
             rows={4}
             maxLength={100000}
           />
-          <div>
+          <div className="flex flex-wrap gap-2">
             <Button type="submit" size="sm" disabled={busyAction || !name.trim() || (!text.trim() && !url.trim())}>
               {busyAction ? 'Adding…' : 'Add source'}
             </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={busyAction}
+              onClick={() => fileInputRef.current?.click()}
+            >
+              Upload file
+            </Button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept={KNOWLEDGE_FILE_ACCEPT}
+              className="hidden"
+              onChange={uploadFile}
+            />
           </div>
+          <p className="text-[11px] text-muted-foreground">Upload a TXT, Markdown, PDF or DOCX file (max 10 MB). It is stored privately, then indexed when you press Index.</p>
         </form>
       )}
 
       {sources.length === 0 && (
         <p className="text-[13px] text-muted-foreground">
           {configured
-            ? 'No sources yet. Add text or a URL above - pasted text is embedded in the background; a URL is stored as draft until you press Fetch.'
+            ? 'No sources yet. Add text or a URL above, or upload a TXT/Markdown/PDF/DOCX file - indexing happens in the background.'
             : 'No sources yet.'}
         </p>
       )}
@@ -201,7 +256,13 @@ export function KnowledgePanel({ projectId, canEdit }: { projectId: string; canE
                   </span>
                 )}
               </div>
-              {(s.url || s.source_type) && (
+              {s.source_type === 'file' ? (
+                <div className="font-mono text-xs text-muted-foreground">
+                  {[fileLabel(s.content_type, s.original_filename), formatBytes(s.size_bytes)]
+                    .filter(Boolean)
+                    .join(' · ')}
+                </div>
+              ) : (
                 <div className="font-mono text-xs text-muted-foreground">
                   {s.source_type}
                   {s.url ? ` · ${s.url}` : ''}
@@ -211,7 +272,9 @@ export function KnowledgePanel({ projectId, canEdit }: { projectId: string; canE
                 <div className="mt-1 text-xs text-muted-foreground">
                   {s.source_type === 'url'
                     ? 'Not fetched yet. Use Fetch to pull the page content into the knowledge base.'
-                    : 'Not indexed yet. Use Index to add this source to the knowledge base.'}
+                    : s.source_type === 'file'
+                      ? 'Stored privately. Use Index to extract and index this file.'
+                      : 'Not indexed yet. Use Index to add this source to the knowledge base.'}
                 </div>
               )}
               {s.error && (

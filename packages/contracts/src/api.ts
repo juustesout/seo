@@ -748,6 +748,12 @@ export interface KnowledgeSourceDto {
   error: string | null;
   chunk_count: number;
   last_indexed_at: string | null;
+  /** Original uploaded filename (file sources only). */
+  original_filename: string | null;
+  /** Validated MIME type of the uploaded file (file sources only). */
+  content_type: string | null;
+  /** Uploaded file size in bytes (file sources only). */
+  size_bytes: number | null;
   created_at: string;
   updated_at: string;
 }

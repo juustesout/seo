@@ -7,11 +7,13 @@
  *     or summarizes content; the source row's `content_text` stays the source
  *     of truth and this is only the processing representation handed to the
  *     chunker/embedder.
- *  2. `extractSourceText` - the one canonical extractor registry. `text`
+ *  2. `extractSourceText` - the canonical extractor for inlined bodies. `text`
  *     sources are extracted here; `url` returns an honest "not fetched yet"
  *     result (KB3 fetches it in the pipeline and then reuses this same
- *     extractor on the captured body) and `file` reports "not available" until
- *     KB4. No extractor ever fabricates content.
+ *     extractor on the captured body). `file` has no inline body by design -
+ *     KB4 re-extracts it from private storage in `KnowledgeService` - so it
+ *     reports "not available" here rather than fabricating text. No extractor
+ *     ever fabricates content.
  */
 
 import type { KnowledgeSourceType } from '@seo/contracts';
@@ -73,7 +75,7 @@ export function extractSourceText(row: SourceTextRow): ExtractionResult {
     return {
       ok: false,
       code: 'not_available',
-      reason: 'File ingestion is not available yet. Paste the text instead.',
+      reason: 'File content is extracted from storage during ingestion, not stored inline.',
     };
   }
 

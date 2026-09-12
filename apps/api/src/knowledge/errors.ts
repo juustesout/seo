@@ -75,6 +75,41 @@ const META: Record<KnowledgeIngestErrorCode, ErrorMeta> = {
     retryable: true,
     message: KNOWLEDGE_ERROR_MESSAGES.knowledge_index_failed,
   },
+  knowledge_file_not_available: {
+    status: 503,
+    retryable: false,
+    message: KNOWLEDGE_ERROR_MESSAGES.knowledge_file_not_available,
+  },
+  knowledge_file_type_not_allowed: {
+    status: 400,
+    retryable: false,
+    message: KNOWLEDGE_ERROR_MESSAGES.knowledge_file_type_not_allowed,
+  },
+  knowledge_file_too_large: {
+    status: 413,
+    retryable: false,
+    message: KNOWLEDGE_ERROR_MESSAGES.knowledge_file_too_large,
+  },
+  knowledge_file_missing: {
+    status: 404,
+    retryable: false,
+    message: KNOWLEDGE_ERROR_MESSAGES.knowledge_file_missing,
+  },
+  knowledge_file_extract_failed: {
+    status: 422,
+    retryable: false,
+    message: KNOWLEDGE_ERROR_MESSAGES.knowledge_file_extract_failed,
+  },
+  knowledge_file_no_extractable_text: {
+    status: 422,
+    retryable: false,
+    message: KNOWLEDGE_ERROR_MESSAGES.knowledge_file_no_extractable_text,
+  },
+  knowledge_file_storage_failed: {
+    status: 502,
+    retryable: true,
+    message: KNOWLEDGE_ERROR_MESSAGES.knowledge_file_storage_failed,
+  },
 };
 
 /** Error carrying a stable code, a safe message and an explicit retryability. */

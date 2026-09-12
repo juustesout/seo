@@ -4,8 +4,8 @@
  * Mounts the real knowledgeRouter with a fake container/user and asserts the
  * wire contract: authentication, viewer vs editor role gates, canonical DTO
  * output, legacy source_type mapping (`note`/`reference` -> `text`) at the
- * boundary, and the precise `knowledge_file_ingestion_not_available` capability
- * error. The service is stubbed so the protocol is exercised in isolation.
+ * boundary, the raw-body file upload contract (KB4), and safe error codes. The
+ * service is stubbed so the protocol is exercised in isolation.
  */
 import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -36,6 +36,9 @@ const sourceDto = {
   error: null,
   chunk_count: 0,
   last_indexed_at: null,
+  original_filename: null,
+  content_type: null,
+  size_bytes: null,
   created_at: '2026-09-08T00:00:00.000Z',
   updated_at: '2026-09-08T00:00:00.000Z',
 };
@@ -82,6 +85,10 @@ beforeAll(async () => {
     (req as unknown as { user?: { sub: string } }).user = TOKEN_TO_USER[token];
     next();
   });
+  app.use(
+    '/api/projects/:projectId/knowledge/sources/upload',
+    express.raw({ type: () => true, limit: '12mb' }),
+  );
   app.use(`/api/projects/:projectId/knowledge`, knowledgeRouter);
   app.use(errorHandler);
   await new Promise<void>((resolve) => {
@@ -100,6 +107,10 @@ beforeEach(() => {
   vi.spyOn(KnowledgeService.prototype, 'createSource').mockResolvedValue({
     source: sourceDto,
     job: { id: 'job-1' },
+  } as never);
+  vi.spyOn(KnowledgeService.prototype, 'createFileSource').mockResolvedValue({
+    source: sourceDto,
+    job: null,
   } as never);
   vi.spyOn(KnowledgeService.prototype, 'enqueueIngest').mockResolvedValue({ id: 'job-2' } as never);
   vi.spyOn(KnowledgeService.prototype, 'enqueueDelete').mockResolvedValue({ id: 'job-3' } as never);
@@ -190,12 +201,57 @@ describe('knowledge create boundary mapping', () => {
     expect((res.json as { error: { code: string } }).error.code).toBe('validation_error');
   });
 
-  it('surfaces the file capability error unchanged', async () => {
+  it('surfaces a file type error unchanged', async () => {
     vi.mocked(KnowledgeService.prototype.createSource).mockRejectedValue(
-      new ApiError(400, 'knowledge_file_ingestion_not_available', 'File ingestion is not available yet.') as never,
+      new ApiError(400, 'knowledge_file_type_not_allowed', 'This file type is not supported.') as never,
     );
     const res = await request('/sources', { method: 'POST', token: 'editor-token', body: { name: 'F', source_type: 'file', url: 'https://f.example' } });
     expect(res.status).toBe(400);
-    expect(res.json).toMatchObject({ error: { code: 'knowledge_file_ingestion_not_available' } });
+    expect(res.json).toMatchObject({ error: { code: 'knowledge_file_type_not_allowed' } });
+  });
+});
+
+describe('knowledge file upload route', () => {
+  async function upload(init: { token?: string; filename?: string; contentType?: string; body?: Uint8Array | string; qs?: string } = {}) {
+    const headers: Record<string, string> = { 'content-type': init.contentType ?? 'text/plain' };
+    if (init.token) headers.authorization = `Bearer ${init.token}`;
+    const q = init.qs ?? (init.filename !== undefined ? `?filename=${encodeURIComponent(init.filename)}` : '');
+    const res = await fetch(`${base}/sources/upload${q}`, { method: 'POST', headers, body: init.body as BodyInit });
+    return { status: res.status, json: (await res.json().catch(() => null)) as unknown };
+  }
+
+  it('requires the editor role and never uploads for a viewer', async () => {
+    const res = await upload({ token: 'viewer-token', filename: 'a.txt', body: 'hello' });
+    expect(res.status).toBe(403);
+    expect(vi.mocked(KnowledgeService.prototype.createFileSource)).not.toHaveBeenCalled();
+  });
+
+  it('passes the sanitized project, filename, content type and bytes to the service', async () => {
+    const res = await upload({ token: 'editor-token', filename: 'report.PDF', contentType: 'application/pdf', body: new TextEncoder().encode('%PDF-1.4 x') });
+    expect(res.status).toBe(201);
+    expect(vi.mocked(KnowledgeService.prototype.createFileSource)).toHaveBeenLastCalledWith(
+      PROJECT,
+      'e-user',
+      expect.objectContaining({ filename: 'report.PDF', contentType: 'application/pdf' }),
+    );
+  });
+
+  it('rejects an empty or bodyless upload', async () => {
+    const res = await upload({ token: 'editor-token', filename: 'a.txt', body: new Uint8Array() });
+    expect(res.status).toBe(400);
+  });
+
+  it('rejects a missing filename', async () => {
+    const res = await upload({ token: 'editor-token', qs: '', body: 'hello' });
+    expect(res.status).toBe(400);
+  });
+
+  it('surfaces the storage failure code from the service', async () => {
+    vi.mocked(KnowledgeService.prototype.createFileSource).mockRejectedValue(
+      new ApiError(502, 'knowledge_file_storage_failed', 'The file could not be stored. Try again later.') as never,
+    );
+    const res = await upload({ token: 'editor-token', filename: 'a.txt', body: 'hello' });
+    expect(res.status).toBe(502);
+    expect(res.json).toMatchObject({ error: { code: 'knowledge_file_storage_failed' } });
   });
 });

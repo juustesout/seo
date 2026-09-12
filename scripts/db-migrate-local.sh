@@ -286,6 +286,7 @@ declare
   v_project uuid;
   v_source uuid;
   v_url_source uuid;
+  v_file_source uuid;
 begin
   select id into v_project from public.seo_projects where slug = 'demo' limit 1;
   if v_project is null then raise exception 'smoke: demo project missing for knowledge sources'; end if;
@@ -299,6 +300,27 @@ begin
   if not exists (select 1 from public.seo_knowledge_sources where id = v_source and status = 'ready' and chunk_count = 1) then
     raise exception 'smoke: source status transition failed';
   end if;
+
+  -- A file source stores only private-storage metadata, never the bytes.
+  insert into public.seo_knowledge_sources
+    (project_id, source_type, name, status, original_filename, content_type, size_bytes, storage_path)
+  values
+    (v_project, 'file', 'Smoke file', 'draft', 'notes.txt', 'text/plain', 123, v_project::text || '/file-1')
+  returning id into v_file_source;
+  if not exists (
+    select 1 from public.seo_knowledge_sources
+    where id = v_file_source and storage_path is not null and size_bytes = 123 and content_text is null
+  ) then raise exception 'smoke: file knowledge source metadata was not stored'; end if;
+
+  -- A negative file size is rejected by the KB4 check constraint.
+  begin
+    insert into public.seo_knowledge_sources (project_id, source_type, name, size_bytes)
+    values (v_project, 'file', 'Bad size', -1);
+    raise exception 'smoke: negative file size unexpectedly allowed';
+  exception when check_violation then
+    null;
+  end;
+  raise notice 'smoke: knowledge file source metadata + size constraint OK';
 
   -- A URL-only source is stored as draft; fetching is not part of KB1.
   insert into public.seo_knowledge_sources (project_id, source_type, name, url, status)

@@ -39,6 +39,7 @@ import type {
   FetchedDocument,
   KnowledgeDocumentInput,
   KnowledgeFetcher,
+  KnowledgeFile,
   KnowledgeProvider,
   KnowledgeSourceDto,
   KnowledgeSourceStatus,
@@ -52,9 +53,15 @@ import type { ServiceContainer } from '../context.js';
 import { assertTransition } from './knowledgeLifecycle.js';
 import { extractSourceText, normalizeText } from './knowledgeText.js';
 import { chunkKnowledgeText } from '../knowledge/chunker.js';
-import { MAX_CHUNKS, MAX_NORMALIZED_CHARS } from '../knowledge/limits.js';
-import { KnowledgeIngestError, isKnowledgeIngestError } from '../knowledge/errors.js';
+import {
+  KNOWLEDGE_MAX_EXTRACTED_CHARS,
+  KNOWLEDGE_MAX_FILE_BYTES,
+  MAX_CHUNKS,
+  MAX_NORMALIZED_CHARS,
+} from '../knowledge/limits.js';
+import { KnowledgeIngestError, isKnowledgeIngestError, type KnowledgeIngestErrorCode } from '../knowledge/errors.js';
 import { validateExternalUrl } from '../knowledge/url.js';
+import { hasValidSignature, resolveFileType, sanitizeFilename } from '../knowledge/files/fileTypes.js';
 
 /** Largest single source body accepted for indexing (bytes/chars). Bounding it
  *  keeps chunking latency and Qdrant payloads sane for a UI/managed item. */
@@ -113,6 +120,9 @@ export function mapSourceRow(row: SourceRow): KnowledgeSourceDto {
     error: row.error ? String(row.error) : null,
     chunk_count: Number(row.chunk_count ?? 0),
     last_indexed_at: row.last_indexed_at ? String(row.last_indexed_at) : null,
+    original_filename: row.original_filename ? String(row.original_filename) : null,
+    content_type: row.content_type ? String(row.content_type) : null,
+    size_bytes: row.size_bytes == null ? null : Number(row.size_bytes),
     created_at: String(row.created_at ?? ''),
     updated_at: String(row.updated_at ?? ''),
   };
@@ -137,6 +147,13 @@ export interface KnowledgeCreateInput {
   name: string;
   url?: string | null;
   text?: string | null;
+}
+
+/** Bytes + declared identity of an uploaded knowledge file (KB4). */
+export interface KnowledgeFileCreateInput {
+  filename: string;
+  contentType: string;
+  bytes: Uint8Array;
 }
 
 type ProgressFn = (progress: number, message?: string) => Promise<void>;
@@ -234,6 +251,13 @@ export class KnowledgeService {
     return message.slice(0, 400);
   }
 
+  /** Turn a stable file error code into the wire-shaped ApiError the routes
+   *  return, without duplicating the status/message mapping in every caller. */
+  private static fileApiError(code: KnowledgeIngestErrorCode): ApiError {
+    const err = new KnowledgeIngestError(code);
+    return new ApiError(err.status, err.code, err.message);
+  }
+
   /** Maps provider failures to clean ApiErrors; details never reach the client. */
   private static mapError(err: unknown): ApiError {
     if (err instanceof ApiError) return err;
@@ -273,7 +297,7 @@ export class KnowledgeService {
   async listSources(projectId: string): Promise<KnowledgeSourceDto[]> {
     const { data, error } = await this.sb
       .from('seo_knowledge_sources')
-      .select('id, project_id, source_type, name, url, status, error, chunk_count, last_indexed_at, created_at, updated_at')
+      .select('id, project_id, source_type, name, url, status, error, chunk_count, last_indexed_at, original_filename, content_type, size_bytes, created_at, updated_at')
       .eq('project_id', projectId)
       .order('updated_at', { ascending: false })
       .limit(200);
@@ -306,11 +330,7 @@ export class KnowledgeService {
       throw ApiError.badRequest('source_type must be text, url or file.');
     }
     if (sourceType === 'file') {
-      throw new ApiError(
-        400,
-        'knowledge_file_ingestion_not_available',
-        'File ingestion is not available yet. Paste the text instead.',
-      );
+      throw ApiError.badRequest('Upload files through the knowledge file upload endpoint.');
     }
     if (sourceType === 'text' && !text) {
       throw ApiError.badRequest('Add text to index for a text source.');
@@ -357,6 +377,72 @@ export class KnowledgeService {
   }
 
   /**
+   * Create a `file` source: validate the type/size/signature, upload the bytes
+   * to private storage, then insert the row in `draft`. Files are NOT ingested
+   * synchronously - the user starts ingestion afterwards (draft -> queued) so a
+   * large PDF never blocks an HTTP request. The row is the record; storage holds
+   * the bytes; extracted text is never written to Postgres.
+   */
+  async createFileSource(projectId: string, userId: string, input: KnowledgeFileCreateInput) {
+    const reason = this.configuredReason();
+    if (reason) throw ApiError.notConfigured(`Knowledge is not configured on this server. ${reason}`);
+    const filename = sanitizeFilename(input.filename ?? '');
+    const declaredType = (input.contentType ?? '').split(';')[0]!.trim().toLowerCase();
+    const bytes = input.bytes;
+    if (!bytes || bytes.length === 0) throw ApiError.badRequest('The uploaded file is empty.');
+    if (bytes.length > KNOWLEDGE_MAX_FILE_BYTES) {
+      throw KnowledgeService.fileApiError('knowledge_file_too_large');
+    }
+    const resolved = resolveFileType(filename, declaredType);
+    if (!resolved.ok || !hasValidSignature(resolved.spec.format, bytes)) {
+      throw KnowledgeService.fileApiError('knowledge_file_type_not_allowed');
+    }
+    const contentType = resolved.spec.mimes[0]!;
+
+    const { data, error } = await this.sb
+      .from('seo_knowledge_sources')
+      .insert({
+        project_id: projectId,
+        source_type: 'file',
+        name: filename,
+        content_text: null,
+        status: 'draft',
+        chunk_count: 0,
+        original_filename: filename,
+        content_type: contentType,
+        size_bytes: bytes.length,
+        created_by: userId,
+      })
+      .select()
+      .single();
+    if (error || !data) throw ApiError.badRequest('Could not add the knowledge source');
+    const inserted = data as SourceRow;
+    const sourceId = sourceRowId(inserted);
+
+    let path: string | null = null;
+    try {
+      path = (await this.container.knowledgeFileStore.upload({ projectId, sourceId, filename, contentType, bytes })).path;
+      const committed = await this.patchRow(projectId, sourceId, ['draft'], { storage_path: path });
+      if (!committed) throw ApiError.conflict('The source changed while storing the file. Try again.');
+    } catch (err) {
+      if (path) await this.container.knowledgeFileStore.remove(path).catch(() => undefined);
+      await this.deleteRowBestEffort(projectId, sourceId);
+      if (err instanceof ApiError) throw err;
+      throw KnowledgeService.fileApiError('knowledge_file_storage_failed');
+    }
+
+    return { source: mapSourceRow({ ...inserted, storage_path: path }), job: null };
+  }
+
+  /** Best-effort row removal for rollback paths; never masks the original error. */
+  private async deleteRowBestEffort(projectId: string, sourceId: string): Promise<void> {
+    try {
+      await this.sb.from('seo_knowledge_sources').delete().eq('project_id', projectId).eq('id', sourceId);
+    } catch {
+      // best-effort cleanup; the caller still reports the real failure
+    }
+  }
+  /**
    * (Re)queue ingestion for an existing source: fetch/retry a `draft`/`failed`
    * URL source, reindex a `ready` one, or start a `draft` text source. The
    * lifecycle map refuses `deleted` sources and sources mid-`processing`, and a
@@ -368,8 +454,18 @@ export class KnowledgeService {
     const row = await this.sourceRow(projectId, sourceId);
     const status = (row.status as KnowledgeSourceStatus) ?? 'draft';
     assertTransition(status, 'queued');
-    if (!buildSourceDocument(row)) {
-      const sourceType = (row.source_type as KnowledgeSourceType) ?? 'text';
+    const sourceType = (row.source_type as KnowledgeSourceType) ?? 'text';
+    if (sourceType === 'file') {
+      // A file row with no stored object cannot be extracted; fail fast with an
+      // honest code instead of queueing a job guaranteed to fail.
+      const storagePath = typeof row.storage_path === 'string' ? row.storage_path.trim() : '';
+      if (!storagePath) {
+        await this.patchRow(projectId, sourceId, [status], { status: 'failed', error: 'knowledge_file_missing' }).catch(
+          () => undefined,
+        );
+        throw KnowledgeService.fileApiError('knowledge_file_missing');
+      }
+    } else if (!buildSourceDocument(row)) {
       const rawUrl = typeof row.url === 'string' ? row.url.trim() : '';
       if (sourceType === 'url' && rawUrl) {
         try {
@@ -425,12 +521,15 @@ export class KnowledgeService {
   }
 
   /**
-   * Resolve the indexable document for a row. Text/file sources use the pure
+   * Resolve the indexable document for a row. Text sources use the pure
    * extractor; a URL source with no captured body is fetched once through the
-   * fetcher, then bounded and normalized. The fetched text is returned so the
-   * caller can persist it on success; it is handled strictly as untrusted data
-   * (never interpreted as instructions). Returns null when there is genuinely
-   * nothing to index.
+   * fetcher; a file source is retrieved from private storage and run through
+   * its format extractor. Everything then flows through the same
+   * normalize -> chunk -> index path. The fetched URL text is returned so the
+   * caller can persist it on success; file text is deliberately NOT persisted
+   * (storage holds the bytes), it is handled strictly as untrusted data (never
+   * interpreted as instructions). Returns null when there is genuinely nothing
+   * to index.
    */
   private async resolveDocument(
     row: SourceRow,
@@ -439,6 +538,7 @@ export class KnowledgeService {
     if (existing) return { doc: existing, capturedText: null };
 
     const sourceType = (row.source_type as KnowledgeSourceType) ?? 'text';
+    if (sourceType === 'file') return this.resolveFileDocument(row);
     const rawUrl = typeof row.url === 'string' ? row.url.trim() : '';
     if (sourceType !== 'url' || !rawUrl) return null;
 
@@ -467,6 +567,77 @@ export class KnowledgeService {
         meta: { source: 'knowledge_source', source_type: 'url' },
       },
       capturedText: text,
+    };
+  }
+
+  /**
+   * File variant of resolveDocument (KB4): download from private storage, pick
+   * the extractor for the validated format, extract plain text, then normalize
+   * and bound. The extracted text is never persisted; `content_text` stays null
+   * and the index is rebuildable by re-reading storage. All failures map to
+   * stable `knowledge_file_*` codes - parser internal errors never escape.
+   */
+  private async resolveFileDocument(
+    row: SourceRow,
+  ): Promise<{ doc: KnowledgeDocumentInput; capturedText: null } | null> {
+    const storagePath = typeof row.storage_path === 'string' ? row.storage_path.trim() : '';
+    if (!storagePath) throw new KnowledgeIngestError('knowledge_file_missing');
+
+    const filename = sanitizeFilename(
+      typeof row.original_filename === 'string' && row.original_filename
+        ? row.original_filename
+        : typeof row.name === 'string'
+          ? row.name
+          : 'file',
+    );
+    const contentType = typeof row.content_type === 'string' ? row.content_type : '';
+
+    let bytes: Uint8Array;
+    try {
+      bytes = await this.container.knowledgeFileStore.download(storagePath);
+    } catch {
+      throw new KnowledgeIngestError('knowledge_file_missing');
+    }
+    if (bytes.length === 0) throw new KnowledgeIngestError('knowledge_file_no_extractable_text');
+    if (bytes.length > KNOWLEDGE_MAX_FILE_BYTES) throw new KnowledgeIngestError('knowledge_file_too_large');
+
+    const resolved = resolveFileType(filename, contentType);
+    if (!resolved.ok || !hasValidSignature(resolved.spec.format, bytes)) {
+      throw new KnowledgeIngestError('knowledge_file_type_not_allowed');
+    }
+
+    const file: KnowledgeFile = { filename, contentType, size: bytes.length, bytes };
+    const extractor = this.container.knowledgeFileExtractors.resolve(file);
+    if (!extractor) throw new KnowledgeIngestError('knowledge_file_type_not_allowed');
+
+    let contentText: string;
+    let extractedTitle: string | undefined;
+    try {
+      const extracted = await extractor.extract(file);
+      contentText = extracted.contentText;
+      extractedTitle = extracted.title;
+    } catch (err) {
+      if (isKnowledgeIngestError(err)) throw err;
+      throw new KnowledgeIngestError('knowledge_file_extract_failed');
+    }
+
+    const text = normalizeText(contentText);
+    if (!text) throw new KnowledgeIngestError('knowledge_file_no_extractable_text');
+    if (text.length > KNOWLEDGE_MAX_EXTRACTED_CHARS || text.length > MAX_NORMALIZED_CHARS) {
+      throw new KnowledgeIngestError('knowledge_source_too_large');
+    }
+    if (chunkKnowledgeText(text).length > MAX_CHUNKS) throw new KnowledgeIngestError('knowledge_source_too_large');
+
+    const name = typeof row.name === 'string' ? row.name.trim() : '';
+    return {
+      doc: {
+        externalId: sourceExternalId(sourceRowId(row)),
+        kind: 'note',
+        title: extractedTitle || name || filename,
+        text,
+        meta: { source: 'knowledge_source', source_type: 'file', content_type: contentType },
+      },
+      capturedText: null,
     };
   }
 
@@ -555,17 +726,16 @@ export class KnowledgeService {
   /**
    * Reflect a project-wide vector wipe on the source read-model. Called by the
    * `knowledge_delete` executor after `provider.deleteProject`: sources with
-   * captured text return to `queued` (re-ingestable), bare URL/file sources
-   * with no extractor return to `draft`. Kept here so status writes never live
-   * in the executor.
+   * captured text or a stored file return to `queued` (re-ingestable); only
+   * bare URL sources with no captured body return to `draft`. Kept here so
+   * status writes never live in the executor.
    */
   async resetStatusesAfterProjectWipe(projectId: string): Promise<void> {
     const { error: resetError } = await this.sb
       .from('seo_knowledge_sources')
       .update({ status: 'queued', chunk_count: 0, error: null })
       .eq('project_id', projectId)
-      .not('content_text', 'is', null)
-      .neq('content_text', '');
+      .or('content_text.not.is.null,storage_path.not.is.null');
     if (resetError) {
       throw new ApiError(502, 'knowledge_provider_error', 'Knowledge cleared but source flags could not be reset');
     }
@@ -573,20 +743,24 @@ export class KnowledgeService {
       .from('seo_knowledge_sources')
       .update({ status: 'draft', chunk_count: 0, error: null })
       .eq('project_id', projectId)
-      .or('content_text.is.null,content_text.eq.');
+      .or('content_text.is.null,content_text.eq.')
+      .is('storage_path', null);
     if (draftError) {
       throw new ApiError(502, 'knowledge_provider_error', 'Knowledge cleared but URL source flags could not be reset');
     }
   }
 
-  /** Background pipeline: drop the source's vectors then its traceability row.
-   *  Idempotent - an already-removed row is reported, not treated as an error. */
+  /** Background pipeline: drop the source's vectors, remove its stored file (if
+   *  any), then its traceability row. Idempotent - an already-removed row is
+   *  reported, not treated as an error. Storage cleanup failure keeps the row in
+   *  its terminal `deleted` state and surfaces so the job retries: it never
+   *  resurrects the source or reports a silent leak. */
   async deleteSource(projectId: string, sourceId: string): Promise<Record<string, unknown>> {
     const provider = this.knowledgeProvider();
     if (!provider) throw ApiError.notConfigured('The knowledge provider is not registered on this server.');
     const { data } = await this.sb
       .from('seo_knowledge_sources')
-      .select('status')
+      .select('status, storage_path')
       .eq('project_id', projectId)
       .eq('id', sourceId)
       .maybeSingle();
@@ -599,6 +773,18 @@ export class KnowledgeService {
       // resurrecting it. The job itself carries the retry/error state.
       await this.patchRow(projectId, sourceId, [status], { error: KnowledgeService.safeError(err) }).catch(() => undefined);
       throw KnowledgeService.mapError(err);
+    }
+    const storagePath = typeof (data as { storage_path?: unknown }).storage_path === 'string'
+      ? ((data as { storage_path: string }).storage_path).trim()
+      : '';
+    if (storagePath) {
+      try {
+        await this.container.knowledgeFileStore.remove(storagePath);
+      } catch (err) {
+        const wrapped = isKnowledgeIngestError(err) ? err : new KnowledgeIngestError('knowledge_file_storage_failed');
+        await this.patchRow(projectId, sourceId, [status], { error: wrapped.code }).catch(() => undefined);
+        throw KnowledgeService.mapError(wrapped);
+      }
     }
     const { error } = await this.sb.from('seo_knowledge_sources').delete().eq('project_id', projectId).eq('id', sourceId);
     if (error) throw ApiError.badRequest('Could not remove the knowledge source row');

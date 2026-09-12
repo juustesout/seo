@@ -1,18 +1,19 @@
 /**
- * KnowledgePanel behaviour tests (KB3).
+ * KnowledgePanel behaviour tests (KB3 + KB4).
  *
- * Verifies the URL source lifecycle surface: a draft URL offers Fetch (which
- * calls the ingest endpoint), a processing URL reads as "fetching", and a
- * stored machine code renders as the shared safe sentence rather than a raw
- * provider error. The transport module is mocked; no live calls are made.
+ * Verifies the URL source lifecycle surface (draft URL offers Fetch, a
+ * processing URL reads as "fetching", stored machine codes render as safe
+ * sentences) and the KB4 file surface: a file is uploaded through the raw
+ * transport and a stored file source shows its format and size. The transport
+ * module is mocked; no live calls are made.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import type { KnowledgeSourceDto, KnowledgeSourcesResponse } from '@seo/contracts';
 import { KnowledgePanel } from './KnowledgePanel';
 
-const { apiMock } = vi.hoisted(() => ({ apiMock: { api: vi.fn() } }));
-vi.mock('../../lib/api', () => ({ api: apiMock.api }));
+const { apiMock } = vi.hoisted(() => ({ apiMock: { api: vi.fn(), apiRaw: vi.fn() } }));
+vi.mock('../../lib/api', () => ({ api: apiMock.api, apiRaw: apiMock.apiRaw }));
 
 const PROJECT = 'p-1';
 
@@ -37,6 +38,9 @@ function source(overrides: Partial<KnowledgeSourceDto>): KnowledgeSourceDto {
     error: null,
     chunk_count: 0,
     last_indexed_at: null,
+    original_filename: null,
+    content_type: null,
+    size_bytes: null,
     created_at: '2026-01-01T00:00:00.000Z',
     updated_at: '2026-01-01T00:00:00.000Z',
     ...overrides,
@@ -45,6 +49,7 @@ function source(overrides: Partial<KnowledgeSourceDto>): KnowledgeSourceDto {
 
 beforeEach(() => {
   apiMock.api.mockReset();
+  apiMock.apiRaw.mockReset();
 });
 
 describe('KnowledgePanel URL sources', () => {
@@ -78,5 +83,49 @@ describe('KnowledgePanel URL sources', () => {
     render(<KnowledgePanel projectId={PROJECT} canEdit />);
     expect(await screen.findByText('Fetching the page timed out. Try again later.')).toBeTruthy();
     expect(screen.queryByText('knowledge_fetch_timeout')).toBeNull();
+  });
+});
+
+describe('KnowledgePanel file sources', () => {
+  it('uploads a selected file through the raw transport with its filename', async () => {
+    apiMock.api.mockImplementation(async (path: string, init?: { method?: string }) => {
+      if (init?.method === 'POST') return { source: source({}) };
+      return response([]);
+    });
+    apiMock.apiRaw.mockResolvedValue({ source: source({ source_type: 'file' }) });
+
+    const { container } = render(<KnowledgePanel projectId={PROJECT} canEdit />);
+    await screen.findByText(/No sources yet/i);
+
+    const input = container.querySelector('input[type="file"]') as HTMLInputElement;
+    const file = new File(['%PDF-1.4 body'], 'guide.pdf', { type: 'application/pdf' });
+    fireEvent.change(input, { target: { files: [file] } });
+
+    await vi.waitFor(() =>
+      expect(apiMock.apiRaw).toHaveBeenCalledWith(
+        `/projects/${PROJECT}/knowledge/sources/upload`,
+        file,
+        { filename: 'guide.pdf' },
+      ),
+    );
+  });
+
+  it('shows the format label and size for a stored file source', async () => {
+    apiMock.api.mockResolvedValue(
+      response([
+        source({
+          source_type: 'file',
+          name: 'guide.pdf',
+          url: null,
+          original_filename: 'guide.pdf',
+          content_type: 'application/pdf',
+          size_bytes: 2048,
+          status: 'ready',
+        }),
+      ]),
+    );
+    render(<KnowledgePanel projectId={PROJECT} canEdit />);
+    expect(await screen.findByText(/PDF · 2\.0 KB/)).toBeTruthy();
+    expect(screen.getByText('PDF · 2.0 KB')).toBeTruthy();
   });
 });

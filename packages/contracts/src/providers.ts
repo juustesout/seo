@@ -184,6 +184,49 @@ export interface KnowledgeFetcher {
 }
 
 // ---------------------------------------------------------------------------
+// Knowledge file extraction (uploaded documents -> text)
+// ---------------------------------------------------------------------------
+//
+// Uploaded files (KB4) are extracted to text by a KnowledgeFileExtractor before
+// entering the exact same normalize -> chunk -> index pipeline as pasted text
+// and fetched URLs. Extractors are pure: they receive bytes in memory, never
+// touch storage/Postgres/Qdrant/HTTP, never execute embedded scripts or fetch
+// external URLs, and hand back only plain text treated as untrusted data.
+// `bytes` is a Uint8Array so the contract stays runtime-agnostic (the API
+// passes a Node Buffer, which is a Uint8Array subclass).
+
+export type KnowledgeFileFormat = 'txt' | 'md' | 'pdf' | 'docx';
+
+/** One uploaded file in memory, already validated at the HTTP boundary. */
+export interface KnowledgeFile {
+  /** Original display filename (sanitized at the boundary; never a server path). */
+  filename: string;
+  /** Declared/validated MIME type. */
+  contentType: string;
+  /** Byte length of `bytes`. */
+  size: number;
+  /** Raw file bytes. */
+  bytes: Uint8Array;
+}
+
+/** Plain-text extraction result: no HTML, no formatting commands. */
+export interface ExtractedDocument {
+  contentText: string;
+  title?: string;
+  contentType: string;
+}
+
+export interface KnowledgeFileExtractor {
+  readonly id: string;
+  readonly name: string;
+  readonly formats: readonly KnowledgeFileFormat[];
+  /** True when this extractor handles the file's format/type. */
+  supports(file: KnowledgeFile): boolean;
+  /** Extract plain text. Throws a normalized ingestion error on failure. */
+  extract(file: KnowledgeFile): Promise<ExtractedDocument>;
+}
+
+// ---------------------------------------------------------------------------
 // Publisher
 // ---------------------------------------------------------------------------
 

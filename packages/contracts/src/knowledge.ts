@@ -18,7 +18,14 @@ export type KnowledgeIngestErrorCode =
   | 'knowledge_fetch_provider_error'
   | 'knowledge_empty_content'
   | 'knowledge_source_too_large'
-  | 'knowledge_index_failed';
+  | 'knowledge_index_failed'
+  | 'knowledge_file_not_available'
+  | 'knowledge_file_type_not_allowed'
+  | 'knowledge_file_too_large'
+  | 'knowledge_file_missing'
+  | 'knowledge_file_extract_failed'
+  | 'knowledge_file_no_extractable_text'
+  | 'knowledge_file_storage_failed';
 
 export const KNOWLEDGE_ERROR_MESSAGES: Record<KnowledgeIngestErrorCode, string> = {
   knowledge_jina_not_configured: 'URL fetching is not configured on this server. Set JINA_API_KEY on the API server.',
@@ -31,6 +38,13 @@ export const KNOWLEDGE_ERROR_MESSAGES: Record<KnowledgeIngestErrorCode, string> 
   knowledge_empty_content: 'No readable content was found at this URL.',
   knowledge_source_too_large: 'This page is too large to index.',
   knowledge_index_failed: 'The content was fetched but could not be indexed. Try again later.',
+  knowledge_file_not_available: 'File ingestion is not available on this server.',
+  knowledge_file_type_not_allowed: 'This file type is not supported. Upload a TXT, Markdown, PDF or DOCX file.',
+  knowledge_file_too_large: 'This file is too large to index.',
+  knowledge_file_missing: 'The uploaded file could not be found. Upload it again.',
+  knowledge_file_extract_failed: 'The file could not be read. It may be corrupt or password-protected.',
+  knowledge_file_no_extractable_text: 'No readable text was found in this file.',
+  knowledge_file_storage_failed: 'The file could not be stored. Try again later.',
 };
 
 /**

@@ -142,6 +142,35 @@ knowledgeRouter.post(
 );
 
 /**
+ * Upload a knowledge file (KB4). The file is sent as the raw request body with
+ * its original name in `?filename=`; the type comes from the Content-Type
+ * header and is re-validated from the bytes server-side. The file is stored
+ * privately and the source is created in `draft` - ingestion is a separate,
+ * explicit step so a large PDF never blocks this request.
+ */
+knowledgeRouter.post(
+  '/sources/upload',
+  asyncHandler(async (req, res) => {
+    const projectId = parseProjectId(req);
+    const { container, user } = req;
+    await container.access.requireRole(user!.sub, projectId, 'editor');
+    const bytes = Buffer.isBuffer(req.body) ? req.body : null;
+    if (!bytes || bytes.length === 0) {
+      throw ApiError.badRequest(
+        'Send the file as the raw request body (Content-Type: text/plain, text/markdown, application/pdf or the DOCX type) with ?filename=',
+      );
+    }
+    const filename = typeof req.query.filename === 'string' ? req.query.filename : '';
+    if (!filename.trim()) throw ApiError.badRequest('Provide the original filename as ?filename=');
+    const contentTypeHeader = req.headers['content-type'];
+    const contentType = typeof contentTypeHeader === 'string' ? contentTypeHeader.split(';')[0]! : '';
+    const svc = new KnowledgeService(container);
+    const { source } = await svc.createFileSource(projectId, user!.sub, { filename, contentType, bytes });
+    res.status(201).json({ data: { source } });
+  }),
+);
+
+/**
  * Fetch + index a source now. For a URL source this triggers the first fetch
  * (draft -> queued); for a failed source it retries; for a ready source it
  * runs the reindex flow. A source already queued/processing is rejected so no

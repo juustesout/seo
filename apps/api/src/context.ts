@@ -15,6 +15,8 @@ import { normalizeKey } from './crypto.js';
 import { ApiError } from './apiErrors.js';
 import { buildRegistry } from './providers/registry.js';
 import { createKnowledgeFetcher } from './providers/knowledgeFetcher.js';
+import { createKnowledgeFileExtractors, type KnowledgeFileExtractorRegistry } from './providers/knowledgeFileExtractors.js';
+import { SupabaseKnowledgeFileStore, type KnowledgeFileStore } from './infra/knowledgeFileStorage.js';
 import { SupabaseJobStore } from './jobs/supabaseJobStore.js';
 import { PostgresJobStore } from './jobs/postgresJobStore.js';
 import type { JobStore } from './jobs/types.js';
@@ -34,6 +36,10 @@ export interface ServiceContainer {
   registry: ProviderRegistry;
   /** URL fetch/extraction provider for knowledge sources (Jina today). */
   knowledgeFetcher: KnowledgeFetcher | null;
+  /** Private object storage for uploaded knowledge files (KB4). */
+  knowledgeFileStore: KnowledgeFileStore;
+  /** Format -> text extractor registry for uploaded knowledge files (KB4). */
+  knowledgeFileExtractors: KnowledgeFileExtractorRegistry;
   /** Durable job queue used by long operations. */
   jobStore: JobStore;
   /** Direct Postgres pool, present when SUPABASE_DB_URL is configured. */
@@ -113,6 +119,8 @@ export function getContainer(): ServiceContainer {
       },
       logger,
     }),
+    knowledgeFileStore: new SupabaseKnowledgeFileStore(sb),
+    knowledgeFileExtractors: createKnowledgeFileExtractors(),
     jobStore,
     pgPool,
   };
