@@ -1,18 +1,24 @@
 /**
- * Knowledge Library behaviour tests (KB5).
+ * Knowledge Sources workspace behaviour tests (KB5/KB8, refactored in KBUI1).
  *
- * Verifies the library surface end to end against a mocked transport: summary +
- * bounded list, type/status filtering and debounced metadata search, source
- * detail with a bounded preview, status-aware lifecycle actions, deliberate
- * delete confirmation, viewer read-only behaviour and loading/error states.
+ * Verifies the Sources section end to end against a mocked transport: summary +
+ * bounded list, type/status filtering and debounced metadata search, distinct
+ * empty vs filtered-empty vs load-failure states, source detail with a bounded
+ * preview, status-aware lifecycle actions, deliberate delete confirmation,
+ * viewer read-only behaviour and the KB8 collection controls.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, within } from '@testing-library/react';
-import type { KnowledgeSourceDetailDto, KnowledgeSourceDto, KnowledgeSourcesResponse } from '@seo/contracts';
-import { KnowledgeLibrary } from './KnowledgeLibrary';
+import type {
+  KnowledgeCollectionDto,
+  KnowledgeSourceDetailDto,
+  KnowledgeSourceDto,
+  KnowledgeSourcesResponse,
+} from '@seo/contracts';
+import { SourcesPage } from './SourcesPage';
 
 const { apiMock } = vi.hoisted(() => ({ apiMock: { api: vi.fn(), apiRaw: vi.fn() } }));
-vi.mock('../../lib/api', () => ({ api: apiMock.api, apiRaw: apiMock.apiRaw }));
+vi.mock('../../../lib/api', () => ({ api: apiMock.api, apiRaw: apiMock.apiRaw }));
 
 const PROJECT = 'p-1';
 
@@ -77,16 +83,12 @@ function deleteCalls(): string[] {
   return apiMock.api.mock.calls.filter((c) => (c[1] as { method?: string } | undefined)?.method === 'DELETE').map((c) => String(c[0]));
 }
 
-/**
- * Route the mocked transport so the library's optional collections lookup
- * returns an empty list by default; the supplied handler answers everything
- * else. Keeps the source-focused tests independent of collection state.
- */
 function mockApi(handler: (path: string, init?: { method?: string; body?: unknown }) => unknown) {
-  apiMock.api.mockImplementation(async (path: string, init?: { method?: string; body?: unknown }) => {
-    if (String(path).includes('/knowledge/collections')) return { items: [], total: 0, limit: 50, offset: 0 };
-    return handler(path, init);
-  });
+  apiMock.api.mockImplementation(async (path: string, init?: { method?: string; body?: unknown }) => handler(String(path), init));
+}
+
+function renderSources(props: Partial<Parameters<typeof SourcesPage>[0]> = {}) {
+  return render(<SourcesPage projectId={PROJECT} canEdit configured {...props} />);
 }
 
 beforeEach(() => {
@@ -94,7 +96,7 @@ beforeEach(() => {
   apiMock.apiRaw.mockReset();
 });
 
-describe('KnowledgeLibrary list + filters', () => {
+describe('SourcesPage list + filters', () => {
   it('renders the summary and the bounded source list', async () => {
     mockApi(() =>
       response([
@@ -102,7 +104,7 @@ describe('KnowledgeLibrary list + filters', () => {
         source({ id: 's-2', name: 'Beta', status: 'failed', chunk_count: 0 }),
       ]),
     );
-    render(<KnowledgeLibrary projectId={PROJECT} canEdit />);
+    renderSources();
 
     expect(await screen.findByText('Alpha guide')).toBeTruthy();
     expect(screen.getByText('Beta')).toBeTruthy();
@@ -110,8 +112,8 @@ describe('KnowledgeLibrary list + filters', () => {
   });
 
   it('re-fetches with the type filter when it changes', async () => {
-    mockApi(() =>response([source()]));
-    render(<KnowledgeLibrary projectId={PROJECT} canEdit />);
+    mockApi(() => response([source()]));
+    renderSources();
     await screen.findByText('Reference');
 
     fireEvent.change(screen.getByLabelText('Filter by type'), { target: { value: 'file' } });
@@ -120,8 +122,8 @@ describe('KnowledgeLibrary list + filters', () => {
   });
 
   it('searches source metadata after a short debounce', async () => {
-    mockApi(() =>response([source()]));
-    render(<KnowledgeLibrary projectId={PROJECT} canEdit />);
+    mockApi(() => response([source()]));
+    renderSources();
     await screen.findByText('Reference');
 
     fireEvent.change(screen.getByLabelText('Search sources'), { target: { value: 'alpha' } });
@@ -129,20 +131,56 @@ describe('KnowledgeLibrary list + filters', () => {
     await vi.waitFor(() => expect(paths().some((p) => p.includes('search=alpha'))).toBe(true), { timeout: 2000 });
   });
 
-  it('shows an error banner when the list request fails', async () => {
-    mockApi(() => { throw new Error('boom'); });
-    render(<KnowledgeLibrary projectId={PROJECT} canEdit />);
-    expect(await screen.findByText('boom')).toBeTruthy();
+  it('honours an initial status filter passed by the Overview health links', async () => {
+    mockApi(() => response([source({ status: 'failed' })]));
+    renderSources({ initialStatus: 'failed' });
+    await screen.findByText('Reference');
+
+    expect(paths().some((p) => p.includes('status=failed'))).toBe(true);
   });
 });
 
-describe('KnowledgeLibrary source detail', () => {
+describe('SourcesPage empty states', () => {
+  it('shows the empty knowledge base state with creation actions', async () => {
+    mockApi(() => response([]));
+    renderSources();
+
+    expect(await screen.findByText('Your knowledge base is empty')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Add source' })).toBeTruthy();
+  });
+
+  it('shows a distinct filtered-empty state with a clear-filters action', async () => {
+    mockApi(() => response([], { summary: { total: 5, draft: 0, queued: 0, processing: 0, ready: 5, failed: 0, total_chunks: 9 } }));
+    renderSources();
+    await screen.findByText('No sources match these filters.');
+
+    fireEvent.change(screen.getByLabelText('Filter by type'), { target: { value: 'text' } });
+    expect(await screen.findByText('No sources match these filters.')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Clear filters' })).toBeTruthy();
+  });
+
+  it('shows a load-failure state and recovers on retry', async () => {
+    let fail = true;
+    mockApi(() => {
+      if (fail) throw new Error('boom');
+      return response([source()]);
+    });
+    renderSources();
+
+    expect(await screen.findByText('boom')).toBeTruthy();
+    fail = false;
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    expect(await screen.findByText('Reference')).toBeTruthy();
+  });
+});
+
+describe('SourcesPage source detail', () => {
   it('opens a detail drawer with the bounded preview', async () => {
     mockApi(async (path: string) => {
       if (/\/sources\/s-1$/.test(String(path))) return detail();
       return response([source()]);
     });
-    render(<KnowledgeLibrary projectId={PROJECT} canEdit />);
+    renderSources();
 
     fireEvent.click(await screen.findByRole('button', { name: 'Reference' }));
 
@@ -150,15 +188,26 @@ describe('KnowledgeLibrary source detail', () => {
     expect(await screen.findByText('preview body')).toBeTruthy();
   });
 
+  it('deep-links straight to a source from the Overview', async () => {
+    mockApi(async (path: string) => {
+      if (/\/sources\/s-1$/.test(String(path))) return detail();
+      return response([source()]);
+    });
+    renderSources({ initialSourceId: 's-1' });
+
+    expect(await screen.findByRole('dialog', { name: 'Source detail' })).toBeTruthy();
+    expect(await screen.findByText('preview body')).toBeTruthy();
+  });
+
   it('renders a safe sentence for a stored error code, never the raw code', async () => {
-    mockApi(() =>response([source({ status: 'failed', error: 'knowledge_file_extract_failed' })]));
-    render(<KnowledgeLibrary projectId={PROJECT} canEdit />);
+    mockApi(() => response([source({ status: 'failed', error: 'knowledge_file_extract_failed' })]));
+    renderSources();
     expect(await screen.findByText('The file could not be read. It may be corrupt or password-protected.')).toBeTruthy();
     expect(screen.queryByText('knowledge_file_extract_failed')).toBeNull();
   });
 });
 
-describe('KnowledgeLibrary lifecycle actions', () => {
+describe('SourcesPage lifecycle actions', () => {
   it('retries a failed source and reindexes a ready one', async () => {
     mockApi(async (_path: string, init?: { method?: string }) => {
       if (init?.method === 'POST') return { job: { id: 'j' } };
@@ -167,7 +216,7 @@ describe('KnowledgeLibrary lifecycle actions', () => {
         source({ id: 's-2', name: 'Ready one', status: 'ready' }),
       ]);
     });
-    render(<KnowledgeLibrary projectId={PROJECT} canEdit />);
+    renderSources();
 
     fireEvent.click(await screen.findByRole('button', { name: 'Retry' }));
     await vi.waitFor(() => expect(paths()).toContain(`/projects/${PROJECT}/knowledge/sources/s-1/ingest`));
@@ -181,7 +230,7 @@ describe('KnowledgeLibrary lifecycle actions', () => {
       if (init?.method === 'DELETE') return { job: { id: 'j' } };
       return response([source()]);
     });
-    render(<KnowledgeLibrary projectId={PROJECT} canEdit />);
+    renderSources();
     await screen.findByText('Reference');
 
     fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
@@ -193,53 +242,39 @@ describe('KnowledgeLibrary lifecycle actions', () => {
   });
 
   it('hides lifecycle actions for a viewer', async () => {
-    mockApi(() =>response([source()]));
-    render(<KnowledgeLibrary projectId={PROJECT} canEdit={false} />);
+    mockApi(() => response([source()]));
+    renderSources({ canEdit: false });
     await screen.findByText('Reference');
     expect(screen.queryByRole('button', { name: 'Reindex' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Delete' })).toBeNull();
   });
 });
 
-describe('KnowledgeLibrary collections (KB8)', () => {
+describe('SourcesPage collections (KB8)', () => {
   const COLLECTION = 'c-1';
 
-  const collectionsResponse = {
-    items: [
-      {
-        id: COLLECTION,
-        projectId: PROJECT,
-        name: 'References',
-        description: null,
-        sourceCount: 1,
-        createdAt: '2026-01-01T00:00:00.000Z',
-        updatedAt: '2026-01-01T00:00:00.000Z',
-      },
-    ],
-    total: 1,
-    limit: 50,
-    offset: 0,
-  };
-
-  function withCollections(handler: (path: string, init?: { method?: string }) => unknown) {
-    apiMock.api.mockImplementation(async (path: string, init?: { method?: string }) => {
-      if (String(path).includes('/knowledge/collections') && (!init?.method || init.method === 'GET')) {
-        return collectionsResponse;
-      }
-      return handler(path, init);
-    });
-  }
+  const collections: KnowledgeCollectionDto[] = [
+    {
+      id: COLLECTION,
+      projectId: PROJECT,
+      name: 'References',
+      description: null,
+      sourceCount: 1,
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    },
+  ];
 
   it('shows a collection badge on an assigned source', async () => {
-    withCollections(() => response([source({ collection_id: COLLECTION, collection_name: 'References' })]));
-    render(<KnowledgeLibrary projectId={PROJECT} canEdit={false} />);
+    mockApi(() => response([source({ collection_id: COLLECTION, collection_name: 'References' })]));
+    renderSources({ canEdit: false, collections });
     await screen.findByText('Reference');
     expect(screen.getByText('References')).toBeTruthy();
   });
 
   it('re-fetches with the collection and uncategorized filters', async () => {
-    withCollections(() => response([source()]));
-    render(<KnowledgeLibrary projectId={PROJECT} canEdit />);
+    mockApi(() => response([source()]));
+    renderSources({ collections });
     await screen.findByText('Reference');
 
     fireEvent.change(screen.getByLabelText('Filter by collection'), { target: { value: COLLECTION } });
@@ -250,14 +285,14 @@ describe('KnowledgeLibrary collections (KB8)', () => {
   });
 
   it('bulk-moves selected sources into a collection', async () => {
-    withCollections((path, init) => {
+    mockApi((_path, init) => {
       if (init?.method === 'POST') return { updated: 2, collection_id: COLLECTION };
       return response([
         source({ id: 's-1', name: 'Alpha' }),
         source({ id: 's-2', name: 'Beta' }),
       ]);
     });
-    render(<KnowledgeLibrary projectId={PROJECT} canEdit />);
+    renderSources({ collections });
     await screen.findByText('Alpha');
 
     fireEvent.click(screen.getByLabelText('Select Alpha'));
@@ -274,13 +309,12 @@ describe('KnowledgeLibrary collections (KB8)', () => {
     });
   });
 
-  it('lets an editor create a collection and reloads the list', async () => {
-    const created = { ...collectionsResponse.items[0]!, id: 'c-2', name: 'New one' };
-    withCollections((path, init) => {
-      if (init?.method === 'POST') return { collection: created };
+  it('lets an editor create a collection', async () => {
+    mockApi((_path, init) => {
+      if (init?.method === 'POST') return { collection: { ...collections[0]!, id: 'c-2', name: 'New one' } };
       return response([source()]);
     });
-    render(<KnowledgeLibrary projectId={PROJECT} canEdit />);
+    renderSources({ collections });
     await screen.findByText('Reference');
 
     fireEvent.change(screen.getByLabelText('New collection name'), { target: { value: 'New one' } });
@@ -296,11 +330,11 @@ describe('KnowledgeLibrary collections (KB8)', () => {
   });
 
   it('confirms a collection delete and tells the user sources are kept', async () => {
-    withCollections((path, init) => {
+    mockApi((_path, init) => {
       if (init?.method === 'DELETE') return { id: COLLECTION, deleted: true, sources_deleted: false };
       return response([source()]);
     });
-    render(<KnowledgeLibrary projectId={PROJECT} canEdit />);
+    renderSources({ collections });
     await screen.findByText('Reference');
 
     const manager = within(screen.getByRole('group', { name: 'Collections' }));

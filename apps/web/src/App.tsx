@@ -68,21 +68,28 @@ interface Me {
 type TopArea = 'overview' | 'projects' | 'integrations' | 'keys';
 type Route =
   | { area: TopArea }
-  | { area: 'project'; projectId: string; view: string };
+  | { area: 'project'; projectId: string; view: string; sub: string | null; search: string };
 
 type NavIcon = React.ComponentType<{ className?: string }>;
 
-/** Derive the current Route from window.location.pathname. */
+/**
+ * Derive the current Route from the URL. Project views may carry one extra
+ * sub-segment so a workspace can own URL-based sections (e.g.
+ * `/p/:id/knowledge/sources`); `search` keeps query-driven filters like
+ * `?status=failed` available to the view.
+ */
 function parseRoute(): Route {
   const seg = window.location.pathname.split('/').filter(Boolean);
-  if (seg[0] === 'p' && seg[1]) return { area: 'project', projectId: seg[1], view: seg[2] || 'dashboard' };
+  if (seg[0] === 'p' && seg[1]) {
+    return { area: 'project', projectId: seg[1], view: seg[2] || 'dashboard', sub: seg[3] ?? null, search: window.location.search };
+  }
   const area = seg[0] === 'projects' || seg[0] === 'integrations' || seg[0] === 'keys' ? seg[0] : 'overview';
   return { area };
 }
 
 /** Render a Route back to its canonical URL path. */
 function routePath(r: Route): string {
-  if (r.area === 'project') return `/p/${r.projectId}/${r.view}`;
+  if (r.area === 'project') return `/p/${r.projectId}/${r.view}${r.sub ? `/${r.sub}` : ''}`;
   return `/${r.area === 'overview' ? 'overview' : r.area}`;
 }
 
@@ -167,8 +174,8 @@ export function App() {
     setRoute(r);
   };
 
-  const goProject = (projectId: string, view: string) => {
-    const r: Route = { area: 'project', projectId, view };
+  const goProject = (projectId: string, view: string, sub?: string) => {
+    const r: Route = { area: 'project', projectId, view, sub: sub ?? null, search: '' };
     window.history.pushState({}, '', routePath(r));
     setRoute(r);
   };
@@ -294,7 +301,17 @@ export function App() {
             {view === 'dashboard' && <Dashboard projectId={pid} onOpenSettings={() => goProject(pid, 'settings')} />}
             {view === 'data' && <DataViews projectId={pid} />}
             {view === 'integrations' && <Integrations projectId={pid} />}
-            {view === 'knowledge' && <Knowledge projectId={pid} role={project.role} />}
+            {view === 'knowledge' && (
+              <Knowledge
+                projectId={pid}
+                role={project.role}
+                section={route.sub}
+                search={route.search}
+                onNavigate={(next, params) =>
+                  openProjectView(pid, next === 'overview' ? 'knowledge' : `knowledge/${next}`, params)
+                }
+              />
+            )}
             {view === 'content' && <Content projectId={pid} role={project.role} onOpenCalendar={() => goProject(pid, 'calendar')} onOpenPublications={(contentId) => openProjectView(pid, 'publications', { content_id: contentId })} />}
             {view === 'calendar' && <ContentSchedule projectId={pid} role={project.role} onViewPublication={(scheduleId) => openProjectView(pid, 'publications', { schedule_id: scheduleId })} />}
             {view === 'publications' && <Publications projectId={pid} />}
