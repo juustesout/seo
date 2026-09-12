@@ -25,7 +25,7 @@ import type {
 } from '@seo/contracts';
 import { QdrantClient, matchOn } from './knowledge/qdrantClient.js';
 import { embedderFromConfig, type Embedder } from './knowledge/embedding.js';
-import { chunkKnowledgeText } from './knowledge/chunker.js';
+import { chunkKnowledgeText } from '../knowledge/chunker.js';
 
 /** Shared vector collection name (project separation is by payload, not name). */
 const COLLECTION = 'seo_knowledge';

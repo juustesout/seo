@@ -11,16 +11,19 @@
  * embedding/chunking unchanged - there is deliberately no second vector/RAG
  * implementation here.
  *
- * One canonical pipeline (KB2):
+ * One canonical pipeline (KB2, extended in KB3):
  *
  *   source row -> extract (knowledgeText) -> normalize        [here]
  *              -> chunk (provider chunker) -> embed -> index  [provider]
  *
- * `text` is fully supported; `url`/`file` extractors honestly report "not
- * available" until KB3/KB4 add them, so those later capabilities feed the same
- * pipeline rather than a parallel one. Postgres stays the source of truth: the
- * original `content_text` is never rewritten, normalization is processing
- * output only, and Qdrant is always rebuildable from the row.
+ * `text` is fully supported. `url` sources are fetched through the injected
+ * `KnowledgeFetcher` (Jina today) and the captured body then flows through the
+ * exact same normalize -> chunk -> index path - there is no URL-specific
+ * pipeline. The fetched body is persisted to `content_text` on success so the
+ * row is self-contained and the index stays rebuildable without re-fetching.
+ * `file` honestly reports "not available" until KB4. Postgres stays the source
+ * of truth: normalization is processing output only and Qdrant is always
+ * rebuildable from the row.
  *
  * Lifecycle is centralized in knowledgeLifecycle.ts. Status changes here are
  * compare-and-swap (`patchRow`) so a delete or concurrent worker can never be
@@ -33,18 +36,25 @@
  */
 
 import type {
+  FetchedDocument,
   KnowledgeDocumentInput,
+  KnowledgeFetcher,
   KnowledgeProvider,
   KnowledgeSourceDto,
   KnowledgeSourceStatus,
   KnowledgeSourceType,
   ProviderContext,
 } from '@seo/contracts';
+import { KNOWLEDGE_ERROR_MESSAGES } from '@seo/contracts';
 import { logger } from '../logger.js';
 import { ApiError } from '../apiErrors.js';
 import type { ServiceContainer } from '../context.js';
 import { assertTransition } from './knowledgeLifecycle.js';
-import { extractSourceText } from './knowledgeText.js';
+import { extractSourceText, normalizeText } from './knowledgeText.js';
+import { chunkKnowledgeText } from '../knowledge/chunker.js';
+import { MAX_CHUNKS, MAX_NORMALIZED_CHARS } from '../knowledge/limits.js';
+import { KnowledgeIngestError, isKnowledgeIngestError } from '../knowledge/errors.js';
+import { validateExternalUrl } from '../knowledge/url.js';
 
 /** Largest single source body accepted for indexing (bytes/chars). Bounding it
  *  keeps chunking latency and Qdrant payloads sane for a UI/managed item. */
@@ -200,18 +210,26 @@ export class KnowledgeService {
     return (data ?? []).length > 0;
   }
 
-  /** Best-effort non-fatal error write; never throws. */
-  private async tryPatchError(projectId: string, sourceId: string, err: unknown): Promise<void> {
+  /** Best-effort non-fatal error write; never throws. `fallback` is the stable
+   *  code stored when `err` is a raw provider/transport error. */
+  private async tryPatchError(projectId: string, sourceId: string, err: unknown, fallback?: string): Promise<void> {
     await this.patchRow(
       projectId,
       sourceId,
       ['queued', 'processing', 'ready', 'failed'],
-      { status: 'failed', error: KnowledgeService.safeError(err) },
+      { status: 'failed', error: KnowledgeService.safeError(err, fallback) },
     ).catch(() => undefined);
   }
 
-  /** Secret-free, bounded error text for the row's `error` column. */
-  private static safeError(err: unknown): string {
+  /** Secret-free, bounded error text for the row's `error` column. Fetch/index
+   *  failures from the pipeline are stored as their stable machine code (the UI
+   *  maps codes to safe sentences via knowledgeErrorMessage); our own ApiErrors
+   *  keep their message; a raw provider error becomes `fallback` when given, or
+   *  a short bounded message otherwise. */
+  private static safeError(err: unknown, fallback?: string): string {
+    if (isKnowledgeIngestError(err)) return err.code;
+    if (err instanceof ApiError) return err.message.slice(0, 400);
+    if (fallback) return fallback;
     const message = err instanceof Error ? err.message : String(err);
     return message.slice(0, 400);
   }
@@ -219,6 +237,9 @@ export class KnowledgeService {
   /** Maps provider failures to clean ApiErrors; details never reach the client. */
   private static mapError(err: unknown): ApiError {
     if (err instanceof ApiError) return err;
+    if (isKnowledgeIngestError(err)) {
+      return new ApiError(err.status, err.code, err.message);
+    }
     const message = err instanceof Error ? err.message : String(err);
     if (/not configured/i.test(message)) {
       return ApiError.notConfigured(
@@ -226,7 +247,7 @@ export class KnowledgeService {
       );
     }
     logger.error({ err }, 'knowledge source operation failed');
-    return new ApiError(502, 'knowledge_provider_error', 'The knowledge provider failed. Please try again later.');
+    return new ApiError(502, 'knowledge_index_failed', KNOWLEDGE_ERROR_MESSAGES.knowledge_index_failed);
   }
 
   /** ProviderContext handed to the Qdrant provider. Credentials are a no-op on
@@ -336,17 +357,33 @@ export class KnowledgeService {
   }
 
   /**
-   * (Re)queue ingestion for an existing source: retry a `failed` one, reindex
-   * a `ready` one, or start a `draft` one. The lifecycle map refuses `deleted`
-   * sources and sources mid-`processing`; `text`less sources are refused so an
-   * unfetched URL can never be faked into `ready`.
+   * (Re)queue ingestion for an existing source: fetch/retry a `draft`/`failed`
+   * URL source, reindex a `ready` one, or start a `draft` text source. The
+   * lifecycle map refuses `deleted` sources and sources mid-`processing`, and a
+   * second call while already `queued` is rejected so only one job runs. A URL
+   * source whose fetcher is unconfigured or whose URL is invalid fails fast with
+   * an honest code instead of enqueueing a job that is guaranteed to fail.
    */
   async enqueueIngest(projectId: string, sourceId: string, userId: string | null) {
     const row = await this.sourceRow(projectId, sourceId);
     const status = (row.status as KnowledgeSourceStatus) ?? 'draft';
     assertTransition(status, 'queued');
     if (!buildSourceDocument(row)) {
-      throw ApiError.badRequest('This source has no text to index yet. URL fetching is not available yet.');
+      const sourceType = (row.source_type as KnowledgeSourceType) ?? 'text';
+      const rawUrl = typeof row.url === 'string' ? row.url.trim() : '';
+      if (sourceType === 'url' && rawUrl) {
+        try {
+          this.resolveFetchTarget(rawUrl);
+        } catch (err) {
+          if (isKnowledgeIngestError(err)) {
+            await this.patchRow(projectId, sourceId, [status], { status: 'failed', error: err.code }).catch(() => undefined);
+            throw new ApiError(err.status, err.code, err.message);
+          }
+          throw err;
+        }
+      } else {
+        throw ApiError.badRequest('This source has no text to index yet.');
+      }
     }
     const moved = await this.patchRow(projectId, sourceId, [status], { status: 'queued', error: null });
     if (!moved) throw ApiError.conflict('The source changed while queueing ingestion. Try again.');
@@ -376,14 +413,72 @@ export class KnowledgeService {
   }
 
   /**
-   * Background pipeline: extract -> normalize -> chunk -> embed -> index one
-   * source into Qdrant, keeping the row's status honest at every step.
+   * Resolve the configured URL fetcher and a validated URL, or throw a
+   * normalized `KnowledgeIngestError`. This is the only path that hands a URL
+   * to a fetcher, so the SSRF guard always runs first and the credential is
+   * read from server env only (never from the source row).
+   */
+  private resolveFetchTarget(rawUrl: string): { fetcher: KnowledgeFetcher; url: string } {
+    const fetcher = this.container.knowledgeFetcher;
+    if (!fetcher || !fetcher.isConfigured()) throw new KnowledgeIngestError('knowledge_jina_not_configured');
+    return { fetcher, url: validateExternalUrl(rawUrl).toString() };
+  }
+
+  /**
+   * Resolve the indexable document for a row. Text/file sources use the pure
+   * extractor; a URL source with no captured body is fetched once through the
+   * fetcher, then bounded and normalized. The fetched text is returned so the
+   * caller can persist it on success; it is handled strictly as untrusted data
+   * (never interpreted as instructions). Returns null when there is genuinely
+   * nothing to index.
+   */
+  private async resolveDocument(
+    row: SourceRow,
+  ): Promise<{ doc: KnowledgeDocumentInput; capturedText: string | null } | null> {
+    const existing = buildSourceDocument(row);
+    if (existing) return { doc: existing, capturedText: null };
+
+    const sourceType = (row.source_type as KnowledgeSourceType) ?? 'text';
+    const rawUrl = typeof row.url === 'string' ? row.url.trim() : '';
+    if (sourceType !== 'url' || !rawUrl) return null;
+
+    const { fetcher, url } = this.resolveFetchTarget(rawUrl);
+    let fetched: FetchedDocument;
+    try {
+      fetched = await fetcher.fetch(url);
+    } catch (err) {
+      if (isKnowledgeIngestError(err)) throw err;
+      throw new KnowledgeIngestError('knowledge_fetch_provider_error');
+    }
+
+    const text = normalizeText(fetched.contentText);
+    if (!text) throw new KnowledgeIngestError('knowledge_empty_content');
+    if (text.length > MAX_NORMALIZED_CHARS) throw new KnowledgeIngestError('knowledge_source_too_large');
+    if (chunkKnowledgeText(text).length > MAX_CHUNKS) throw new KnowledgeIngestError('knowledge_source_too_large');
+
+    const name = typeof row.name === 'string' ? row.name.trim() : '';
+    return {
+      doc: {
+        externalId: sourceExternalId(sourceRowId(row)),
+        kind: 'note',
+        title: fetched.title || name || url,
+        text,
+        url: fetched.canonicalUrl || url,
+        meta: { source: 'knowledge_source', source_type: 'url' },
+      },
+      capturedText: text,
+    };
+  }
+
+  /**
+   * Background pipeline: extract/fetch -> normalize -> chunk -> embed -> index
+   * one source into Qdrant, keeping the row's status honest at every step.
    *
    * Idempotent: the source's existing vectors are removed before the current
    * representation is written, so repeat runs never accumulate duplicate
-   * chunks. Concurrency-safe: the row is claimed with a CAS, and if a delete
-   * wins the race during indexing the just-written vectors are compensated
-   * away rather than left searchable.
+   * chunks. Concurrency-safe: the row is claimed with a CAS before any fetch or
+   * index work, and if a delete wins the race during indexing the just-written
+   * vectors are compensated away rather than left searchable.
    */
   async ingestSource(projectId: string, sourceId: string, report?: ProgressFn): Promise<Record<string, unknown>> {
     let row: SourceRow;
@@ -402,14 +497,9 @@ export class KnowledgeService {
     const provider = this.knowledgeProvider();
     if (!provider) throw ApiError.notConfigured('The knowledge provider is not registered on this server.');
 
-    const doc = buildSourceDocument(row);
-    if (!doc) {
-      await this.tryPatchError(projectId, sourceId, new Error('The source has no indexable text.'));
-      throw ApiError.badRequest('The knowledge source has no indexable text.');
-    }
-
-    // Claim the row for processing (also recovers a stale 'processing' left by
-    // a crashed worker). A 0-row CAS means it was deleted or is not ours.
+    // Claim the row before the (potentially slow) fetch + index steps (also
+    // recovers a stale 'processing' left by a crashed worker). A 0-row CAS
+    // means it was deleted or a concurrent run already owns it.
     const claimed = await this.patchRow(
       projectId,
       sourceId,
@@ -422,6 +512,14 @@ export class KnowledgeService {
 
     const ctx = this.context(projectId);
     try {
+      const resolved = await this.resolveDocument(row);
+      if (!resolved) {
+        const noText = ApiError.badRequest('The knowledge source has no indexable text.');
+        await this.tryPatchError(projectId, sourceId, noText);
+        throw noText;
+      }
+      const { doc, capturedText } = resolved;
+
       await report?.(15, `Indexing "${doc.title}"`);
       await provider.ensureProject(ctx);
       await report?.(45, 'Embedding and chunking…');
@@ -431,12 +529,16 @@ export class KnowledgeService {
       const { indexed } = await provider.index(ctx, [doc]);
       await report?.(80, 'Saving state');
 
-      const committed = await this.patchRow(projectId, sourceId, ['processing'], {
+      const patch: Record<string, unknown> = {
         status: 'ready',
         error: null,
         chunk_count: indexed,
         last_indexed_at: new Date().toISOString(),
-      });
+      };
+      // Persist the fetched snapshot only on success, so a failed index never
+      // leaves a half-captured body behind.
+      if (capturedText !== null) patch.content_text = capturedText;
+      const committed = await this.patchRow(projectId, sourceId, ['processing'], patch);
       if (!committed) {
         // A delete won the race while we were indexing: drop what we wrote.
         await provider.delete(ctx, doc.externalId).catch(() => undefined);
@@ -445,7 +547,7 @@ export class KnowledgeService {
       await report?.(100, `Indexed ${indexed} chunk(s)`);
       return { source_id: sourceId, chunks: indexed };
     } catch (err) {
-      await this.tryPatchError(projectId, sourceId, err);
+      await this.tryPatchError(projectId, sourceId, err, 'knowledge_index_failed');
       throw KnowledgeService.mapError(err);
     }
   }

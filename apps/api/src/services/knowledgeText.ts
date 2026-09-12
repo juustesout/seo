@@ -8,10 +8,10 @@
  *     of truth and this is only the processing representation handed to the
  *     chunker/embedder.
  *  2. `extractSourceText` - the one canonical extractor registry. `text`
- *     sources are extracted here; `url` and `file` return an honest
- *     "not available" result until KB3 (URL fetch) / KB4 (file parsing) add
- *     real extractors, so the later capabilities slot into the same pipeline
- *     instead of a parallel one. No extractor ever fabricates content.
+ *     sources are extracted here; `url` returns an honest "not fetched yet"
+ *     result (KB3 fetches it in the pipeline and then reuses this same
+ *     extractor on the captured body) and `file` reports "not available" until
+ *     KB4. No extractor ever fabricates content.
  */
 
 import type { KnowledgeSourceType } from '@seo/contracts';
@@ -83,7 +83,7 @@ export function extractSourceText(row: SourceTextRow): ExtractionResult {
       ? {
           ok: false,
           code: 'not_available',
-          reason: 'Fetching page content for URL sources is not available yet.',
+          reason: 'This URL has not been fetched yet.',
         }
       : { ok: false, code: 'empty', reason: 'This source has no text to index.' };
   }

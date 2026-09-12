@@ -14,12 +14,13 @@ import { CredentialStore } from './infra/credentials.js';
 import { normalizeKey } from './crypto.js';
 import { ApiError } from './apiErrors.js';
 import { buildRegistry } from './providers/registry.js';
+import { createKnowledgeFetcher } from './providers/knowledgeFetcher.js';
 import { SupabaseJobStore } from './jobs/supabaseJobStore.js';
 import { PostgresJobStore } from './jobs/postgresJobStore.js';
 import type { JobStore } from './jobs/types.js';
 import type { Pool } from 'pg';
 import pg from 'pg';
-import type { ProviderContext, ProviderRegistry } from '@seo/contracts';
+import type { KnowledgeFetcher, ProviderContext, ProviderRegistry } from '@seo/contracts';
 
 export interface ServiceContainer {
   config: AppConfig;
@@ -31,6 +32,8 @@ export interface ServiceContainer {
   credentials: CredentialStore;
   /** Provider plugin surface (adapters by id). */
   registry: ProviderRegistry;
+  /** URL fetch/extraction provider for knowledge sources (Jina today). */
+  knowledgeFetcher: KnowledgeFetcher | null;
   /** Durable job queue used by long operations. */
   jobStore: JobStore;
   /** Direct Postgres pool, present when SUPABASE_DB_URL is configured. */
@@ -100,6 +103,13 @@ export function getContainer(): ServiceContainer {
         PUBLIC_APP_URL: config.env.PUBLIC_APP_URL,
         X_OAUTH_CLIENT_ID: config.env.X_OAUTH_CLIENT_ID,
         ENABLE_TEST_PUBLISHERS: config.env.ENABLE_TEST_PUBLISHERS,
+      },
+      logger,
+    }),
+    knowledgeFetcher: createKnowledgeFetcher({
+      config: {
+        JINA_API_KEY: config.env.JINA_API_KEY,
+        JINA_BASE_URL: config.env.JINA_BASE_URL,
       },
       logger,
     }),

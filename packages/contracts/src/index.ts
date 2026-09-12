@@ -12,4 +12,5 @@ export * from './contentIntelligence.js';
 export * from './seo.js';
 export * from './models.js';
 export * from './providers.js';
+export * from './knowledge.js';
 export * from './api.js';

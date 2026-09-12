@@ -8,7 +8,7 @@
  * deleting so statuses stay live without a permanent interval.
  */
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
-import type { KnowledgeSourcesResponse } from '@seo/contracts';
+import { knowledgeErrorMessage, type KnowledgeSourcesResponse } from '@seo/contracts';
 import { api } from '../../lib/api';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -95,7 +95,17 @@ export function KnowledgePanel({ projectId, canEdit }: { projectId: string; canE
     }
   };
 
-  const retrySource = async (id: string) => {
+  const ingestSource = async (id: string) => {
+    setErr(null);
+    try {
+      await api(`/projects/${projectId}/knowledge/sources/${id}/ingest`, { method: 'POST', body: {} });
+      await load();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const reindexSource = async (id: string) => {
     setErr(null);
     try {
       await api(`/projects/${projectId}/knowledge/sources/${id}/reindex`, { method: 'POST', body: {} });
@@ -106,11 +116,11 @@ export function KnowledgePanel({ projectId, canEdit }: { projectId: string; canE
   };
 
   const configured = state?.configured ?? false;
-  const statusPill = (status: string) => {
+  const statusPill = (sourceType: string, status: string) => {
     if (status === 'ready') return <Badge variant="success">ready</Badge>;
     if (status === 'failed') return <Badge variant="destructive">failed</Badge>;
     if (status === 'deleted') return <Badge variant="warning">deleting…</Badge>;
-    if (status === 'processing') return <Badge variant="warning">indexing…</Badge>;
+    if (status === 'processing') return <Badge variant="warning">{sourceType === 'url' ? 'fetching…' : 'indexing…'}</Badge>;
     if (status === 'draft') return <Badge variant="outline">draft</Badge>;
     return <Badge variant="warning">queued…</Badge>;
   };
@@ -173,7 +183,7 @@ export function KnowledgePanel({ projectId, canEdit }: { projectId: string; canE
       {sources.length === 0 && (
         <p className="text-[13px] text-muted-foreground">
           {configured
-            ? 'No sources yet. Add text or a URL above - pasted text is embedded in the background; a URL is stored as draft until fetching is available.'
+            ? 'No sources yet. Add text or a URL above - pasted text is embedded in the background; a URL is stored as draft until you press Fetch.'
             : 'No sources yet.'}
         </p>
       )}
@@ -184,7 +194,7 @@ export function KnowledgePanel({ projectId, canEdit }: { projectId: string; canE
             <li key={s.id} className="rounded-lg border bg-muted/40 px-2.5 py-2">
               <div className="flex flex-wrap items-center gap-2">
                 <b className="text-[13px]">{s.name}</b>
-                {statusPill(s.status)}
+                {statusPill(s.source_type, s.status)}
                 {s.chunk_count > 0 && (
                   <span className="text-xs text-muted-foreground">
                     {s.chunk_count} chunk{s.chunk_count === 1 ? '' : 's'}
@@ -199,19 +209,28 @@ export function KnowledgePanel({ projectId, canEdit }: { projectId: string; canE
               )}
               {s.status === 'draft' && (
                 <div className="mt-1 text-xs text-muted-foreground">
-                  Stored as a reference. Fetching page content is not available yet, so this source is not searchable.
+                  {s.source_type === 'url'
+                    ? 'Not fetched yet. Use Fetch to pull the page content into the knowledge base.'
+                    : 'Not indexed yet. Use Index to add this source to the knowledge base.'}
                 </div>
               )}
-              {s.error && <div className="mt-1 whitespace-pre-wrap text-xs text-destructive">{s.error}</div>}
+              {s.error && (
+                <div className="mt-1 whitespace-pre-wrap text-xs text-destructive">{knowledgeErrorMessage(s.error)}</div>
+              )}
               {canEdit && (
                 <div className="mt-1.5 flex gap-1.5">
                   {s.status === 'failed' && (
-                    <Button variant="outline" size="sm" onClick={() => void retrySource(s.id)}>
+                    <Button variant="outline" size="sm" onClick={() => void ingestSource(s.id)}>
                       Retry
                     </Button>
                   )}
+                  {s.status === 'draft' && (
+                    <Button variant="outline" size="sm" onClick={() => void ingestSource(s.id)}>
+                      {s.source_type === 'url' ? 'Fetch' : 'Index'}
+                    </Button>
+                  )}
                   {s.status === 'ready' && (
-                    <Button variant="outline" size="sm" onClick={() => void retrySource(s.id)}>
+                    <Button variant="outline" size="sm" onClick={() => void reindexSource(s.id)}>
                       Reindex
                     </Button>
                   )}

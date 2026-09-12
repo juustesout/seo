@@ -127,10 +127,44 @@ describe('knowledge route authentication + role gates', () => {
     expect(create.status).toBe(403);
   });
 
-  it('lets an editor create, reindex and delete', async () => {
+  it('lets an editor create, reindex, ingest and delete', async () => {
     expect((await request('/sources', { method: 'POST', token: 'editor-token', body: { name: 'N', text: 'x' } })).status).toBe(202);
     expect((await request(`/sources/${SOURCE}/reindex`, { method: 'POST', token: 'editor-token', body: {} })).status).toBe(202);
+    expect((await request(`/sources/${SOURCE}/ingest`, { method: 'POST', token: 'editor-token', body: {} })).status).toBe(202);
     expect((await request(`/sources/${SOURCE}`, { method: 'DELETE', token: 'editor-token' })).status).toBe(202);
+  });
+});
+
+describe('knowledge ingest route', () => {
+  it('requires the editor role', async () => {
+    const res = await request(`/sources/${SOURCE}/ingest`, { method: 'POST', token: 'viewer-token', body: {} });
+    expect(res.status).toBe(403);
+    expect(vi.mocked(KnowledgeService.prototype.enqueueIngest)).not.toHaveBeenCalled();
+  });
+
+  it('scopes the ingest to the project and the calling user', async () => {
+    const res = await request(`/sources/${SOURCE}/ingest`, { method: 'POST', token: 'editor-token', body: {} });
+    expect(res.status).toBe(202);
+    expect(res.json).toMatchObject({ data: { job: { id: 'job-2' } } });
+    expect(vi.mocked(KnowledgeService.prototype.enqueueIngest)).toHaveBeenLastCalledWith(PROJECT, SOURCE, 'e-user');
+  });
+
+  it('surfaces the lifecycle conflict when the source is already queued/processing', async () => {
+    vi.mocked(KnowledgeService.prototype.enqueueIngest).mockRejectedValue(
+      new ApiError(409, 'conflict', 'The source changed while queueing ingestion. Try again.') as never,
+    );
+    const res = await request(`/sources/${SOURCE}/ingest`, { method: 'POST', token: 'editor-token', body: {} });
+    expect(res.status).toBe(409);
+    expect(res.json).toMatchObject({ error: { code: 'conflict' } });
+  });
+
+  it('reports an unconfigured fetcher as a safe capability error', async () => {
+    vi.mocked(KnowledgeService.prototype.enqueueIngest).mockRejectedValue(
+      new ApiError(503, 'knowledge_jina_not_configured', 'URL fetching is not configured on this server.') as never,
+    );
+    const res = await request(`/sources/${SOURCE}/ingest`, { method: 'POST', token: 'editor-token', body: {} });
+    expect(res.status).toBe(503);
+    expect(res.json).toMatchObject({ error: { code: 'knowledge_jina_not_configured' } });
   });
 });
 

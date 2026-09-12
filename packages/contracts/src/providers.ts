@@ -142,6 +142,48 @@ export interface KnowledgeProvider {
 }
 
 // ---------------------------------------------------------------------------
+// Knowledge fetcher (URL -> document extraction)
+// ---------------------------------------------------------------------------
+//
+// URL knowledge sources are fetched and extracted by a KnowledgeFetcher before
+// entering the same normalize -> chunk -> index pipeline as pasted text. The
+// fetcher is a pure external-content adapter: it holds no credentials from the
+// database, never touches Qdrant/Postgres/HTTP routes, and treats everything it
+// returns as untrusted data. Jina is the first implementation; the interface is
+// the seam for adding/replacing fetchers later.
+
+export interface KnowledgeFetchOptions {
+  /** Caller cancellation, combined with the fetcher's own timeout. */
+  signal?: AbortSignal;
+}
+
+/**
+ * One fetched + extracted external document. `contentText` is the extracted
+ * body (untrusted), never HTML markup that the application interprets; callers
+ * normalize and chunk it like any other source.
+ */
+export interface FetchedDocument {
+  /** The URL that was requested (the source's primary identity). */
+  sourceUrl: string;
+  /** Provider-reported canonical URL, when offered. Never an authorization input. */
+  canonicalUrl?: string;
+  /** Provider-reported document title, when offered. */
+  title?: string;
+  contentText: string;
+  contentType?: string;
+  fetchedAt: string;
+}
+
+export interface KnowledgeFetcher {
+  readonly id: string;
+  readonly name: string;
+  /** False when the server lacks the credentials this fetcher needs. */
+  isConfigured(): boolean;
+  /** Fetch + extract one URL. Throws a normalized ingestion error on failure. */
+  fetch(url: string, options?: KnowledgeFetchOptions): Promise<FetchedDocument>;
+}
+
+// ---------------------------------------------------------------------------
 // Publisher
 // ---------------------------------------------------------------------------
 

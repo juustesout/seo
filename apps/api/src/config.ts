@@ -62,6 +62,10 @@ const envSchema = z.object({
   QDRANT_URL: z.string().url().optional(),
   QDRANT_API_KEY: z.string().optional(),
 
+  // Jina (URL knowledge-source fetch/extraction; server-side only).
+  JINA_API_KEY: z.string().optional(),
+  JINA_BASE_URL: z.string().url().optional(),
+
   // OpenAI (AI chat/generation/embeddings - BYOK key, server-side only).
   OPENAI_API_KEY: z.string().optional(),
   OPENAI_BASE_URL: z.string().url().optional(),

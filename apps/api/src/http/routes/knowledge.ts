@@ -141,6 +141,25 @@ knowledgeRouter.post(
   }),
 );
 
+/**
+ * Fetch + index a source now. For a URL source this triggers the first fetch
+ * (draft -> queued); for a failed source it retries; for a ready source it
+ * runs the reindex flow. A source already queued/processing is rejected so no
+ * second job is created. Deleted sources are refused by the lifecycle guard.
+ */
+knowledgeRouter.post(
+  '/sources/:sourceId/ingest',
+  asyncHandler(async (req, res) => {
+    const projectId = parseProjectId(req);
+    const { container, user } = req;
+    await container.access.requireRole(user!.sub, projectId, 'editor');
+    const sourceId = parseId(req, 'sourceId');
+    const svc = new KnowledgeService(container);
+    const job = await svc.enqueueIngest(projectId, sourceId, user!.sub);
+    res.status(202).json({ data: { job } });
+  }),
+);
+
 /** Re-queue ingestion for a source (e.g. retry after an error). */
 knowledgeRouter.post(
   '/sources/:sourceId/reindex',

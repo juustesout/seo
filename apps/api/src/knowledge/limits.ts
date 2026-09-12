@@ -1,0 +1,25 @@
+/**
+ * Central resource limits for knowledge ingestion (KB3).
+ *
+ * Kept in one place so fetching, normalization and indexing share the same
+ * conservative, memory- and runtime-bounded defaults. Everything here is a
+ * hard stop: exceeding a limit fails the source (never a partial 'ready').
+ */
+
+/** Longest URL accepted from a user or handed to a fetcher. */
+export const MAX_URL_LENGTH = 2048;
+
+/** Hard timeout for one external fetch (the job layer owns retry/backoff). */
+export const FETCH_TIMEOUT_MS = 20_000;
+
+/** Transport cap while reading a fetch response, to bound memory. */
+export const MAX_FETCHED_BYTES = 4_000_000;
+
+/** Largest extracted body accepted from a fetcher, before normalization. */
+export const MAX_FETCHED_CHARS = 500_000;
+
+/** Largest normalized body kept for indexing. */
+export const MAX_NORMALIZED_CHARS = 200_000;
+
+/** Hard cap on chunks per source; exceeding it fails rather than partially index. */
+export const MAX_CHUNKS = 400;
