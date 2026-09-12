@@ -15,6 +15,7 @@ import { normalizeKey } from './crypto.js';
 import { ApiError } from './apiErrors.js';
 import { buildRegistry } from './providers/registry.js';
 import { createKnowledgeFetcher } from './providers/knowledgeFetcher.js';
+import { createKnowledgeDiscoveryProvider } from './providers/knowledgeDiscoveryProvider.js';
 import { createKnowledgeFileExtractors, type KnowledgeFileExtractorRegistry } from './providers/knowledgeFileExtractors.js';
 import { SupabaseKnowledgeFileStore, type KnowledgeFileStore } from './infra/knowledgeFileStorage.js';
 import { SupabaseJobStore } from './jobs/supabaseJobStore.js';
@@ -22,7 +23,12 @@ import { PostgresJobStore } from './jobs/postgresJobStore.js';
 import type { JobStore } from './jobs/types.js';
 import type { Pool } from 'pg';
 import pg from 'pg';
-import type { KnowledgeFetcher, ProviderContext, ProviderRegistry } from '@seo/contracts';
+import type {
+  KnowledgeDiscoveryProvider,
+  KnowledgeFetcher,
+  ProviderContext,
+  ProviderRegistry,
+} from '@seo/contracts';
 
 export interface ServiceContainer {
   config: AppConfig;
@@ -36,6 +42,8 @@ export interface ServiceContainer {
   registry: ProviderRegistry;
   /** URL fetch/extraction provider for knowledge sources (Jina today). */
   knowledgeFetcher: KnowledgeFetcher | null;
+  /** Bounded link-discovery provider (KB9); null when the fetcher is absent. */
+  knowledgeDiscoveryProvider: KnowledgeDiscoveryProvider | null;
   /** Private object storage for uploaded knowledge files (KB4). */
   knowledgeFileStore: KnowledgeFileStore;
   /** Format -> text extractor registry for uploaded knowledge files (KB4). */
@@ -82,6 +90,14 @@ export function getContainer(): ServiceContainer {
     logger.info('using supabase polling job store (set SUPABASE_DB_URL for LISTEN/NOTIFY)');
   }
 
+  const knowledgeFetcher = createKnowledgeFetcher({
+    config: {
+      JINA_API_KEY: config.env.JINA_API_KEY,
+      JINA_BASE_URL: config.env.JINA_BASE_URL,
+    },
+    logger,
+  });
+
   const container: ServiceContainer = {
     config,
     sb,
@@ -112,13 +128,8 @@ export function getContainer(): ServiceContainer {
       },
       logger,
     }),
-    knowledgeFetcher: createKnowledgeFetcher({
-      config: {
-        JINA_API_KEY: config.env.JINA_API_KEY,
-        JINA_BASE_URL: config.env.JINA_BASE_URL,
-      },
-      logger,
-    }),
+    knowledgeFetcher,
+    knowledgeDiscoveryProvider: createKnowledgeDiscoveryProvider({ fetcher: knowledgeFetcher, logger }),
     knowledgeFileStore: new SupabaseKnowledgeFileStore(sb),
     knowledgeFileExtractors: createKnowledgeFileExtractors(),
     jobStore,

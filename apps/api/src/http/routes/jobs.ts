@@ -33,6 +33,7 @@ const JOB_PROVIDER: Record<string, string> = {
   knowledge_index: 'qdrant',
   knowledge_reindex: 'qdrant',
   knowledge_delete: 'qdrant',
+  knowledge_discovery: 'qdrant',
 };
 
 const KNOWN_JOB_TYPES = Object.keys(JOB_PROVIDER);

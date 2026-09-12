@@ -522,6 +522,119 @@ if [ -z "${LEAK_COUNT}" ] || [ "${LEAK_COUNT}" != "0" ]; then
 fi
 echo "   smoke: non-member cannot read a foreign project source (RLS isolation OK)"
 
+echo "==> smoke test: knowledge discovery sessions (KB9) + limits + isolation"
+PSQL -d "${DB_NAME}" <<'SQL'
+set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-000000000001"}';
+do $$
+declare
+  v_project uuid;
+  v_project2 uuid;
+  v_collection uuid;
+  v_foreign_collection uuid;
+  v_session uuid;
+  v_owner uuid := '00000000-0000-0000-0000-000000000001';
+begin
+  select id into v_project from public.seo_projects where slug = 'demo' limit 1;
+  select id into v_project2 from public.seo_projects where slug = 'second-user-project' limit 1;
+  if v_project is null or v_project2 is null then raise exception 'smoke: KB9 projects missing'; end if;
+
+  insert into public.seo_knowledge_collections (project_id, name, created_by)
+  values (v_project, 'Discovery target', v_owner)
+  returning id into v_collection;
+
+  insert into public.seo_knowledge_discovery_sessions
+    (project_id, seed_url, normalized_seed_url, collection_id, scope, max_urls, max_depth, request_json, created_by)
+  values
+    (v_project, 'https://example.com/', 'https://example.com', v_collection, 'same_host', 25, 1, '{"seedUrl":"https://example.com/"}'::jsonb, v_owner)
+  returning id into v_session;
+  if v_session is null then raise exception 'smoke: KB9 session was not created'; end if;
+  if not exists (
+    select 1 from public.seo_knowledge_discovery_sessions
+    where id = v_session and status = 'queued' and scope = 'same_host' and collection_id = v_collection
+  ) then raise exception 'smoke: KB9 session defaults were not stored'; end if;
+
+  -- Limits: max_urls 1..100, max_depth 0..3, scope + status allowlists.
+  begin
+    insert into public.seo_knowledge_discovery_sessions (project_id, seed_url, normalized_seed_url, max_urls)
+    values (v_project, 'https://example.com/', 'https://example.com', 0);
+    raise exception 'smoke: KB9 max_urls below 1 unexpectedly allowed';
+  exception when check_violation then null;
+  end;
+  begin
+    insert into public.seo_knowledge_discovery_sessions (project_id, seed_url, normalized_seed_url, max_urls)
+    values (v_project, 'https://example.com/', 'https://example.com', 101);
+    raise exception 'smoke: KB9 max_urls above 100 unexpectedly allowed';
+  exception when check_violation then null;
+  end;
+  begin
+    insert into public.seo_knowledge_discovery_sessions (project_id, seed_url, normalized_seed_url, max_depth)
+    values (v_project, 'https://example.com/', 'https://example.com', 4);
+    raise exception 'smoke: KB9 max_depth above 3 unexpectedly allowed';
+  exception when check_violation then null;
+  end;
+  begin
+    insert into public.seo_knowledge_discovery_sessions (project_id, seed_url, normalized_seed_url, scope)
+    values (v_project, 'https://example.com/', 'https://example.com', 'everywhere');
+    raise exception 'smoke: KB9 invalid scope unexpectedly allowed';
+  exception when check_violation then null;
+  end;
+  begin
+    insert into public.seo_knowledge_discovery_sessions (project_id, seed_url, normalized_seed_url, status)
+    values (v_project, 'https://example.com/', 'https://example.com', 'done');
+    raise exception 'smoke: KB9 invalid status unexpectedly allowed';
+  exception when check_violation then null;
+  end;
+
+  -- A foreign-project collection cannot be targeted (composite FK).
+  insert into public.seo_knowledge_collections (project_id, name, created_by)
+  values (v_project2, 'Foreign discovery target', v_owner)
+  returning id into v_foreign_collection;
+  begin
+    update public.seo_knowledge_discovery_sessions set collection_id = v_foreign_collection where id = v_session;
+    raise exception 'smoke: KB9 cross-project collection unexpectedly allowed';
+  exception when foreign_key_violation then null;
+  end;
+
+  -- Proposal transition + bounded candidate payload the API serializes.
+  update public.seo_knowledge_discovery_sessions
+  set status = 'ready',
+      result_json = '{"candidates":[{"url":"https://example.com/a","normalizedUrl":"https://example.com/a","depth":1,"eligible":true}]}'::jsonb
+  where id = v_session;
+  if not exists (
+    select 1 from public.seo_knowledge_discovery_sessions
+    where id = v_session and status = 'ready' and jsonb_array_length(result_json->'candidates') = 1
+  ) then raise exception 'smoke: KB9 proposal was not stored'; end if;
+
+  -- Deleting the target collection keeps the session (ON DELETE SET NULL).
+  delete from public.seo_knowledge_collections where id = v_collection;
+  if not exists (
+    select 1 from public.seo_knowledge_discovery_sessions where id = v_session and collection_id is null
+  ) then raise exception 'smoke: KB9 collection delete did not keep the session'; end if;
+
+  if not exists (
+    select 1 from pg_indexes
+    where schemaname = 'public' and indexname = 'seo_knowledge_discovery_sessions_project_status_idx'
+  ) then raise exception 'smoke: KB9 status index missing'; end if;
+
+  raise notice 'smoke: knowledge discovery session (limits/transition/isolate/delete) OK';
+end $$;
+SQL
+
+# RLS can only be exercised as a non-superuser role (superusers bypass RLS).
+DISCOVERY_LEAK_COUNT="$(PSQL -d "${DB_NAME}" -t -A <<'SQL'
+grant usage on schema public to authenticated;
+grant select on public.seo_knowledge_discovery_sessions to authenticated;
+set role authenticated;
+set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-000000000002"}';
+select count(*) from public.seo_knowledge_discovery_sessions;
+SQL
+)"
+if [ -z "${DISCOVERY_LEAK_COUNT}" ] || [ "${DISCOVERY_LEAK_COUNT}" != "0" ]; then
+  echo "!! RLS leak: non-member read ${DISCOVERY_LEAK_COUNT} discovery sessions" >&2
+  exit 1
+fi
+echo "   smoke: non-member cannot read a foreign project discovery session (RLS isolation OK)"
+
 echo "==> smoke test: media library (phase F) + safe deletion + isolation"
 PSQL -d "${DB_NAME}" <<'SQL'
 set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-000000000001"}';

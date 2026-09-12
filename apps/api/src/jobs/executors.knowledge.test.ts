@@ -42,3 +42,35 @@ describe('knowledge_source_refresh executor (KB7)', () => {
     spy.mockRestore();
   });
 });
+
+describe('knowledge_discovery executor (KB9)', () => {
+  it('is registered and delegates to KnowledgeService.runDiscovery', async () => {
+    const spy = vi
+      .spyOn(KnowledgeService.prototype, 'runDiscovery')
+      .mockResolvedValue({ status: 'ready', candidates: [] } as never);
+    const executor = getExecutor('knowledge_discovery');
+    expect(executor).toBeTypeOf('function');
+
+    const report = vi.fn(async () => undefined);
+    await executor!({
+      container: {} as never,
+      job: { project_id: PROJECT, params: { session_id: SOURCE } } as never,
+      writer: {} as never,
+      report,
+    });
+
+    expect(spy).toHaveBeenCalledWith(PROJECT, SOURCE, report);
+    spy.mockRestore();
+  });
+
+  it('rejects a job without a session_id before touching the service', async () => {
+    const spy = vi.spyOn(KnowledgeService.prototype, 'runDiscovery');
+    const executor = getExecutor('knowledge_discovery')!;
+
+    await expect(
+      executor({ container: {} as never, job: { project_id: PROJECT, params: {} } as never, writer: {} as never, report: vi.fn() }),
+    ).rejects.toMatchObject({ status: 400 });
+    expect(spy).not.toHaveBeenCalled();
+    spy.mockRestore();
+  });
+});

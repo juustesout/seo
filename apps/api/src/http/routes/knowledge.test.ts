@@ -135,6 +135,38 @@ const searchHit = {
   score: 0.87,
 };
 
+const DISCOVERY = '44444444-4444-4444-8444-444444444444';
+
+const discoverySessionDto = {
+  id: DISCOVERY,
+  projectId: PROJECT,
+  seedUrl: 'https://example.com/',
+  normalizedSeedUrl: 'https://example.com/',
+  collectionId: null,
+  status: 'ready',
+  scope: 'same_host',
+  maxUrls: 25,
+  maxDepth: 1,
+  candidateCount: 1,
+  eligibleCount: 1,
+  alreadyExistingCount: 0,
+  errorCode: null,
+  createdAt: '2026-09-08T00:00:00.000Z',
+  updatedAt: '2026-09-08T00:00:00.000Z',
+};
+
+const discoveryCandidate = {
+  url: 'https://example.com/a',
+  normalizedUrl: 'https://example.com/a',
+  title: 'A',
+  depth: 1,
+  discoveredFrom: 'https://example.com/',
+  eligible: true,
+  reason: null,
+  alreadyExists: false,
+  existingSourceId: null,
+};
+
 beforeEach(() => {
   vi.spyOn(KnowledgeService.prototype, 'configuredReason').mockReturnValue(null);
   vi.spyOn(KnowledgeService.prototype, 'search').mockResolvedValue({
@@ -187,6 +219,23 @@ beforeEach(() => {
   vi.spyOn(KnowledgeService.prototype, 'bulkAssignCollection').mockResolvedValue({
     updated: 2,
     collectionId: COLLECTION,
+  } as never);
+  vi.spyOn(KnowledgeService.prototype, 'startDiscovery').mockResolvedValue({
+    session: discoverySessionDto,
+    job: { id: 'job-discovery' },
+  } as never);
+  vi.spyOn(KnowledgeService.prototype, 'getDiscoverySession').mockResolvedValue({
+    ...discoverySessionDto,
+    candidates: [discoveryCandidate],
+  } as never);
+  vi.spyOn(KnowledgeService.prototype, 'applyDiscovery').mockResolvedValue({
+    created: 1,
+    alreadyExists: 0,
+    queued: 1,
+    rejected: 0,
+    items: [
+      { url: 'https://example.com/a', normalizedUrl: 'https://example.com/a', outcome: 'created', sourceId: SOURCE, reason: null },
+    ],
   } as never);
 });
 
@@ -742,5 +791,92 @@ describe('knowledge collections routes (KB8)', () => {
       const res = await request('/search', { method: 'POST', token: 'viewer-token', body });
       expect(res.status, JSON.stringify(body)).toBe(400);
     }
+  });
+});
+
+describe('knowledge discovery routes (KB9)', () => {
+  it('lets a viewer poll a session but not start or apply one', async () => {
+    const read = await request(`/discovery/${DISCOVERY}`, { token: 'viewer-token' });
+    expect(read.status).toBe(200);
+    expect(read.json).toMatchObject({ data: { id: DISCOVERY, candidates: [{ url: 'https://example.com/a' }] } });
+
+    const start = await request('/discovery', {
+      method: 'POST',
+      token: 'viewer-token',
+      body: { seedUrl: 'https://example.com' },
+    });
+    const apply = await request(`/discovery/${DISCOVERY}/apply`, {
+      method: 'POST',
+      token: 'viewer-token',
+      body: { urls: ['https://example.com/a'] },
+    });
+    expect(start.status).toBe(403);
+    expect(apply.status).toBe(403);
+    expect(vi.mocked(KnowledgeService.prototype.startDiscovery)).not.toHaveBeenCalled();
+    expect(vi.mocked(KnowledgeService.prototype.applyDiscovery)).not.toHaveBeenCalled();
+  });
+
+  it('starts a bounded session for an editor and returns the queued session', async () => {
+    const res = await request('/discovery', {
+      method: 'POST',
+      token: 'editor-token',
+      body: { seedUrl: ' https://example.com/ ', collectionId: COLLECTION, maxUrls: 10, maxDepth: 2, scope: 'same_domain' },
+    });
+    expect(res.status).toBe(202);
+    expect(vi.mocked(KnowledgeService.prototype.startDiscovery)).toHaveBeenLastCalledWith(PROJECT, 'e-user', {
+      seedUrl: 'https://example.com/',
+      collectionId: COLLECTION,
+      maxUrls: 10,
+      maxDepth: 2,
+      scope: 'same_domain',
+    });
+    expect(res.json).toMatchObject({ data: { session: { id: DISCOVERY }, job: { id: 'job-discovery' } } });
+  });
+
+  it('rejects malformed discovery input at the edge without calling the service', async () => {
+    for (const body of [
+      {},
+      { seedUrl: '' },
+      { seedUrl: 'https://example.com', maxUrls: 101 },
+      { seedUrl: 'https://example.com', maxDepth: 4 },
+      { seedUrl: 'https://example.com', scope: 'anywhere' },
+      { seedUrl: 'https://example.com', collectionId: 'not-a-uuid' },
+    ]) {
+      const res = await request('/discovery', { method: 'POST', token: 'editor-token', body });
+      expect(res.status, JSON.stringify(body)).toBe(400);
+      expect((res.json as { error: { code: string } }).error.code).toBe('validation_error');
+    }
+    const bad = await request('/discovery/not-a-uuid', { token: 'viewer-token' });
+    expect(bad.status).toBe(400);
+    expect(vi.mocked(KnowledgeService.prototype.startDiscovery)).not.toHaveBeenCalled();
+    expect(vi.mocked(KnowledgeService.prototype.getDiscoverySession)).not.toHaveBeenCalled();
+  });
+
+  it('applies a bounded selection and reports honest counts', async () => {
+    const res = await request(`/discovery/${DISCOVERY}/apply`, {
+      method: 'POST',
+      token: 'editor-token',
+      body: { urls: ['https://example.com/a'] },
+    });
+    expect(res.status).toBe(200);
+    expect(vi.mocked(KnowledgeService.prototype.applyDiscovery)).toHaveBeenLastCalledWith(PROJECT, 'e-user', DISCOVERY, [
+      'https://example.com/a',
+    ]);
+    expect(res.json).toMatchObject({ data: { created: 1, alreadyExists: 0, queued: 1, rejected: 0 } });
+  });
+
+  it('rejects an empty or oversized selection and a malformed session id', async () => {
+    for (const body of [{ urls: [] }, { urls: [''] }, { urls: Array.from({ length: 101 }, () => 'https://example.com/a') }, {}]) {
+      const res = await request(`/discovery/${DISCOVERY}/apply`, { method: 'POST', token: 'editor-token', body });
+      expect(res.status, JSON.stringify(body)).toBe(400);
+      expect((res.json as { error: { code: string } }).error.code).toBe('validation_error');
+    }
+    const bad = await request('/discovery/not-a-uuid/apply', {
+      method: 'POST',
+      token: 'editor-token',
+      body: { urls: ['https://example.com/a'] },
+    });
+    expect(bad.status).toBe(400);
+    expect(vi.mocked(KnowledgeService.prototype.applyDiscovery)).not.toHaveBeenCalled();
   });
 });

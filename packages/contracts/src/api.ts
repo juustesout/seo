@@ -20,6 +20,7 @@ import type {
 } from './models.js';
 import type { TipDoc } from './contentDoc.js';
 import type { SeoResult } from './seo.js';
+import type { KnowledgeDiscoveryScope } from './providers.js';
 
 /**
  * Success envelope: the shared error handler wraps every 2xx payload as
@@ -1092,6 +1093,129 @@ export interface KnowledgeCollectionDetailDto extends KnowledgeCollectionDto {
 export interface KnowledgeSourceBulkAssignRequest {
   source_ids: string[];
   collection_id: string | null;
+}
+
+// ---------------------------------------------------------------------------
+// Knowledge discovery (KB9) - controlled, human-approved link discovery
+//
+// A discovery session proposes candidate URLs found by following in-scope links
+// from a seed page. It stores the *proposal*, never scraped content, and nothing
+// is indexed until a human selects candidates and applies them (which creates
+// normal URL sources and queues the existing KB3 ingestion). These DTOs are
+// camelCase like the collection DTOs; candidate URLs are untrusted text.
+// ---------------------------------------------------------------------------
+
+/** How far discovery may wander from the seed host. */
+export const KNOWLEDGE_DISCOVERY_SCOPES = ['same_host', 'same_domain'] as const;
+
+export type { KnowledgeDiscoveryScope };
+
+/** Default and hard caps for discovered URLs (fail-closed beyond the max). */
+export const KNOWLEDGE_DISCOVERY_DEFAULT_MAX_URLS = 25;
+export const KNOWLEDGE_DISCOVERY_MAX_URLS = 100;
+
+/** Default and hard caps for link depth (the seed is depth 0). */
+export const KNOWLEDGE_DISCOVERY_DEFAULT_MAX_DEPTH = 1;
+export const KNOWLEDGE_DISCOVERY_MAX_DEPTH = 3;
+
+/** Maximum URLs a single apply call may turn into sources. */
+export const KNOWLEDGE_DISCOVERY_APPLY_MAX_URLS = 100;
+
+/** Longest seed URL accepted (mirrors the SSRF guard's URL cap). */
+export const KNOWLEDGE_DISCOVERY_SEED_MAX_CHARS = 2048;
+
+/** Session lifecycle. `ready` holds a proposal; `applied` means it was acted on. */
+export const KNOWLEDGE_DISCOVERY_STATUSES = ['queued', 'processing', 'ready', 'failed', 'applied'] as const;
+export type KnowledgeDiscoveryStatus = (typeof KNOWLEDGE_DISCOVERY_STATUSES)[number];
+
+/** Why a discovered candidate cannot be turned into a source. */
+export type KnowledgeDiscoveryReason = 'url_not_allowed' | 'out_of_scope' | 'duplicate';
+
+/** Outcome of one requested URL during apply. */
+export type KnowledgeDiscoveryApplyOutcome = 'created' | 'already_exists' | 'rejected';
+
+/** One proposed candidate URL with its eligibility and duplicate state. */
+export interface KnowledgeDiscoveryCandidate {
+  /** The URL exactly as discovered (untrusted text). */
+  url: string;
+  /** Canonical normalized URL used for de-duplication and apply matching. */
+  normalizedUrl: string;
+  title: string | null;
+  /** Depth relative to the seed (seed = 0). */
+  depth: number;
+  discoveredFrom: string | null;
+  /** True when the candidate is in scope, safe and not already a source. */
+  eligible: boolean;
+  /** Machine reason when `eligible` is false. */
+  reason: KnowledgeDiscoveryReason | null;
+  /** True when this project already has a source for the normalized URL. */
+  alreadyExists: boolean;
+  existingSourceId: string | null;
+}
+
+/** Start a discovery session (editor+). All fields except the seed are optional. */
+export interface KnowledgeDiscoveryRequest {
+  seedUrl: string;
+  collectionId?: string | null;
+  maxUrls?: number;
+  maxDepth?: number;
+  scope?: KnowledgeDiscoveryScope;
+}
+
+/** Safe session summary - never exposes raw provider payloads or stored JSON. */
+export interface KnowledgeDiscoverySessionDto {
+  id: string;
+  projectId: string;
+  seedUrl: string;
+  normalizedSeedUrl: string;
+  collectionId: string | null;
+  status: KnowledgeDiscoveryStatus;
+  scope: KnowledgeDiscoveryScope;
+  maxUrls: number;
+  maxDepth: number;
+  candidateCount: number;
+  eligibleCount: number;
+  alreadyExistingCount: number;
+  /** Normalized ingestion error code when the session failed, else null. */
+  errorCode: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** One session plus its bounded candidate proposal (only when ready/applied). */
+export interface KnowledgeDiscoverySessionDetailDto extends KnowledgeDiscoverySessionDto {
+  candidates: KnowledgeDiscoveryCandidate[];
+}
+
+/**
+ * Apply a human selection from a `ready` (or previously `applied`) session.
+ * URLs may be candidate `normalizedUrl` or `url` values; anything not in the
+ * session is rejected. Bounded to `KNOWLEDGE_DISCOVERY_APPLY_MAX_URLS`.
+ */
+export interface KnowledgeDiscoveryApplyRequest {
+  urls: string[];
+}
+
+/** One requested URL's honest outcome. */
+export interface KnowledgeDiscoveryApplyItem {
+  url: string;
+  normalizedUrl: string;
+  outcome: KnowledgeDiscoveryApplyOutcome;
+  sourceId: string | null;
+  reason: string | null;
+}
+
+/**
+ * Apply result. `created` sources were committed and their ingestion was
+ * queued; `alreadyExists` were skipped; `rejected` never became sources. The
+ * counts are never merged - the UI must show what actually happened.
+ */
+export interface KnowledgeDiscoveryApplyResultDto {
+  created: number;
+  alreadyExists: number;
+  queued: number;
+  rejected: number;
+  items: KnowledgeDiscoveryApplyItem[];
 }
 
 // ---------------------------------------------------------------------------

@@ -40,6 +40,15 @@ import type {
   KnowledgeCollectionDetailDto,
   KnowledgeCollectionDto,
   KnowledgeCollectionsResponse,
+  KnowledgeDiscoveryApplyItem,
+  KnowledgeDiscoveryApplyResultDto,
+  KnowledgeDiscoveryCandidate,
+  KnowledgeDiscoveryRequest,
+  KnowledgeDiscoverySessionDetailDto,
+  KnowledgeDiscoverySessionDto,
+  KnowledgeDiscoveryStatus,
+  KnowledgeDiscoveryScope,
+  KnowledgeDiscoveryReason,
   KnowledgeDocumentInput,
   KnowledgeDueRefreshDto,
   KnowledgeFetcher,
@@ -62,6 +71,11 @@ import type {
 import {
   KNOWLEDGE_COLLECTION_DESCRIPTION_MAX_CHARS,
   KNOWLEDGE_COLLECTION_NAME_MAX_CHARS,
+  KNOWLEDGE_DISCOVERY_APPLY_MAX_URLS,
+  KNOWLEDGE_DISCOVERY_DEFAULT_MAX_DEPTH,
+  KNOWLEDGE_DISCOVERY_DEFAULT_MAX_URLS,
+  KNOWLEDGE_DISCOVERY_MAX_DEPTH,
+  KNOWLEDGE_DISCOVERY_MAX_URLS,
   KNOWLEDGE_ERROR_MESSAGES,
   KNOWLEDGE_SEARCH_FAILED_CODE,
   KNOWLEDGE_SEARCH_FAILED_MESSAGE,
@@ -96,6 +110,7 @@ import {
 } from '../knowledge/limits.js';
 import { KnowledgeIngestError, isKnowledgeIngestError, type KnowledgeIngestErrorCode } from '../knowledge/errors.js';
 import { validateExternalUrl } from '../knowledge/url.js';
+import { isWithinScope, normalizeDiscoveryUrl } from '../knowledge/discovery.js';
 import { hasValidSignature, resolveFileType, sanitizeFilename } from '../knowledge/files/fileTypes.js';
 
 /** Largest single source body accepted for indexing (bytes/chars). Bounding it
@@ -110,6 +125,11 @@ const SOURCE_LIST_COLUMNS =
 
 /** Columns for one collection row (never a raw row on the wire). */
 const COLLECTION_COLUMNS = 'id, project_id, name, description, created_at, updated_at';
+
+/** Columns safe to expose for a discovery session. `request_json` is excluded:
+ *  the session DTO carries only the individual fields the UI renders. */
+const DISCOVERY_SESSION_COLUMNS =
+  'id, project_id, seed_url, normalized_seed_url, collection_id, status, scope, max_urls, max_depth, result_json, error, created_at, updated_at';
 
 /** Fixed, allowlisted sort map. A client `sort` value can only select one of
  *  these pairs; no raw column name or SQL order ever reaches the database. */
@@ -126,6 +146,18 @@ const SOURCE_SORTS: Record<string, { column: string; ascending: boolean }> = {
 function clampListLimit(value: number | undefined): number {
   if (typeof value !== 'number' || !Number.isFinite(value)) return KNOWLEDGE_LIST_DEFAULT_LIMIT;
   return Math.min(KNOWLEDGE_LIST_MAX_LIMIT, Math.max(1, Math.floor(value)));
+}
+
+/** Clamp discovery `maxUrls` into [1, max]; absent/non-finite uses the default. */
+export function clampDiscoveryMaxUrls(value: number | undefined): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return KNOWLEDGE_DISCOVERY_DEFAULT_MAX_URLS;
+  return Math.max(1, Math.min(KNOWLEDGE_DISCOVERY_MAX_URLS, Math.floor(value)));
+}
+
+/** Clamp discovery `maxDepth` into [0, max]; absent/non-finite uses the default. */
+export function clampDiscoveryMaxDepth(value: number | undefined): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return KNOWLEDGE_DISCOVERY_DEFAULT_MAX_DEPTH;
+  return Math.max(0, Math.min(KNOWLEDGE_DISCOVERY_MAX_DEPTH, Math.floor(value)));
 }
 
 /**
@@ -266,6 +298,64 @@ export function mapCollectionRow(row: SourceRow, sourceCount: number): Knowledge
     createdAt: String(row.created_at ?? ''),
     updatedAt: String(row.updated_at ?? ''),
   };
+}
+
+/**
+ * Read the bounded candidate proposal out of a session row. The stored JSON is
+ * always our own normalized shape, and only the allowlisted candidate fields are
+ * projected - a raw provider payload could never reach the wire this way.
+ */
+function discoveryCandidates(row: SourceRow): KnowledgeDiscoveryCandidate[] {
+  const result = row.result_json as { candidates?: unknown } | null | undefined;
+  const raw = result && typeof result === 'object' ? (result as { candidates?: unknown }).candidates : undefined;
+  if (!Array.isArray(raw)) return [];
+  return raw.flatMap((entry): KnowledgeDiscoveryCandidate[] => {
+    if (!entry || typeof entry !== 'object') return [];
+    const c = entry as Record<string, unknown>;
+    const url = typeof c.url === 'string' ? c.url : '';
+    const normalizedUrl = typeof c.normalizedUrl === 'string' ? c.normalizedUrl : url;
+    if (!url) return [];
+    return [
+      {
+        url,
+        normalizedUrl,
+        title: typeof c.title === 'string' ? c.title : null,
+        depth: Number(c.depth ?? 0),
+        discoveredFrom: typeof c.discoveredFrom === 'string' ? c.discoveredFrom : null,
+        eligible: c.eligible === true,
+        reason: typeof c.reason === 'string' ? (c.reason as KnowledgeDiscoveryReason) : null,
+        alreadyExists: c.alreadyExists === true,
+        existingSourceId: typeof c.existingSourceId === 'string' ? c.existingSourceId : null,
+      },
+    ];
+  });
+}
+
+/** Safe discovery session row -> camelCase DTO (no stored request JSON). */
+export function mapDiscoverySessionRow(row: SourceRow): KnowledgeDiscoverySessionDto {
+  const candidates = discoveryCandidates(row);
+  return {
+    id: String(row.id),
+    projectId: String(row.project_id),
+    seedUrl: String(row.seed_url ?? ''),
+    normalizedSeedUrl: String(row.normalized_seed_url ?? ''),
+    collectionId: row.collection_id == null ? null : String(row.collection_id),
+    status: (row.status as KnowledgeDiscoveryStatus) ?? 'queued',
+    scope: (row.scope as KnowledgeDiscoveryScope) ?? 'same_host',
+    maxUrls: Number(row.max_urls ?? KNOWLEDGE_DISCOVERY_DEFAULT_MAX_URLS),
+    maxDepth: Number(row.max_depth ?? KNOWLEDGE_DISCOVERY_DEFAULT_MAX_DEPTH),
+    candidateCount: candidates.length,
+    eligibleCount: candidates.filter((c) => c.eligible).length,
+    alreadyExistingCount: candidates.filter((c) => c.alreadyExists).length,
+    errorCode: row.error == null ? null : String(row.error),
+    createdAt: String(row.created_at ?? ''),
+    updatedAt: String(row.updated_at ?? ''),
+  };
+}
+
+/** Session summary plus its bounded candidate list. */
+export function mapDiscoverySessionDetailRow(row: SourceRow): KnowledgeDiscoverySessionDetailDto {
+  return { ...mapDiscoverySessionRow(row), candidates: discoveryCandidates(row) };
 }
 
 /**
@@ -940,6 +1030,404 @@ export class KnowledgeService {
     if (updateError) throw ApiError.badRequest('Could not update the selected sources');
     await Promise.all(ids.map((id) => this.syncCollectionMetadata(projectId, id, target)));
     return { updated: ids.length, collectionId: target };
+  }
+
+  // -------------------------------------------------------------------------
+  // Knowledge discovery (KB9) - controlled, human-approved link discovery.
+  //
+  // The service is the policy owner: it validates the seed, bounds the run,
+  // normalizes/dedupes/scopes every discovered URL, marks eligibility and
+  // existing sources, and (only on an explicit human selection) creates normal
+  // URL sources and queues the existing KB3 ingestion. The provider only
+  // fetches and extracts links; it never decides what becomes knowledge.
+  // -------------------------------------------------------------------------
+
+  private async discoverySessionRow(projectId: string, sessionId: string): Promise<SourceRow> {
+    const { data } = await this.sb
+      .from('seo_knowledge_discovery_sessions')
+      .select(DISCOVERY_SESSION_COLUMNS)
+      .eq('project_id', projectId)
+      .eq('id', sessionId)
+      .maybeSingle();
+    if (!data) throw ApiError.notFound('Discovery session not found');
+    return data as SourceRow;
+  }
+
+  /** Compare-and-swap a session's status; false when no row matched. */
+  private async patchDiscoveryRow(
+    projectId: string,
+    sessionId: string,
+    statuses: KnowledgeDiscoveryStatus[],
+    patch: Record<string, unknown>,
+  ): Promise<boolean> {
+    const { data, error } = await this.sb
+      .from('seo_knowledge_discovery_sessions')
+      .update(patch)
+      .eq('project_id', projectId)
+      .eq('id', sessionId)
+      .in('status', statuses)
+      .select('id');
+    if (error) throw ApiError.badRequest('Could not update the discovery session');
+    return Array.isArray(data) ? data.length > 0 : Boolean(data);
+  }
+
+  private async failDiscovery(projectId: string, sessionId: string, code: string): Promise<void> {
+    await this.patchDiscoveryRow(projectId, sessionId, ['queued', 'processing'], { status: 'failed', error: code }).catch(
+      () => undefined,
+    );
+  }
+
+  /** Normalized-URL -> existing source id for this project (non-deleted only). */
+  private async existingUrlSourceMap(projectId: string): Promise<Map<string, string>> {
+    const { data, error } = await this.sb
+      .from('seo_knowledge_sources')
+      .select('id, url')
+      .eq('project_id', projectId)
+      .eq('source_type', 'url')
+      .neq('status', 'deleted');
+    if (error) throw ApiError.badRequest('Could not check existing knowledge sources');
+    const map = new Map<string, string>();
+    for (const row of (data ?? []) as SourceRow[]) {
+      const url = typeof row.url === 'string' ? row.url.trim() : '';
+      if (!url) continue;
+      try {
+        map.set(normalizeDiscoveryUrl(url), String(row.id));
+      } catch {
+        // A legacy/never-fetchable URL cannot participate in de-duplication.
+      }
+    }
+    return map;
+  }
+
+  /**
+   * Project a provider link list onto the bounded candidate model: normalize,
+   * de-duplicate, scope-check, re-validate and mark existing sources. Ordering
+   * is stable and deterministic (depth, then discovery order, then URL).
+   */
+  private async buildDiscoveryCandidates(
+    projectId: string,
+    seedUrl: string,
+    scope: KnowledgeDiscoveryScope,
+    links: Array<{ url: string; title?: string; depth: number; discoveredFrom?: string }>,
+  ): Promise<KnowledgeDiscoveryCandidate[]> {
+    const seedHost = new URL(seedUrl).hostname;
+    const existing = await this.existingUrlSourceMap(projectId);
+    const seen = new Set<string>();
+    const candidates: KnowledgeDiscoveryCandidate[] = [];
+
+    for (const link of links) {
+      let normalized: string | null = null;
+      try {
+        normalized = normalizeDiscoveryUrl(link.url);
+      } catch {
+        normalized = null;
+      }
+
+      let reason: KnowledgeDiscoveryReason | null = null;
+      if (!normalized) {
+        reason = 'url_not_allowed';
+      } else if (seen.has(normalized)) {
+        continue;
+      } else {
+        seen.add(normalized);
+        if (!isWithinScope(seedHost, new URL(normalized).hostname, scope)) reason = 'out_of_scope';
+      }
+
+      const existingId = normalized ? existing.get(normalized) ?? null : null;
+      if (existingId) reason = 'duplicate';
+      candidates.push({
+        url: link.url,
+        normalizedUrl: normalized ?? link.url.slice(0, 2048),
+        title: link.title ?? null,
+        depth: link.depth,
+        discoveredFrom: link.discoveredFrom ?? null,
+        eligible: reason === null,
+        reason,
+        alreadyExists: existingId !== null,
+        existingSourceId: existingId,
+      });
+    }
+
+    return candidates
+      .map((candidate, order) => ({ candidate, order }))
+      .sort(
+        (a, b) =>
+          a.candidate.depth - b.candidate.depth ||
+          a.order - b.order ||
+          a.candidate.normalizedUrl.localeCompare(b.candidate.normalizedUrl),
+      )
+      .map((entry) => entry.candidate);
+  }
+
+  /**
+   * Start a discovery session: validate the seed through the SSRF guard, resolve
+   * an optional collection target, persist a bounded request row and queue the
+   * background discovery job. No network fetch happens here.
+   */
+  async startDiscovery(projectId: string, userId: string, input: KnowledgeDiscoveryRequest) {
+    const reason = this.configuredReason();
+    if (reason) throw ApiError.notConfigured(`Knowledge discovery is not configured. ${reason}`);
+    const provider = this.container.knowledgeDiscoveryProvider;
+    if (!provider || !provider.isConfigured()) {
+      throw ApiError.notConfigured('Knowledge discovery is not configured on this server.');
+    }
+
+    const rawSeed = (input.seedUrl ?? '').trim();
+    if (!rawSeed) throw ApiError.badRequest('Provide a seed URL to discover from.');
+    let seedUrl: string;
+    let normalizedSeedUrl: string;
+    try {
+      seedUrl = validateExternalUrl(rawSeed).toString();
+      normalizedSeedUrl = normalizeDiscoveryUrl(seedUrl);
+    } catch (err) {
+      if (isKnowledgeIngestError(err)) throw new ApiError(err.status, err.code, err.message);
+      throw err;
+    }
+
+    const collectionId = input.collectionId ? await this.resolveCollectionTarget(projectId, input.collectionId) : null;
+    const scope: KnowledgeDiscoveryScope = input.scope === 'same_domain' ? 'same_domain' : 'same_host';
+    const maxUrls = clampDiscoveryMaxUrls(input.maxUrls);
+    const maxDepth = clampDiscoveryMaxDepth(input.maxDepth);
+
+    const { data, error } = await this.sb
+      .from('seo_knowledge_discovery_sessions')
+      .insert({
+        project_id: projectId,
+        seed_url: seedUrl,
+        normalized_seed_url: normalizedSeedUrl,
+        collection_id: collectionId,
+        status: 'queued',
+        scope,
+        max_urls: maxUrls,
+        max_depth: maxDepth,
+        request_json: { seedUrl, scope, maxUrls, maxDepth, collectionId },
+        created_by: userId,
+      })
+      .select(DISCOVERY_SESSION_COLUMNS)
+      .single();
+    if (error || !data) throw ApiError.badRequest('Could not start the discovery session');
+    const inserted = data as SourceRow;
+
+    try {
+      const job = await this.container.jobStore.enqueue({
+        project_id: projectId,
+        provider: 'qdrant',
+        job_type: 'knowledge_discovery',
+        params: { session_id: String(inserted.id) },
+        created_by: userId,
+      });
+      return { session: mapDiscoverySessionRow(inserted), job };
+    } catch (err) {
+      // Never leave a session stuck in `queued` when the queue refused the job.
+      await this.patchDiscoveryRow(projectId, String(inserted.id), ['queued'], {
+        status: 'failed',
+        error: 'knowledge_fetch_provider_error',
+      }).catch(() => undefined);
+      throw err;
+    }
+  }
+
+  /** One session plus its bounded candidate proposal. */
+  async getDiscoverySession(projectId: string, sessionId: string): Promise<KnowledgeDiscoverySessionDetailDto> {
+    return mapDiscoverySessionDetailRow(await this.discoverySessionRow(projectId, sessionId));
+  }
+
+  /**
+   * Run discovery for one session (worker executor). Claims the row, runs the
+   * bounded provider, builds the candidate proposal and commits it. The seed
+   * fetch failing fails the session honestly; individual unreachable discovered
+   * pages are skipped by the provider and never become fabricated candidates.
+   */
+  async runDiscovery(projectId: string, sessionId: string, report?: ProgressFn): Promise<Record<string, unknown>> {
+    let row: SourceRow;
+    try {
+      row = await this.discoverySessionRow(projectId, sessionId);
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 404) {
+        return { session_id: sessionId, skipped: true, message: 'Discovery session no longer exists' };
+      }
+      throw err;
+    }
+    if ((row.status as KnowledgeDiscoveryStatus) === 'applied') {
+      return { session_id: sessionId, skipped: true, message: 'Session was already applied' };
+    }
+
+    const provider = this.container.knowledgeDiscoveryProvider;
+    if (!provider || !provider.isConfigured()) {
+      await this.failDiscovery(projectId, sessionId, 'knowledge_jina_not_configured');
+      throw new ApiError(503, 'knowledge_jina_not_configured', KNOWLEDGE_ERROR_MESSAGES.knowledge_jina_not_configured);
+    }
+
+    const claimed = await this.patchDiscoveryRow(projectId, sessionId, ['queued', 'processing', 'failed'], {
+      status: 'processing',
+      error: null,
+    });
+    if (!claimed) return { session_id: sessionId, skipped: true, message: 'Session is not discoverable right now' };
+
+    try {
+      const seedUrl = String(row.seed_url);
+      const scope = (row.scope as KnowledgeDiscoveryScope) ?? 'same_host';
+      await report?.(10, 'Fetching the seed page');
+      const result = await provider.discover(seedUrl, {
+        maxUrls: clampDiscoveryMaxUrls(Number(row.max_urls)),
+        maxDepth: clampDiscoveryMaxDepth(Number(row.max_depth)),
+        scope,
+      });
+      await report?.(60, 'Checking existing sources');
+      const candidates = await this.buildDiscoveryCandidates(projectId, seedUrl, scope, result.links);
+      const committed = await this.patchDiscoveryRow(projectId, sessionId, ['processing'], {
+        status: 'ready',
+        error: null,
+        result_json: { candidates, seedTitle: result.seedTitle ?? null },
+      });
+      if (!committed) return { session_id: sessionId, skipped: true, message: 'Session changed during discovery' };
+      await report?.(100, `Found ${candidates.length} candidate URL(s)`);
+      return {
+        session_id: sessionId,
+        candidates: candidates.length,
+        eligible: candidates.filter((c) => c.eligible).length,
+      };
+    } catch (err) {
+      const code = isKnowledgeIngestError(err) ? err.code : 'knowledge_fetch_provider_error';
+      await this.failDiscovery(projectId, sessionId, code);
+      throw err;
+    }
+  }
+
+  /**
+   * Apply a human selection from a `ready` session. Every requested URL must be
+   * a candidate of *this* session; URLs are re-validated, duplicates are
+   * skipped and each created source is committed before its existing KB3
+   * ingestion is queued. Re-running an apply is safe: already-created sources
+   * are reported as `already_exists`, never duplicated.
+   */
+  async applyDiscovery(
+    projectId: string,
+    userId: string,
+    sessionId: string,
+    urls: string[],
+  ): Promise<KnowledgeDiscoveryApplyResultDto> {
+    const row = await this.discoverySessionRow(projectId, sessionId);
+    const status = (row.status as KnowledgeDiscoveryStatus) ?? 'queued';
+    if (status === 'queued' || status === 'processing') {
+      throw ApiError.conflict('Discovery is still running. Wait for it to finish.');
+    }
+    if (status === 'failed') throw ApiError.conflict('This discovery session failed. Start a new one.');
+
+    const candidates = discoveryCandidates(row);
+    const byKey = new Map<string, KnowledgeDiscoveryCandidate>();
+    for (const candidate of candidates) {
+      byKey.set(candidate.normalizedUrl, candidate);
+      byKey.set(candidate.url, candidate);
+    }
+
+    const requested = [...new Set((urls ?? []).map((value) => String(value).trim()).filter(Boolean))];
+    if (requested.length === 0) throw ApiError.badRequest('Select at least one URL to add.');
+    if (requested.length > KNOWLEDGE_DISCOVERY_APPLY_MAX_URLS) {
+      throw ApiError.badRequest(`Too many URLs selected (max ${KNOWLEDGE_DISCOVERY_APPLY_MAX_URLS}).`);
+    }
+
+    const collectionId = row.collection_id == null ? null : String(row.collection_id);
+    const existing = await this.existingUrlSourceMap(projectId);
+    const seen = new Set<string>();
+    const items: KnowledgeDiscoveryApplyItem[] = [];
+    let created = 0;
+    let alreadyExists = 0;
+    let queued = 0;
+    let rejected = 0;
+
+    const reject = (url: string, normalizedUrl: string, reason: string) => {
+      rejected += 1;
+      items.push({ url, normalizedUrl, outcome: 'rejected', sourceId: null, reason });
+    };
+    const exists = (url: string, normalizedUrl: string, sourceId: string) => {
+      alreadyExists += 1;
+      items.push({ url, normalizedUrl, outcome: 'already_exists', sourceId, reason: 'duplicate' });
+    };
+
+    for (const raw of requested) {
+      const candidate = byKey.get(raw);
+      if (!candidate) {
+        reject(raw, raw, 'not_a_candidate');
+        continue;
+      }
+      const normalized = candidate.normalizedUrl;
+      if (seen.has(normalized)) {
+        reject(raw, normalized, 'duplicate');
+        continue;
+      }
+      seen.add(normalized);
+
+      // Re-validate every URL at apply time: the SSRF guard is the last gate
+      // before a source is created, and scope/eligibility is re-checked.
+      try {
+        normalizeDiscoveryUrl(normalized);
+      } catch {
+        reject(raw, normalized, 'url_not_allowed');
+        continue;
+      }
+      if (!candidate.eligible) {
+        if (candidate.alreadyExists && candidate.existingSourceId) {
+          exists(raw, normalized, candidate.existingSourceId);
+        } else {
+          reject(raw, normalized, candidate.reason ?? 'rejected');
+        }
+        continue;
+      }
+      const existingId = existing.get(normalized);
+      if (existingId) {
+        exists(raw, normalized, existingId);
+        continue;
+      }
+
+      const name = KnowledgeService.discoverySourceName(candidate, normalized);
+      const { data: inserted, error } = await this.sb
+        .from('seo_knowledge_sources')
+        .insert({
+          project_id: projectId,
+          source_type: 'url',
+          name,
+          url: normalized,
+          content_text: null,
+          status: 'draft',
+          chunk_count: 0,
+          refresh_policy: 'manual',
+          collection_id: collectionId,
+          created_by: userId,
+        })
+        .select('id')
+        .single();
+      if (error || !inserted) {
+        reject(raw, normalized, 'create_failed');
+        continue;
+      }
+      const sourceId = String((inserted as SourceRow).id);
+      existing.set(normalized, sourceId);
+      created += 1;
+      try {
+        await this.enqueueIngest(projectId, sourceId, userId);
+        queued += 1;
+        items.push({ url: raw, normalizedUrl: normalized, outcome: 'created', sourceId, reason: null });
+      } catch {
+        items.push({ url: raw, normalizedUrl: normalized, outcome: 'created', sourceId, reason: 'ingest_not_queued' });
+      }
+    }
+
+    await this.patchDiscoveryRow(projectId, sessionId, [status], { status: 'applied' });
+    return { created, alreadyExists, queued, rejected, items };
+  }
+
+  /** Best-effort display name for a discovered source: title, else host + path. */
+  private static discoverySourceName(candidate: KnowledgeDiscoveryCandidate, normalized: string): string {
+    const title = (candidate.title ?? '').trim();
+    if (title) return title.slice(0, 200);
+    try {
+      const url = new URL(normalized);
+      const path = url.pathname === '/' ? '' : url.pathname;
+      return `${url.hostname}${path}`.slice(0, 200) || url.hostname;
+    } catch {
+      return normalized.slice(0, 200);
+    }
   }
 
   /**

@@ -23,6 +23,7 @@ import { KnowledgeSourceDetail } from './KnowledgeSourceDetail';
 import { KnowledgeSourceFilters, type KnowledgeFilterState } from './KnowledgeSourceFilters';
 import { KnowledgeSourceList } from './KnowledgeSourceList';
 import { KnowledgeBulkAssign, KnowledgeCollectionManager } from './KnowledgeCollections';
+import { KnowledgeDiscoveryPanel } from './KnowledgeDiscovery';
 import { KNOWLEDGE_FILE_ACCEPT } from './format';
 
 const PAGE_SIZE = 50;
@@ -359,6 +360,18 @@ export function KnowledgeLibrary({ projectId, canEdit }: { projectId: string; ca
               onCreate={(collectionName, description) => createCollection(collectionName, description)}
               onRename={(id, newName) => renameCollection(id, newName)}
               onDelete={(id) => deleteCollection(id)}
+            />
+          )}
+
+          {canEdit && configured && (
+            <KnowledgeDiscoveryPanel
+              projectId={projectId}
+              collections={collections}
+              canEdit={canEdit}
+              onApplied={() => {
+                void load();
+                void loadCollections();
+              }}
             />
           )}
 

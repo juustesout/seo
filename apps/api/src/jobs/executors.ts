@@ -466,6 +466,19 @@ const knowledgeSourceDelete: JobExecutor = async ({ container, job }) => {
   return service.deleteSource(job.project_id, sourceId);
 };
 
+/**
+ * Run one knowledge discovery session (KB9). Thin delegation to
+ * KnowledgeService so all policy (bounding, normalization, scope, eligibility)
+ * stays in exactly one place; the service persists the proposal, this executor
+ * never fetches a URL itself.
+ */
+const knowledgeDiscovery: JobExecutor = async ({ container, job, report }) => {
+  const sessionId = typeof job.params?.session_id === 'string' ? job.params.session_id : '';
+  if (!sessionId) throw new ApiError(400, 'bad_request', 'knowledge_discovery requires a session_id');
+  const service = new KnowledgeService(container);
+  return service.runDiscovery(job.project_id, sessionId, report);
+};
+
 // ---------------------------------------------------------------------------
 // Publishing
 // ---------------------------------------------------------------------------
@@ -714,6 +727,7 @@ export const EXECUTORS: Record<string, JobExecutor> = {
   knowledge_source_ingest: knowledgeSourceIngest,
   knowledge_source_refresh: knowledgeSourceRefresh,
   knowledge_source_delete: knowledgeSourceDelete,
+  knowledge_discovery: knowledgeDiscovery,
   content_generate: contentGenerate,
   content_images: contentImages,
   content_analyze: contentAnalyze,

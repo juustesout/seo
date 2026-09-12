@@ -18,6 +18,11 @@ import { z } from 'zod';
 import {
   KNOWLEDGE_COLLECTION_DESCRIPTION_MAX_CHARS,
   KNOWLEDGE_COLLECTION_NAME_MAX_CHARS,
+  KNOWLEDGE_DISCOVERY_APPLY_MAX_URLS,
+  KNOWLEDGE_DISCOVERY_MAX_DEPTH,
+  KNOWLEDGE_DISCOVERY_MAX_URLS,
+  KNOWLEDGE_DISCOVERY_SCOPES,
+  KNOWLEDGE_DISCOVERY_SEED_MAX_CHARS,
   KNOWLEDGE_REFRESH_POLICIES,
   KNOWLEDGE_SOURCE_BULK_MAX_IDS,
   KNOWLEDGE_SOURCE_STATUSES,
@@ -468,5 +473,79 @@ knowledgeRouter.delete(
     const svc = new KnowledgeService(container);
     await svc.deleteCollection(projectId, collectionId);
     res.json({ data: { id: collectionId, deleted: true, sources_deleted: false } });
+  }),
+);
+
+// ---------------------------------------------------------------------------
+// Knowledge discovery (KB9) - bounded, human-approved link discovery.
+//
+// Discovery only proposes candidate URLs; nothing is fetched or indexed inside
+// these routes. A session runs in the worker, a viewer polls it, and an editor
+// applies a reviewed selection (which creates normal URL sources and queues the
+// existing ingestion).
+// ---------------------------------------------------------------------------
+
+/** Bounded discovery request. Every value is validated/clamped at the edge. */
+const startDiscoverySchema = z.object({
+  seedUrl: z.string().trim().min(1).max(KNOWLEDGE_DISCOVERY_SEED_MAX_CHARS),
+  collectionId: z.string().uuid().nullable().optional(),
+  maxUrls: z.number().int().min(1).max(KNOWLEDGE_DISCOVERY_MAX_URLS).optional(),
+  maxDepth: z.number().int().min(0).max(KNOWLEDGE_DISCOVERY_MAX_DEPTH).optional(),
+  scope: z.enum(KNOWLEDGE_DISCOVERY_SCOPES).optional(),
+});
+
+/** Start a discovery session (editor+). Returns the queued session + job. */
+knowledgeRouter.post(
+  '/discovery',
+  asyncHandler(async (req, res) => {
+    const projectId = parseProjectId(req);
+    const { container, user } = req;
+    await container.access.requireRole(user!.sub, projectId, 'editor');
+    const body = startDiscoverySchema.parse(req.body);
+    const svc = new KnowledgeService(container);
+    const result = await svc.startDiscovery(projectId, user!.sub, {
+      seedUrl: body.seedUrl,
+      collectionId: body.collectionId ?? null,
+      maxUrls: body.maxUrls,
+      maxDepth: body.maxDepth,
+      scope: body.scope,
+    });
+    res.status(202).json({ data: result });
+  }),
+);
+
+/** One discovery session with its bounded candidate proposal (viewer+). */
+knowledgeRouter.get(
+  '/discovery/:sessionId',
+  asyncHandler(async (req, res) => {
+    const projectId = parseProjectId(req);
+    const { container, user } = req;
+    await container.access.requireRole(user!.sub, projectId, 'viewer');
+    const sessionId = parseId(req, 'sessionId');
+    const svc = new KnowledgeService(container);
+    const session = await svc.getDiscoverySession(projectId, sessionId);
+    res.json({ data: session });
+  }),
+);
+
+/** Apply a reviewed selection from a `ready`/`applied` session (editor+). */
+const applyDiscoverySchema = z.object({
+  urls: z
+    .array(z.string().trim().min(1).max(KNOWLEDGE_DISCOVERY_SEED_MAX_CHARS))
+    .min(1)
+    .max(KNOWLEDGE_DISCOVERY_APPLY_MAX_URLS),
+});
+
+knowledgeRouter.post(
+  '/discovery/:sessionId/apply',
+  asyncHandler(async (req, res) => {
+    const projectId = parseProjectId(req);
+    const { container, user } = req;
+    await container.access.requireRole(user!.sub, projectId, 'editor');
+    const sessionId = parseId(req, 'sessionId');
+    const body = applyDiscoverySchema.parse(req.body);
+    const svc = new KnowledgeService(container);
+    const result = await svc.applyDiscovery(projectId, user!.sub, sessionId, body.urls);
+    res.json({ data: result });
   }),
 );

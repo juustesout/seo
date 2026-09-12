@@ -215,6 +215,58 @@ export interface KnowledgeFetcher {
 }
 
 // ---------------------------------------------------------------------------
+// Knowledge discovery (bounded link discovery from a seed URL)
+// ---------------------------------------------------------------------------
+//
+// Discovery (KB9) is a *proposal* step: given one seed URL it returns a bounded,
+// de-duplicated list of candidate URLs that a human can then choose to add as
+// normal URL sources. It is deliberately not a general crawler - the provider
+// stays within one host/domain, never renders JavaScript, and never fetches
+// unbounded pages. The provider is a pure external-content adapter (no
+// credentials from the database, no Qdrant/Postgres/HTTP-route access) and
+// returns a provider-agnostic shape so the service never sees a vendor payload.
+
+/** How far discovery may wander from the seed host. */
+export type KnowledgeDiscoveryScope = 'same_host' | 'same_domain';
+
+export interface KnowledgeDiscoveryOptions {
+  /** Hard cap on the number of links returned. */
+  maxUrls: number;
+  /** Hard cap on link depth (seed = 0). */
+  maxDepth: number;
+  scope: KnowledgeDiscoveryScope;
+  /** Caller cancellation, combined with the provider's own bounds. */
+  signal?: AbortSignal;
+}
+
+/** One discovered link. `depth` is relative to the seed (seed = 0). */
+export interface DiscoveredLink {
+  url: string;
+  title?: string;
+  depth: number;
+  /** The page this link was found on, when known. */
+  discoveredFrom?: string;
+}
+
+/** Bounded discovery result. Providers must not return more than `maxUrls`. */
+export interface KnowledgeDiscoveryResult {
+  links: DiscoveredLink[];
+  /** Provider-reported title of the seed page, when offered. */
+  seedTitle?: string;
+}
+
+export interface KnowledgeDiscoveryProvider {
+  readonly id: string;
+  readonly name: string;
+  /** False when the server lacks the credentials this provider needs. */
+  isConfigured(): boolean;
+  /** Discover bounded, in-scope links starting from one validated seed URL. */
+  discover(seedUrl: string, options: KnowledgeDiscoveryOptions): Promise<KnowledgeDiscoveryResult>;
+}
+
+export type KnowledgeDiscoveryFactory = (deps: ProviderDeps) => KnowledgeDiscoveryProvider;
+
+// ---------------------------------------------------------------------------
 // Knowledge file extraction (uploaded documents -> text)
 // ---------------------------------------------------------------------------
 //
