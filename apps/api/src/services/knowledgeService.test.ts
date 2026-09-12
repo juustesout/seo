@@ -53,6 +53,7 @@ type Filter =
   | { kind: 'neq'; col: string; value: unknown }
   | { kind: 'in'; col: string; value: unknown[] }
   | { kind: 'lte'; col: string; value: unknown }
+  | { kind: 'is'; col: string; value: unknown }
   | { kind: 'notIs'; col: string; value: unknown }
   | { kind: 'or'; clauses: Array<{ col: string; pattern: string }> };
 
@@ -68,15 +69,26 @@ function rowMatches(row: DbRow, filters: Filter[]): boolean {
     if (f.kind === 'neq') return row[f.col] !== f.value;
     if (f.kind === 'in') return (f.value as unknown[]).includes(row[f.col]);
     if (f.kind === 'lte') return String(row[f.col] ?? '') <= String(f.value ?? '');
+    if (f.kind === 'is') return (row[f.col] ?? null) === f.value;
     if (f.kind === 'notIs') return !(row[f.col] === f.value);
     return f.clauses.some((c) => matchIlike(row[c.col], c.pattern));
   });
 }
 
-function makeDb(seed: DbRow[], opts: { failUpdate?: boolean } = {}) {
-  const rows: DbRow[] = seed.map((r) => ({ ...r }));
+function makeDb(seed: DbRow[], opts: { failUpdate?: boolean; collections?: DbRow[] } = {}) {
+  const tables: Record<string, DbRow[]> = {
+    seo_knowledge_sources: seed.map((r) => ({ ...r })),
+    seo_knowledge_collections: (opts.collections ?? []).map((r) => ({ ...r })),
+  };
+  const rows = tables.seo_knowledge_sources;
+  let seq = 0;
+  const nextUuid = () => {
+    seq += 1;
+    return `00000000-0000-4000-8000-${String(seq).padStart(12, '0')}`;
+  };
   const sb = {
-    from(_table: string) {
+    from(table: string) {
+      const tableRows = tables[table] ?? (tables[table] = []);
       const filters: Filter[] = [];
       let op: 'select' | 'insert' | 'update' | 'delete' = 'select';
       let patch: DbRow | null = null;
@@ -91,26 +103,39 @@ function makeDb(seed: DbRow[], opts: { failUpdate?: boolean } = {}) {
       const exec = async () => {
         if (op === 'insert') {
           const created: DbRow = {
-            id: SOURCE_ID,
+            id: table === 'seo_knowledge_sources' ? SOURCE_ID : nextUuid(),
             created_at: '2026-01-01T00:00:00.000Z',
             updated_at: '2026-01-01T00:00:00.000Z',
             ...insert,
           };
-          rows.push(created);
+          const createdName = typeof created.name === 'string' ? created.name.toLowerCase() : null;
+          if (table === 'seo_knowledge_collections' && createdName !== null) {
+            const duplicate = tableRows.some(
+              (r) => r.project_id === created.project_id && String(r.name).toLowerCase() === createdName,
+            );
+            if (duplicate) return { data: null, error: { code: '23505', message: 'duplicate key' } };
+          }
+          tableRows.push(created);
           return { data: mode === 'many' ? [created] : created, error: null };
         }
         if (op === 'update') {
           if (opts.failUpdate) return { data: null, error: { message: 'update failed' } };
-          const matched = rows.filter((r) => rowMatches(r, filters));
+          const matched = tableRows.filter((r) => rowMatches(r, filters));
           for (const r of matched) Object.assign(r, patch);
           return { data: mode === 'many' ? matched.map((r) => ({ id: r.id })) : (matched[0] ?? null), error: null };
         }
         if (op === 'delete') {
-          const matched = rows.filter((r) => rowMatches(r, filters));
-          for (const r of matched) rows.splice(rows.indexOf(r), 1);
+          const matched = tableRows.filter((r) => rowMatches(r, filters));
+          if (table === 'seo_knowledge_collections') {
+            const removed = new Set(matched.map((r) => String(r.id)));
+            for (const source of tables.seo_knowledge_sources ?? []) {
+              if (source.collection_id && removed.has(String(source.collection_id))) source.collection_id = null;
+            }
+          }
+          for (const r of matched) tableRows.splice(tableRows.indexOf(r), 1);
           return { data: null, error: null };
         }
-        let out = rows.filter((r) => rowMatches(r, filters));
+        let out = tableRows.filter((r) => rowMatches(r, filters));
         // Supabase applies orders in call order; apply from last to first so the
         // first `.order()` wins as the primary key (stable JS sort). Nulls sort
         // last, mirroring the service's `nullsFirst: false`.
@@ -168,6 +193,10 @@ function makeDb(seed: DbRow[], opts: { failUpdate?: boolean } = {}) {
         filters.push({ kind: 'lte', col, value });
         return q;
       };
+      q.is = (col: string, value: unknown) => {
+        filters.push({ kind: 'is', col, value });
+        return q;
+      };
       q.not = (col: string, op: string, value: unknown) => {
         if (op === 'is') filters.push({ kind: 'notIs', col, value });
         return q;
@@ -205,7 +234,7 @@ function makeDb(seed: DbRow[], opts: { failUpdate?: boolean } = {}) {
       return q;
     },
   };
-  return { sb, rows };
+  return { sb, rows, tables };
 }
 
 /** Recording fake KnowledgeProvider. `onIndex` lets a test mutate state mid-call. */
@@ -1258,6 +1287,8 @@ describe('knowledge retrieval service (KB6)', () => {
         source_type: 'url',
         source_url: 'https://guide.example',
         managed: true,
+        collection_id: null,
+        collection_name: null,
         chunk_index: 2,
         content: 'chunk body',
         score: 0.87,
@@ -1306,6 +1337,8 @@ describe('knowledge retrieval service (KB6)', () => {
         source_type: 'url',
         source_url: 'https://a.example',
         managed: false,
+        collection_id: null,
+        collection_name: null,
         chunk_index: null,
         content: 'page body',
         score: 0.5,
@@ -1633,6 +1666,217 @@ describe('KnowledgeService refresh lifecycle (KB7)', () => {
     expect(dto).not.toHaveProperty('content_text');
     expect(dto).not.toHaveProperty('storage_path');
     expect(dto.freshness?.state).toBe('fresh');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// KB8 - Knowledge collections: optional organization only. Collections never
+// change lifecycle/freshness/vectors, deleting one never deletes sources, and
+// search/assignment stay strictly project-scoped.
+// ---------------------------------------------------------------------------
+
+describe('KnowledgeService collections (KB8)', () => {
+  const COLL = '00000000-0000-0000-0000-0000000000c1';
+  const COLL2 = '00000000-0000-0000-0000-0000000000c2';
+  const OTHER_PROJECT = '00000000-0000-0000-0000-0000000000ee';
+
+  function searchProvider(hits: unknown[]) {
+    return fakeProvider({ search: vi.fn(async () => hits) }).provider;
+  }
+
+  function collectionRow(overrides: DbRow = {}): DbRow {
+    return {
+      id: COLL,
+      project_id: PROJECT,
+      name: 'SEO references',
+      description: null,
+      created_at: '2026-01-01T00:00:00.000Z',
+      updated_at: '2026-01-01T00:00:00.000Z',
+      ...overrides,
+    };
+  }
+
+  it('creates a collection, lists it with a source count, and renames it', async () => {
+    const db = makeDb([{ ...ROW, id: SOURCE_ID, status: 'ready', collection_id: COLL }]);
+    const svc = new KnowledgeService(containerWith(db, fakeProvider().provider));
+
+    const created = await svc.createCollection(PROJECT, 'u1', { name: '  SEO references  ' });
+    expect(created).toMatchObject({ projectId: PROJECT, name: 'SEO references', sourceCount: 0 });
+
+    db.rows[0].collection_id = created.id;
+    const page = await svc.listCollections(PROJECT);
+    expect(page.total).toBe(1);
+    expect(page.items[0]).toMatchObject({ name: 'SEO references', sourceCount: 1 });
+
+    const renamed = await svc.updateCollection(PROJECT, created.id, { name: 'References', description: ' Team docs ' });
+    expect(renamed).toMatchObject({ name: 'References', description: 'Team docs' });
+  });
+
+  it('rejects a duplicate collection name case-insensitively with a clean conflict', async () => {
+    const db = makeDb([]);
+    const svc = new KnowledgeService(containerWith(db, fakeProvider().provider));
+    await svc.createCollection(PROJECT, 'u1', { name: 'Guides' });
+    await expect(svc.createCollection(PROJECT, 'u1', { name: 'guides' })).rejects.toMatchObject({ status: 409 });
+  });
+
+  it('validates collection name and description bounds', async () => {
+    const svc = new KnowledgeService(containerWith(makeDb([]), fakeProvider().provider));
+    await expect(svc.createCollection(PROJECT, 'u1', { name: '   ' })).rejects.toMatchObject({ status: 400 });
+    await expect(svc.createCollection(PROJECT, 'u1', { name: 'x'.repeat(121) })).rejects.toMatchObject({ status: 400 });
+    await expect(
+      svc.createCollection(PROJECT, 'u1', { name: 'ok', description: 'x'.repeat(501) }),
+    ).rejects.toMatchObject({ status: 400 });
+  });
+
+  it('assigns and unassigns a source without changing lifecycle and mirrors metadata to the provider', async () => {
+    const db = makeDb([{ ...ROW, id: SOURCE_ID, status: 'ready', collection_id: null }], {
+      collections: [collectionRow()],
+    });
+    const updateMetadata = vi.fn(async () => undefined);
+    const { provider, calls } = fakeProvider({ updateMetadata });
+    const svc = new KnowledgeService(containerWith(db, provider));
+
+    const assigned = await svc.assignCollection(PROJECT, SOURCE_ID, COLL);
+    expect(assigned.collection_id).toBe(COLL);
+    expect(db.rows[0].status).toBe('ready');
+    expect(updateMetadata).toHaveBeenCalledWith(expect.anything(), sourceExternalId(SOURCE_ID), { collection_id: COLL });
+    expect(calls).not.toContain(`index:${sourceExternalId(SOURCE_ID)}`);
+    expect(calls).not.toContain(`delete:${sourceExternalId(SOURCE_ID)}`);
+
+    const removed = await svc.assignCollection(PROJECT, SOURCE_ID, null);
+    expect(removed.collection_id).toBeNull();
+    expect(updateMetadata).toHaveBeenLastCalledWith(expect.anything(), sourceExternalId(SOURCE_ID), { collection_id: null });
+  });
+
+  it('refuses to assign a source to another project collection or an invalid id', async () => {
+    const db = makeDb([{ ...ROW, id: SOURCE_ID, status: 'ready' }], {
+      collections: [collectionRow({ id: COLL2, project_id: OTHER_PROJECT })],
+    });
+    const svc = new KnowledgeService(containerWith(db, fakeProvider().provider));
+
+    await expect(svc.assignCollection(PROJECT, SOURCE_ID, COLL2)).rejects.toMatchObject({ status: 404 });
+    await expect(svc.assignCollection(PROJECT, SOURCE_ID, 'not-a-uuid')).rejects.toMatchObject({ status: 400 });
+    expect(db.rows[0].collection_id ?? null).toBeNull();
+  });
+
+  it('refuses to assign a source that is being deleted', async () => {
+    const db = makeDb([{ ...ROW, id: SOURCE_ID, status: 'deleted' }], { collections: [collectionRow()] });
+    const svc = new KnowledgeService(containerWith(db, fakeProvider().provider));
+    await expect(svc.assignCollection(PROJECT, SOURCE_ID, COLL)).rejects.toMatchObject({ status: 409 });
+  });
+
+  it('bulk-assigns atomically and fails closed when any source is unknown', async () => {
+    const idA = '00000000-0000-0000-0000-0000000000a1';
+    const idB = '00000000-0000-0000-0000-0000000000a2';
+    const idMissing = '00000000-0000-0000-0000-0000000000a9';
+    const db = makeDb(
+      [idA, idB].map((id) => ({ ...ROW, id, status: 'ready', collection_id: null })),
+      { collections: [collectionRow()] },
+    );
+    const updateMetadata = vi.fn(async () => undefined);
+    const svc = new KnowledgeService(containerWith(db, fakeProvider({ updateMetadata }).provider));
+
+    const ok = await svc.bulkAssignCollection(PROJECT, [idA, idB], COLL);
+    expect(ok).toEqual({ updated: 2, collectionId: COLL });
+    expect(db.rows.every((r) => r.collection_id === COLL)).toBe(true);
+    expect(updateMetadata).toHaveBeenCalledTimes(2);
+
+    const missing = await svc.bulkAssignCollection(PROJECT, [idA, idMissing], null).catch((e) => e);
+    expect(missing).toMatchObject({ status: 400 });
+    expect(db.rows[0].collection_id).toBe(COLL);
+  });
+
+  it('deletes a collection but keeps its sources (they become uncategorized)', async () => {
+    const db = makeDb([{ ...ROW, id: SOURCE_ID, status: 'ready', collection_id: COLL }], {
+      collections: [collectionRow()],
+    });
+    const svc = new KnowledgeService(containerWith(db, fakeProvider().provider));
+
+    const result = await svc.deleteCollection(PROJECT, COLL);
+
+    expect(result).toEqual({ id: COLL, deleted: true });
+    expect(db.tables.seo_knowledge_collections).toHaveLength(0);
+    expect(db.rows).toHaveLength(1);
+    expect(db.rows[0].collection_id).toBeNull();
+    expect(db.rows[0].status).toBe('ready');
+  });
+
+  it('hides a foreign collection as 404, never an existence oracle', async () => {
+    const db = makeDb([], { collections: [collectionRow({ project_id: OTHER_PROJECT })] });
+    const svc = new KnowledgeService(containerWith(db, fakeProvider().provider));
+    await expect(svc.updateCollection(PROJECT, COLL, { name: 'Nope' })).rejects.toMatchObject({ status: 404 });
+    await expect(svc.deleteCollection(PROJECT, COLL)).rejects.toMatchObject({ status: 404 });
+  });
+
+  it('returns a collection detail with a bounded source page', async () => {
+    const db = makeDb(
+      [
+        { ...ROW, id: 'a', status: 'ready', collection_id: COLL },
+        { ...ROW, id: 'b', status: 'ready', collection_id: COLL },
+        { ...ROW, id: 'c', status: 'ready', collection_id: null },
+      ],
+      { collections: [collectionRow()] },
+    );
+    const svc = new KnowledgeService(containerWith(db, fakeProvider().provider));
+
+    const detail = await svc.getCollectionDetail(PROJECT, COLL, { limit: 1, offset: 0 });
+
+    expect(detail.sourceCount).toBe(2);
+    expect(detail.total).toBe(2);
+    expect(detail.items).toHaveLength(1);
+  });
+
+  it('filters the source list by collection and by uncategorized', async () => {
+    const db = makeDb([
+      { ...ROW, id: 'a', status: 'ready', collection_id: COLL },
+      { ...ROW, id: 'b', status: 'ready', collection_id: null },
+    ]);
+    const svc = new KnowledgeService(containerWith(db, fakeProvider().provider));
+
+    const inCollection = await svc.listSources(PROJECT, { collection_id: COLL });
+    expect(inCollection.items.map((i) => i.id)).toEqual(['a']);
+
+    const uncategorized = await svc.listSources(PROJECT, { uncategorized: true });
+    expect(uncategorized.items.map((i) => i.id)).toEqual(['b']);
+  });
+
+  it('projects collection and uncategorized search filters onto the provider allowlist', async () => {
+    const { provider } = fakeProvider();
+    const svc = new KnowledgeService(containerWith(makeDb([]), provider));
+
+    await svc.search(PROJECT, { query: 'q', collectionId: COLL });
+    expect(vi.mocked(provider.search)).toHaveBeenLastCalledWith(
+      expect.objectContaining({ filter: { collectionId: COLL } }),
+    );
+
+    await svc.search(PROJECT, { query: 'q', uncategorized: true });
+    expect(vi.mocked(provider.search)).toHaveBeenLastCalledWith(
+      expect.objectContaining({ filter: { uncategorized: true } }),
+    );
+
+    await expect(svc.search(PROJECT, { query: 'q', collectionId: 'nope' })).rejects.toMatchObject({ status: 400 });
+  });
+
+  it('attributes a hit to its collection and keeps it organization metadata, not evidence', async () => {
+    const db = makeDb([
+      { ...ROW, id: SOURCE_ID, status: 'ready', name: 'Guide', collection_id: COLL, collection: { name: 'SEO references' } },
+    ]);
+    const provider = searchProvider([
+      {
+        id: 'p1',
+        score: 0.9,
+        payload: { source_id: sourceExternalId(SOURCE_ID), text: 'chunk body' },
+      },
+    ]);
+    const svc = new KnowledgeService(containerWith(db, provider));
+
+    const res = await svc.search(PROJECT, { query: 'q' });
+
+    expect(res.results[0]).toMatchObject({
+      source_id: SOURCE_ID,
+      collection_id: COLL,
+      collection_name: 'SEO references',
+    });
   });
 });
 

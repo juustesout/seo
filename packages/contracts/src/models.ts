@@ -655,6 +655,10 @@ export interface KnowledgeDocumentInput {
   text: string;
   title?: string;
   url?: string;
+  /** Optional organizational collection id (KB8). Null/absent = uncategorized.
+   *  Carried in the Qdrant payload so collection-scoped retrieval can filter
+   *  without a second database round-trip; it never affects the embedding. */
+  collectionId?: string | null;
   meta?: Record<string, unknown>;
 }
 

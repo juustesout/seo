@@ -25,6 +25,8 @@ function hit(overrides: Partial<KnowledgeSearchHitDto> = {}): KnowledgeSearchHit
     source_type: 'text',
     source_url: null,
     managed: true,
+    collection_id: null,
+    collection_name: null,
     chunk_index: 0,
     content: 'the matched excerpt',
     score: 0.87,
@@ -57,6 +59,8 @@ function detail(): KnowledgeSourceDetailDto {
     original_filename: null,
     content_type: null,
     size_bytes: null,
+    collection_id: null,
+    collection_name: null,
     created_at: '2026-01-01T00:00:00.000Z',
     updated_at: '2026-01-02T00:00:00.000Z',
     preview: { text: 'preview body', truncated: false, characters: 12 },
@@ -187,5 +191,56 @@ describe('KnowledgeSearchExplorer configuration', () => {
 
     expect(screen.getByText('Knowledge search is not usable on this server yet.')).toBeTruthy();
     expect((screen.getByRole('button', { name: 'Search' }) as HTMLButtonElement).disabled).toBe(true);
+  });
+});
+
+describe('KnowledgeSearchExplorer collections (KB8)', () => {
+  const collectionsResponse = {
+    items: [
+      {
+        id: 'c-1',
+        projectId: PROJECT,
+        name: 'References',
+        description: null,
+        sourceCount: 1,
+        createdAt: '2026-01-01T00:00:00.000Z',
+        updatedAt: '2026-01-01T00:00:00.000Z',
+      },
+    ],
+    total: 1,
+    limit: 100,
+    offset: 0,
+  };
+
+  function mockWithCollections(hits: KnowledgeSearchHitDto[]) {
+    apiMock.api.mockImplementation(async (path: string) => {
+      if (String(path).includes('/knowledge/collections')) return collectionsResponse;
+      return searchResponse(hits);
+    });
+  }
+
+  it('sends the collection filter and shows collection attribution on a hit', async () => {
+    mockWithCollections([hit({ collection_id: 'c-1', collection_name: 'References' })]);
+    render(<KnowledgeSearchExplorer projectId={PROJECT} configured canEdit />);
+
+    await screen.findByRole('option', { name: 'References (1)' });
+    fireEvent.change(screen.getByLabelText('Filter by collection'), { target: { value: 'c-1' } });
+    submit('alpha');
+
+    await vi.waitFor(() => expect(searchCalls()).toHaveLength(1));
+    expect(firstSearchCall().body).toMatchObject({ query: 'alpha', collection_id: 'c-1' });
+    expect(await screen.findByText('References')).toBeTruthy();
+  });
+
+  it('sends uncategorized=true when the uncategorized filter is chosen', async () => {
+    mockWithCollections([hit()]);
+    render(<KnowledgeSearchExplorer projectId={PROJECT} configured canEdit />);
+
+    await screen.findByRole('option', { name: 'Uncategorized' });
+    fireEvent.change(screen.getByLabelText('Filter by collection'), { target: { value: '__uncategorized__' } });
+    submit('alpha');
+
+    await vi.waitFor(() => expect(searchCalls()).toHaveLength(1));
+    expect(firstSearchCall().body).toMatchObject({ query: 'alpha', uncategorized: true });
   });
 });

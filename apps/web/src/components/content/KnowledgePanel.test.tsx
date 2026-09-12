@@ -45,6 +45,8 @@ function source(overrides: Partial<KnowledgeSourceDto>): KnowledgeSourceDto {
     original_filename: null,
     content_type: null,
     size_bytes: null,
+    collection_id: null,
+    collection_name: null,
     created_at: '2026-01-01T00:00:00.000Z',
     updated_at: '2026-01-01T00:00:00.000Z',
     ...overrides,

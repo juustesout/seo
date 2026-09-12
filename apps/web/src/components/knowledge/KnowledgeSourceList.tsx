@@ -16,6 +16,9 @@ export function KnowledgeSourceList({
   selectedId,
   canEdit,
   busyId,
+  selectable = false,
+  selectedIds = [],
+  onToggleSelect,
   onSelect,
   onIngest,
   onReindex,
@@ -25,6 +28,9 @@ export function KnowledgeSourceList({
   selectedId: string | null;
   canEdit: boolean;
   busyId: string | null;
+  selectable?: boolean;
+  selectedIds?: string[];
+  onToggleSelect?: (id: string) => void;
   onSelect: (source: KnowledgeSourceDto) => void;
   onIngest: (id: string) => void;
   onReindex: (id: string) => void;
@@ -46,13 +52,24 @@ export function KnowledgeSourceList({
             className={`rounded-lg border px-3 py-2.5 ${selected ? 'border-primary/50 bg-muted/60' : 'bg-muted/30'}`}
           >
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <button
-                type="button"
-                className="text-left text-[13px] font-semibold hover:underline"
-                onClick={() => onSelect(source)}
-              >
-                {source.name}
-              </button>
+              <div className="flex min-w-0 items-center gap-2">
+                {selectable && (
+                  <input
+                    type="checkbox"
+                    aria-label={`Select ${source.name}`}
+                    checked={selectedIds.includes(source.id)}
+                    onChange={() => onToggleSelect?.(source.id)}
+                  />
+                )}
+                <button
+                  type="button"
+                  className="text-left text-[13px] font-semibold hover:underline"
+                  onClick={() => onSelect(source)}
+                >
+                  {source.name}
+                </button>
+                {source.collection_name && <Badge variant="outline">{source.collection_name}</Badge>}
+              </div>
               <div className="flex items-center gap-1.5">
                 <Badge variant="outline">{SOURCE_TYPE_LABELS[source.source_type]}</Badge>
                 <Badge variant={statusBadgeVariant(source.status)}>{SOURCE_STATUS_LABELS[source.status]}</Badge>

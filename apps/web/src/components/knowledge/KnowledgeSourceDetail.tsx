@@ -16,6 +16,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   KNOWLEDGE_REFRESH_POLICIES,
   knowledgeErrorMessage,
+  type KnowledgeCollectionDto,
   type KnowledgeRefreshPolicy,
   type KnowledgeSourceDetailDto,
 } from '@seo/contracts';
@@ -62,6 +63,7 @@ export function KnowledgeSourceDetail({
   error,
   canEdit,
   busy,
+  collections = [],
   onClose,
   onIngest,
   onReindex,
@@ -74,6 +76,7 @@ export function KnowledgeSourceDetail({
   error: string | null;
   canEdit: boolean;
   busy: boolean;
+  collections?: KnowledgeCollectionDto[];
   onClose: () => void;
   onIngest: (id: string) => void;
   onReindex: (id: string) => void;
@@ -82,6 +85,7 @@ export function KnowledgeSourceDetail({
 }) {
   const [refreshing, setRefreshing] = useState(false);
   const [policyBusy, setPolicyBusy] = useState(false);
+  const [collectionBusy, setCollectionBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [refreshNotice, setRefreshNotice] = useState<string | null>(null);
   const mounted = useRef(true);
@@ -99,6 +103,7 @@ export function KnowledgeSourceDetail({
     setRefreshNotice(null);
     setRefreshing(false);
     setPolicyBusy(false);
+    setCollectionBusy(false);
   }, [detail?.id]);
 
   const refreshNow = useCallback(async () => {
@@ -149,6 +154,26 @@ export function KnowledgeSourceDetail({
         setActionError(message(e));
       } finally {
         if (mounted.current) setPolicyBusy(false);
+      }
+    },
+    [detail, projectId, onChanged],
+  );
+
+  const changeCollection = useCallback(
+    async (collectionId: string | null) => {
+      if (!detail) return;
+      setCollectionBusy(true);
+      setActionError(null);
+      try {
+        await api(`/projects/${projectId}/knowledge/sources/${detail.id}`, {
+          method: 'PATCH',
+          body: { collection_id: collectionId },
+        });
+        onChanged?.();
+      } catch (e) {
+        setActionError(message(e));
+      } finally {
+        if (mounted.current) setCollectionBusy(false);
       }
     },
     [detail, projectId, onChanged],
@@ -209,6 +234,28 @@ export function KnowledgeSourceDetail({
                 </>
               )}
             </dl>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-[11px] uppercase tracking-wide text-muted-foreground">Collection</span>
+              {canEdit ? (
+                <select
+                  aria-label="Collection"
+                  className="h-8 rounded-md border bg-background px-2 text-sm text-foreground"
+                  value={detail.collection_id ?? ''}
+                  disabled={collectionBusy}
+                  onChange={(e) => void changeCollection(e.target.value || null)}
+                >
+                  <option value="">Uncategorized</option>
+                  {collections.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <span className="text-sm">{detail.collection_name ?? 'Uncategorized'}</span>
+              )}
+            </div>
 
             {isUrl && freshness && (
               <div className="grid gap-2 rounded-lg border bg-muted/20 p-3">

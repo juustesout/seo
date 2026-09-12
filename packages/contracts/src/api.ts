@@ -721,6 +721,17 @@ export interface KnowledgeSearchRequest {
   source_types?: KnowledgeSourceType[];
   /** Restrict to these managed source ids (UUIDs, project scoped). */
   source_ids?: string[];
+  /**
+   * Restrict retrieval to one collection (KB8, project scoped). Omit to search
+   * all project knowledge. Mutually exclusive with `uncategorized`.
+   */
+  collection_id?: string;
+  /**
+   * Restrict retrieval to sources that belong to no collection (KB8). Explicit,
+   * so `collection_id` is never overloaded to mean "the null collection".
+   * Mutually exclusive with `collection_id`.
+   */
+  uncategorized?: boolean;
 }
 
 /**
@@ -740,6 +751,11 @@ export interface KnowledgeSearchHitDto {
   /** True when `source_id` is a managed Knowledge Source (KB5) and can be
    *  opened in Source Detail. */
   managed: boolean;
+  /** Organizational collection of the source (KB8), or null when uncategorized
+   *  or not a managed source. Organizational attribution only - not evidence. */
+  collection_id: string | null;
+  /** Display name of `collection_id`, or null when uncategorized/unresolved. */
+  collection_name: string | null;
   /** 0-based chunk position within the source, when the index recorded it. */
   chunk_index: number | null;
   /** Bounded plain-text excerpt of the matched chunk. Untrusted data. */
@@ -822,6 +838,13 @@ export interface KnowledgeSourceDto {
   /** Uploaded file size in bytes (file sources only). */
   size_bytes: number | null;
   /**
+   * Optional organizational collection (KB8). Null means uncategorized, which is
+   * a valid, fully searchable state - never an error or a "missing" source.
+   */
+  collection_id: string | null;
+  /** Display name of `collection_id`, or null when uncategorized/unresolved. */
+  collection_name: string | null;
+  /**
    * Derived freshness (KB7). Present for every source the API returns; `state`
    * is `unknown` and the policy null for text/file sources. Never stored.
    */
@@ -897,6 +920,10 @@ export interface KnowledgeSourceListQuery {
   status?: KnowledgeSourceStatus;
   /** Metadata search over name/url/filename (never vector search). */
   search?: string;
+  /** Restrict to one collection (KB8, project scoped). */
+  collection_id?: string;
+  /** Restrict to sources in no collection (KB8). Mutually exclusive with `collection_id`. */
+  uncategorized?: boolean;
   sort?: KnowledgeSourceSort;
   limit?: number;
   offset?: number;
@@ -993,6 +1020,78 @@ export interface KnowledgeDueRefreshDto {
   next_refresh_at: string;
   refresh_policy: KnowledgeRefreshPolicy;
   refresh_failures: number;
+}
+
+// ---------------------------------------------------------------------------
+// Knowledge collections (KB8) - optional, project-scoped source organization
+//
+// Collections are organizational metadata, not a knowledge store: a source may
+// belong to at most one collection, uncategorized is a valid normal state, and
+// deleting a collection never deletes its sources. Collection names/descriptions
+// are untrusted text. These DTOs are camelCase (like the Writer DTOs) to keep
+// collection objects visually distinct from the snake_case source DTOs.
+// ---------------------------------------------------------------------------
+
+/** Longest collection name accepted (trimmed). */
+export const KNOWLEDGE_COLLECTION_NAME_MAX_CHARS = 120;
+
+/** Longest collection description accepted. */
+export const KNOWLEDGE_COLLECTION_DESCRIPTION_MAX_CHARS = 500;
+
+/** Maximum source ids movable in one bulk assignment (fail-closed beyond this). */
+export const KNOWLEDGE_SOURCE_BULK_MAX_IDS = 100;
+
+/** One project knowledge collection plus its source count. */
+export interface KnowledgeCollectionDto {
+  id: string;
+  projectId: string;
+  name: string;
+  description: string | null;
+  /** Number of non-deleted sources currently assigned to this collection. */
+  sourceCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Create a collection (editor+). `description` is optional free text. */
+export interface KnowledgeCollectionCreateRequest {
+  name: string;
+  description?: string | null;
+}
+
+/** Update a collection's name and/or description (editor+). */
+export interface KnowledgeCollectionUpdateRequest {
+  name?: string;
+  description?: string | null;
+}
+
+/** Bounded, paginated collection list for one project. */
+export interface KnowledgeCollectionsResponse {
+  items: KnowledgeCollectionDto[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+/**
+ * One collection with a bounded page of its source summaries. `total` is the
+ * collection's full source count; `items` is only the returned window.
+ */
+export interface KnowledgeCollectionDetailDto extends KnowledgeCollectionDto {
+  items: KnowledgeSourceDto[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+/**
+ * Move sources into a collection, or out of any collection with
+ * `collection_id: null` (KB8). Applied atomically and fail-closed: if any id is
+ * unknown or in another project nothing is changed.
+ */
+export interface KnowledgeSourceBulkAssignRequest {
+  source_ids: string[];
+  collection_id: string | null;
 }
 
 // ---------------------------------------------------------------------------

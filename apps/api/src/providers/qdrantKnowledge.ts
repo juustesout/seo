@@ -114,6 +114,7 @@ export class QdrantKnowledgeProvider implements KnowledgeProvider {
             chunk_index: i,
             chunk_total: chunks.length,
             indexed_at: indexedAt,
+            collection_id: doc.collectionId ?? null,
             meta: doc.meta ?? {},
           },
         });
@@ -161,6 +162,21 @@ export class QdrantKnowledgeProvider implements KnowledgeProvider {
   }
 
   /**
+   * Update one document's non-vector metadata in place (KB8 collection
+   * membership). The filter is scoped on project_id AND external_id, so it can
+   * never touch another project's copy, and no vector is recomputed or
+   * duplicated. A document that has not been indexed yet simply matches nothing.
+   */
+  async updateMetadata(ctx: ProviderContext, externalId: string, metadata: Record<string, unknown>): Promise<void> {
+    this.assertConfigured();
+    await this.client!.setPayloadByFilter(
+      COLLECTION,
+      { must: [matchOn('project_id', ctx.projectId), matchOn('external_id', externalId)] },
+      metadata,
+    );
+  }
+
+  /**
    * Semantic search. The query is embedded with the same embedder used for
    * indexing (model drift between index and query would silently break
    * results), the candidate set is narrowed to the project's points, and the
@@ -180,6 +196,14 @@ export class QdrantKnowledgeProvider implements KnowledgeProvider {
     if (sourceTypes.length > 0) filter.must.push({ key: 'meta.source_type', match: { any: sourceTypes } });
     const sourceIds = toStringList(opts.filter?.sourceIds);
     if (sourceIds.length > 0) filter.must.push({ key: 'source_id', match: { any: sourceIds } });
+    const collectionId = typeof opts.filter?.collectionId === 'string' ? opts.filter.collectionId.trim() : '';
+    if (collectionId) {
+      filter.must.push(matchOn('collection_id', collectionId));
+    } else if (opts.filter?.uncategorized) {
+      // `is_null` matches both explicit nulls and points indexed before KB8 that
+      // have no `collection_id` field, so uncategorized retrieval is complete.
+      filter.must.push({ is_null: { key: 'collection_id' } });
+    }
     const hits = await this.client!.search(COLLECTION, vectors[0] ?? [], filter, opts.limit ?? 8);
     return hits.map((h: { id: string; score: number; payload: Record<string, unknown> }) => ({ id: h.id, score: h.score, payload: h.payload }));
   }

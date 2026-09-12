@@ -94,7 +94,7 @@ export class QdrantClient {
       });
     }
     // payload indexes so filters stay fast on large knowledge bases
-    for (const field of ['project_id', 'external_id', 'source_id', 'kind', 'meta.source_type']) {
+    for (const field of ['project_id', 'external_id', 'source_id', 'kind', 'meta.source_type', 'collection_id']) {
       await this.ensurePayloadIndex(name, field);
     }
   }
@@ -160,6 +160,22 @@ export class QdrantClient {
   /** Delete every point matching a filter (used for reindex and project teardown). */
   async deleteByFilter(collection: string, filter: QdrantFilter): Promise<void> {
     await this.request('POST', `/collections/${encodeURIComponent(collection)}/points/delete?wait=true`, {
+      filter,
+    });
+  }
+
+  /**
+   * Merge payload fields onto every point matching a filter, leaving vectors
+   * untouched. Used for organizational metadata that must not trigger a
+   * re-embed (KB8 collection membership); a no-match filter is a valid no-op.
+   */
+  async setPayloadByFilter(
+    collection: string,
+    filter: QdrantFilter,
+    payload: Record<string, unknown>,
+  ): Promise<void> {
+    await this.request('POST', `/collections/${encodeURIComponent(collection)}/points/payload?wait=true`, {
+      payload,
       filter,
     });
   }

@@ -10,12 +10,14 @@
  * auto-links), and managed results can be opened in the shared KB5 Source
  * Detail surface. The browser never talks to Qdrant directly.
  */
-import { useCallback, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import {
   KNOWLEDGE_SEARCH_DEFAULT_LIMIT,
   KNOWLEDGE_SEARCH_MAX_LIMIT,
   KNOWLEDGE_SEARCH_QUERY_MAX_CHARS,
   KNOWLEDGE_SOURCE_TYPES,
+  type KnowledgeCollectionDto,
+  type KnowledgeCollectionsResponse,
   type KnowledgeSearchResponse,
   type KnowledgeSourceDetailDto,
   type KnowledgeSourceType,
@@ -27,6 +29,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { KnowledgeSourceDetail } from './KnowledgeSourceDetail';
+import { KnowledgeOrganizationFilter, type OrganizationFilter } from './KnowledgeCollections';
 import { SOURCE_TYPE_LABELS } from './format';
 
 const selectClass = 'h-9 rounded-md border bg-background px-2 text-sm text-foreground';
@@ -48,6 +51,8 @@ export function KnowledgeSearchExplorer({
   const [query, setQuery] = useState('');
   const [limit, setLimit] = useState(KNOWLEDGE_SEARCH_DEFAULT_LIMIT);
   const [type, setType] = useState<KnowledgeSourceType | ''>('');
+  const [collection, setCollection] = useState<OrganizationFilter>({ collectionId: '', uncategorized: false });
+  const [collections, setCollections] = useState<KnowledgeCollectionDto[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [response, setResponse] = useState<KnowledgeSearchResponse | null>(null);
@@ -57,6 +62,22 @@ export function KnowledgeSearchExplorer({
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    void (async () => {
+      try {
+        const res = await api<KnowledgeCollectionsResponse>(`/projects/${projectId}/knowledge/collections?limit=100`);
+        if (active) setCollections(Array.isArray(res?.items) ? res.items : []);
+      } catch {
+        // Collections are an optional filter; their absence must not break search.
+        if (active) setCollections([]);
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, [projectId]);
 
   const canSubmit = configured && query.trim().length > 0 && !loading;
 
@@ -68,6 +89,8 @@ export function KnowledgeSearchExplorer({
     try {
       const body: Record<string, unknown> = { query: query.trim(), limit };
       if (type) body.source_types = [type];
+      if (collection.uncategorized) body.uncategorized = true;
+      else if (collection.collectionId) body.collection_id = collection.collectionId;
       setResponse(
         await api<KnowledgeSearchResponse>(`/projects/${projectId}/knowledge/search`, { method: 'POST', body }),
       );
@@ -194,6 +217,11 @@ export function KnowledgeSearchExplorer({
                 </option>
               ))}
             </select>
+            <KnowledgeOrganizationFilter
+              collections={collections}
+              value={collection}
+              onChange={(patch) => setCollection((c) => ({ ...c, ...patch }))}
+            />
             <Button type="submit" disabled={!canSubmit}>
               {loading ? 'Searching…' : 'Search'}
             </Button>
@@ -221,6 +249,7 @@ export function KnowledgeSearchExplorer({
                       <div className="flex flex-wrap items-center gap-1.5">
                         <span className="font-medium">{r.source_name}</span>
                         <Badge variant="outline">{SOURCE_TYPE_LABELS[r.source_type]}</Badge>
+                        {r.collection_name && <Badge variant="outline">{r.collection_name}</Badge>}
                         {r.chunk_index != null && (
                           <span className="text-[11px] text-muted-foreground">chunk {r.chunk_index + 1}</span>
                         )}
@@ -256,6 +285,7 @@ export function KnowledgeSearchExplorer({
           error={detailError}
           canEdit={canEdit}
           busy={busy}
+          collections={collections}
           onClose={closeDetail}
           onIngest={(id) => void runAction(id, 'ingest')}
           onReindex={(id) => void runAction(id, 'reindex')}

@@ -16,7 +16,10 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import {
+  KNOWLEDGE_COLLECTION_DESCRIPTION_MAX_CHARS,
+  KNOWLEDGE_COLLECTION_NAME_MAX_CHARS,
   KNOWLEDGE_REFRESH_POLICIES,
+  KNOWLEDGE_SOURCE_BULK_MAX_IDS,
   KNOWLEDGE_SOURCE_STATUSES,
   KNOWLEDGE_SOURCE_SORTS,
   KNOWLEDGE_SOURCE_TYPES,
@@ -48,12 +51,19 @@ const hasEmbeddingKey = () => Boolean(process.env.EMBEDDINGS_API_KEY || process.
  * UUID source ids; the result limit is hard-capped. All validation happens at
  * the edge so the service only ever sees a safe, typed request.
  */
-const searchSchema = z.object({
-  query: z.string().trim().min(1).max(KNOWLEDGE_SEARCH_QUERY_MAX_CHARS),
-  limit: z.number().int().min(1).max(KNOWLEDGE_SEARCH_MAX_LIMIT).optional(),
-  source_types: z.array(z.enum(KNOWLEDGE_SOURCE_TYPES)).min(1).max(KNOWLEDGE_SOURCE_TYPES.length).optional(),
-  source_ids: z.array(z.string().uuid()).min(1).max(KNOWLEDGE_SEARCH_MAX_SOURCE_FILTERS).optional(),
-});
+const searchSchema = z
+  .object({
+    query: z.string().trim().min(1).max(KNOWLEDGE_SEARCH_QUERY_MAX_CHARS),
+    limit: z.number().int().min(1).max(KNOWLEDGE_SEARCH_MAX_LIMIT).optional(),
+    source_types: z.array(z.enum(KNOWLEDGE_SOURCE_TYPES)).min(1).max(KNOWLEDGE_SOURCE_TYPES.length).optional(),
+    source_ids: z.array(z.string().uuid()).min(1).max(KNOWLEDGE_SEARCH_MAX_SOURCE_FILTERS).optional(),
+    collection_id: z.string().uuid().optional(),
+    uncategorized: z.boolean().optional(),
+  })
+  .refine((value) => !(value.collection_id && value.uncategorized), {
+    message: 'collection_id and uncategorized are mutually exclusive',
+    path: ['uncategorized'],
+  });
 
 /**
  * Canonical, attributed semantic search over the project knowledge base. The
@@ -74,6 +84,8 @@ knowledgeRouter.post(
       limit: body.limit,
       sourceTypes: body.source_types,
       sourceIds: body.source_ids,
+      collectionId: body.collection_id,
+      uncategorized: body.uncategorized,
     });
     res.json({ data: result });
   }),
@@ -131,6 +143,11 @@ const listSourcesSchema = z.object({
   type: z.enum(KNOWLEDGE_SOURCE_TYPES).optional(),
   status: z.enum(KNOWLEDGE_SOURCE_STATUSES).optional(),
   search: z.string().trim().max(KNOWLEDGE_SEARCH_MAX_CHARS).optional(),
+  collection_id: z.string().uuid().optional(),
+  uncategorized: z
+    .enum(['true', 'false'])
+    .transform((value) => value === 'true')
+    .optional(),
   sort: z.enum(KNOWLEDGE_SOURCE_SORTS).default('updated_desc'),
   limit: z.coerce.number().int().min(1).max(KNOWLEDGE_LIST_MAX_LIMIT).default(KNOWLEDGE_LIST_DEFAULT_LIMIT),
   offset: z.coerce.number().int().min(0).default(0),
@@ -263,11 +280,18 @@ knowledgeRouter.post(
 );
 
 /**
- * Bounded refresh-policy update for a URL source (KB7). Invalid policies are
- * rejected by the enum (400); non-URL/deleted sources are a conflict from the
- * service. Editors and above only.
+ * Bounded source update (KB7 policy, KB8 collection). Exactly one purpose per
+ * call is enough, but both may be supplied; each is validated by the service.
+ * `collection_id: null` removes the source from its collection (uncategorized).
  */
-const refreshPolicySchema = z.object({ refresh_policy: z.enum(KNOWLEDGE_REFRESH_POLICIES) });
+const updateSourceSchema = z
+  .object({
+    refresh_policy: z.enum(KNOWLEDGE_REFRESH_POLICIES).optional(),
+    collection_id: z.string().uuid().nullable().optional(),
+  })
+  .refine((value) => value.refresh_policy !== undefined || value.collection_id !== undefined, {
+    message: 'Provide refresh_policy and/or collection_id',
+  });
 
 knowledgeRouter.patch(
   '/sources/:sourceId',
@@ -276,10 +300,38 @@ knowledgeRouter.patch(
     const { container, user } = req;
     await container.access.requireRole(user!.sub, projectId, 'editor');
     const sourceId = parseId(req, 'sourceId');
-    const body = refreshPolicySchema.parse(req.body);
+    const body = updateSourceSchema.parse(req.body);
     const svc = new KnowledgeService(container);
-    const source = await svc.updateRefreshPolicy(projectId, sourceId, body.refresh_policy);
+    let source = body.refresh_policy
+      ? await svc.updateRefreshPolicy(projectId, sourceId, body.refresh_policy)
+      : await svc.getSourceDetail(projectId, sourceId);
+    if (body.collection_id !== undefined) {
+      source = await svc.assignCollection(projectId, sourceId, body.collection_id);
+    }
     res.json({ data: { source } });
+  }),
+);
+
+/**
+ * Bulk move sources into a collection, or out of every collection with a null
+ * `collection_id` (KB8). Atomic and fail-closed in the service: if any id is
+ * unknown/foreign nothing changes. Editors and above only.
+ */
+const bulkAssignSchema = z.object({
+  source_ids: z.array(z.string().uuid()).min(1).max(KNOWLEDGE_SOURCE_BULK_MAX_IDS),
+  collection_id: z.string().uuid().nullable(),
+});
+
+knowledgeRouter.post(
+  '/sources/bulk',
+  asyncHandler(async (req, res) => {
+    const projectId = parseProjectId(req);
+    const { container, user } = req;
+    await container.access.requireRole(user!.sub, projectId, 'editor');
+    const body = bulkAssignSchema.parse(req.body);
+    const svc = new KnowledgeService(container);
+    const result = await svc.bulkAssignCollection(projectId, body.source_ids, body.collection_id);
+    res.json({ data: { updated: result.updated, collection_id: result.collectionId } });
   }),
 );
 
@@ -312,5 +364,109 @@ knowledgeRouter.delete(
     const svc = new KnowledgeService(container);
     const job = await svc.enqueueDelete(projectId, sourceId, user!.sub);
     res.status(202).json({ data: { job } });
+  }),
+);
+
+// ---------------------------------------------------------------------------
+// Knowledge collections (KB8) - optional, project-scoped source organization.
+// Viewers read; editors manage. Collections are organizational metadata only:
+// deleting one never deletes its sources (they become uncategorized).
+// ---------------------------------------------------------------------------
+
+/** Bounded collection list/detail pagination (same caps as the source list). */
+const listCollectionsSchema = z.object({
+  limit: z.coerce.number().int().min(1).max(KNOWLEDGE_LIST_MAX_LIMIT).default(KNOWLEDGE_LIST_DEFAULT_LIMIT),
+  offset: z.coerce.number().int().min(0).default(0),
+});
+
+const createCollectionSchema = z.object({
+  name: z.string().trim().min(1).max(KNOWLEDGE_COLLECTION_NAME_MAX_CHARS),
+  description: z.string().trim().max(KNOWLEDGE_COLLECTION_DESCRIPTION_MAX_CHARS).nullable().optional(),
+});
+
+const updateCollectionSchema = z
+  .object({
+    name: z.string().trim().min(1).max(KNOWLEDGE_COLLECTION_NAME_MAX_CHARS).optional(),
+    description: z.string().trim().max(KNOWLEDGE_COLLECTION_DESCRIPTION_MAX_CHARS).nullable().optional(),
+  })
+  .refine((value) => value.name !== undefined || value.description !== undefined, {
+    message: 'Provide name and/or description',
+  });
+
+/** List this project's collections with per-collection source counts. */
+knowledgeRouter.get(
+  '/collections',
+  asyncHandler(async (req, res) => {
+    const projectId = parseProjectId(req);
+    const { container, user } = req;
+    await container.access.requireRole(user!.sub, projectId, 'viewer');
+    const query = listCollectionsSchema.parse(req.query);
+    const svc = new KnowledgeService(container);
+    const page = await svc.listCollections(projectId, query);
+    res.json({ data: page });
+  }),
+);
+
+/** One collection with a bounded page of its sources. */
+knowledgeRouter.get(
+  '/collections/:collectionId',
+  asyncHandler(async (req, res) => {
+    const projectId = parseProjectId(req);
+    const { container, user } = req;
+    await container.access.requireRole(user!.sub, projectId, 'viewer');
+    const collectionId = parseId(req, 'collectionId');
+    const query = listCollectionsSchema.parse(req.query);
+    const svc = new KnowledgeService(container);
+    const detail = await svc.getCollectionDetail(projectId, collectionId, query);
+    res.json({ data: detail });
+  }),
+);
+
+/** Create a collection (editor+). */
+knowledgeRouter.post(
+  '/collections',
+  asyncHandler(async (req, res) => {
+    const projectId = parseProjectId(req);
+    const { container, user } = req;
+    await container.access.requireRole(user!.sub, projectId, 'editor');
+    const body = createCollectionSchema.parse(req.body);
+    const svc = new KnowledgeService(container);
+    const collection = await svc.createCollection(projectId, user!.sub, {
+      name: body.name,
+      description: body.description ?? null,
+    });
+    res.status(201).json({ data: { collection } });
+  }),
+);
+
+/** Rename / re-describe a collection (editor+). */
+knowledgeRouter.patch(
+  '/collections/:collectionId',
+  asyncHandler(async (req, res) => {
+    const projectId = parseProjectId(req);
+    const { container, user } = req;
+    await container.access.requireRole(user!.sub, projectId, 'editor');
+    const collectionId = parseId(req, 'collectionId');
+    const body = updateCollectionSchema.parse(req.body);
+    const svc = new KnowledgeService(container);
+    const collection = await svc.updateCollection(projectId, collectionId, body);
+    res.json({ data: { collection } });
+  }),
+);
+
+/**
+ * Delete a collection (editor+). Its sources are never deleted - they are
+ * returned to uncategorized. The response names that outcome explicitly.
+ */
+knowledgeRouter.delete(
+  '/collections/:collectionId',
+  asyncHandler(async (req, res) => {
+    const projectId = parseProjectId(req);
+    const { container, user } = req;
+    await container.access.requireRole(user!.sub, projectId, 'editor');
+    const collectionId = parseId(req, 'collectionId');
+    const svc = new KnowledgeService(container);
+    await svc.deleteCollection(projectId, collectionId);
+    res.json({ data: { id: collectionId, deleted: true, sources_deleted: false } });
   }),
 );

@@ -223,3 +223,69 @@ describe('delete', () => {
     ).toBe(true);
   });
 });
+
+describe('collections (KB8)', () => {
+  it('writes collection_id (explicit null when uncategorized) into the payload', async () => {
+    const { calls } = makeHarness();
+    const p = provider();
+    await p.index(CONTEXT('p1'), [
+      { externalId: 'source:a', kind: 'note', title: 'A', text: 'body a', collectionId: 'coll-1' },
+      { externalId: 'source:b', kind: 'note', title: 'B', text: 'body b' },
+    ]);
+
+    const upserts = calls.filter((c) => c.method === 'PUT' && c.url.includes('/points?wait=true'));
+    const points = upserts.flatMap(
+      (c) => (c.body as { points: Array<{ external_id: string; payload: Record<string, unknown> }> }).points,
+    );
+    const a = points.find((pt) => (pt.payload as Record<string, unknown>).external_id === 'source:a')!;
+    const b = points.find((pt) => (pt.payload as Record<string, unknown>).external_id === 'source:b')!;
+    expect((a.payload as Record<string, unknown>).collection_id).toBe('coll-1');
+    expect((b.payload as Record<string, unknown>).collection_id).toBeNull();
+  });
+
+  it('filters by collection_id while keeping project scope', async () => {
+    const { calls } = makeHarness();
+    const p = provider();
+    await p.search({ query: 'q', projectId: 'p9', filter: { collectionId: 'coll-1' }, limit: 3 });
+
+    const body = calls.find((c) => c.url.includes('/points/search'))!.body as {
+      filter: { must: Array<Record<string, unknown>> };
+    };
+    expect(
+      body.filter.must.some((m) => m.key === 'project_id' && (m.match as { value: string }).value === 'p9'),
+    ).toBe(true);
+    expect(
+      body.filter.must.some((m) => m.key === 'collection_id' && (m.match as { value: string }).value === 'coll-1'),
+    ).toBe(true);
+  });
+
+  it('filters to uncategorized sources with is_null', async () => {
+    const { calls } = makeHarness();
+    const p = provider();
+    await p.search({ query: 'q', projectId: 'p9', filter: { uncategorized: true }, limit: 3 });
+
+    const body = calls.find((c) => c.url.includes('/points/search'))!.body as {
+      filter: { must: Array<Record<string, unknown>> };
+    };
+    expect(body.filter.must.some((m) => (m.is_null as { key?: string } | undefined)?.key === 'collection_id')).toBe(true);
+  });
+
+  it('updates collection metadata in place without embedding or duplicating vectors', async () => {
+    const { calls } = makeHarness();
+    const p = provider();
+    await p.updateMetadata(CONTEXT('p1'), 'source:abc', { collection_id: 'coll-1' });
+
+    const patch = calls.find((c) => c.method === 'POST' && c.url.includes('/points/payload'));
+    expect(patch).toBeTruthy();
+    const body = patch!.body as { payload: Record<string, unknown>; filter: { must: Array<Record<string, unknown>> } };
+    expect(body.payload.collection_id).toBe('coll-1');
+    expect(
+      body.filter.must.some((m) => m.key === 'project_id' && (m.match as { value: string }).value === 'p1'),
+    ).toBe(true);
+    expect(
+      body.filter.must.some((m) => m.key === 'external_id' && (m.match as { value: string }).value === 'source:abc'),
+    ).toBe(true);
+    expect(calls.some((c) => c.url.includes('/embeddings'))).toBe(false);
+    expect(calls.some((c) => c.method === 'PUT' && c.url.includes('/points?wait=true'))).toBe(false);
+  });
+});

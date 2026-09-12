@@ -410,6 +410,103 @@ begin
 end $$;
 SQL
 
+echo "==> smoke test: knowledge collections (KB8) + optional organization + isolation"
+PSQL -d "${DB_NAME}" <<'SQL'
+set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-000000000001"}';
+do $$
+declare
+  v_project uuid;
+  v_project2 uuid;
+  v_source uuid;
+  v_collection uuid;
+  v_foreign_collection uuid;
+  v_owner uuid := '00000000-0000-0000-0000-000000000001';
+begin
+  select id into v_project from public.seo_projects where slug = 'demo' limit 1;
+  select id into v_project2 from public.seo_projects where slug = 'second-user-project' limit 1;
+  if v_project is null or v_project2 is null then raise exception 'smoke: KB8 projects missing'; end if;
+  select id into v_source from public.seo_knowledge_sources where project_id = v_project and name = 'Smoke note' limit 1;
+  if v_source is null then raise exception 'smoke: KB8 source missing'; end if;
+
+  -- 1. Collection creation.
+  insert into public.seo_knowledge_collections (project_id, name, description, created_by)
+  values (v_project, 'Smoke collection', 'migration smoke', v_owner)
+  returning id into v_collection;
+  if v_collection is null then raise exception 'smoke: KB8 collection was not created'; end if;
+  if not exists (
+    select 1 from public.seo_knowledge_collections
+    where id = v_collection and project_id = v_project and description = 'migration smoke'
+  ) then raise exception 'smoke: KB8 collection metadata was not stored'; end if;
+
+  -- 2. Case-insensitive uniqueness per project.
+  begin
+    insert into public.seo_knowledge_collections (project_id, name, created_by)
+    values (v_project, 'smoke collection', v_owner);
+    raise exception 'smoke: duplicate collection name unexpectedly allowed';
+  exception when unique_violation then
+    null;
+  end;
+
+  -- 3. Assignment (membership only; the source keeps its lifecycle).
+  update public.seo_knowledge_sources set collection_id = v_collection where id = v_source;
+  if not exists (
+    select 1 from public.seo_knowledge_sources where id = v_source and collection_id = v_collection and status = 'ready'
+  ) then raise exception 'smoke: KB8 source assignment failed'; end if;
+
+  -- 6/7/8. Normal / collection-filtered / uncategorized queries the API uses.
+  if (select count(*) from public.seo_knowledge_sources where project_id = v_project and status <> 'deleted') < 1 then
+    raise exception 'smoke: KB8 normal source query returned nothing';
+  end if;
+  if (select count(*) from public.seo_knowledge_sources where project_id = v_project and collection_id = v_collection) < 1 then
+    raise exception 'smoke: KB8 collection-filtered query returned nothing';
+  end if;
+  if not exists (
+    select 1 from public.seo_knowledge_sources where project_id = v_project and collection_id is null
+  ) then raise exception 'smoke: KB8 uncategorized query returned nothing'; end if;
+
+  -- 4. A foreign-project collection cannot be assigned (composite FK).
+  insert into public.seo_knowledge_collections (project_id, name, created_by)
+  values (v_project2, 'Foreign collection', v_owner)
+  returning id into v_foreign_collection;
+  begin
+    update public.seo_knowledge_sources set collection_id = v_foreign_collection where id = v_source;
+    raise exception 'smoke: cross-project collection assignment unexpectedly allowed';
+  exception when foreign_key_violation then
+    null;
+  end;
+
+  -- 5. Deleting a collection never deletes its sources (ON DELETE SET NULL).
+  delete from public.seo_knowledge_collections where id = v_collection;
+  if exists (select 1 from public.seo_knowledge_collections where id = v_collection) then
+    raise exception 'smoke: KB8 collection delete failed';
+  end if;
+  if not exists (
+    select 1 from public.seo_knowledge_sources where id = v_source and collection_id is null and status = 'ready'
+  ) then raise exception 'smoke: KB8 collection delete removed or detached the source'; end if;
+
+  -- Kept for the RLS check below (user 2 is not a member of the demo project).
+  insert into public.seo_knowledge_collections (project_id, name, created_by)
+  values (v_project, 'RLS demo collection', v_owner);
+
+  raise notice 'smoke: knowledge collections (create/uniqueness/assign/isolate/delete) OK';
+end $$;
+SQL
+
+# RLS can only be exercised as a non-superuser role (superusers bypass RLS).
+COLLECTION_LEAK_COUNT="$(PSQL -d "${DB_NAME}" -t -A <<'SQL'
+grant usage on schema public to authenticated;
+grant select on public.seo_knowledge_collections to authenticated;
+set role authenticated;
+set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-000000000002"}';
+select count(*) from public.seo_knowledge_collections where name = 'RLS demo collection';
+SQL
+)"
+if [ -z "${COLLECTION_LEAK_COUNT}" ] || [ "${COLLECTION_LEAK_COUNT}" != "0" ]; then
+  echo "!! RLS leak: non-member read ${COLLECTION_LEAK_COUNT} rows from a foreign project collection" >&2
+  exit 1
+fi
+echo "   smoke: non-member cannot read a foreign project collection (RLS isolation OK)"
+
 # RLS can only be exercised as a non-superuser role (superusers bypass RLS).
 LEAK_COUNT="$(PSQL -d "${DB_NAME}" -t -A <<'SQL'
 grant usage on schema public to authenticated;

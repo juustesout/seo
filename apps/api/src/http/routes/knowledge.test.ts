@@ -17,6 +17,7 @@ import { knowledgeRouter } from './knowledge.js';
 
 const PROJECT = '11111111-1111-4111-8111-111111111111';
 const SOURCE = '22222222-2222-4222-8222-222222222222';
+const COLLECTION = '33333333-3333-4333-8333-333333333333';
 
 const TOKEN_TO_USER: Record<string, { sub: string } | undefined> = {
   'viewer-token': { sub: 'v-user' },
@@ -113,6 +114,16 @@ const summary = {
 
 const detailDto = { ...sourceDto, preview: { text: 'My note body', truncated: false, characters: 12 } };
 
+const collectionDto = {
+  id: COLLECTION,
+  projectId: PROJECT,
+  name: 'References',
+  description: null,
+  sourceCount: 0,
+  createdAt: '2026-09-08T00:00:00.000Z',
+  updatedAt: '2026-09-08T00:00:00.000Z',
+};
+
 const searchHit = {
   source_id: SOURCE,
   source_name: 'My note',
@@ -153,6 +164,30 @@ beforeEach(() => {
   vi.spyOn(KnowledgeService.prototype, 'enqueueDelete').mockResolvedValue({ id: 'job-3' } as never);
   vi.spyOn(KnowledgeService.prototype, 'updateRefreshPolicy').mockResolvedValue(sourceDto as never);
   vi.spyOn(KnowledgeService.prototype, 'enqueueRefresh').mockResolvedValue({ id: 'job-refresh' } as never);
+  vi.spyOn(KnowledgeService.prototype, 'listCollections').mockResolvedValue({
+    items: [collectionDto],
+    total: 1,
+    limit: 50,
+    offset: 0,
+  } as never);
+  vi.spyOn(KnowledgeService.prototype, 'getCollectionDetail').mockResolvedValue({
+    ...collectionDto,
+    items: [sourceDto],
+    total: 1,
+    limit: 50,
+    offset: 0,
+  } as never);
+  vi.spyOn(KnowledgeService.prototype, 'createCollection').mockResolvedValue(collectionDto as never);
+  vi.spyOn(KnowledgeService.prototype, 'updateCollection').mockResolvedValue(collectionDto as never);
+  vi.spyOn(KnowledgeService.prototype, 'deleteCollection').mockResolvedValue({ id: COLLECTION, deleted: true } as never);
+  vi.spyOn(KnowledgeService.prototype, 'assignCollection').mockResolvedValue({
+    ...sourceDto,
+    collection_id: COLLECTION,
+  } as never);
+  vi.spyOn(KnowledgeService.prototype, 'bulkAssignCollection').mockResolvedValue({
+    updated: 2,
+    collectionId: COLLECTION,
+  } as never);
 });
 
 afterEach(() => {
@@ -365,6 +400,8 @@ describe('knowledge retrieval route (KB6)', () => {
       limit: undefined,
       sourceTypes: undefined,
       sourceIds: undefined,
+      collectionId: undefined,
+      uncategorized: undefined,
     });
     expect(res.json).toMatchObject({
       data: {
@@ -393,6 +430,8 @@ describe('knowledge retrieval route (KB6)', () => {
       limit: 5,
       sourceTypes: ['url', 'file'],
       sourceIds: [SOURCE],
+      collectionId: undefined,
+      uncategorized: undefined,
     });
   });
 
@@ -515,5 +554,193 @@ describe('knowledge refresh + policy routes (KB7)', () => {
     expect(refresh.status).toBe(400);
     expect(vi.mocked(KnowledgeService.prototype.updateRefreshPolicy)).not.toHaveBeenCalled();
     expect(vi.mocked(KnowledgeService.prototype.enqueueRefresh)).not.toHaveBeenCalled();
+  });
+});
+
+describe('knowledge collections routes (KB8)', () => {
+  it('lets a viewer list and read collections but not manage them', async () => {
+    const list = await request('/collections', { token: 'viewer-token' });
+    expect(list.status).toBe(200);
+    expect(list.json).toMatchObject({ data: { items: [{ id: COLLECTION, sourceCount: 0 }], total: 1 } });
+
+    const detail = await request(`/collections/${COLLECTION}`, { token: 'viewer-token' });
+    expect(detail.status).toBe(200);
+    expect(detail.json).toMatchObject({ data: { id: COLLECTION, items: [{ id: SOURCE }] } });
+
+    const create = await request('/collections', { method: 'POST', token: 'viewer-token', body: { name: 'X' } });
+    const patch = await request(`/collections/${COLLECTION}`, { method: 'PATCH', token: 'viewer-token', body: { name: 'Y' } });
+    const remove = await request(`/collections/${COLLECTION}`, { method: 'DELETE', token: 'viewer-token' });
+    const bulk = await request('/sources/bulk', {
+      method: 'POST',
+      token: 'viewer-token',
+      body: { source_ids: [SOURCE], collection_id: COLLECTION },
+    });
+    expect(create.status).toBe(403);
+    expect(patch.status).toBe(403);
+    expect(remove.status).toBe(403);
+    expect(bulk.status).toBe(403);
+    expect(vi.mocked(KnowledgeService.prototype.createCollection)).not.toHaveBeenCalled();
+    expect(vi.mocked(KnowledgeService.prototype.bulkAssignCollection)).not.toHaveBeenCalled();
+  });
+
+  it('creates a collection for an editor with a trimmed name and bounded pagination', async () => {
+    const created = await request('/collections', {
+      method: 'POST',
+      token: 'editor-token',
+      body: { name: '  References  ', description: ' Team docs ' },
+    });
+    expect(created.status).toBe(201);
+    expect(vi.mocked(KnowledgeService.prototype.createCollection)).toHaveBeenLastCalledWith(PROJECT, 'e-user', {
+      name: 'References',
+      description: 'Team docs',
+    });
+    expect(created.json).toMatchObject({ data: { collection: { id: COLLECTION } } });
+
+    const list = await request('/collections?limit=10&offset=20', { token: 'viewer-token' });
+    expect(list.status).toBe(200);
+    expect(vi.mocked(KnowledgeService.prototype.listCollections)).toHaveBeenLastCalledWith(PROJECT, {
+      limit: 10,
+      offset: 20,
+    });
+  });
+
+  it('rejects invalid collection input at the edge without calling the service', async () => {
+    for (const body of [{}, { name: '' }, { name: '   ' }, { name: 'x'.repeat(121) }, { name: 'ok', description: 'x'.repeat(501) }]) {
+      const res = await request('/collections', { method: 'POST', token: 'editor-token', body });
+      expect(res.status, JSON.stringify(body)).toBe(400);
+      expect((res.json as { error: { code: string } }).error.code).toBe('validation_error');
+    }
+    for (const body of [{}, { name: 'y'.repeat(121) }]) {
+      const res = await request(`/collections/${COLLECTION}`, { method: 'PATCH', token: 'editor-token', body });
+      expect(res.status, JSON.stringify(body)).toBe(400);
+    }
+    expect(vi.mocked(KnowledgeService.prototype.createCollection)).not.toHaveBeenCalled();
+  });
+
+  it('updates and deletes a collection, reporting that sources are preserved', async () => {
+    const patch = await request(`/collections/${COLLECTION}`, {
+      method: 'PATCH',
+      token: 'editor-token',
+      body: { name: 'Renamed' },
+    });
+    expect(patch.status).toBe(200);
+    expect(vi.mocked(KnowledgeService.prototype.updateCollection)).toHaveBeenLastCalledWith(PROJECT, COLLECTION, {
+      name: 'Renamed',
+    });
+
+    const remove = await request(`/collections/${COLLECTION}`, { method: 'DELETE', token: 'editor-token' });
+    expect(remove.status).toBe(200);
+    expect(remove.json).toMatchObject({ data: { id: COLLECTION, deleted: true, sources_deleted: false } });
+    expect(vi.mocked(KnowledgeService.prototype.deleteCollection)).toHaveBeenLastCalledWith(PROJECT, COLLECTION);
+  });
+
+  it('rejects a malformed collection id before any service call', async () => {
+    const detail = await request('/collections/not-a-uuid', { token: 'viewer-token' });
+    const patch = await request('/collections/not-a-uuid', {
+      method: 'PATCH',
+      token: 'editor-token',
+      body: { name: 'X' },
+    });
+    const remove = await request('/collections/not-a-uuid', { method: 'DELETE', token: 'editor-token' });
+    expect(detail.status).toBe(400);
+    expect(patch.status).toBe(400);
+    expect(remove.status).toBe(400);
+    expect(vi.mocked(KnowledgeService.prototype.getCollectionDetail)).not.toHaveBeenCalled();
+    expect(vi.mocked(KnowledgeService.prototype.updateCollection)).not.toHaveBeenCalled();
+    expect(vi.mocked(KnowledgeService.prototype.deleteCollection)).not.toHaveBeenCalled();
+  });
+
+  it('moves a single source into and out of a collection via PATCH', async () => {
+    const assign = await request(`/sources/${SOURCE}`, {
+      method: 'PATCH',
+      token: 'editor-token',
+      body: { collection_id: COLLECTION },
+    });
+    expect(assign.status).toBe(200);
+    expect(vi.mocked(KnowledgeService.prototype.assignCollection)).toHaveBeenLastCalledWith(PROJECT, SOURCE, COLLECTION);
+    expect(assign.json).toMatchObject({ data: { source: { id: SOURCE, collection_id: COLLECTION } } });
+
+    const remove = await request(`/sources/${SOURCE}`, {
+      method: 'PATCH',
+      token: 'editor-token',
+      body: { collection_id: null },
+    });
+    expect(remove.status).toBe(200);
+    expect(vi.mocked(KnowledgeService.prototype.assignCollection)).toHaveBeenLastCalledWith(PROJECT, SOURCE, null);
+  });
+
+  it('rejects a malformed collection assignment at the edge', async () => {
+    const res = await request(`/sources/${SOURCE}`, {
+      method: 'PATCH',
+      token: 'editor-token',
+      body: { collection_id: 'not-a-uuid' },
+    });
+    expect(res.status).toBe(400);
+    expect(vi.mocked(KnowledgeService.prototype.assignCollection)).not.toHaveBeenCalled();
+  });
+
+  it('bulk-moves sources and enforces id bounds', async () => {
+    const ok = await request('/sources/bulk', {
+      method: 'POST',
+      token: 'editor-token',
+      body: { source_ids: [SOURCE], collection_id: COLLECTION },
+    });
+    expect(ok.status).toBe(200);
+    expect(vi.mocked(KnowledgeService.prototype.bulkAssignCollection)).toHaveBeenLastCalledWith(
+      PROJECT,
+      [SOURCE],
+      COLLECTION,
+    );
+    expect(ok.json).toMatchObject({ data: { updated: 2, collection_id: COLLECTION } });
+
+    for (const body of [{ source_ids: [], collection_id: null }, { source_ids: ['not-a-uuid'], collection_id: null }, { source_ids: [SOURCE] }]) {
+      const res = await request('/sources/bulk', { method: 'POST', token: 'editor-token', body });
+      expect(res.status, JSON.stringify(body)).toBe(400);
+    }
+  });
+
+  it('passes collection filters through list and search', async () => {
+    await request(`/sources?collection_id=${COLLECTION}&limit=10`, { token: 'viewer-token' });
+    expect(vi.mocked(KnowledgeService.prototype.listSources)).toHaveBeenLastCalledWith(
+      PROJECT,
+      expect.objectContaining({ collection_id: COLLECTION, limit: 10 }),
+    );
+
+    const search = await request('/search', {
+      method: 'POST',
+      token: 'viewer-token',
+      body: { query: 'seo', collection_id: COLLECTION },
+    });
+    expect(search.status).toBe(200);
+    expect(vi.mocked(KnowledgeService.prototype.search)).toHaveBeenLastCalledWith(PROJECT, {
+      query: 'seo',
+      limit: undefined,
+      sourceTypes: undefined,
+      sourceIds: undefined,
+      collectionId: COLLECTION,
+      uncategorized: undefined,
+    });
+
+    const uncategorized = await request('/search', {
+      method: 'POST',
+      token: 'viewer-token',
+      body: { query: 'seo', uncategorized: true },
+    });
+    expect(uncategorized.status).toBe(200);
+    expect(vi.mocked(KnowledgeService.prototype.search)).toHaveBeenLastCalledWith(
+      PROJECT,
+      expect.objectContaining({ collectionId: undefined, uncategorized: true }),
+    );
+  });
+
+  it('rejects mutually exclusive and malformed search collection filters', async () => {
+    for (const body of [
+      { query: 'seo', collection_id: COLLECTION, uncategorized: true },
+      { query: 'seo', collection_id: 'not-a-uuid' },
+      { query: 'seo', uncategorized: 'yes' },
+    ]) {
+      const res = await request('/search', { method: 'POST', token: 'viewer-token', body });
+      expect(res.status, JSON.stringify(body)).toBe(400);
+    }
   });
 });

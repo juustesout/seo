@@ -7,7 +7,13 @@
  * storage path, a content body outside the bounded preview, or a raw error.
  */
 import { useCallback, useEffect, useRef, useState, type ChangeEvent, type FormEvent } from 'react';
-import type { KnowledgeSourceDetailDto, KnowledgeSourceDto, KnowledgeSourcesResponse } from '@seo/contracts';
+import type {
+  KnowledgeCollectionDto,
+  KnowledgeCollectionsResponse,
+  KnowledgeSourceDetailDto,
+  KnowledgeSourceDto,
+  KnowledgeSourcesResponse,
+} from '@seo/contracts';
 import { api, apiRaw } from '../../lib/api';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -16,11 +22,19 @@ import { Textarea } from '@/components/ui/textarea';
 import { KnowledgeSourceDetail } from './KnowledgeSourceDetail';
 import { KnowledgeSourceFilters, type KnowledgeFilterState } from './KnowledgeSourceFilters';
 import { KnowledgeSourceList } from './KnowledgeSourceList';
+import { KnowledgeBulkAssign, KnowledgeCollectionManager } from './KnowledgeCollections';
 import { KNOWLEDGE_FILE_ACCEPT } from './format';
 
 const PAGE_SIZE = 50;
 
-const EMPTY_FILTERS: KnowledgeFilterState = { type: '', status: '', search: '', sort: 'updated_desc' };
+const EMPTY_FILTERS: KnowledgeFilterState = {
+  type: '',
+  status: '',
+  search: '',
+  sort: 'updated_desc',
+  collectionId: '',
+  uncategorized: false,
+};
 
 function message(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
@@ -46,6 +60,27 @@ export function KnowledgeLibrary({ projectId, canEdit }: { projectId: string; ca
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState<string | null>(null);
 
+  const [collections, setCollections] = useState<KnowledgeCollectionDto[]>([]);
+  const [collectionBusy, setCollectionBusy] = useState(false);
+  const [checkedIds, setCheckedIds] = useState<string[]>([]);
+  const [bulkBusy, setBulkBusy] = useState(false);
+
+  const loadCollections = useCallback(async () => {
+    try {
+      const res = await api<KnowledgeCollectionsResponse>(
+        `/projects/${projectId}/knowledge/collections?limit=${PAGE_SIZE}`,
+      );
+      setCollections(Array.isArray(res?.items) ? res.items : []);
+    } catch {
+      // Collections are optional organization; a failure must not block the library.
+      setCollections([]);
+    }
+  }, [projectId]);
+
+  useEffect(() => {
+    void loadCollections();
+  }, [loadCollections]);
+
   const load = useCallback(async () => {
     setLoading(true);
     try {
@@ -53,6 +88,8 @@ export function KnowledgeLibrary({ projectId, canEdit }: { projectId: string; ca
       if (filters.type) params.set('type', filters.type);
       if (filters.status) params.set('status', filters.status);
       if (filters.search.trim()) params.set('search', filters.search.trim());
+      if (filters.uncategorized) params.set('uncategorized', 'true');
+      else if (filters.collectionId) params.set('collection_id', filters.collectionId);
       params.set('sort', filters.sort);
       params.set('limit', String(PAGE_SIZE));
       params.set('offset', String(offset));
@@ -133,8 +170,81 @@ export function KnowledgeLibrary({ projectId, canEdit }: { projectId: string; ca
 
   const handleDetailChanged = useCallback(() => {
     void load();
+    void loadCollections();
     if (selectedId) void refreshDetail(selectedId);
-  }, [load, selectedId, refreshDetail]);
+  }, [load, loadCollections, selectedId, refreshDetail]);
+
+  const runCollection = useCallback(
+    async (fn: () => Promise<void>) => {
+      setCollectionBusy(true);
+      setError(null);
+      try {
+        await fn();
+        await loadCollections();
+      } catch (e) {
+        setError(message(e));
+      } finally {
+        setCollectionBusy(false);
+      }
+    },
+    [loadCollections],
+  );
+
+  const createCollection = useCallback(
+    (collectionName: string, description: string | null) =>
+      runCollection(async () => {
+        await api(`/projects/${projectId}/knowledge/collections`, {
+          method: 'POST',
+          body: { name: collectionName, description },
+        });
+      }),
+    [projectId, runCollection],
+  );
+
+  const renameCollection = useCallback(
+    (id: string, newName: string) =>
+      runCollection(async () => {
+        await api(`/projects/${projectId}/knowledge/collections/${id}`, {
+          method: 'PATCH',
+          body: { name: newName },
+        });
+      }),
+    [projectId, runCollection],
+  );
+
+  const deleteCollection = useCallback(
+    (id: string) =>
+      runCollection(async () => {
+        await api(`/projects/${projectId}/knowledge/collections/${id}`, { method: 'DELETE' });
+        setFilters((f) => (f.collectionId === id ? { ...f, collectionId: '' } : f));
+      }),
+    [projectId, runCollection],
+  );
+
+  const toggleChecked = useCallback((id: string) => {
+    setCheckedIds((ids) => (ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id]));
+  }, []);
+
+  const bulkMove = useCallback(
+    async (collectionId: string | null) => {
+      if (checkedIds.length === 0) return;
+      setBulkBusy(true);
+      setError(null);
+      try {
+        await api(`/projects/${projectId}/knowledge/sources/bulk`, {
+          method: 'POST',
+          body: { source_ids: checkedIds, collection_id: collectionId },
+        });
+        setCheckedIds([]);
+        await Promise.all([load(), loadCollections()]);
+      } catch (e) {
+        setError(message(e));
+      } finally {
+        setBulkBusy(false);
+      }
+    },
+    [projectId, checkedIds, load, loadCollections],
+  );
 
   const runAction = useCallback(
     async (id: string, action: 'ingest' | 'reindex' | 'delete') => {
@@ -239,7 +349,18 @@ export function KnowledgeLibrary({ projectId, canEdit }: { projectId: string; ca
             }}
             summary={data?.summary ?? null}
             total={total}
+            collections={collections}
           />
+
+          {canEdit && (
+            <KnowledgeCollectionManager
+              collections={collections}
+              busy={collectionBusy}
+              onCreate={(collectionName, description) => createCollection(collectionName, description)}
+              onRename={(id, newName) => renameCollection(id, newName)}
+              onDelete={(id) => deleteCollection(id)}
+            />
+          )}
 
           {canEdit && configured && (
             <form className="grid gap-2 rounded-lg border bg-muted/20 p-3" onSubmit={addSource}>
@@ -290,6 +411,16 @@ export function KnowledgeLibrary({ projectId, canEdit }: { projectId: string; ca
             </form>
           )}
 
+          {canEdit && (
+            <KnowledgeBulkAssign
+              collections={collections}
+              count={checkedIds.length}
+              busy={bulkBusy}
+              onMove={(collectionId) => bulkMove(collectionId)}
+              onClear={() => setCheckedIds([])}
+            />
+          )}
+
           {loading && !data ? (
             <p className="text-sm text-muted-foreground">Loading sources…</p>
           ) : (
@@ -298,6 +429,9 @@ export function KnowledgeLibrary({ projectId, canEdit }: { projectId: string; ca
               selectedId={selectedId}
               canEdit={canEdit}
               busyId={busyId}
+              selectable={canEdit}
+              selectedIds={checkedIds}
+              onToggleSelect={toggleChecked}
               onSelect={(s) => void openDetail(s)}
               onIngest={(id) => void runAction(id, 'ingest')}
               onReindex={(id) => void runAction(id, 'reindex')}
@@ -331,6 +465,7 @@ export function KnowledgeLibrary({ projectId, canEdit }: { projectId: string; ca
           error={detailError}
           canEdit={canEdit}
           busy={busyId === selectedId}
+          collections={collections}
           onClose={closeDetail}
           onIngest={(id) => void runAction(id, 'ingest')}
           onReindex={(id) => void runAction(id, 'reindex')}

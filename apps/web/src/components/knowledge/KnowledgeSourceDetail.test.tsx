@@ -31,6 +31,8 @@ function detail(overrides: Partial<KnowledgeSourceDetailDto> = {}): KnowledgeSou
     original_filename: null,
     content_type: null,
     size_bytes: null,
+    collection_id: null,
+    collection_name: null,
     created_at: '2026-01-01T00:00:00.000Z',
     updated_at: '2026-01-04T00:00:00.000Z',
     preview: { text: 'preview body', truncated: false, characters: 12 },

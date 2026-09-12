@@ -37,6 +37,9 @@
 
 import type {
   FetchedDocument,
+  KnowledgeCollectionDetailDto,
+  KnowledgeCollectionDto,
+  KnowledgeCollectionsResponse,
   KnowledgeDocumentInput,
   KnowledgeDueRefreshDto,
   KnowledgeFetcher,
@@ -56,7 +59,14 @@ import type {
   KnowledgeSourceType,
   ProviderContext,
 } from '@seo/contracts';
-import { KNOWLEDGE_ERROR_MESSAGES, KNOWLEDGE_SEARCH_FAILED_CODE, KNOWLEDGE_SEARCH_FAILED_MESSAGE } from '@seo/contracts';
+import {
+  KNOWLEDGE_COLLECTION_DESCRIPTION_MAX_CHARS,
+  KNOWLEDGE_COLLECTION_NAME_MAX_CHARS,
+  KNOWLEDGE_ERROR_MESSAGES,
+  KNOWLEDGE_SEARCH_FAILED_CODE,
+  KNOWLEDGE_SEARCH_FAILED_MESSAGE,
+  KNOWLEDGE_SOURCE_BULK_MAX_IDS,
+} from '@seo/contracts';
 import { logger } from '../logger.js';
 import { ApiError } from '../apiErrors.js';
 import type { ServiceContainer } from '../context.js';
@@ -96,7 +106,10 @@ export const KNOWLEDGE_MAX_CHARS = 100_000;
  *  `content_text` (large, private body) and `storage_path` (private object
  *  key) so neither can leak through a list response. */
 const SOURCE_LIST_COLUMNS =
-  'id, project_id, source_type, name, url, status, error, chunk_count, last_indexed_at, original_filename, content_type, size_bytes, last_fetched_at, last_changed_at, next_refresh_at, refresh_policy, refresh_failures, created_at, updated_at';
+  'id, project_id, source_type, name, url, status, error, chunk_count, last_indexed_at, original_filename, content_type, size_bytes, collection_id, last_fetched_at, last_changed_at, next_refresh_at, refresh_policy, refresh_failures, created_at, updated_at, collection:seo_knowledge_collections(name)';
+
+/** Columns for one collection row (never a raw row on the wire). */
+const COLLECTION_COLUMNS = 'id, project_id, name, description, created_at, updated_at';
 
 /** Fixed, allowlisted sort map. A client `sort` value can only select one of
  *  these pairs; no raw column name or SQL order ever reaches the database. */
@@ -184,6 +197,7 @@ export function buildSourceDocument(row: SourceRow): KnowledgeDocumentInput | nu
     title,
     text,
     url,
+    collectionId: row.collection_id ? String(row.collection_id) : null,
     meta: { source: 'knowledge_source', source_type: type },
   };
 }
@@ -195,6 +209,7 @@ export function buildSourceDocument(row: SourceRow): KnowledgeDocumentInput | nu
 export function mapSourceRow(row: SourceRow, now: Date = new Date()): KnowledgeSourceDto {
   const sourceType = (row.source_type as KnowledgeSourceType) ?? 'text';
   const status = (row.status as KnowledgeSourceDto['status']) ?? 'queued';
+  const collectionId = row.collection_id ? String(row.collection_id) : null;
   return {
     id: String(row.id),
     project_id: String(row.project_id),
@@ -208,6 +223,8 @@ export function mapSourceRow(row: SourceRow, now: Date = new Date()): KnowledgeS
     original_filename: row.original_filename ? String(row.original_filename) : null,
     content_type: row.content_type ? String(row.content_type) : null,
     size_bytes: row.size_bytes == null ? null : Number(row.size_bytes),
+    collection_id: collectionId,
+    collection_name: collectionId ? embeddedCollectionName(row) : null,
     freshness: computeFreshness(
       {
         sourceType,
@@ -222,6 +239,32 @@ export function mapSourceRow(row: SourceRow, now: Date = new Date()): KnowledgeS
     ),
     created_at: String(row.created_at ?? ''),
     updated_at: String(row.updated_at ?? ''),
+  };
+}
+
+/** Collection display name from a PostgREST embedding (`collection` may be a
+ *  to-one object or a one-element array). Missing/unresolved is null, never a
+ *  fabricated value. */
+function embeddedCollectionName(row: SourceRow): string | null {
+  const rel = row.collection;
+  const obj = Array.isArray(rel) ? rel[0] : rel;
+  if (obj && typeof obj === 'object') {
+    const name = (obj as Record<string, unknown>).name;
+    if (typeof name === 'string' && name.trim()) return name.trim();
+  }
+  return null;
+}
+
+/** Safe collection row -> camelCase DTO. `description` is untrusted free text. */
+export function mapCollectionRow(row: SourceRow, sourceCount: number): KnowledgeCollectionDto {
+  return {
+    id: String(row.id),
+    projectId: String(row.project_id),
+    name: String(row.name ?? ''),
+    description: row.description == null ? null : String(row.description),
+    sourceCount,
+    createdAt: String(row.created_at ?? ''),
+    updatedAt: String(row.updated_at ?? ''),
   };
 }
 
@@ -252,6 +295,9 @@ export interface KnowledgeSearchInput {
   limit?: number;
   sourceTypes?: KnowledgeSourceType[];
   sourceIds?: string[];
+  /** Restrict to one collection (KB8) or, with `uncategorized`, to none. */
+  collectionId?: string;
+  uncategorized?: boolean;
 }
 
 /** Managed source ids live in the index as `source:<uuid>` external ids. */
@@ -376,7 +422,7 @@ export class KnowledgeService {
   private async sourceRow(projectId: string, sourceId: string): Promise<SourceRow> {
     const { data, error } = await this.sb
       .from('seo_knowledge_sources')
-      .select('*')
+      .select('*, collection:seo_knowledge_collections(name)')
       .eq('project_id', projectId)
       .eq('id', sourceId)
       .maybeSingle();
@@ -495,6 +541,8 @@ export class KnowledgeService {
     if (query.type) q = q.eq('source_type', query.type);
     if (query.status) q = q.eq('status', query.status);
     else q = q.neq('status', 'deleted');
+    if (query.uncategorized) q = q.is('collection_id', null);
+    else if (query.collection_id) q = q.eq('collection_id', query.collection_id);
     const term = sanitizeKnowledgeSearch(query.search);
     if (term) {
       q = q.or(`name.ilike.%${term}%,url.ilike.%${term}%,original_filename.ilike.%${term}%`);
@@ -628,6 +676,272 @@ export class KnowledgeService {
       .filter((row): row is KnowledgeDueRefreshDto => row !== null);
   }
 
+  // -------------------------------------------------------------------------
+  // Knowledge collections (KB8) - optional organizational metadata. These
+  // methods never touch lifecycle, freshness or vectors; assigning a source to
+  // a collection is a metadata write only (and, when a provider supports it, an
+  // in-place payload update - never a re-index).
+  // -------------------------------------------------------------------------
+
+  /** Load one collection row strictly inside this project (404 otherwise). */
+  private async collectionRow(projectId: string, collectionId: string): Promise<SourceRow> {
+    const { data, error } = await this.sb
+      .from('seo_knowledge_collections')
+      .select(COLLECTION_COLUMNS)
+      .eq('project_id', projectId)
+      .eq('id', collectionId)
+      .maybeSingle();
+    if (error || !data) throw ApiError.notFound('Knowledge collection not found in this project');
+    return data as SourceRow;
+  }
+
+  /** Count non-deleted sources per collection for the given ids (one query). */
+  private async sourceCountsByCollection(projectId: string, ids: string[]): Promise<Map<string, number>> {
+    const counts = new Map<string, number>();
+    if (ids.length === 0) return counts;
+    const { data, error } = await this.sb
+      .from('seo_knowledge_sources')
+      .select('collection_id')
+      .eq('project_id', projectId)
+      .in('collection_id', ids)
+      .neq('status', 'deleted');
+    if (error) throw ApiError.badRequest('Could not count collection sources');
+    for (const row of (data ?? []) as SourceRow[]) {
+      const id = row.collection_id ? String(row.collection_id) : '';
+      if (id) counts.set(id, (counts.get(id) ?? 0) + 1);
+    }
+    return counts;
+  }
+
+  /** Map a Supabase write error to a safe ApiError (unique name -> conflict). */
+  private static collectionWriteError(error: { code?: string; message?: string }): ApiError {
+    if (error.code === '23505') return ApiError.conflict('A collection with that name already exists.');
+    return ApiError.badRequest('Could not save the knowledge collection');
+  }
+
+  /**
+   * Bounded, deterministically ordered list of this project's collections with
+   * a per-collection source count. Never unbounded and never a raw row.
+   */
+  async listCollections(
+    projectId: string,
+    query: { limit?: number; offset?: number } = {},
+  ): Promise<KnowledgeCollectionsResponse> {
+    const limit = clampListLimit(query.limit);
+    const offset = Math.max(0, Math.floor(query.offset ?? 0));
+    const { data, error, count } = await this.sb
+      .from('seo_knowledge_collections')
+      .select(COLLECTION_COLUMNS, { count: 'exact' })
+      .eq('project_id', projectId)
+      .order('name', { ascending: true })
+      .order('id', { ascending: true })
+      .range(offset, offset + limit - 1);
+    if (error) throw ApiError.badRequest('Could not list knowledge collections');
+    const rows = (data ?? []) as SourceRow[];
+    const counts = await this.sourceCountsByCollection(projectId, rows.map((r) => String(r.id)));
+    const items = rows.map((row) => mapCollectionRow(row, counts.get(String(row.id)) ?? 0));
+    return { items, total: count ?? items.length, limit, offset };
+  }
+
+  /** One collection plus a bounded, update-first page of its sources. */
+  async getCollectionDetail(
+    projectId: string,
+    collectionId: string,
+    query: { limit?: number; offset?: number } = {},
+  ): Promise<KnowledgeCollectionDetailDto> {
+    const row = await this.collectionRow(projectId, collectionId);
+    const limit = clampListLimit(query.limit);
+    const offset = Math.max(0, Math.floor(query.offset ?? 0));
+    const { data, error, count } = await this.sb
+      .from('seo_knowledge_sources')
+      .select(SOURCE_LIST_COLUMNS, { count: 'exact' })
+      .eq('project_id', projectId)
+      .eq('collection_id', collectionId)
+      .neq('status', 'deleted')
+      .order('updated_at', { ascending: false, nullsFirst: false })
+      .order('id', { ascending: true })
+      .range(offset, offset + limit - 1);
+    if (error) throw ApiError.badRequest('Could not load the collection sources');
+    const items = ((data ?? []) as SourceRow[]).map((source) => mapSourceRow(source));
+    const total = count ?? items.length;
+    return { ...mapCollectionRow(row, total), items, total, limit, offset };
+  }
+
+  /** Create a collection (editor+). Name is trimmed and uniqueness is enforced
+   *  case-insensitively; a duplicate is a clean conflict, never a raw SQL error. */
+  async createCollection(
+    projectId: string,
+    userId: string,
+    input: { name: string; description?: string | null },
+  ): Promise<KnowledgeCollectionDto> {
+    const name = KnowledgeService.validCollectionName(input.name);
+    const description = KnowledgeService.normalizeCollectionDescription(input.description);
+    const { data, error } = await this.sb
+      .from('seo_knowledge_collections')
+      .insert({ project_id: projectId, name, description, created_by: userId })
+      .select(COLLECTION_COLUMNS)
+      .single();
+    if (error || !data) throw KnowledgeService.collectionWriteError(error ?? {});
+    return mapCollectionRow(data as SourceRow, 0);
+  }
+
+  /** Rename / re-describe a collection (editor+). Omitted fields are untouched. */
+  async updateCollection(
+    projectId: string,
+    collectionId: string,
+    input: { name?: string; description?: string | null },
+  ): Promise<KnowledgeCollectionDto> {
+    await this.collectionRow(projectId, collectionId);
+    const patch: Record<string, unknown> = {};
+    if (input.name !== undefined) patch.name = KnowledgeService.validCollectionName(input.name);
+    if ('description' in input) patch.description = KnowledgeService.normalizeCollectionDescription(input.description);
+    if (Object.keys(patch).length === 0) throw ApiError.badRequest('Nothing to update.');
+    const { data, error } = await this.sb
+      .from('seo_knowledge_collections')
+      .update(patch)
+      .eq('project_id', projectId)
+      .eq('id', collectionId)
+      .select(COLLECTION_COLUMNS)
+      .single();
+    if (error || !data) throw KnowledgeService.collectionWriteError(error ?? {});
+    const counts = await this.sourceCountsByCollection(projectId, [collectionId]);
+    return mapCollectionRow(data as SourceRow, counts.get(collectionId) ?? 0);
+  }
+
+  /**
+   * Delete a collection (editor+). Sources are deliberately NOT deleted: the
+   * FK's ON DELETE SET NULL returns them to uncategorized, where they remain
+   * fully searchable. Returns the deleted id so the UI can confirm the outcome.
+   */
+  async deleteCollection(projectId: string, collectionId: string): Promise<{ id: string; deleted: true }> {
+    await this.collectionRow(projectId, collectionId);
+    const { error } = await this.sb
+      .from('seo_knowledge_collections')
+      .delete()
+      .eq('project_id', projectId)
+      .eq('id', collectionId);
+    if (error) throw ApiError.badRequest('Could not delete the knowledge collection');
+    return { id: collectionId, deleted: true };
+  }
+
+  private static validCollectionName(raw: string | undefined): string {
+    const name = (raw ?? '').trim();
+    if (!name) throw ApiError.badRequest('Give the collection a name.');
+    if (name.length > KNOWLEDGE_COLLECTION_NAME_MAX_CHARS) {
+      throw ApiError.badRequest(`Collection name is too long (max ${KNOWLEDGE_COLLECTION_NAME_MAX_CHARS} characters).`);
+    }
+    return name;
+  }
+
+  private static normalizeCollectionDescription(raw: string | null | undefined): string | null {
+    const description = (raw ?? '').trim();
+    if (!description) return null;
+    if (description.length > KNOWLEDGE_COLLECTION_DESCRIPTION_MAX_CHARS) {
+      throw ApiError.badRequest(
+        `Collection description is too long (max ${KNOWLEDGE_COLLECTION_DESCRIPTION_MAX_CHARS} characters).`,
+      );
+    }
+    return description;
+  }
+
+  /**
+   * Mirror a source's collection onto its existing vectors without re-embedding
+   * (KB8). Postgres stays authoritative: if the provider cannot sync (absent or
+   * failing) the registry is still correct and the next index run reconciles the
+   * payload, so this is logged, never surfaced as a failure of the assignment.
+   */
+  private async syncCollectionMetadata(
+    projectId: string,
+    sourceId: string,
+    collectionId: string | null,
+  ): Promise<void> {
+    const provider = this.knowledgeProvider();
+    if (!provider?.updateMetadata) return;
+    try {
+      await provider.updateMetadata(this.context(projectId), sourceExternalId(sourceId), {
+        collection_id: collectionId,
+      });
+    } catch (err) {
+      logger.warn({ err, projectId, sourceId }, 'knowledge collection metadata sync failed; registry remains authoritative');
+    }
+  }
+
+  /** Validate that a collection id is a real collection in this project. */
+  private async resolveCollectionTarget(projectId: string, collectionId: string): Promise<string> {
+    const id = collectionId.trim();
+    if (!UUID.test(id)) throw ApiError.badRequest('Invalid collection id');
+    await this.collectionRow(projectId, id);
+    return id;
+  }
+
+  /**
+   * Assign one source to a collection, or remove it (null) so it becomes
+   * uncategorized. Metadata only: lifecycle, freshness and vectors are never
+   * changed, and cross-project collections are refused.
+   */
+  async assignCollection(
+    projectId: string,
+    sourceId: string,
+    collectionId: string | null,
+  ): Promise<KnowledgeSourceDto> {
+    const row = await this.sourceRow(projectId, sourceId);
+    if (((row.status as KnowledgeSourceStatus) ?? 'draft') === 'deleted') {
+      throw ApiError.conflict('This source is being deleted.');
+    }
+    const target = collectionId === null ? null : await this.resolveCollectionTarget(projectId, collectionId);
+    const { error } = await this.sb
+      .from('seo_knowledge_sources')
+      .update({ collection_id: target })
+      .eq('project_id', projectId)
+      .eq('id', sourceId);
+    if (error) throw ApiError.badRequest('Could not update the source collection');
+    await this.syncCollectionMetadata(projectId, sourceId, target);
+    return mapSourceRow(await this.sourceRow(projectId, sourceId));
+  }
+
+  /**
+   * Move a bounded set of sources into a collection (or out of any collection
+   * with null) atomically and fail-closed: every id must be a non-deleted
+   * source in this project and the target must belong to it, otherwise nothing
+   * is changed. One UPDATE statement applies the whole batch.
+   */
+  async bulkAssignCollection(
+    projectId: string,
+    sourceIds: string[],
+    collectionId: string | null,
+  ): Promise<{ updated: number; collectionId: string | null }> {
+    const ids = [...new Set(sourceIds.map((id) => id.trim()).filter(Boolean))];
+    if (ids.length === 0) throw ApiError.badRequest('Select at least one source.');
+    if (ids.length > KNOWLEDGE_SOURCE_BULK_MAX_IDS) {
+      throw ApiError.badRequest(`Too many sources selected (max ${KNOWLEDGE_SOURCE_BULK_MAX_IDS}).`);
+    }
+    if (ids.some((id) => !UUID.test(id))) throw ApiError.badRequest('Invalid source id');
+    const target = collectionId === null ? null : await this.resolveCollectionTarget(projectId, collectionId);
+
+    const { data, error } = await this.sb
+      .from('seo_knowledge_sources')
+      .select('id, status')
+      .eq('project_id', projectId)
+      .in('id', ids);
+    if (error) throw ApiError.badRequest('Could not resolve the selected sources');
+    const found = new Map(((data ?? []) as SourceRow[]).map((row) => [String(row.id), row]));
+    if (ids.some((id) => !found.has(id))) {
+      throw ApiError.badRequest('Some selected sources are not in this project.');
+    }
+    if (ids.some((id) => String(found.get(id)?.status ?? '') === 'deleted')) {
+      throw ApiError.conflict('Some selected sources are being deleted.');
+    }
+
+    const { error: updateError } = await this.sb
+      .from('seo_knowledge_sources')
+      .update({ collection_id: target })
+      .eq('project_id', projectId)
+      .in('id', ids);
+    if (updateError) throw ApiError.badRequest('Could not update the selected sources');
+    await Promise.all(ids.map((id) => this.syncCollectionMetadata(projectId, id, target)));
+    return { updated: ids.length, collectionId: target };
+  }
+
   /**
    * Canonical retrieval (KB6): one bounded, attributed result envelope for the
    * API, the Search Explorer and the writer. The query is normalized, the limit
@@ -684,6 +998,13 @@ export class KnowledgeService {
     const ids = [...new Set((input.sourceIds ?? []).map((id) => id.trim()).filter(Boolean))];
     if (ids.some((id) => !UUID.test(id))) throw ApiError.badRequest('Invalid source id filter');
     if (ids.length > 0) filter.sourceIds = ids.map(sourceExternalId);
+    if (input.collectionId) {
+      const collectionId = input.collectionId.trim();
+      if (!UUID.test(collectionId)) throw ApiError.badRequest('Invalid collection id filter');
+      filter.collectionId = collectionId;
+    } else if (input.uncategorized) {
+      filter.uncategorized = true;
+    }
     return Object.keys(filter).length > 0 ? filter : undefined;
   }
 
@@ -708,7 +1029,7 @@ export class KnowledgeService {
     if (managedIds.length > 0) {
       const { data, error } = await this.sb
         .from('seo_knowledge_sources')
-        .select('id, name, source_type, url, status')
+        .select('id, name, source_type, url, status, collection_id, collection:seo_knowledge_collections(name)')
         .eq('project_id', projectId)
         .in('id', managedIds);
       if (error) throw ApiError.badRequest('Could not attribute knowledge results');
@@ -733,6 +1054,8 @@ export class KnowledgeService {
           source_type: (row.source_type as KnowledgeSourceType) ?? 'text',
           source_url: typeof row.url === 'string' && row.url.trim() ? row.url.trim() : null,
           managed: true,
+          collection_id: row.collection_id ? String(row.collection_id) : null,
+          collection_name: row.collection_id ? embeddedCollectionName(row) : null,
           chunk_index: searchChunkIndex(payload),
           content,
           score,
@@ -750,6 +1073,8 @@ export class KnowledgeService {
         source_type: searchSourceType(payload, url),
         source_url: url,
         managed: false,
+        collection_id: null,
+        collection_name: null,
         chunk_index: searchChunkIndex(payload),
         content,
         score,
@@ -1095,6 +1420,7 @@ export class KnowledgeService {
         title: fetched.title || name || url,
         text,
         url: fetched.canonicalUrl || url,
+        collectionId: row.collection_id ? String(row.collection_id) : null,
         meta: { source: 'knowledge_source', source_type: 'url' },
       },
       capturedText: text,
@@ -1167,6 +1493,7 @@ export class KnowledgeService {
         kind: 'note',
         title: extractedTitle || name || filename,
         text,
+        collectionId: row.collection_id ? String(row.collection_id) : null,
         meta: { source: 'knowledge_source', source_type: 'file', content_type: contentType },
       },
       capturedText: null,

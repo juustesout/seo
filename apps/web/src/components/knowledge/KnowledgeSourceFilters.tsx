@@ -10,12 +10,14 @@ import {
   KNOWLEDGE_SOURCE_SORTS,
   KNOWLEDGE_SOURCE_STATUSES,
   KNOWLEDGE_SOURCE_TYPES,
+  type KnowledgeCollectionDto,
   type KnowledgeSourceSort,
   type KnowledgeSourceStatus,
   type KnowledgeSourceSummaryDto,
   type KnowledgeSourceType,
 } from '@seo/contracts';
 import { Input } from '@/components/ui/input';
+import { KnowledgeOrganizationFilter } from './KnowledgeCollections';
 import { SOURCE_STATUS_LABELS, SOURCE_TYPE_LABELS } from './format';
 
 export interface KnowledgeFilterState {
@@ -23,6 +25,8 @@ export interface KnowledgeFilterState {
   status: KnowledgeSourceStatus | '';
   search: string;
   sort: KnowledgeSourceSort;
+  collectionId: string;
+  uncategorized: boolean;
 }
 
 const SORT_LABELS: Record<KnowledgeSourceSort, string> = {
@@ -50,11 +54,13 @@ export function KnowledgeSourceFilters({
   onChange,
   summary,
   total,
+  collections,
 }: {
   value: KnowledgeFilterState;
   onChange: (patch: Partial<KnowledgeFilterState>) => void;
   summary: KnowledgeSourceSummaryDto | null;
   total: number;
+  collections: KnowledgeCollectionDto[];
 }) {
   return (
     <div className="grid gap-3">
@@ -115,6 +121,11 @@ export function KnowledgeSourceFilters({
             </option>
           ))}
         </select>
+        <KnowledgeOrganizationFilter
+          collections={collections}
+          value={{ collectionId: value.collectionId, uncategorized: value.uncategorized }}
+          onChange={onChange}
+        />
       </div>
     </div>
   );

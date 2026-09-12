@@ -127,6 +127,17 @@ export interface KnowledgeSearchFilter {
   sourceTypes?: string[];
   /** Managed source external ids (`source:<id>`) via the `source_id` payload. */
   sourceIds?: string[];
+  /**
+   * Restrict to managed sources assigned to one collection (KB8). Resolved from
+   * the project-scoped `collection_id` payload field. Mutually exclusive with
+   * `uncategorized`.
+   */
+  collectionId?: string;
+  /**
+   * Restrict to managed sources that belong to no collection (KB8). Mutually
+   * exclusive with `collectionId`.
+   */
+  uncategorized?: boolean;
 }
 
 export interface KnowledgeSearchOptions {
@@ -149,6 +160,12 @@ export interface KnowledgeProvider {
   reindex(ctx: ProviderContext, documents: KnowledgeDocumentInput[]): Promise<{ indexed: number; deleted: number }>;
   /** Remove a single document by external id. */
   delete(ctx: ProviderContext, externalId: string): Promise<void>;
+  /**
+   * Optional: update non-vector metadata (e.g. a source's collection, KB8) on an
+   * already-indexed document without re-embedding or duplicating vectors. When
+   * absent the only way to change metadata is to re-index the document.
+   */
+  updateMetadata?(ctx: ProviderContext, externalId: string, metadata: Record<string, unknown>): Promise<void>;
   /** Delete the whole project knowledge base. */
   deleteProject(ctx: ProviderContext): Promise<void>;
   /** Vector + metadata search scoped to a project. */
