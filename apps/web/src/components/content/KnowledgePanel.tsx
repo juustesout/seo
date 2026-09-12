@@ -14,27 +14,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
-
-/** Accepted upload types (kept in sync with the server allow-list). */
-const KNOWLEDGE_FILE_ACCEPT = '.txt,.md,.markdown,.pdf,.docx';
-
-/** Human label for a file source, derived from its stored MIME/extension. */
-function fileLabel(contentType: string | null, filename: string | null): string {
-  const type = (contentType ?? '').toLowerCase();
-  if (type === 'application/pdf' || /\.pdf$/i.test(filename ?? '')) return 'PDF';
-  if (type.includes('wordprocessingml') || /\.docx$/i.test(filename ?? '')) return 'DOCX';
-  if (type === 'text/markdown' || type === 'text/x-markdown' || /\.markdown?$/i.test(filename ?? '')) return 'Markdown';
-  if (type === 'text/plain') return 'Text';
-  return (filename?.split('.').pop() ?? 'File').toUpperCase();
-}
-
-/** Compact byte size for the source list (e.g. "1.2 MB"). */
-function formatBytes(bytes: number | null): string | null {
-  if (bytes == null || bytes <= 0) return null;
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-}
+import { fileLabel, formatBytes, KNOWLEDGE_FILE_ACCEPT } from '../knowledge/format';
 
 /**
  * Small Content Studio knowledge panel (Phase E). Lists the project's
@@ -66,7 +46,7 @@ export function KnowledgePanel({ projectId, canEdit }: { projectId: string; canE
   }, [load]);
 
   const busy = useMemo(
-    () => (state?.sources ?? []).some((s) => s.status === 'queued' || s.status === 'processing' || s.status === 'deleted'),
+    () => (state?.items ?? []).some((s) => s.status === 'queued' || s.status === 'processing' || s.status === 'deleted'),
     [state],
   );
 
@@ -79,7 +59,7 @@ export function KnowledgePanel({ projectId, canEdit }: { projectId: string; canE
     return () => window.clearInterval(id);
   }, [busy, load]);
 
-  const sources = state?.sources ?? [];
+  const sources = state?.items ?? [];
 
   const addSource = async (e: FormEvent) => {
     e.preventDefault();

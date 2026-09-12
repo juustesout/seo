@@ -15,11 +15,21 @@
 
 import { Router } from 'express';
 import { z } from 'zod';
+import {
+  KNOWLEDGE_SOURCE_STATUSES,
+  KNOWLEDGE_SOURCE_SORTS,
+  KNOWLEDGE_SOURCE_TYPES,
+} from '@seo/contracts';
 import { requireAuth } from '../middleware.js';
 import { asyncHandler } from '../asyncHandler.js';
 import { ApiError } from '../../apiErrors.js';
 import { parseId, parseProjectId } from './utils.js';
 import { KnowledgeService, KNOWLEDGE_MAX_CHARS, normalizeSourceTypeInput } from '../../services/knowledgeService.js';
+import {
+  KNOWLEDGE_LIST_DEFAULT_LIMIT,
+  KNOWLEDGE_LIST_MAX_LIMIT,
+  KNOWLEDGE_SEARCH_MAX_CHARS,
+} from '../../knowledge/limits.js';
 
 export const knowledgeRouter: Router = Router({ mergeParams: true });
 
@@ -99,26 +109,63 @@ const createSourceSchema = z
     source_type: value.source_type ? normalizeSourceTypeInput(value.source_type) : undefined,
   }));
 
-/** List this project's sources + whether the server can index/search them. */
+/**
+ * Bounded, allowlisted source-list query (KB5). Every value is validated at the
+ * edge: unknown types/statuses/sorts are rejected, the search term is capped,
+ * and limit is hard-capped so the list can never be unbounded. The service maps
+ * the sort value onto a fixed column/direction pair.
+ */
+const listSourcesSchema = z.object({
+  type: z.enum(KNOWLEDGE_SOURCE_TYPES).optional(),
+  status: z.enum(KNOWLEDGE_SOURCE_STATUSES).optional(),
+  search: z.string().trim().max(KNOWLEDGE_SEARCH_MAX_CHARS).optional(),
+  sort: z.enum(KNOWLEDGE_SOURCE_SORTS).default('updated_desc'),
+  limit: z.coerce.number().int().min(1).max(KNOWLEDGE_LIST_MAX_LIMIT).default(KNOWLEDGE_LIST_DEFAULT_LIMIT),
+  offset: z.coerce.number().int().min(0).default(0),
+});
+
+/**
+ * List this project's sources (filtered/sorted/paginated) plus project-level
+ * health counts and whether the server can index/search them.
+ */
 knowledgeRouter.get(
   '/sources',
   asyncHandler(async (req, res) => {
     const projectId = parseProjectId(req);
     const { container, user } = req;
     await container.access.requireRole(user!.sub, projectId, 'viewer');
+    const query = listSourcesSchema.parse(req.query);
     const svc = new KnowledgeService(container);
     const descriptor = container.registry.listKnowledge()[0] ?? null;
     const reason = svc.configuredReason();
-    const [sources] = await Promise.all([svc.listSources(projectId)]);
+    const page = await svc.listSources(projectId, query);
     res.json({
       data: {
         project_id: projectId,
         configured: reason === null,
         provider: descriptor,
         note: descriptor ? reason ?? 'Sources are indexed into this project’s isolated vector space.' : 'No knowledge provider registered.',
-        sources,
+        ...page,
       },
     });
+  }),
+);
+
+/**
+ * One source's safe detail (KB5), including a bounded plain-text preview for
+ * text/URL sources whose body is stored. Strictly project-scoped: a source from
+ * another project is a 404, never an existence oracle.
+ */
+knowledgeRouter.get(
+  '/sources/:sourceId',
+  asyncHandler(async (req, res) => {
+    const projectId = parseProjectId(req);
+    const { container, user } = req;
+    await container.access.requireRole(user!.sub, projectId, 'viewer');
+    const sourceId = parseId(req, 'sourceId');
+    const svc = new KnowledgeService(container);
+    const detail = await svc.getSourceDetail(projectId, sourceId);
+    res.json({ data: detail });
   }),
 );
 

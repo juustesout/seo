@@ -1,17 +1,19 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { KnowledgeFetcher, KnowledgeFileExtractor, KnowledgeProvider, ProviderContext } from '@seo/contracts';
 import { KnowledgeIngestError } from '../knowledge/errors.js';
-import { KNOWLEDGE_MAX_FILE_BYTES } from '../knowledge/limits.js';
+import { KNOWLEDGE_MAX_FILE_BYTES, KNOWLEDGE_PREVIEW_MAX_CHARS } from '../knowledge/limits.js';
 import { createKnowledgeFileExtractors } from '../providers/knowledgeFileExtractors.js';
 import type { KnowledgeFileExtractorRegistry } from '../providers/knowledgeFileExtractors.js';
 import type { KnowledgeFileStore } from '../infra/knowledgeFileStorage.js';
 import type { ServiceContainer } from '../context.js';
 import {
   buildSourceDocument,
+  buildSourcePreview,
   KnowledgeService,
   KNOWLEDGE_MAX_CHARS,
   mapSourceRow,
   normalizeSourceTypeInput,
+  sanitizeKnowledgeSearch,
   sourceExternalId,
 } from './knowledgeService.js';
 
@@ -33,14 +35,25 @@ const ENV = { QDRANT_URL: 'http://qdrant:6333', QDRANT_API_KEY: 'k', OPENAI_API_
 
 type DbRow = Record<string, unknown>;
 
-interface Filter {
-  kind: 'eq' | 'in';
-  col: string;
-  value: unknown;
+type Filter =
+  | { kind: 'eq'; col: string; value: unknown }
+  | { kind: 'neq'; col: string; value: unknown }
+  | { kind: 'in'; col: string; value: unknown[] }
+  | { kind: 'or'; clauses: Array<{ col: string; pattern: string }> };
+
+/** Case-insensitive `ilike` match for the `or` filter (patterns are `%...%`). */
+function matchIlike(value: unknown, pattern: string): boolean {
+  const needle = pattern.replace(/^%|%$/g, '').toLowerCase();
+  return String(value ?? '').toLowerCase().includes(needle);
 }
 
 function rowMatches(row: DbRow, filters: Filter[]): boolean {
-  return filters.every((f) => (f.kind === 'eq' ? row[f.col] === f.value : (f.value as unknown[]).includes(row[f.col])));
+  return filters.every((f) => {
+    if (f.kind === 'eq') return row[f.col] === f.value;
+    if (f.kind === 'neq') return row[f.col] !== f.value;
+    if (f.kind === 'in') return (f.value as unknown[]).includes(row[f.col]);
+    return f.clauses.some((c) => matchIlike(row[c.col], c.pattern));
+  });
 }
 
 function makeDb(seed: DbRow[], opts: { failUpdate?: boolean } = {}) {
@@ -52,8 +65,11 @@ function makeDb(seed: DbRow[], opts: { failUpdate?: boolean } = {}) {
       let patch: DbRow | null = null;
       let insert: DbRow | null = null;
       let mode: 'many' | 'single' | 'maybeSingle' = 'many';
-      let orderCol: string | null = null;
+      let orders: Array<{ col: string; ascending: boolean }> = [];
       let limitN: number | null = null;
+      let rangeFrom: number | null = null;
+      let rangeTo: number | null = null;
+      let countRequested = false;
 
       const exec = async () => {
         if (op === 'insert') {
@@ -78,16 +94,33 @@ function makeDb(seed: DbRow[], opts: { failUpdate?: boolean } = {}) {
           return { data: null, error: null };
         }
         let out = rows.filter((r) => rowMatches(r, filters));
-        if (orderCol) {
-          const col = orderCol;
-          out = [...out].sort((a, b) => String(b[col] ?? '').localeCompare(String(a[col] ?? '')));
+        // Supabase applies orders in call order; apply from last to first so the
+        // first `.order()` wins as the primary key (stable JS sort). Nulls sort
+        // last, mirroring the service's `nullsFirst: false`.
+        for (const { col, ascending } of [...orders].reverse()) {
+          out = [...out].sort((a, b) => {
+            const av = a[col];
+            const bv = b[col];
+            const aMissing = av == null || av === '';
+            const bMissing = bv == null || bv === '';
+            if (aMissing && bMissing) return 0;
+            if (aMissing) return 1;
+            if (bMissing) return -1;
+            const cmp = String(av).localeCompare(String(bv));
+            return ascending ? cmp : -cmp;
+          });
         }
-        if (limitN != null) out = out.slice(0, limitN);
-        return { data: mode === 'many' ? out : (out[0] ?? null), error: null };
+        const total = out.length;
+        if (rangeFrom != null) out = out.slice(rangeFrom, (rangeTo ?? total - 1) + 1);
+        else if (limitN != null) out = out.slice(0, limitN);
+        return { data: mode === 'many' ? out : (out[0] ?? null), error: null, count: countRequested ? total : null };
       };
 
       const q: Record<string, unknown> = {};
-      q.select = () => q;
+      q.select = (_cols?: unknown, selectOpts?: { count?: string }) => {
+        if (selectOpts?.count) countRequested = true;
+        return q;
+      };
       q.insert = (row: DbRow) => {
         op = 'insert';
         insert = row;
@@ -106,12 +139,29 @@ function makeDb(seed: DbRow[], opts: { failUpdate?: boolean } = {}) {
         filters.push({ kind: 'eq', col, value });
         return q;
       };
+      q.neq = (col: string, value: unknown) => {
+        filters.push({ kind: 'neq', col, value });
+        return q;
+      };
       q.in = (col: string, value: unknown[]) => {
         filters.push({ kind: 'in', col, value });
         return q;
       };
-      q.order = (col: string) => {
-        orderCol = col;
+      q.or = (expression: string) => {
+        const clauses = expression.split(',').map((part) => {
+          const [col, rest] = part.split('.ilike.');
+          return { col, pattern: rest ?? '' };
+        });
+        filters.push({ kind: 'or', clauses });
+        return q;
+      };
+      q.order = (col: string, orderOpts?: { ascending?: boolean }) => {
+        orders.push({ col, ascending: orderOpts?.ascending ?? true });
+        return q;
+      };
+      q.range = (from: number, to: number) => {
+        rangeFrom = from;
+        rangeTo = to;
         return q;
       };
       q.limit = (n: number) => {
@@ -951,5 +1001,166 @@ describe('KnowledgeService file deletion', () => {
     expect(db.rows).toHaveLength(1);
     expect(db.rows[0].status).toBe('deleted');
     expect(db.rows[0].error).toBe('knowledge_file_storage_failed');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// KB5 - Knowledge Library: filtering, search, sorting, pagination, summary,
+// detail preview and project isolation.
+// ---------------------------------------------------------------------------
+
+describe('knowledge search sanitization + preview helper (KB5)', () => {
+  it('strips filter syntax, collapses whitespace and caps the term length', () => {
+    expect(sanitizeKnowledgeSearch(undefined)).toBe('');
+    expect(sanitizeKnowledgeSearch('  a,b(c)%*\\d  ')).toBe('a b c d');
+    expect(sanitizeKnowledgeSearch('x'.repeat(500))).toHaveLength(200);
+  });
+
+  it('builds bounded previews only for stored text/url bodies', () => {
+    expect(buildSourcePreview({ source_type: 'file', content_text: 'ignored' })).toBeNull();
+    expect(buildSourcePreview({ source_type: 'text', content_text: '' })).toBeNull();
+    expect(buildSourcePreview({ source_type: 'url', content_text: 'hello' })).toEqual({
+      text: 'hello',
+      truncated: false,
+      characters: 5,
+    });
+  });
+});
+
+describe('knowledge source library (KB5)', () => {
+  const SEED: DbRow[] = [
+    {
+      ...ROW,
+      id: 'a1',
+      name: 'Alpha guide',
+      source_type: 'file',
+      url: null,
+      status: 'ready',
+      chunk_count: 3,
+      updated_at: '2026-01-03T00:00:00.000Z',
+      last_indexed_at: '2026-01-03T00:00:00.000Z',
+      original_filename: 'alpha.pdf',
+      content_type: 'application/pdf',
+      size_bytes: 10,
+    },
+    {
+      ...ROW,
+      id: 'a2',
+      name: 'Beta note',
+      source_type: 'text',
+      url: null,
+      status: 'failed',
+      chunk_count: 0,
+      updated_at: '2026-01-02T00:00:00.000Z',
+      last_indexed_at: null,
+      original_filename: null,
+    },
+    {
+      ...ROW,
+      id: 'a3',
+      name: 'Gamma url',
+      source_type: 'url',
+      url: 'https://gamma.example/a',
+      status: 'ready',
+      chunk_count: 5,
+      updated_at: '2026-01-01T00:00:00.000Z',
+      last_indexed_at: '2026-01-01T00:00:00.000Z',
+      original_filename: null,
+    },
+    {
+      ...ROW,
+      id: 'a4',
+      name: 'Zeta old',
+      source_type: 'text',
+      url: null,
+      status: 'deleted',
+      chunk_count: 0,
+      updated_at: '2025-12-31T00:00:00.000Z',
+      last_indexed_at: null,
+      original_filename: null,
+    },
+  ];
+  const FOREIGN: DbRow = { ...ROW, id: 'b1', project_id: 'other-project', name: 'Foreign secret', status: 'ready' };
+
+  function svcWith(rows: DbRow[]) {
+    return new KnowledgeService(containerWith(makeDb(rows), fakeProvider().provider));
+  }
+
+  it('hides deleted sources by default and never returns another project', async () => {
+    const svc = svcWith([...SEED, FOREIGN]);
+    const all = await svc.listSources(PROJECT);
+    expect(all.items.map((i) => i.id)).toEqual(['a1', 'a2', 'a3']);
+    expect(all.total).toBe(3);
+    expect(all.items.some((i) => i.id === 'b1')).toBe(false);
+  });
+
+  it('filters by type and status (including deleted when asked)', async () => {
+    const svc = svcWith(SEED);
+    expect((await svc.listSources(PROJECT, { type: 'file' })).items.map((i) => i.id)).toEqual(['a1']);
+    expect((await svc.listSources(PROJECT, { status: 'failed' })).items.map((i) => i.id)).toEqual(['a2']);
+    expect((await svc.listSources(PROJECT, { status: 'deleted' })).items.map((i) => i.id)).toEqual(['a4']);
+    expect((await svc.listSources(PROJECT, { type: 'text', status: 'failed' })).items.map((i) => i.id)).toEqual(['a2']);
+  });
+
+  it('searches name, url and filename metadata case-insensitively', async () => {
+    const svc = svcWith(SEED);
+    expect((await svc.listSources(PROJECT, { search: 'gamma' })).items.map((i) => i.id)).toEqual(['a3']);
+    expect((await svc.listSources(PROJECT, { search: 'ALPHA' })).items.map((i) => i.id)).toEqual(['a1']);
+    expect((await svc.listSources(PROJECT, { search: 'beta' })).items.map((i) => i.id)).toEqual(['a2']);
+    expect((await svc.listSources(PROJECT, { search: 'nothing-here' })).items).toEqual([]);
+  });
+
+  it('sorts on the allowlisted columns only', async () => {
+    const svc = svcWith(SEED);
+    expect((await svc.listSources(PROJECT, { sort: 'name_asc' })).items.map((i) => i.name)).toEqual([
+      'Alpha guide',
+      'Beta note',
+      'Gamma url',
+    ]);
+    expect((await svc.listSources(PROJECT, { sort: 'name_desc' })).items.map((i) => i.name)).toEqual([
+      'Gamma url',
+      'Beta note',
+      'Alpha guide',
+    ]);
+    expect((await svc.listSources(PROJECT, { sort: 'indexed_asc' })).items[0].id).toBe('a3');
+    expect((await svc.listSources(PROJECT)).items.map((i) => i.id)).toEqual(['a1', 'a2', 'a3']);
+  });
+
+  it('paginates with a clamped limit and reports the unfiltered total', async () => {
+    const svc = svcWith(SEED);
+    const page1 = await svc.listSources(PROJECT, { limit: 2, offset: 0 });
+    expect(page1.items.map((i) => i.id)).toEqual(['a1', 'a2']);
+    expect(page1.total).toBe(3);
+    expect(page1.limit).toBe(2);
+    const page2 = await svc.listSources(PROJECT, { limit: 2, offset: 2 });
+    expect(page2.items.map((i) => i.id)).toEqual(['a3']);
+    expect((await svc.listSources(PROJECT, { limit: 9999 })).limit).toBe(100);
+    expect((await svc.listSources(PROJECT, { limit: 0 })).limit).toBe(1);
+  });
+
+  it('summarizes non-deleted sources and total chunks', async () => {
+    const svc = svcWith(SEED);
+    const { summary } = await svc.listSources(PROJECT);
+    expect(summary).toEqual({ total: 3, draft: 0, queued: 0, processing: 0, ready: 2, failed: 1, total_chunks: 8 });
+  });
+
+  it('returns a bounded detail preview and never leaks private columns', async () => {
+    const body = 'x'.repeat(KNOWLEDGE_PREVIEW_MAX_CHARS + 50);
+    const svc = svcWith([{ ...ROW, id: 'a1', status: 'ready', content_text: body, storage_path: 'p/s/obj' }]);
+    const detail = await svc.getSourceDetail(PROJECT, 'a1');
+    expect(detail.preview?.characters).toBe(body.length);
+    expect(detail.preview?.truncated).toBe(true);
+    expect(detail.preview?.text).toHaveLength(KNOWLEDGE_PREVIEW_MAX_CHARS);
+    const asRecord = detail as unknown as Record<string, unknown>;
+    expect(asRecord.storage_path).toBeUndefined();
+    expect(asRecord.content_text).toBeUndefined();
+  });
+
+  it('has no preview for a file source and 404s a source from another project', async () => {
+    const svc = svcWith([
+      { ...ROW, id: 'f1', source_type: 'file', status: 'ready', content_text: null, original_filename: 'a.pdf', storage_path: 'p/s/obj' },
+    ]);
+    expect((await svc.getSourceDetail(PROJECT, 'f1')).preview).toBeNull();
+    await expect(svc.getSourceDetail('other-project', 'f1')).rejects.toMatchObject({ code: 'not_found' });
   });
 });

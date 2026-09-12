@@ -41,8 +41,12 @@ import type {
   KnowledgeFetcher,
   KnowledgeFile,
   KnowledgeProvider,
+  KnowledgeSourceDetailDto,
   KnowledgeSourceDto,
+  KnowledgeSourceListQuery,
+  KnowledgeSourcePreviewDto,
   KnowledgeSourceStatus,
+  KnowledgeSourceSummaryDto,
   KnowledgeSourceType,
   ProviderContext,
 } from '@seo/contracts';
@@ -54,8 +58,12 @@ import { assertTransition } from './knowledgeLifecycle.js';
 import { extractSourceText, normalizeText } from './knowledgeText.js';
 import { chunkKnowledgeText } from '../knowledge/chunker.js';
 import {
+  KNOWLEDGE_LIST_DEFAULT_LIMIT,
+  KNOWLEDGE_LIST_MAX_LIMIT,
   KNOWLEDGE_MAX_EXTRACTED_CHARS,
   KNOWLEDGE_MAX_FILE_BYTES,
+  KNOWLEDGE_PREVIEW_MAX_CHARS,
+  KNOWLEDGE_SEARCH_MAX_CHARS,
   MAX_CHUNKS,
   MAX_NORMALIZED_CHARS,
 } from '../knowledge/limits.js';
@@ -66,6 +74,63 @@ import { hasValidSignature, resolveFileType, sanitizeFilename } from '../knowled
 /** Largest single source body accepted for indexing (bytes/chars). Bounding it
  *  keeps chunking latency and Qdrant payloads sane for a UI/managed item. */
 export const KNOWLEDGE_MAX_CHARS = 100_000;
+
+/** Columns safe to expose in a list/detail DTO. Deliberately excludes
+ *  `content_text` (large, private body) and `storage_path` (private object
+ *  key) so neither can leak through a list response. */
+const SOURCE_LIST_COLUMNS =
+  'id, project_id, source_type, name, url, status, error, chunk_count, last_indexed_at, original_filename, content_type, size_bytes, created_at, updated_at';
+
+/** Fixed, allowlisted sort map. A client `sort` value can only select one of
+ *  these pairs; no raw column name or SQL order ever reaches the database. */
+const SOURCE_SORTS: Record<string, { column: string; ascending: boolean }> = {
+  updated_desc: { column: 'updated_at', ascending: false },
+  updated_asc: { column: 'updated_at', ascending: true },
+  indexed_desc: { column: 'last_indexed_at', ascending: false },
+  indexed_asc: { column: 'last_indexed_at', ascending: true },
+  name_asc: { column: 'name', ascending: true },
+  name_desc: { column: 'name', ascending: false },
+};
+
+/** Clamp a requested page size into [1, max]; non-finite falls back to default. */
+function clampListLimit(value: number | undefined): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return KNOWLEDGE_LIST_DEFAULT_LIMIT;
+  return Math.min(KNOWLEDGE_LIST_MAX_LIMIT, Math.max(1, Math.floor(value)));
+}
+
+/**
+ * Sanitize a metadata search term before it becomes a PostgREST `or` filter.
+ * Characters with syntactic meaning in a filter (`%`, `*`, `,`, `(`, `)`, `\`)
+ * and control characters are stripped, so a user can never inject a second
+ * clause. The caller wraps the result in `%...%` for a case-insensitive match.
+ */
+export function sanitizeKnowledgeSearch(value: string | undefined): string {
+  if (!value) return '';
+  return value
+    .replace(/[,()%*\\]/g, ' ')
+    .replace(/[\u0000-\u001f\u007f]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, KNOWLEDGE_SEARCH_MAX_CHARS);
+}
+
+/**
+ * Bounded plain-text preview of a source's stored body. File sources keep their
+ * bytes in private storage and have no stored body, so they return null. The
+ * text is data, never markup: the API returns it as-is and the UI renders it as
+ * plain text.
+ */
+export function buildSourcePreview(row: SourceRow): KnowledgeSourcePreviewDto | null {
+  const type = (row.source_type as KnowledgeSourceType | null) ?? 'text';
+  if (type === 'file') return null;
+  const raw = typeof row.content_text === 'string' ? row.content_text : '';
+  if (!raw) return null;
+  return {
+    text: raw.slice(0, KNOWLEDGE_PREVIEW_MAX_CHARS),
+    truncated: raw.length > KNOWLEDGE_PREVIEW_MAX_CHARS,
+    characters: raw.length,
+  };
+}
 
 export type SourceRow = Record<string, unknown>;
 
@@ -293,16 +358,90 @@ export class KnowledgeService {
     };
   }
 
-  /** List this project's knowledge sources, newest update first. */
-  async listSources(projectId: string): Promise<KnowledgeSourceDto[]> {
+  /**
+   * List this project's knowledge sources with allowlisted filtering, metadata
+   * search, sorting and bounded pagination, plus the project health summary.
+   * `deleted` sources are hidden unless explicitly requested by status. Every
+   * filter/sort value is resolved from a fixed map so no client input becomes
+   * raw SQL, and the page size is always clamped.
+   */
+  async listSources(
+    projectId: string,
+    query: KnowledgeSourceListQuery = {},
+  ): Promise<{ items: KnowledgeSourceDto[]; total: number; limit: number; offset: number; summary: KnowledgeSourceSummaryDto }> {
+    const limit = clampListLimit(query.limit);
+    const offset = Math.max(0, Math.floor(query.offset ?? 0));
+    const sort = SOURCE_SORTS[query.sort ?? 'updated_desc'] ?? SOURCE_SORTS.updated_desc;
+
+    let q = this.sb
+      .from('seo_knowledge_sources')
+      .select(SOURCE_LIST_COLUMNS, { count: 'exact' })
+      .eq('project_id', projectId);
+    if (query.type) q = q.eq('source_type', query.type);
+    if (query.status) q = q.eq('status', query.status);
+    else q = q.neq('status', 'deleted');
+    const term = sanitizeKnowledgeSearch(query.search);
+    if (term) {
+      q = q.or(`name.ilike.%${term}%,url.ilike.%${term}%,original_filename.ilike.%${term}%`);
+    }
+    const { data, error, count } = await q
+      .order(sort.column, { ascending: sort.ascending, nullsFirst: false })
+      .order('id', { ascending: true })
+      .range(offset, offset + limit - 1);
+    if (error) throw ApiError.badRequest('Could not list knowledge sources');
+    const items = ((data ?? []) as SourceRow[]).map(mapSourceRow);
+    const summary = await this.summarizeSources(projectId);
+    return { items, total: count ?? items.length, limit, offset, summary };
+  }
+
+  /**
+   * Project-level source health counts, computed from the source registry only
+   * (never from Qdrant). Only non-deleted sources are counted; `total_chunks`
+   * sums the indexed chunk counts so the UI can show whether the base is built.
+   */
+  async summarizeSources(projectId: string): Promise<KnowledgeSourceSummaryDto> {
     const { data, error } = await this.sb
       .from('seo_knowledge_sources')
-      .select('id, project_id, source_type, name, url, status, error, chunk_count, last_indexed_at, original_filename, content_type, size_bytes, created_at, updated_at')
+      .select('status, chunk_count')
       .eq('project_id', projectId)
-      .order('updated_at', { ascending: false })
-      .limit(200);
-    if (error) throw ApiError.badRequest('Could not list knowledge sources');
-    return ((data ?? []) as SourceRow[]).map(mapSourceRow);
+      .neq('status', 'deleted');
+    if (error) throw ApiError.badRequest('Could not summarize knowledge sources');
+    const summary: KnowledgeSourceSummaryDto = {
+      total: 0,
+      draft: 0,
+      queued: 0,
+      processing: 0,
+      ready: 0,
+      failed: 0,
+      total_chunks: 0,
+    };
+    const countable: ReadonlyArray<'draft' | 'queued' | 'processing' | 'ready' | 'failed'> = [
+      'draft',
+      'queued',
+      'processing',
+      'ready',
+      'failed',
+    ];
+    for (const row of (data ?? []) as Array<{ status?: string; chunk_count?: unknown }>) {
+      summary.total += 1;
+      if ((countable as readonly string[]).includes(row.status ?? '')) {
+        summary[row.status as (typeof countable)[number]] += 1;
+      }
+      const chunks = Number(row.chunk_count ?? 0);
+      if (Number.isFinite(chunks) && chunks > 0) summary.total_chunks += chunks;
+    }
+    return summary;
+  }
+
+  /**
+   * One source with its safe detail surface. Strictly project-scoped (a source
+   * from another project 404s rather than leaking its existence), and the
+   * preview is bounded plain text - never the raw row, a storage path or a
+   * parser error.
+   */
+  async getSourceDetail(projectId: string, sourceId: string): Promise<KnowledgeSourceDetailDto> {
+    const row = await this.sourceRow(projectId, sourceId);
+    return { ...mapSourceRow(row), preview: buildSourcePreview(row) };
   }
 
   /**

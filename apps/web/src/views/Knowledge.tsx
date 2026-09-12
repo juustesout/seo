@@ -15,6 +15,7 @@ import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { PageHeader } from '@/components/ui/page-header';
+import { KnowledgeLibrary } from '../components/knowledge/KnowledgeLibrary';
 
 interface Status {
   provider: { id: string; name: string; description: string } | null;
@@ -27,12 +28,18 @@ interface Hit {
   payload?: Record<string, unknown>;
 }
 
+/** Editor-or-higher roles can manage sources; viewers get read-only surfaces. */
+const ROLE_RANK: Record<string, number> = { viewer: 0, editor: 1, admin: 2, owner: 3 };
+
 /**
- * Shows knowledge status, a semantic search box (only when configured) and the
- * project's indexing jobs. All reads go through project-scoped endpoints;
- * search posts the query to the API, never to Qdrant directly.
+ * Shows the source library (summary, filters, metadata search, detail and
+ * lifecycle actions), the knowledge status, a semantic search box (only when
+ * configured) and the project's indexing jobs. All reads go through
+ * project-scoped endpoints; search posts the query to the API, never to Qdrant
+ * directly.
  */
-export function Knowledge({ projectId }: { projectId: string }) {
+export function Knowledge({ projectId, role = 'viewer' }: { projectId: string; role?: string }) {
+  const canEdit = (ROLE_RANK[role] ?? 0) >= 1;
   const [refresh, setRefresh] = useState(0);
   const [err, setErr] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -83,8 +90,8 @@ export function Knowledge({ projectId }: { projectId: string }) {
   return (
     <div className="grid gap-5">
       <PageHeader
-        title="Knowledge Base"
-        description="Semantic search over the content and data this project has collected (Qdrant, per-project isolated collection)."
+        title="Knowledge Library"
+        description="Manage the project's reference sources, review what has been indexed and search the project-isolated vector base."
       />
 
       {err && (
@@ -95,6 +102,8 @@ export function Knowledge({ projectId }: { projectId: string }) {
       {notice && (
         <div className="rounded-md border border-success/30 bg-success/5 px-3 py-2 text-sm text-success">{notice}</div>
       )}
+
+      <KnowledgeLibrary projectId={projectId} canEdit={canEdit} />
 
       <Card>
         <CardHeader>

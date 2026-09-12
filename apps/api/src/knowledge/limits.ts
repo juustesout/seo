@@ -30,3 +30,15 @@ export const KNOWLEDGE_MAX_FILE_BYTES = 10 * 1024 * 1024;
 
 /** Largest extracted text kept from an uploaded file, before normalization. */
 export const KNOWLEDGE_MAX_EXTRACTED_CHARS = 200_000;
+
+/** Default page size for the knowledge source library list. */
+export const KNOWLEDGE_LIST_DEFAULT_LIMIT = 50;
+
+/** Hard maximum page size; a client can never pull an unbounded list. */
+export const KNOWLEDGE_LIST_MAX_LIMIT = 100;
+
+/** Longest metadata search term accepted (bound before it reaches the DB). */
+export const KNOWLEDGE_SEARCH_MAX_CHARS = 200;
+
+/** Hard cap on the plain-text content preview returned by the detail surface. */
+export const KNOWLEDGE_PREVIEW_MAX_CHARS = 2000;

@@ -101,9 +101,28 @@ afterAll(async () => {
   await new Promise<void>((resolve, reject) => server.close((err) => (err ? reject(err) : resolve())));
 });
 
+const summary = {
+  total: 1,
+  draft: 0,
+  queued: 1,
+  processing: 0,
+  ready: 0,
+  failed: 0,
+  total_chunks: 0,
+};
+
+const detailDto = { ...sourceDto, preview: { text: 'My note body', truncated: false, characters: 12 } };
+
 beforeEach(() => {
   vi.spyOn(KnowledgeService.prototype, 'configuredReason').mockReturnValue(null);
-  vi.spyOn(KnowledgeService.prototype, 'listSources').mockResolvedValue([sourceDto] as never);
+  vi.spyOn(KnowledgeService.prototype, 'listSources').mockResolvedValue({
+    items: [sourceDto],
+    total: 1,
+    limit: 50,
+    offset: 0,
+    summary,
+  } as never);
+  vi.spyOn(KnowledgeService.prototype, 'getSourceDetail').mockResolvedValue(detailDto as never);
   vi.spyOn(KnowledgeService.prototype, 'createSource').mockResolvedValue({
     source: sourceDto,
     job: { id: 'job-1' },
@@ -253,5 +272,66 @@ describe('knowledge file upload route', () => {
     const res = await upload({ token: 'editor-token', filename: 'a.txt', body: 'hello' });
     expect(res.status).toBe(502);
     expect(res.json).toMatchObject({ error: { code: 'knowledge_file_storage_failed' } });
+  });
+});
+
+describe('knowledge source library (KB5)', () => {
+  it('passes validated filter/sort/pagination to the service and returns the page', async () => {
+    const res = await request('/sources?type=file&status=ready&search=guide&sort=name_asc&limit=10&offset=20', {
+      token: 'viewer-token',
+    });
+    expect(res.status).toBe(200);
+    expect(vi.mocked(KnowledgeService.prototype.listSources)).toHaveBeenLastCalledWith(PROJECT, {
+      type: 'file',
+      status: 'ready',
+      search: 'guide',
+      sort: 'name_asc',
+      limit: 10,
+      offset: 20,
+    });
+    expect(res.json).toMatchObject({
+      data: { total: 1, limit: 50, offset: 0, items: [{ id: SOURCE }], summary: { total: 1 } },
+    });
+  });
+
+  it('applies bounded defaults when no query is given', async () => {
+    await request('/sources', { token: 'viewer-token' });
+    expect(vi.mocked(KnowledgeService.prototype.listSources)).toHaveBeenLastCalledWith(PROJECT, {
+      sort: 'updated_desc',
+      limit: 50,
+      offset: 0,
+    });
+  });
+
+  it('rejects invalid type, status, sort and over-max limit at the edge', async () => {
+    for (const qs of ['type=bogus', 'status=nope', 'sort=id_asc', 'limit=1000', 'offset=-1']) {
+      const res = await request(`/sources?${qs}`, { token: 'viewer-token' });
+      expect(res.status, qs).toBe(400);
+      expect((res.json as { error: { code: string } }).error.code).toBe('validation_error');
+    }
+  });
+
+  it('returns one project-scoped source detail with its bounded preview', async () => {
+    const res = await request(`/sources/${SOURCE}`, { token: 'viewer-token' });
+    expect(res.status).toBe(200);
+    expect(vi.mocked(KnowledgeService.prototype.getSourceDetail)).toHaveBeenLastCalledWith(PROJECT, SOURCE);
+    expect(res.json).toMatchObject({
+      data: { id: SOURCE, project_id: PROJECT, preview: { text: 'My note body', truncated: false } },
+    });
+  });
+
+  it('hides a foreign/unknown source as 404, never an existence oracle', async () => {
+    vi.mocked(KnowledgeService.prototype.getSourceDetail).mockRejectedValue(
+      ApiError.notFound('Knowledge source not found in this project') as never,
+    );
+    const res = await request(`/sources/${SOURCE}`, { token: 'viewer-token' });
+    expect(res.status).toBe(404);
+    expect(res.json).toMatchObject({ error: { code: 'not_found' } });
+  });
+
+  it('rejects a malformed source id before any lookup', async () => {
+    const res = await request('/sources/not-a-uuid', { token: 'viewer-token' });
+    expect(res.status).toBe(400);
+    expect(vi.mocked(KnowledgeService.prototype.getSourceDetail)).not.toHaveBeenCalled();
   });
 });

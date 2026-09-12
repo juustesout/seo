@@ -765,7 +765,14 @@ export interface KnowledgeSourcesResponse {
   provider: ProviderDescriptorDto | null;
   /** Human note explaining why knowledge is (not) usable. */
   note: string | null;
-  sources: KnowledgeSourceDto[];
+  /** This page of sources for the current filter/sort (bounded by `limit`). */
+  items: KnowledgeSourceDto[];
+  /** Total sources matching the current filter (ignores pagination). */
+  total: number;
+  limit: number;
+  offset: number;
+  /** Project-level health counts, computed from the source registry. */
+  summary: KnowledgeSourceSummaryDto;
 }
 
 export interface KnowledgeSourceCreateInput {
@@ -775,6 +782,89 @@ export interface KnowledgeSourceCreateInput {
   url?: string | null;
   /** Body text to index. Required for a text source; URL-only sources stay draft until fetched. */
   text?: string | null;
+}
+
+// ---------------------------------------------------------------------------
+// Knowledge Library (KB5) - listing, filtering, detail and project summary.
+// The UI reads source metadata only through the API; Qdrant is never queried
+// directly and no field here carries raw content_text or a storage path.
+// ---------------------------------------------------------------------------
+
+/** Canonical source types, exposed for UI filters (single vocabulary). */
+export const KNOWLEDGE_SOURCE_TYPES = ['text', 'url', 'file'] as const;
+
+/** Canonical statuses, exposed for UI filters (single vocabulary). */
+export const KNOWLEDGE_SOURCE_STATUSES = [
+  'draft',
+  'queued',
+  'processing',
+  'ready',
+  'failed',
+  'deleted',
+] as const;
+
+/**
+ * Server-side sort allowlist for the source list. Values map to fixed
+ * column/direction pairs on the API - a client can never pass a raw SQL order.
+ */
+export const KNOWLEDGE_SOURCE_SORTS = [
+  'updated_desc',
+  'updated_asc',
+  'indexed_desc',
+  'indexed_asc',
+  'name_asc',
+  'name_desc',
+] as const;
+
+export type KnowledgeSourceSort = (typeof KNOWLEDGE_SOURCE_SORTS)[number];
+
+/** Bounded, allowlisted query for the knowledge source list. */
+export interface KnowledgeSourceListQuery {
+  type?: KnowledgeSourceType;
+  /** When omitted the API hides `deleted` sources; pass `deleted` to see them. */
+  status?: KnowledgeSourceStatus;
+  /** Metadata search over name/url/filename (never vector search). */
+  search?: string;
+  sort?: KnowledgeSourceSort;
+  limit?: number;
+  offset?: number;
+}
+
+export interface KnowledgeSourceListResponse {
+  items: KnowledgeSourceDto[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+/** Project-level source health summary (non-deleted sources only). */
+export interface KnowledgeSourceSummaryDto {
+  total: number;
+  draft: number;
+  queued: number;
+  processing: number;
+  ready: number;
+  failed: number;
+  total_chunks: number;
+}
+
+/** Bounded, read-only plain-text preview of a source's stored content. */
+export interface KnowledgeSourcePreviewDto {
+  /** First `KNOWLEDGE_PREVIEW_MAX_CHARS` characters of the stored body. */
+  text: string;
+  /** True when the stored body was longer than the cap and was cut. */
+  truncated: boolean;
+  /** Total character count of the stored body. */
+  characters: number;
+}
+
+/**
+ * One source with its safe detail surface. `preview` is present only for
+ * `text`/`url` sources that actually captured a body; file sources have no
+ * preview because the original bytes stay in private storage.
+ */
+export interface KnowledgeSourceDetailDto extends KnowledgeSourceDto {
+  preview: KnowledgeSourcePreviewDto | null;
 }
 
 // ---------------------------------------------------------------------------

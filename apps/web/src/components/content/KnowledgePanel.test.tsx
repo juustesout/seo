@@ -23,7 +23,11 @@ function response(sources: KnowledgeSourceDto[]): KnowledgeSourcesResponse {
     configured: true,
     provider: { id: 'qdrant', name: 'Qdrant', description: '', capabilities: [], kind: 'knowledge' },
     note: null,
-    sources,
+    items: sources,
+    total: sources.length,
+    limit: 50,
+    offset: 0,
+    summary: { total: sources.length, draft: 0, queued: 0, processing: 0, ready: 0, failed: 0, total_chunks: 0 },
   };
 }
 
