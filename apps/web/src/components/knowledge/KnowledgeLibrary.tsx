@@ -131,6 +131,11 @@ export function KnowledgeLibrary({ projectId, canEdit }: { projectId: string; ca
     [projectId],
   );
 
+  const handleDetailChanged = useCallback(() => {
+    void load();
+    if (selectedId) void refreshDetail(selectedId);
+  }, [load, selectedId, refreshDetail]);
+
   const runAction = useCallback(
     async (id: string, action: 'ingest' | 'reindex' | 'delete') => {
       setBusyId(id);
@@ -320,6 +325,7 @@ export function KnowledgeLibrary({ projectId, canEdit }: { projectId: string; ca
 
       {selectedId && (
         <KnowledgeSourceDetail
+          projectId={projectId}
           detail={detail}
           loading={detailLoading}
           error={detailError}
@@ -329,6 +335,7 @@ export function KnowledgeLibrary({ projectId, canEdit }: { projectId: string; ca
           onIngest={(id) => void runAction(id, 'ingest')}
           onReindex={(id) => void runAction(id, 'reindex')}
           onDelete={(id) => void runAction(id, 'delete')}
+          onChanged={handleDetailChanged}
         />
       )}
     </>

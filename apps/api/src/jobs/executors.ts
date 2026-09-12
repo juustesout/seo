@@ -445,6 +445,19 @@ const knowledgeSourceIngest: JobExecutor = async ({ container, job, report }) =>
   return service.ingestSource(job.project_id, sourceId, report);
 };
 
+/**
+ * Refresh one user-managed URL source (KB7). Deliberately a thin delegation to
+ * the SAME KnowledgeService pipeline as ingest: the executor owns no business
+ * logic, so hashing, the unchanged short-circuit, reindexing and bounded
+ * backoff live in exactly one place.
+ */
+const knowledgeSourceRefresh: JobExecutor = async ({ container, job, report }) => {
+  const sourceId = typeof job.params?.source_id === 'string' ? job.params.source_id : '';
+  if (!sourceId) throw new ApiError(400, 'bad_request', 'knowledge_source_refresh requires a source_id');
+  const service = new KnowledgeService(container);
+  return service.refreshSource(job.project_id, sourceId, report);
+};
+
 /** Remove one user-managed knowledge source: vectors first, then the row. */
 const knowledgeSourceDelete: JobExecutor = async ({ container, job }) => {
   const sourceId = typeof job.params?.source_id === 'string' ? job.params.source_id : '';
@@ -699,6 +712,7 @@ export const EXECUTORS: Record<string, JobExecutor> = {
   knowledge_reindex: knowledgeReindex,
   knowledge_delete: knowledgeDelete,
   knowledge_source_ingest: knowledgeSourceIngest,
+  knowledge_source_refresh: knowledgeSourceRefresh,
   knowledge_source_delete: knowledgeSourceDelete,
   content_generate: contentGenerate,
   content_images: contentImages,

@@ -821,6 +821,11 @@ export interface KnowledgeSourceDto {
   content_type: string | null;
   /** Uploaded file size in bytes (file sources only). */
   size_bytes: number | null;
+  /**
+   * Derived freshness (KB7). Present for every source the API returns; `state`
+   * is `unknown` and the policy null for text/file sources. Never stored.
+   */
+  freshness?: KnowledgeFreshnessDto;
   created_at: string;
   updated_at: string;
 }
@@ -932,6 +937,62 @@ export interface KnowledgeSourcePreviewDto {
  */
 export interface KnowledgeSourceDetailDto extends KnowledgeSourceDto {
   preview: KnowledgeSourcePreviewDto | null;
+}
+
+// ---------------------------------------------------------------------------
+// Knowledge freshness & refresh lifecycle (KB7)
+//
+// Postgres stays the source of truth and Qdrant stays a derived index. For URL
+// sources the registry records the facts (when it was fetched, whether the body
+// changed, when it is next due and how often it failed); `state` is derived
+// deterministically from those facts and is never stored. `content_hash` is
+// internal-only and is deliberately absent from every DTO.
+// ---------------------------------------------------------------------------
+
+/** Canonical refresh cadence for a URL source. `manual` never auto-refreshes. */
+export const KNOWLEDGE_REFRESH_POLICIES = ['manual', 'daily', 'weekly', 'monthly'] as const;
+
+export type KnowledgeRefreshPolicy = (typeof KNOWLEDGE_REFRESH_POLICIES)[number];
+
+/**
+ * Derived freshness of a URL source. It is computed centrally from the stored
+ * facts and the current time - never stored and never computed ad hoc in a
+ * route or the UI:
+ *   fresh   -> ready and not yet due (or manual with no schedule)
+ *   due     -> ready and the scheduled check time has passed
+ *   stale   -> ready and the schedule is strongly overdue
+ *   unknown -> text/file sources, or a URL without a successful fetch
+ */
+export type KnowledgeFreshnessState = 'fresh' | 'due' | 'stale' | 'unknown';
+
+/** Safe freshness metadata. Never carries a content hash, provider field or path. */
+export interface KnowledgeFreshnessDto {
+  state: KnowledgeFreshnessState;
+  refresh_policy: KnowledgeRefreshPolicy | null;
+  last_fetched_at: string | null;
+  last_changed_at: string | null;
+  next_refresh_at: string | null;
+  refresh_failures: number;
+}
+
+/** Update a URL source's refresh cadence (editor+). */
+export interface KnowledgeRefreshPolicyInput {
+  refresh_policy: KnowledgeRefreshPolicy;
+}
+
+/**
+ * One URL source that is due for a refresh. Returned by the service-level
+ * `listDueRefreshes` capability (bounded, project-scoped) that a future
+ * scheduler (KB9) will consume - there is no public dashboard in KB7.
+ */
+export interface KnowledgeDueRefreshDto {
+  id: string;
+  project_id: string;
+  name: string;
+  url: string | null;
+  next_refresh_at: string;
+  refresh_policy: KnowledgeRefreshPolicy;
+  refresh_failures: number;
 }
 
 // ---------------------------------------------------------------------------

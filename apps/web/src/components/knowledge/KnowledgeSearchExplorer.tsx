@@ -102,6 +102,17 @@ export function KnowledgeSearchExplorer({
     [projectId],
   );
 
+  const reloadDetail = useCallback(
+    async (sourceId: string) => {
+      try {
+        setDetail(await api<KnowledgeSourceDetailDto>(`/projects/${projectId}/knowledge/sources/${sourceId}`));
+      } catch {
+        // keep the current detail; the request already surfaced any error
+      }
+    },
+    [projectId],
+  );
+
   const runAction = useCallback(
     async (id: string, action: 'ingest' | 'reindex' | 'delete') => {
       setBusy(true);
@@ -239,6 +250,7 @@ export function KnowledgeSearchExplorer({
 
       {selectedId && (
         <KnowledgeSourceDetail
+          projectId={projectId}
           detail={detail}
           loading={detailLoading}
           error={detailError}
@@ -248,6 +260,7 @@ export function KnowledgeSearchExplorer({
           onIngest={(id) => void runAction(id, 'ingest')}
           onReindex={(id) => void runAction(id, 'reindex')}
           onDelete={(id) => void runAction(id, 'delete')}
+          onChanged={() => void reloadDetail(selectedId)}
         />
       )}
     </>

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { KnowledgeFetcher, KnowledgeFileExtractor, KnowledgeProvider, ProviderContext } from '@seo/contracts';
 import { KNOWLEDGE_SEARCH_FAILED_CODE, KNOWLEDGE_SEARCH_FAILED_MESSAGE } from '@seo/contracts';
 import { KnowledgeIngestError } from '../knowledge/errors.js';
+import { contentHash, HOUR_MS, nextRefreshAt, refreshBackoffMs } from '../knowledge/freshness.js';
 import {
   KNOWLEDGE_MAX_FILE_BYTES,
   KNOWLEDGE_PREVIEW_MAX_CHARS,
@@ -51,6 +52,8 @@ type Filter =
   | { kind: 'eq'; col: string; value: unknown }
   | { kind: 'neq'; col: string; value: unknown }
   | { kind: 'in'; col: string; value: unknown[] }
+  | { kind: 'lte'; col: string; value: unknown }
+  | { kind: 'notIs'; col: string; value: unknown }
   | { kind: 'or'; clauses: Array<{ col: string; pattern: string }> };
 
 /** Case-insensitive `ilike` match for the `or` filter (patterns are `%...%`). */
@@ -64,6 +67,8 @@ function rowMatches(row: DbRow, filters: Filter[]): boolean {
     if (f.kind === 'eq') return row[f.col] === f.value;
     if (f.kind === 'neq') return row[f.col] !== f.value;
     if (f.kind === 'in') return (f.value as unknown[]).includes(row[f.col]);
+    if (f.kind === 'lte') return String(row[f.col] ?? '') <= String(f.value ?? '');
+    if (f.kind === 'notIs') return !(row[f.col] === f.value);
     return f.clauses.some((c) => matchIlike(row[c.col], c.pattern));
   });
 }
@@ -157,6 +162,14 @@ function makeDb(seed: DbRow[], opts: { failUpdate?: boolean } = {}) {
       };
       q.in = (col: string, value: unknown[]) => {
         filters.push({ kind: 'in', col, value });
+        return q;
+      };
+      q.lte = (col: string, value: unknown) => {
+        filters.push({ kind: 'lte', col, value });
+        return q;
+      };
+      q.not = (col: string, op: string, value: unknown) => {
+        if (op === 'is') filters.push({ kind: 'notIs', col, value });
         return q;
       };
       q.or = (expression: string) => {
@@ -1365,3 +1378,261 @@ describe('knowledge retrieval service (KB6)', () => {
     expect(vi.mocked(provider.search)).not.toHaveBeenCalled();
   });
 });
+
+// ---------------------------------------------------------------------------
+// KB7 - Freshness & refresh lifecycle: hash-based unchanged short-circuit,
+// reindex on change, failures that preserve existing content, bounded backoff,
+// SSRF re-validation, race safety and the freshness read surface.
+// ---------------------------------------------------------------------------
+
+describe('KnowledgeService refresh lifecycle (KB7)', () => {
+  const BODY = 'Fetched body';
+
+  function readyUrlRow(overrides: DbRow = {}): DbRow {
+    return {
+      ...URL_ROW,
+      status: 'ready',
+      content_text: BODY,
+      content_hash: contentHash(BODY),
+      refresh_policy: 'daily',
+      refresh_failures: 0,
+      last_fetched_at: '2026-01-01T00:00:00.000Z',
+      last_changed_at: '2025-12-01T00:00:00.000Z',
+      next_refresh_at: '2026-01-02T00:00:00.000Z',
+      ...overrides,
+    };
+  }
+
+  it('leaves vectors, body and last_changed_at untouched when content is unchanged', async () => {
+    const db = makeDb([readyUrlRow()]);
+    const { provider, calls } = fakeProvider();
+    const svc = new KnowledgeService(containerWith(db, provider, undefined, fakeFetcher({ contentText: BODY })));
+
+    const result = await svc.refreshSource(PROJECT, SOURCE_ID);
+
+    expect(result).toMatchObject({ refreshed: true, changed: false });
+    expect(calls).toEqual(['ensureProject']);
+    expect(provider.delete).not.toHaveBeenCalled();
+    expect(provider.index).not.toHaveBeenCalled();
+    expect(db.rows[0].content_text).toBe(BODY);
+    expect(db.rows[0].content_hash).toBe(contentHash(BODY));
+    expect(db.rows[0].last_changed_at).toBe('2025-12-01T00:00:00.000Z');
+    expect(db.rows[0].last_fetched_at).not.toBe('2026-01-01T00:00:00.000Z');
+    expect(db.rows[0].refresh_failures).toBe(0);
+    expect(db.rows[0].status).toBe('ready');
+  });
+
+  it('reindexes and commits the new body when the hash changes', async () => {
+    const db = makeDb([readyUrlRow()]);
+    const { provider, calls } = fakeProvider();
+    const svc = new KnowledgeService(
+      containerWith(db, provider, undefined, fakeFetcher({ contentText: 'Brand new body' })),
+    );
+
+    const result = await svc.refreshSource(PROJECT, SOURCE_ID);
+
+    expect(result).toMatchObject({ refreshed: true, changed: true, chunks: 2 });
+    expect(calls).toEqual(['ensureProject', `delete:${sourceExternalId(SOURCE_ID)}`, `index:${sourceExternalId(SOURCE_ID)}`]);
+    expect(db.rows[0].content_text).toBe('Brand new body');
+    expect(db.rows[0].content_hash).toBe(contentHash('Brand new body'));
+    expect(db.rows[0].last_changed_at).not.toBe('2025-12-01T00:00:00.000Z');
+    expect(db.rows[0].refresh_failures).toBe(0);
+  });
+
+  it('keeps existing searchable content and records a bounded retry when a refresh fails', async () => {
+    const db = makeDb([readyUrlRow()]);
+    const { provider } = fakeProvider();
+    const fetcher = fakeFetcher();
+    fetcher.fetch.mockRejectedValueOnce(new KnowledgeIngestError('knowledge_fetch_timeout'));
+    const svc = new KnowledgeService(containerWith(db, provider, undefined, fetcher));
+
+    const before = Date.now();
+    const result = await svc.refreshSource(PROJECT, SOURCE_ID);
+
+    expect(result).toMatchObject({ refreshed: false, failed: true, error: 'knowledge_fetch_timeout' });
+    expect(provider.index).not.toHaveBeenCalled();
+    expect(provider.delete).not.toHaveBeenCalled();
+    expect(db.rows[0].status).toBe('ready');
+    expect(db.rows[0].content_text).toBe(BODY);
+    expect(db.rows[0].content_hash).toBe(contentHash(BODY));
+    expect(db.rows[0].refresh_failures).toBe(1);
+    const retry = Date.parse(String(db.rows[0].next_refresh_at));
+    expect(retry - before).toBeGreaterThanOrEqual(refreshBackoffMs(1) - 5000);
+    expect(retry - before).toBeLessThanOrEqual(refreshBackoffMs(1) + 5000);
+  });
+
+  it('escalates the backoff with the existing failure count', async () => {
+    const db = makeDb([readyUrlRow({ refresh_failures: 2 })]);
+    const { provider } = fakeProvider();
+    const fetcher = fakeFetcher();
+    fetcher.fetch.mockRejectedValueOnce(new Error('provider blew up with a secret body'));
+    const svc = new KnowledgeService(containerWith(db, provider, undefined, fetcher));
+
+    const before = Date.now();
+    const result = await svc.refreshSource(PROJECT, SOURCE_ID);
+
+    expect(result).toMatchObject({ failed: true, error: 'knowledge_fetch_provider_error' });
+    expect(db.rows[0].refresh_failures).toBe(3);
+    const retry = Date.parse(String(db.rows[0].next_refresh_at));
+    expect(retry - before).toBeGreaterThanOrEqual(refreshBackoffMs(3) - 5000);
+  });
+
+  it('fails a refresh that has no existing content instead of keeping a hopeless source ready', async () => {
+    const db = makeDb([readyUrlRow({ content_text: null, content_hash: null })]);
+    const { provider } = fakeProvider();
+    const fetcher = fakeFetcher();
+    fetcher.fetch.mockRejectedValueOnce(new KnowledgeIngestError('knowledge_fetch_timeout'));
+    const svc = new KnowledgeService(containerWith(db, provider, undefined, fetcher));
+
+    await expect(svc.refreshSource(PROJECT, SOURCE_ID)).rejects.toMatchObject({ status: 504 });
+    expect(db.rows[0].status).toBe('failed');
+    expect(db.rows[0].error).toBe('knowledge_fetch_timeout');
+  });
+
+  it('refuses to refresh a non-URL source', async () => {
+    const db = makeDb([{ ...ROW, status: 'ready' }]);
+    const { provider } = fakeProvider();
+    const svc = new KnowledgeService(containerWith(db, provider, undefined, fakeFetcher()));
+
+    await expect(svc.refreshSource(PROJECT, SOURCE_ID)).rejects.toMatchObject({ status: 409 });
+  });
+
+  it('does not resurrect or leave vectors behind when a delete wins a refresh race', async () => {
+    const db = makeDb([
+      readyUrlRow({ content_hash: contentHash('different') }),
+    ]);
+    const { provider, calls } = fakeProvider({
+      index: vi.fn(async () => {
+        db.rows[0].status = 'deleted';
+        return { indexed: 2 };
+      }),
+    });
+    const svc = new KnowledgeService(containerWith(db, provider, undefined, fakeFetcher({ contentText: BODY })));
+
+    const result = await svc.refreshSource(PROJECT, SOURCE_ID);
+
+    expect(result).toMatchObject({ skipped: true });
+    expect(db.rows[0].status).toBe('deleted');
+    expect(calls.filter((c) => c === `delete:${sourceExternalId(SOURCE_ID)}`)).toHaveLength(2);
+  });
+
+  it('skips a refresh for a source that no longer exists', async () => {
+    const db = makeDb([]);
+    const { provider } = fakeProvider();
+    const svc = new KnowledgeService(containerWith(db, provider, undefined, fakeFetcher()));
+
+    await expect(svc.refreshSource(PROJECT, SOURCE_ID)).resolves.toMatchObject({ skipped: true });
+    expect(provider.index).not.toHaveBeenCalled();
+  });
+
+  it('queues a refresh for a ready URL source and enqueues the refresh job', async () => {
+    const db = makeDb([readyUrlRow()]);
+    const { provider } = fakeProvider();
+    const enqueue = vi.fn(async () => ({ id: 'job-refresh' }));
+    const svc = new KnowledgeService(containerWith(db, provider, enqueue, fakeFetcher()));
+
+    await svc.enqueueRefresh(PROJECT, SOURCE_ID, 'u1');
+
+    expect(db.rows[0].status).toBe('queued');
+    expect(enqueue).toHaveBeenCalledWith(
+      expect.objectContaining({ job_type: 'knowledge_source_refresh', project_id: PROJECT, provider: 'qdrant' }),
+    );
+  });
+
+  it('refuses a parallel refresh while one is queued or processing', async () => {
+    for (const status of ['queued', 'processing']) {
+      const db = makeDb([readyUrlRow({ status })]);
+      const { provider } = fakeProvider();
+      const enqueue = vi.fn();
+      const svc = new KnowledgeService(containerWith(db, provider, enqueue, fakeFetcher()));
+
+      await expect(svc.enqueueRefresh(PROJECT, SOURCE_ID, 'u1')).rejects.toMatchObject({ status: 409 });
+      expect(enqueue).not.toHaveBeenCalled();
+    }
+  });
+
+  it('refuses to refresh a non-URL source', async () => {
+    const db = makeDb([{ ...ROW, status: 'ready' }]);
+    const { provider } = fakeProvider();
+    const svc = new KnowledgeService(containerWith(db, provider, vi.fn(), fakeFetcher()));
+
+    await expect(svc.enqueueRefresh(PROJECT, SOURCE_ID, 'u1')).rejects.toMatchObject({ status: 409 });
+  });
+
+  it('re-validates the URL before queueing and keeps a ready source content on a bad URL', async () => {
+    const db = makeDb([readyUrlRow({ url: 'http://127.0.0.1/internal' })]);
+    const { provider } = fakeProvider();
+    const enqueue = vi.fn();
+    const svc = new KnowledgeService(containerWith(db, provider, enqueue, fakeFetcher()));
+
+    await expect(svc.enqueueRefresh(PROJECT, SOURCE_ID, 'u1')).rejects.toMatchObject({
+      status: 400,
+      code: 'knowledge_invalid_url',
+    });
+    expect(enqueue).not.toHaveBeenCalled();
+    expect(db.rows[0].status).toBe('ready');
+    expect(db.rows[0].content_text).toBe(BODY);
+  });
+
+  it('recomputes the next check from the last fetch when the policy changes', async () => {
+    const fetched = '2026-01-01T00:00:00.000Z';
+    const db = makeDb([readyUrlRow({ last_fetched_at: fetched })]);
+    const { provider } = fakeProvider();
+    const svc = new KnowledgeService(containerWith(db, provider, undefined, fakeFetcher()));
+
+    const dto = await svc.updateRefreshPolicy(PROJECT, SOURCE_ID, 'weekly');
+
+    expect(dto.freshness?.refresh_policy).toBe('weekly');
+    expect(db.rows[0].next_refresh_at).toBe(nextRefreshAt('weekly', new Date(fetched)));
+  });
+
+  it('clears the schedule for a manual policy and refuses non-URL sources', async () => {
+    const db = makeDb([readyUrlRow()]);
+    const { provider } = fakeProvider();
+    const svc = new KnowledgeService(containerWith(db, provider, undefined, fakeFetcher()));
+
+    const dto = await svc.updateRefreshPolicy(PROJECT, SOURCE_ID, 'manual');
+    expect(dto.freshness?.refresh_policy).toBe('manual');
+    expect(db.rows[0].next_refresh_at).toBeNull();
+
+    const textDb = makeDb([{ ...ROW, status: 'ready' }]);
+    const textSvc = new KnowledgeService(containerWith(textDb, fakeProvider().provider, undefined, fakeFetcher()));
+    await expect(textSvc.updateRefreshPolicy(PROJECT, SOURCE_ID, 'daily')).rejects.toMatchObject({ status: 409 });
+  });
+
+  it('lists only due, non-manual, ready URL sources oldest first, bounded', async () => {
+    const past = (hoursAgo: number) => new Date(Date.now() - hoursAgo * HOUR_MS).toISOString();
+    const future = new Date(Date.now() + 10 * HOUR_MS).toISOString();
+    const db = makeDb([
+      readyUrlRow({ id: 'due-old', next_refresh_at: past(48) }),
+      readyUrlRow({ id: 'due-new', next_refresh_at: past(2) }),
+      readyUrlRow({ id: 'future', next_refresh_at: future }),
+      readyUrlRow({ id: 'manual', refresh_policy: 'manual', next_refresh_at: null }),
+      readyUrlRow({ id: 'notready', status: 'failed', next_refresh_at: past(1) }),
+      { ...ROW, id: 'text-policy', status: 'ready', source_type: 'text', next_refresh_at: past(1), refresh_policy: 'daily' },
+    ]);
+    const { provider } = fakeProvider();
+    const svc = new KnowledgeService(containerWith(db, provider, undefined, fakeFetcher()));
+
+    const due = await svc.listDueRefreshes(PROJECT, 10);
+
+    expect(due.map((d) => d.id)).toEqual(['due-old', 'due-new']);
+    expect(due[0]).toMatchObject({ project_id: PROJECT, refresh_policy: 'daily' });
+    const capped = await svc.listDueRefreshes(PROJECT, 1);
+    expect(capped).toHaveLength(1);
+  });
+
+  it('never exposes the content hash or storage internals in a source DTO', async () => {
+    const db = makeDb([readyUrlRow({ storage_path: 'private/path', next_refresh_at: new Date(Date.now() + HOUR_MS).toISOString() })]);
+    const { provider } = fakeProvider();
+    const svc = new KnowledgeService(containerWith(db, provider, undefined, fakeFetcher()));
+
+    const dto = await svc.getSourceDetail(PROJECT, SOURCE_ID);
+
+    expect(dto).not.toHaveProperty('content_hash');
+    expect(dto).not.toHaveProperty('content_text');
+    expect(dto).not.toHaveProperty('storage_path');
+    expect(dto.freshness?.state).toBe('fresh');
+  });
+});
+

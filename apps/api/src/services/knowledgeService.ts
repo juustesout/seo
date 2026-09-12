@@ -38,9 +38,11 @@
 import type {
   FetchedDocument,
   KnowledgeDocumentInput,
+  KnowledgeDueRefreshDto,
   KnowledgeFetcher,
   KnowledgeFile,
   KnowledgeProvider,
+  KnowledgeRefreshPolicy,
   KnowledgeSearchFilter,
   KnowledgeSearchHitDto,
   KnowledgeSearchResponse,
@@ -61,6 +63,13 @@ import type { ServiceContainer } from '../context.js';
 import { assertTransition } from './knowledgeLifecycle.js';
 import { extractSourceText, normalizeText } from './knowledgeText.js';
 import { chunkKnowledgeText } from '../knowledge/chunker.js';
+import {
+  computeFreshness,
+  contentHash,
+  nextRefreshAt,
+  normalizeRefreshPolicy,
+  refreshBackoffMs,
+} from '../knowledge/freshness.js';
 import {
   KNOWLEDGE_LIST_DEFAULT_LIMIT,
   KNOWLEDGE_LIST_MAX_LIMIT,
@@ -87,7 +96,7 @@ export const KNOWLEDGE_MAX_CHARS = 100_000;
  *  `content_text` (large, private body) and `storage_path` (private object
  *  key) so neither can leak through a list response. */
 const SOURCE_LIST_COLUMNS =
-  'id, project_id, source_type, name, url, status, error, chunk_count, last_indexed_at, original_filename, content_type, size_bytes, created_at, updated_at';
+  'id, project_id, source_type, name, url, status, error, chunk_count, last_indexed_at, original_filename, content_type, size_bytes, last_fetched_at, last_changed_at, next_refresh_at, refresh_policy, refresh_failures, created_at, updated_at';
 
 /** Fixed, allowlisted sort map. A client `sort` value can only select one of
  *  these pairs; no raw column name or SQL order ever reaches the database. */
@@ -181,21 +190,36 @@ export function buildSourceDocument(row: SourceRow): KnowledgeDocumentInput | nu
 
 /** Safe row -> DTO mapping: exposes status/error for honest reporting but
  *  never the raw body content, so source text is only reachable through the
- *  provider, never through this API. */
-export function mapSourceRow(row: SourceRow): KnowledgeSourceDto {
+ *  provider, never through this API. Freshness is derived here (never stored)
+ *  so every read surface reports the same state. */
+export function mapSourceRow(row: SourceRow, now: Date = new Date()): KnowledgeSourceDto {
+  const sourceType = (row.source_type as KnowledgeSourceType) ?? 'text';
+  const status = (row.status as KnowledgeSourceDto['status']) ?? 'queued';
   return {
     id: String(row.id),
     project_id: String(row.project_id),
-    source_type: (row.source_type as KnowledgeSourceType) ?? 'text',
+    source_type: sourceType,
     name: String(row.name ?? ''),
     url: row.url ? String(row.url) : null,
-    status: (row.status as KnowledgeSourceDto['status']) ?? 'queued',
+    status,
     error: row.error ? String(row.error) : null,
     chunk_count: Number(row.chunk_count ?? 0),
     last_indexed_at: row.last_indexed_at ? String(row.last_indexed_at) : null,
     original_filename: row.original_filename ? String(row.original_filename) : null,
     content_type: row.content_type ? String(row.content_type) : null,
     size_bytes: row.size_bytes == null ? null : Number(row.size_bytes),
+    freshness: computeFreshness(
+      {
+        sourceType,
+        status,
+        refreshPolicy: row.refresh_policy,
+        lastFetchedAt: row.last_fetched_at ? String(row.last_fetched_at) : null,
+        lastChangedAt: row.last_changed_at ? String(row.last_changed_at) : null,
+        nextRefreshAt: row.next_refresh_at ? String(row.next_refresh_at) : null,
+        refreshFailures: Number(row.refresh_failures ?? 0),
+      },
+      now,
+    ),
     created_at: String(row.created_at ?? ''),
     updated_at: String(row.updated_at ?? ''),
   };
@@ -480,7 +504,7 @@ export class KnowledgeService {
       .order('id', { ascending: true })
       .range(offset, offset + limit - 1);
     if (error) throw ApiError.badRequest('Could not list knowledge sources');
-    const items = ((data ?? []) as SourceRow[]).map(mapSourceRow);
+    const items = ((data ?? []) as SourceRow[]).map((row) => mapSourceRow(row));
     const summary = await this.summarizeSources(projectId);
     return { items, total: count ?? items.length, limit, offset, summary };
   }
@@ -533,6 +557,75 @@ export class KnowledgeService {
   async getSourceDetail(projectId: string, sourceId: string): Promise<KnowledgeSourceDetailDto> {
     const row = await this.sourceRow(projectId, sourceId);
     return { ...mapSourceRow(row), preview: buildSourcePreview(row) };
+  }
+
+  /**
+   * Change a URL source's refresh cadence (KB7). The next check is recomputed
+   * from the last successful fetch so switching to `daily` on a week-old source
+   * makes it immediately due, while `manual` clears the schedule. Non-URL and
+   * deleted sources are refused - a policy is meaningless there.
+   */
+  async updateRefreshPolicy(
+    projectId: string,
+    sourceId: string,
+    policy: KnowledgeRefreshPolicy,
+  ): Promise<KnowledgeSourceDto> {
+    const row = await this.sourceRow(projectId, sourceId);
+    const status = (row.status as KnowledgeSourceStatus) ?? 'draft';
+    if (status === 'deleted') throw ApiError.conflict('This source is being deleted.');
+    if (((row.source_type as KnowledgeSourceType) ?? 'text') !== 'url') {
+      throw ApiError.conflict('Refresh policies apply to URL sources only.');
+    }
+
+    const now = new Date();
+    const lastFetched = typeof row.last_fetched_at === 'string' ? row.last_fetched_at : '';
+    const base = lastFetched ? new Date(lastFetched) : now;
+    const next = status === 'ready' && Number.isFinite(base.getTime()) ? nextRefreshAt(policy, base) : null;
+    const committed = await this.patchRow(
+      projectId,
+      sourceId,
+      ['draft', 'queued', 'processing', 'ready', 'failed'],
+      { refresh_policy: policy, next_refresh_at: next },
+    );
+    if (!committed) throw ApiError.conflict('The source changed while updating its refresh policy. Try again.');
+    return mapSourceRow(await this.sourceRow(projectId, sourceId));
+  }
+
+  /**
+   * Bounded, project-scoped list of URL sources whose scheduled refresh is due.
+   * Service-level capability that KB9/the scheduler will consume - there is no
+   * public dashboard in KB7. Only `ready` sources with a real (non-manual)
+   * policy and a due `next_refresh_at` are returned, oldest first.
+   */
+  async listDueRefreshes(projectId: string, limit = 50): Promise<KnowledgeDueRefreshDto[]> {
+    const cap = Math.min(100, Math.max(1, Math.floor(Number.isFinite(limit) ? limit : 50)));
+    const { data, error } = await this.sb
+      .from('seo_knowledge_sources')
+      .select('id, project_id, name, url, next_refresh_at, refresh_policy, refresh_failures')
+      .eq('project_id', projectId)
+      .eq('source_type', 'url')
+      .eq('status', 'ready')
+      .neq('refresh_policy', 'manual')
+      .not('next_refresh_at', 'is', null)
+      .lte('next_refresh_at', new Date().toISOString())
+      .order('next_refresh_at', { ascending: true })
+      .limit(cap);
+    if (error) throw ApiError.badRequest('Could not list due knowledge refreshes');
+    return ((data ?? []) as SourceRow[])
+      .map((row) => {
+        const policy = normalizeRefreshPolicy(row.refresh_policy);
+        if (!policy || !row.next_refresh_at) return null;
+        return {
+          id: String(row.id),
+          project_id: String(row.project_id),
+          name: String(row.name ?? ''),
+          url: row.url ? String(row.url) : null,
+          next_refresh_at: String(row.next_refresh_at),
+          refresh_policy: policy,
+          refresh_failures: Number(row.refresh_failures ?? 0),
+        } satisfies KnowledgeDueRefreshDto;
+      })
+      .filter((row): row is KnowledgeDueRefreshDto => row !== null);
   }
 
   /**
@@ -721,6 +814,9 @@ export class KnowledgeService {
         content_text: text,
         status: 'draft',
         chunk_count: 0,
+        // A new URL source starts on the manual cadence: it is only checked when
+        // the user asks, never silently on a schedule (KB7).
+        refresh_policy: sourceType === 'url' ? 'manual' : null,
         created_by: userId,
       })
       .select()
@@ -864,6 +960,52 @@ export class KnowledgeService {
     });
   }
 
+  /**
+   * Queue an explicit refresh for a URL source (KB7). This is a thin wrapper
+   * over the same job pipeline as ingest: it refuses non-URL sources, rejects a
+   * source that is already queued/processing (no parallel refresh), re-validates
+   * the URL through the SSRF guard before queueing, and enqueues
+   * `knowledge_source_refresh`. The executor owns the actual fetch/compare.
+   */
+  async enqueueRefresh(projectId: string, sourceId: string, userId: string | null) {
+    const row = await this.sourceRow(projectId, sourceId);
+    const status = (row.status as KnowledgeSourceStatus) ?? 'draft';
+    if (((row.source_type as KnowledgeSourceType) ?? 'text') !== 'url') {
+      throw ApiError.conflict('Only URL sources can be refreshed.');
+    }
+    if (status === 'queued' || status === 'processing') {
+      throw ApiError.conflict('A refresh is already in progress for this source.');
+    }
+    assertTransition(status, 'queued');
+
+    // Re-validate every refresh: a URL that was acceptable last time may now
+    // resolve to a private target, and the SSRF guard is the single gate before
+    // any fetch. A ready source keeps its content on a bad URL; a source with no
+    // content is honestly marked failed rather than queued for a doomed job.
+    const rawUrl = typeof row.url === 'string' ? row.url.trim() : '';
+    try {
+      this.resolveFetchTarget(rawUrl);
+    } catch (err) {
+      if (isKnowledgeIngestError(err)) {
+        if (status !== 'ready') {
+          await this.patchRow(projectId, sourceId, [status], { status: 'failed', error: err.code }).catch(() => undefined);
+        }
+        throw new ApiError(err.status, err.code, err.message);
+      }
+      throw err;
+    }
+
+    const moved = await this.patchRow(projectId, sourceId, [status], { status: 'queued', error: null });
+    if (!moved) throw ApiError.conflict('The source changed while queueing a refresh. Try again.');
+    return this.container.jobStore.enqueue({
+      project_id: projectId,
+      provider: 'qdrant',
+      job_type: 'knowledge_source_refresh',
+      params: { source_id: sourceId },
+      created_by: userId,
+    });
+  }
+
   /** Marks a source 'deleted' (terminal) and queues removal of its vectors + row. */
   async enqueueDelete(projectId: string, sourceId: string, userId: string | null) {
     const row = await this.sourceRow(projectId, sourceId);
@@ -905,16 +1047,33 @@ export class KnowledgeService {
    */
   private async resolveDocument(
     row: SourceRow,
-  ): Promise<{ doc: KnowledgeDocumentInput; capturedText: string | null } | null> {
+  ): Promise<{ doc: KnowledgeDocumentInput; capturedText: string | null; contentHash: string | null } | null> {
     const existing = buildSourceDocument(row);
-    if (existing) return { doc: existing, capturedText: null };
+    if (existing) return { doc: existing, capturedText: null, contentHash: null };
 
     const sourceType = (row.source_type as KnowledgeSourceType) ?? 'text';
     if (sourceType === 'file') return this.resolveFileDocument(row);
     const rawUrl = typeof row.url === 'string' ? row.url.trim() : '';
     if (sourceType !== 'url' || !rawUrl) return null;
 
+    return this.fetchUrlDocument(row);
+  }
+
+  /**
+   * Fetch + extract + normalize + hash one URL source, ignoring any body already
+   * stored on the row. This is the only place a URL is handed to a fetcher, so
+   * the SSRF guard always runs first (KB3) and the credential is read from
+   * server env only. The hash is of the canonical, bounded text - the exact
+   * representation the knowledge base would hold - so it is a stable change
+   * detector (KB7).
+   */
+  private async fetchUrlDocument(
+    row: SourceRow,
+  ): Promise<{ doc: KnowledgeDocumentInput; capturedText: string; contentHash: string }> {
+    const rawUrl = typeof row.url === 'string' ? row.url.trim() : '';
+    if (!rawUrl) throw new KnowledgeIngestError('knowledge_invalid_url');
     const { fetcher, url } = this.resolveFetchTarget(rawUrl);
+
     let fetched: FetchedDocument;
     try {
       fetched = await fetcher.fetch(url);
@@ -939,6 +1098,7 @@ export class KnowledgeService {
         meta: { source: 'knowledge_source', source_type: 'url' },
       },
       capturedText: text,
+      contentHash: contentHash(text),
     };
   }
 
@@ -951,7 +1111,7 @@ export class KnowledgeService {
    */
   private async resolveFileDocument(
     row: SourceRow,
-  ): Promise<{ doc: KnowledgeDocumentInput; capturedText: null } | null> {
+  ): Promise<{ doc: KnowledgeDocumentInput; capturedText: null; contentHash: null } | null> {
     const storagePath = typeof row.storage_path === 'string' ? row.storage_path.trim() : '';
     if (!storagePath) throw new KnowledgeIngestError('knowledge_file_missing');
 
@@ -1010,6 +1170,7 @@ export class KnowledgeService {
         meta: { source: 'knowledge_source', source_type: 'file', content_type: contentType },
       },
       capturedText: null,
+      contentHash: null,
     };
   }
 
@@ -1061,7 +1222,7 @@ export class KnowledgeService {
         await this.tryPatchError(projectId, sourceId, noText);
         throw noText;
       }
-      const { doc, capturedText } = resolved;
+      const { doc, capturedText, contentHash: hash } = resolved;
 
       await report?.(15, `Indexing "${doc.title}"`);
       await provider.ensureProject(ctx);
@@ -1072,15 +1233,24 @@ export class KnowledgeService {
       const { indexed } = await provider.index(ctx, [doc]);
       await report?.(80, 'Saving state');
 
+      const now = new Date();
       const patch: Record<string, unknown> = {
         status: 'ready',
         error: null,
         chunk_count: indexed,
-        last_indexed_at: new Date().toISOString(),
+        last_indexed_at: now.toISOString(),
       };
       // Persist the fetched snapshot only on success, so a failed index never
-      // leaves a half-captured body behind.
+      // leaves a half-captured body behind. A URL fetch also records its
+      // freshness facts here: this is the first successful capture of the body.
       if (capturedText !== null) patch.content_text = capturedText;
+      if (hash) {
+        patch.content_hash = hash;
+        patch.last_fetched_at = now.toISOString();
+        patch.last_changed_at = now.toISOString();
+        patch.next_refresh_at = nextRefreshAt(normalizeRefreshPolicy(row.refresh_policy), now);
+        patch.refresh_failures = 0;
+      }
       const committed = await this.patchRow(projectId, sourceId, ['processing'], patch);
       if (!committed) {
         // A delete won the race while we were indexing: drop what we wrote.
@@ -1090,6 +1260,120 @@ export class KnowledgeService {
       await report?.(100, `Indexed ${indexed} chunk(s)`);
       return { source_id: sourceId, chunks: indexed };
     } catch (err) {
+      await this.tryPatchError(projectId, sourceId, err, 'knowledge_index_failed');
+      throw KnowledgeService.mapError(err);
+    }
+  }
+
+  /**
+   * Refresh one URL source (KB7): always re-fetch, then decide from a SHA-256
+   * content hash whether anything actually changed.
+   *
+   *   unchanged -> update only the freshness facts; vectors, body and
+   *                last_changed_at are left untouched (no Jina/embedding/index
+   *                cost is paid again)
+   *   changed   -> run the normal index pipeline and commit the new body
+   *   failure   -> if the source already had searchable content, keep it and
+   *                the existing vectors, record the failure with a bounded
+   *                retry time and leave the source `ready`; only a source with
+   *                no usable content is allowed to become `failed`.
+   *
+   * Claiming uses the same CAS as ingest, so a delete that wins the race can
+   * never be resurrected and two refreshes can never run in parallel.
+   */
+  async refreshSource(projectId: string, sourceId: string, report?: ProgressFn): Promise<Record<string, unknown>> {
+    let row: SourceRow;
+    try {
+      row = await this.sourceRow(projectId, sourceId);
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 404) {
+        return { source_id: sourceId, skipped: true, message: 'Source no longer exists' };
+      }
+      throw err;
+    }
+    if (((row.status as KnowledgeSourceStatus) ?? 'draft') === 'deleted') {
+      return { source_id: sourceId, skipped: true, message: 'Source is being deleted' };
+    }
+    if (((row.source_type as KnowledgeSourceType) ?? 'text') !== 'url') {
+      throw ApiError.conflict('Only URL sources can be refreshed.');
+    }
+
+    const provider = this.knowledgeProvider();
+    if (!provider) throw ApiError.notConfigured('The knowledge provider is not registered on this server.');
+
+    const claimed = await this.patchRow(projectId, sourceId, ['queued', 'processing', 'failed', 'ready'], {
+      status: 'processing',
+      error: null,
+    });
+    if (!claimed) {
+      return { source_id: sourceId, skipped: true, message: 'Source is already refreshing' };
+    }
+
+    const ctx = this.context(projectId);
+    const hasExistingContent = typeof row.content_text === 'string' && row.content_text.trim().length > 0;
+    const existingHash = typeof row.content_hash === 'string' ? row.content_hash : '';
+    const policy = normalizeRefreshPolicy(row.refresh_policy);
+
+    try {
+      await report?.(10, 'Fetching the latest page');
+      await provider.ensureProject(ctx);
+      const { doc, capturedText, contentHash: newHash } = await this.fetchUrlDocument(row);
+      const now = new Date();
+
+      if (hasExistingContent && existingHash && newHash === existingHash) {
+        const committed = await this.patchRow(projectId, sourceId, ['processing'], {
+          status: 'ready',
+          error: null,
+          last_fetched_at: now.toISOString(),
+          next_refresh_at: nextRefreshAt(policy, now),
+          refresh_failures: 0,
+        });
+        if (!committed) {
+          return { source_id: sourceId, skipped: true, message: 'Source was removed during refresh' };
+        }
+        await report?.(100, 'Checked - no content changes');
+        return { source_id: sourceId, refreshed: true, changed: false, chunks: Number(row.chunk_count ?? 0) };
+      }
+
+      await report?.(45, 'Content changed - reindexing');
+      await provider.delete(ctx, doc.externalId);
+      const { indexed } = await provider.index(ctx, [doc]);
+      const committed = await this.patchRow(projectId, sourceId, ['processing'], {
+        status: 'ready',
+        error: null,
+        chunk_count: indexed,
+        last_indexed_at: now.toISOString(),
+        last_fetched_at: now.toISOString(),
+        last_changed_at: now.toISOString(),
+        content_text: capturedText,
+        content_hash: newHash,
+        next_refresh_at: nextRefreshAt(policy, now),
+        refresh_failures: 0,
+      });
+      if (!committed) {
+        // A delete won the race while we were indexing: drop what we wrote.
+        await provider.delete(ctx, doc.externalId).catch(() => undefined);
+        return { source_id: sourceId, skipped: true, message: 'Source was removed during refresh' };
+      }
+      await report?.(100, `Updated and reindexed ${indexed} chunk(s)`);
+      return { source_id: sourceId, refreshed: true, changed: true, chunks: indexed };
+    } catch (err) {
+      if (hasExistingContent) {
+        const code = KnowledgeService.safeError(err, 'knowledge_fetch_provider_error');
+        const failures = Number(row.refresh_failures ?? 0) + 1;
+        const retryAt = new Date(Date.now() + refreshBackoffMs(failures)).toISOString();
+        await this.patchRow(projectId, sourceId, ['processing'], {
+          status: 'ready',
+          error: code,
+          refresh_failures: failures,
+          next_refresh_at: retryAt,
+        }).catch(() => undefined);
+        await report?.(100, 'Refresh failed - existing content is still available');
+        // A refresh failure on existing content is a handled outcome, not a
+        // failed job: the source keeps its vectors and the retry is bounded by
+        // refresh_failures/next_refresh_at rather than by the job backoff.
+        return { source_id: sourceId, refreshed: false, failed: true, error: code };
+      }
       await this.tryPatchError(projectId, sourceId, err, 'knowledge_index_failed');
       throw KnowledgeService.mapError(err);
     }

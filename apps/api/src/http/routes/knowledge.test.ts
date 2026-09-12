@@ -151,6 +151,8 @@ beforeEach(() => {
   } as never);
   vi.spyOn(KnowledgeService.prototype, 'enqueueIngest').mockResolvedValue({ id: 'job-2' } as never);
   vi.spyOn(KnowledgeService.prototype, 'enqueueDelete').mockResolvedValue({ id: 'job-3' } as never);
+  vi.spyOn(KnowledgeService.prototype, 'updateRefreshPolicy').mockResolvedValue(sourceDto as never);
+  vi.spyOn(KnowledgeService.prototype, 'enqueueRefresh').mockResolvedValue({ id: 'job-refresh' } as never);
 });
 
 afterEach(() => {
@@ -442,5 +444,76 @@ describe('knowledge retrieval route (KB6)', () => {
     const hit = (res.json as { data: { results: Array<Record<string, unknown>> } }).data.results[0]!;
     expect(hit.payload).toBeUndefined();
     expect(hit.id).toBeUndefined();
+  });
+});
+
+describe('knowledge refresh + policy routes (KB7)', () => {
+  it('gates both actions behind the editor role', async () => {
+    const patch = await request(`/sources/${SOURCE}`, {
+      method: 'PATCH',
+      token: 'viewer-token',
+      body: { refresh_policy: 'daily' },
+    });
+    const refresh = await request(`/sources/${SOURCE}/refresh`, { method: 'POST', token: 'viewer-token', body: {} });
+    expect(patch.status).toBe(403);
+    expect(refresh.status).toBe(403);
+    expect(vi.mocked(KnowledgeService.prototype.updateRefreshPolicy)).not.toHaveBeenCalled();
+    expect(vi.mocked(KnowledgeService.prototype.enqueueRefresh)).not.toHaveBeenCalled();
+  });
+
+  it('lets an editor change the policy and returns the updated source', async () => {
+    const res = await request(`/sources/${SOURCE}`, {
+      method: 'PATCH',
+      token: 'editor-token',
+      body: { refresh_policy: 'weekly' },
+    });
+    expect(res.status).toBe(200);
+    expect(vi.mocked(KnowledgeService.prototype.updateRefreshPolicy)).toHaveBeenLastCalledWith(PROJECT, SOURCE, 'weekly');
+    expect(res.json).toMatchObject({ data: { source: { id: SOURCE } } });
+  });
+
+  it('rejects an invalid policy at the edge without calling the service', async () => {
+    for (const body of [{ refresh_policy: 'hourly' }, { refresh_policy: '' }, {}]) {
+      const res = await request(`/sources/${SOURCE}`, { method: 'PATCH', token: 'editor-token', body });
+      expect(res.status, JSON.stringify(body)).toBe(400);
+      expect((res.json as { error: { code: string } }).error.code).toBe('validation_error');
+    }
+    expect(vi.mocked(KnowledgeService.prototype.updateRefreshPolicy)).not.toHaveBeenCalled();
+  });
+
+  it('queues an explicit refresh for an editor and returns the job', async () => {
+    const res = await request(`/sources/${SOURCE}/refresh`, { method: 'POST', token: 'editor-token', body: {} });
+    expect(res.status).toBe(202);
+    expect(vi.mocked(KnowledgeService.prototype.enqueueRefresh)).toHaveBeenLastCalledWith(PROJECT, SOURCE, 'e-user');
+    expect(res.json).toMatchObject({ data: { job: { id: 'job-refresh' } } });
+  });
+
+  it('surfaces service conflicts and invalid URLs as safe errors', async () => {
+    vi.mocked(KnowledgeService.prototype.enqueueRefresh).mockRejectedValue(
+      ApiError.conflict('Only URL sources can be refreshed.') as never,
+    );
+    const conflict = await request(`/sources/${SOURCE}/refresh`, { method: 'POST', token: 'editor-token', body: {} });
+    expect(conflict.status).toBe(409);
+    expect(conflict.json).toMatchObject({ error: { code: 'conflict' } });
+
+    vi.mocked(KnowledgeService.prototype.enqueueRefresh).mockRejectedValue(
+      new ApiError(400, 'knowledge_invalid_url', "That URL can't be used.") as never,
+    );
+    const invalid = await request(`/sources/${SOURCE}/refresh`, { method: 'POST', token: 'editor-token', body: {} });
+    expect(invalid.status).toBe(400);
+    expect(invalid.json).toMatchObject({ error: { code: 'knowledge_invalid_url' } });
+  });
+
+  it('rejects a malformed source id before any lookup', async () => {
+    const patch = await request('/sources/not-a-uuid', {
+      method: 'PATCH',
+      token: 'editor-token',
+      body: { refresh_policy: 'daily' },
+    });
+    const refresh = await request('/sources/not-a-uuid/refresh', { method: 'POST', token: 'editor-token', body: {} });
+    expect(patch.status).toBe(400);
+    expect(refresh.status).toBe(400);
+    expect(vi.mocked(KnowledgeService.prototype.updateRefreshPolicy)).not.toHaveBeenCalled();
+    expect(vi.mocked(KnowledgeService.prototype.enqueueRefresh)).not.toHaveBeenCalled();
   });
 });

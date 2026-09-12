@@ -16,6 +16,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import {
+  KNOWLEDGE_REFRESH_POLICIES,
   KNOWLEDGE_SOURCE_STATUSES,
   KNOWLEDGE_SOURCE_SORTS,
   KNOWLEDGE_SOURCE_TYPES,
@@ -257,6 +258,45 @@ knowledgeRouter.post(
     const sourceId = parseId(req, 'sourceId');
     const svc = new KnowledgeService(container);
     const job = await svc.enqueueIngest(projectId, sourceId, user!.sub);
+    res.status(202).json({ data: { job } });
+  }),
+);
+
+/**
+ * Bounded refresh-policy update for a URL source (KB7). Invalid policies are
+ * rejected by the enum (400); non-URL/deleted sources are a conflict from the
+ * service. Editors and above only.
+ */
+const refreshPolicySchema = z.object({ refresh_policy: z.enum(KNOWLEDGE_REFRESH_POLICIES) });
+
+knowledgeRouter.patch(
+  '/sources/:sourceId',
+  asyncHandler(async (req, res) => {
+    const projectId = parseProjectId(req);
+    const { container, user } = req;
+    await container.access.requireRole(user!.sub, projectId, 'editor');
+    const sourceId = parseId(req, 'sourceId');
+    const body = refreshPolicySchema.parse(req.body);
+    const svc = new KnowledgeService(container);
+    const source = await svc.updateRefreshPolicy(projectId, sourceId, body.refresh_policy);
+    res.json({ data: { source } });
+  }),
+);
+
+/**
+ * Explicit manual refresh of a URL source (KB7). Re-validates the URL, refuses
+ * a refresh already in flight (conflict) and queues `knowledge_source_refresh`.
+ * The worker re-fetches, hashes and only reindexes when the content changed.
+ */
+knowledgeRouter.post(
+  '/sources/:sourceId/refresh',
+  asyncHandler(async (req, res) => {
+    const projectId = parseProjectId(req);
+    const { container, user } = req;
+    await container.access.requireRole(user!.sub, projectId, 'editor');
+    const sourceId = parseId(req, 'sourceId');
+    const svc = new KnowledgeService(container);
+    const job = await svc.enqueueRefresh(projectId, sourceId, user!.sub);
     res.status(202).json({ data: { job } });
   }),
 );

@@ -4,7 +4,12 @@
  * human labels only and never touch content bodies, so hostile text is never
  * interpreted here.
  */
-import type { KnowledgeSourceStatus, KnowledgeSourceType } from '@seo/contracts';
+import type {
+  KnowledgeFreshnessState,
+  KnowledgeRefreshPolicy,
+  KnowledgeSourceStatus,
+  KnowledgeSourceType,
+} from '@seo/contracts';
 
 /** Accepted upload types (kept in sync with the server allow-list). */
 export const KNOWLEDGE_FILE_ACCEPT = '.txt,.md,.markdown,.pdf,.docx';
@@ -66,3 +71,29 @@ export function sourceMetaLine(source: {
   if (source.source_type === 'url') return source.url ?? '';
   return 'Text';
 }
+
+/** Human label for a derived freshness state (KB7). */
+export const FRESHNESS_LABELS: Record<KnowledgeFreshnessState, string> = {
+  fresh: 'Fresh',
+  due: 'Due',
+  stale: 'Stale',
+  unknown: 'Unknown',
+};
+
+/** Neutral/semantic badge variant for a freshness state. */
+export function freshnessBadgeVariant(
+  state: KnowledgeFreshnessState,
+): 'success' | 'warning' | 'destructive' | 'outline' {
+  if (state === 'fresh') return 'success';
+  if (state === 'due') return 'warning';
+  if (state === 'stale') return 'destructive';
+  return 'outline';
+}
+
+/** Human label for a refresh cadence. */
+export const REFRESH_POLICY_LABELS: Record<KnowledgeRefreshPolicy, string> = {
+  manual: 'Manual',
+  daily: 'Daily',
+  weekly: 'Weekly',
+  monthly: 'Monthly',
+};

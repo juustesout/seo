@@ -363,6 +363,49 @@ begin
     where name = 'Legacy seeded error' and source_type = 'text' and status = 'failed'
   ) then raise exception 'smoke: legacy error row was not remapped'; end if;
 
+  -- KB7 freshness facts: URL rows that pre-date the migration are put on the
+  -- manual policy and the failure counter defaults to zero; nothing else is
+  -- pre-populated (freshness state itself is never stored).
+  if not exists (
+    select 1 from public.seo_knowledge_sources
+    where name = 'Legacy seeded url' and source_type = 'url' and refresh_policy = 'manual'
+      and refresh_failures = 0 and content_hash is null and next_refresh_at is null
+  ) then raise exception 'smoke: KB7 freshness defaults were not applied'; end if;
+
+  update public.seo_knowledge_sources
+  set content_hash = repeat('a', 64),
+      last_fetched_at = now(),
+      last_changed_at = now(),
+      next_refresh_at = now() + interval '1 day',
+      refresh_policy = 'daily',
+      refresh_failures = 2
+  where id = v_url_source;
+  if not exists (
+    select 1 from public.seo_knowledge_sources
+    where id = v_url_source and refresh_policy = 'daily' and refresh_failures = 2
+      and content_hash = repeat('a', 64) and next_refresh_at is not null
+  ) then raise exception 'smoke: KB7 freshness facts were not stored'; end if;
+
+  begin
+    update public.seo_knowledge_sources set refresh_policy = 'hourly' where id = v_url_source;
+    raise exception 'smoke: invalid refresh_policy unexpectedly allowed';
+  exception when check_violation then
+    null;
+  end;
+
+  begin
+    update public.seo_knowledge_sources set refresh_failures = -1 where id = v_url_source;
+    raise exception 'smoke: negative refresh_failures unexpectedly allowed';
+  exception when check_violation then
+    null;
+  end;
+
+  if not exists (
+    select 1 from pg_indexes
+    where schemaname = 'public' and indexname = 'seo_knowledge_sources_due_refresh_idx'
+  ) then raise exception 'smoke: KB7 due-refresh index missing'; end if;
+  raise notice 'smoke: KB7 freshness facts + policy/backoff constraints OK';
+
   raise notice 'smoke: knowledge source insert + status transition OK';
 end $$;
 SQL
