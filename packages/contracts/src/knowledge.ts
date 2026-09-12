@@ -48,6 +48,15 @@ export const KNOWLEDGE_ERROR_MESSAGES: Record<KnowledgeIngestErrorCode, string> 
 };
 
 /**
+ * Retrieval (search) failure vocabulary (KB6). Kept separate from the ingestion
+ * taxonomy above: a failed search has no source row and is reported to the
+ * caller as one safe, provider-agnostic sentence - never a raw Qdrant/embedding
+ * error body, status or credential.
+ */
+export const KNOWLEDGE_SEARCH_FAILED_CODE = 'knowledge_search_failed' as const;
+export const KNOWLEDGE_SEARCH_FAILED_MESSAGE = 'Knowledge search is temporarily unavailable.';
+
+/**
  * Render a stored source error as a safe human sentence. Known codes map to
  * their message; any other (legacy/free-form) value is returned unchanged.
  */

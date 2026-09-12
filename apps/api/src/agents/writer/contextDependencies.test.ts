@@ -119,10 +119,11 @@ describe('writer context dependencies (production adapters)', () => {
     expect(searched).toHaveLength(0);
   });
 
-  it('knowledge maps search hits to chunks with a stable sourceId', async () => {
+  it('knowledge maps attributed search hits to chunks and drops unattributed ones', async () => {
     let searched = 0;
     const registry = {
       getKnowledge: () => ({
+        id: 'qdrant',
         search: async () => {
           searched += 1;
           return [
@@ -138,10 +139,9 @@ describe('writer context dependencies (production adapters)', () => {
 
     expect(searched).toBe(1);
     expect(result.status).toBe('available');
-    expect(result.chunks).toEqual([
-      { sourceId: 'src-1', title: 'Guide', text: 'body text' },
-      { sourceId: 'point-2', title: undefined, text: 'no title chunk' },
-    ]);
+    // The canonical boundary drops any hit without a real source identity, so
+    // the internal point id can never become a writer-visible sourceId.
+    expect(result.chunks).toEqual([{ sourceId: 'src-1', title: 'Guide', text: 'body text' }]);
   });
 
   it('knowledge reports empty when search returns no usable chunks', async () => {

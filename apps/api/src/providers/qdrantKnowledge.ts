@@ -163,8 +163,10 @@ export class QdrantKnowledgeProvider implements KnowledgeProvider {
   /**
    * Semantic search. The query is embedded with the same embedder used for
    * indexing (model drift between index and query would silently break
-   * results), the candidate set is narrowed to the project's points, and an
-   * optional kind filter narrows further before cosine ranking.
+   * results), the candidate set is narrowed to the project's points, and the
+   * optional allowlisted filters narrow it further before cosine ranking.
+   * Only the filter keys declared in KnowledgeSearchFilter can reach the query
+   * DSL; there is no raw client filter pass-through.
    */
   async search(opts: KnowledgeSearchOptions): Promise<KnowledgeSearchResult[]> {
     this.assertConfigured();
@@ -172,11 +174,19 @@ export class QdrantKnowledgeProvider implements KnowledgeProvider {
     const filter: { must: Array<Record<string, unknown>> } = {
       must: [matchOn('project_id', opts.projectId)],
     };
-    if (opts.filter?.kind) {
-      const kinds = Array.isArray(opts.filter.kind) ? opts.filter.kind : [opts.filter.kind];
-      filter.must.push({ key: 'kind', match: { any: kinds } });
-    }
+    const kinds = toStringList(opts.filter?.kind);
+    if (kinds.length > 0) filter.must.push({ key: 'kind', match: { any: kinds } });
+    const sourceTypes = toStringList(opts.filter?.sourceTypes);
+    if (sourceTypes.length > 0) filter.must.push({ key: 'meta.source_type', match: { any: sourceTypes } });
+    const sourceIds = toStringList(opts.filter?.sourceIds);
+    if (sourceIds.length > 0) filter.must.push({ key: 'source_id', match: { any: sourceIds } });
     const hits = await this.client!.search(COLLECTION, vectors[0] ?? [], filter, opts.limit ?? 8);
     return hits.map((h: { id: string; score: number; payload: Record<string, unknown> }) => ({ id: h.id, score: h.score, payload: h.payload }));
   }
+}
+
+/** Normalize a filter value to a de-duplicated, non-empty list of strings. */
+function toStringList(value: string | string[] | undefined): string[] {
+  const values = Array.isArray(value) ? value : value === undefined ? [] : [value];
+  return [...new Set(values.filter((v): v is string => typeof v === 'string' && v.trim().length > 0))];
 }

@@ -41,6 +41,10 @@ import type {
   KnowledgeFetcher,
   KnowledgeFile,
   KnowledgeProvider,
+  KnowledgeSearchFilter,
+  KnowledgeSearchHitDto,
+  KnowledgeSearchResponse,
+  KnowledgeSearchResult,
   KnowledgeSourceDetailDto,
   KnowledgeSourceDto,
   KnowledgeSourceListQuery,
@@ -50,7 +54,7 @@ import type {
   KnowledgeSourceType,
   ProviderContext,
 } from '@seo/contracts';
-import { KNOWLEDGE_ERROR_MESSAGES } from '@seo/contracts';
+import { KNOWLEDGE_ERROR_MESSAGES, KNOWLEDGE_SEARCH_FAILED_CODE, KNOWLEDGE_SEARCH_FAILED_MESSAGE } from '@seo/contracts';
 import { logger } from '../logger.js';
 import { ApiError } from '../apiErrors.js';
 import type { ServiceContainer } from '../context.js';
@@ -63,7 +67,11 @@ import {
   KNOWLEDGE_MAX_EXTRACTED_CHARS,
   KNOWLEDGE_MAX_FILE_BYTES,
   KNOWLEDGE_PREVIEW_MAX_CHARS,
+  KNOWLEDGE_SEARCH_CONTENT_MAX_CHARS,
+  KNOWLEDGE_SEARCH_DEFAULT_LIMIT,
   KNOWLEDGE_SEARCH_MAX_CHARS,
+  KNOWLEDGE_SEARCH_MAX_LIMIT,
+  KNOWLEDGE_SEARCH_QUERY_MAX_CHARS,
   MAX_CHUNKS,
   MAX_NORMALIZED_CHARS,
 } from '../knowledge/limits.js';
@@ -205,6 +213,89 @@ const LEGACY_SOURCE_TYPES: Record<string, KnowledgeSourceType> = {
 
 export function normalizeSourceTypeInput(value: string): KnowledgeSourceType {
   return (LEGACY_SOURCE_TYPES[value] ?? value) as KnowledgeSourceType;
+}
+
+// ---------------------------------------------------------------------------
+// Retrieval (KB6) - canonical, attributed, bounded search over the project
+// knowledge base. Qdrant stays a ranking signal: scores are similarity scores,
+// result content is untrusted plain text, and every hit must be attributable to
+// a source or it is dropped (fail closed).
+// ---------------------------------------------------------------------------
+
+/** A validated retrieval request (the HTTP edge has already checked types). */
+export interface KnowledgeSearchInput {
+  query: string;
+  limit?: number;
+  sourceTypes?: KnowledgeSourceType[];
+  sourceIds?: string[];
+}
+
+/** Managed source ids live in the index as `source:<uuid>` external ids. */
+const MANAGED_SOURCE_EXTERNAL_ID =
+  /^source:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Normalize a retrieval query: control characters become spaces, runs of
+ * whitespace collapse, and the result is hard-capped. Returns '' for a blank
+ * query so the caller can reject it instead of searching for whitespace.
+ */
+export function normalizeSearchQuery(value: string | undefined): string {
+  if (!value) return '';
+  return value
+    .replace(/[\u0000-\u001f\u007f]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, KNOWLEDGE_SEARCH_QUERY_MAX_CHARS);
+}
+
+/** Clamp a requested result count into [1, max]; non-finite falls back to default. */
+export function clampSearchLimit(value: number | undefined): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return KNOWLEDGE_SEARCH_DEFAULT_LIMIT;
+  return Math.min(KNOWLEDGE_SEARCH_MAX_LIMIT, Math.max(1, Math.floor(value)));
+}
+
+/** Managed source UUID from a hit's `source:<uuid>` external id, else null. */
+export function managedSourceIdFromPayload(payload: Record<string, unknown>): string | null {
+  const raw =
+    typeof payload.source_id === 'string'
+      ? payload.source_id
+      : typeof payload.external_id === 'string'
+        ? payload.external_id
+        : '';
+  const match = MANAGED_SOURCE_EXTERNAL_ID.exec(raw.trim());
+  return match ? match[1]!.toLowerCase() : null;
+}
+
+/**
+ * Bounded plain-text content of one hit. Retrieved content is untrusted data -
+ * it is never interpreted as markup here and is always truncated server-side so
+ * the browser can never receive an unbounded body through search. Returns null
+ * when the hit carries no usable text.
+ */
+export function buildSearchContent(payload: Record<string, unknown>): string | null {
+  const raw = typeof payload.text === 'string' ? payload.text : '';
+  const text = raw.trim();
+  if (!text) return null;
+  return text.slice(0, KNOWLEDGE_SEARCH_CONTENT_MAX_CHARS);
+}
+
+/** 0-based chunk index recorded by the provider, or null when absent. */
+function searchChunkIndex(payload: Record<string, unknown>): number | null {
+  const value = Number(payload.chunk_index);
+  return Number.isInteger(value) && value >= 0 ? value : null;
+}
+
+/**
+ * Honest source type for a system-indexed hit: prefer the real type recorded in
+ * `meta.source_type`, else infer from whether the indexed item has a URL. Never
+ * fabricated - it reflects stored index metadata only.
+ */
+function searchSourceType(payload: Record<string, unknown>, url: string | null): KnowledgeSourceType {
+  const meta = payload.meta as Record<string, unknown> | undefined;
+  const metaType = meta && typeof meta.source_type === 'string' ? meta.source_type : '';
+  if (metaType === 'text' || metaType === 'url' || metaType === 'file') return metaType;
+  return url ? 'url' : 'text';
 }
 
 export interface KnowledgeCreateInput {
@@ -442,6 +533,148 @@ export class KnowledgeService {
   async getSourceDetail(projectId: string, sourceId: string): Promise<KnowledgeSourceDetailDto> {
     const row = await this.sourceRow(projectId, sourceId);
     return { ...mapSourceRow(row), preview: buildSourcePreview(row) };
+  }
+
+  /**
+   * Canonical retrieval (KB6): one bounded, attributed result envelope for the
+   * API, the Search Explorer and the writer. The query is normalized, the limit
+   * is clamped, and filters are projected onto the provider's allowlisted shape
+   * - no raw client filter ever reaches Qdrant. Raw provider hits are then
+   * mapped to attributed results; a hit without a real source identity is
+   * dropped rather than invented. Diagnostics are measured inside this boundary
+   * only (never a raw provider payload).
+   */
+  async search(projectId: string, input: KnowledgeSearchInput): Promise<KnowledgeSearchResponse> {
+    const reason = this.configuredReason();
+    if (reason) throw ApiError.notConfigured(`Knowledge search is not available. ${reason}`);
+    const provider = this.knowledgeProvider();
+    if (!provider) throw ApiError.notConfigured('The knowledge provider is not registered on this server.');
+
+    const query = normalizeSearchQuery(input.query);
+    if (!query) throw ApiError.badRequest('Enter a search query.');
+    const limit = clampSearchLimit(input.limit);
+    const filter = KnowledgeService.buildSearchFilter(input);
+
+    const started = Date.now();
+    let hits: KnowledgeSearchResult[];
+    try {
+      hits = await provider.search({ projectId, query, limit, filter });
+    } catch (err) {
+      throw KnowledgeService.mapSearchError(err);
+    }
+    const searchDurationMs = Date.now() - started;
+
+    const results = await this.attributeSearchHits(projectId, hits);
+    return {
+      project_id: projectId,
+      query,
+      limit,
+      results,
+      diagnostics: {
+        result_count: results.length,
+        provider: provider.id,
+        search_duration_ms: searchDurationMs,
+      },
+    };
+  }
+
+  /**
+   * Project a validated request onto the provider filter allowlist. Source ids
+   * are the project's source UUIDs; they are mapped to the `source:<id>` index
+   * key. Anything else is ignored rather than forwarded, and an invalid id is a
+   * bad request instead of a silently broadened search.
+   */
+  private static buildSearchFilter(input: KnowledgeSearchInput): KnowledgeSearchFilter | undefined {
+    const filter: KnowledgeSearchFilter = {};
+    const sourceTypes = [...new Set(input.sourceTypes ?? [])];
+    if (sourceTypes.length > 0) filter.sourceTypes = sourceTypes;
+    const ids = [...new Set((input.sourceIds ?? []).map((id) => id.trim()).filter(Boolean))];
+    if (ids.some((id) => !UUID.test(id))) throw ApiError.badRequest('Invalid source id filter');
+    if (ids.length > 0) filter.sourceIds = ids.map(sourceExternalId);
+    return Object.keys(filter).length > 0 ? filter : undefined;
+  }
+
+  /**
+   * Attribute raw provider hits to Knowledge Sources. Managed sources
+   * (`source:<uuid>`) are resolved against this project's registry so the name
+   * and type are authoritative; a hit whose managed source is missing from the
+   * project or is no longer freshly indexed is dropped (fail closed, no
+   * cross-project or stale leak). System-indexed knowledge is attributed from
+   * the hit's own safe metadata, never from a vector point id.
+   */
+  private async attributeSearchHits(
+    projectId: string,
+    hits: KnowledgeSearchResult[],
+  ): Promise<KnowledgeSearchHitDto[]> {
+    const managedIds = [
+      ...new Set(
+        hits.map((h) => managedSourceIdFromPayload(h.payload)).filter((id): id is string => Boolean(id)),
+      ),
+    ];
+    const rows = new Map<string, SourceRow>();
+    if (managedIds.length > 0) {
+      const { data, error } = await this.sb
+        .from('seo_knowledge_sources')
+        .select('id, name, source_type, url, status')
+        .eq('project_id', projectId)
+        .in('id', managedIds);
+      if (error) throw ApiError.badRequest('Could not attribute knowledge results');
+      for (const row of (data ?? []) as SourceRow[]) rows.set(String(row.id), row);
+    }
+
+    const results: KnowledgeSearchHitDto[] = [];
+    for (const hit of hits) {
+      const score = Number(hit.score);
+      if (!Number.isFinite(score)) continue;
+      const content = buildSearchContent(hit.payload);
+      if (!content) continue;
+      const payload = hit.payload;
+
+      const managedId = managedSourceIdFromPayload(payload);
+      if (managedId) {
+        const row = rows.get(managedId);
+        if (!row || String(row.status ?? '') !== 'ready') continue;
+        results.push({
+          source_id: managedId,
+          source_name: String(row.name ?? '').trim() || managedId,
+          source_type: (row.source_type as KnowledgeSourceType) ?? 'text',
+          source_url: typeof row.url === 'string' && row.url.trim() ? row.url.trim() : null,
+          managed: true,
+          chunk_index: searchChunkIndex(payload),
+          content,
+          score,
+        });
+        continue;
+      }
+
+      const sourceId = typeof payload.source_id === 'string' ? payload.source_id.trim() : '';
+      const name = typeof payload.title === 'string' ? payload.title.trim() : '';
+      if (!sourceId || !name) continue;
+      const url = typeof payload.url === 'string' && payload.url.trim() ? payload.url.trim() : null;
+      results.push({
+        source_id: sourceId,
+        source_name: name,
+        source_type: searchSourceType(payload, url),
+        source_url: url,
+        managed: false,
+        chunk_index: searchChunkIndex(payload),
+        content,
+        score,
+      });
+    }
+    return results;
+  }
+
+  /** Maps retrieval failures to clean ApiErrors; provider internals never leak. */
+  private static mapSearchError(err: unknown): ApiError {
+    if (err instanceof ApiError) return err;
+    if (isKnowledgeIngestError(err)) return new ApiError(err.status, err.code, err.message);
+    const message = err instanceof Error ? err.message : String(err);
+    if (/not configured/i.test(message)) {
+      return ApiError.notConfigured('Knowledge search is not configured on this server.');
+    }
+    logger.error({ err }, 'knowledge search failed');
+    return new ApiError(502, KNOWLEDGE_SEARCH_FAILED_CODE, KNOWLEDGE_SEARCH_FAILED_MESSAGE);
   }
 
   /**

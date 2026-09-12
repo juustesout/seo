@@ -94,7 +94,7 @@ export class QdrantClient {
       });
     }
     // payload indexes so filters stay fast on large knowledge bases
-    for (const field of ['project_id', 'external_id', 'kind']) {
+    for (const field of ['project_id', 'external_id', 'source_id', 'kind', 'meta.source_type']) {
       await this.ensurePayloadIndex(name, field);
     }
   }

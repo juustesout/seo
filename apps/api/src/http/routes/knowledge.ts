@@ -29,6 +29,9 @@ import {
   KNOWLEDGE_LIST_DEFAULT_LIMIT,
   KNOWLEDGE_LIST_MAX_LIMIT,
   KNOWLEDGE_SEARCH_MAX_CHARS,
+  KNOWLEDGE_SEARCH_MAX_LIMIT,
+  KNOWLEDGE_SEARCH_MAX_SOURCE_FILTERS,
+  KNOWLEDGE_SEARCH_QUERY_MAX_CHARS,
 } from '../../knowledge/limits.js';
 
 export const knowledgeRouter: Router = Router({ mergeParams: true });
@@ -39,7 +42,22 @@ knowledgeRouter.use(requireAuth);
 const hasEmbeddingKey = () => Boolean(process.env.EMBEDDINGS_API_KEY || process.env.OPENAI_API_KEY);
 
 /**
- * Semantic search over the project knowledge base (never leaks other projects).
+ * Bounded, allowlisted retrieval request (KB6). The query is required and
+ * bounded; filters are limited to the canonical source types and to bounded
+ * UUID source ids; the result limit is hard-capped. All validation happens at
+ * the edge so the service only ever sees a safe, typed request.
+ */
+const searchSchema = z.object({
+  query: z.string().trim().min(1).max(KNOWLEDGE_SEARCH_QUERY_MAX_CHARS),
+  limit: z.number().int().min(1).max(KNOWLEDGE_SEARCH_MAX_LIMIT).optional(),
+  source_types: z.array(z.enum(KNOWLEDGE_SOURCE_TYPES)).min(1).max(KNOWLEDGE_SOURCE_TYPES.length).optional(),
+  source_ids: z.array(z.string().uuid()).min(1).max(KNOWLEDGE_SEARCH_MAX_SOURCE_FILTERS).optional(),
+});
+
+/**
+ * Canonical, attributed semantic search over the project knowledge base. The
+ * service owns normalization, bounding, attribution (fail closed) and
+ * diagnostics; the route only authorizes (viewers may search) and validates.
  */
 knowledgeRouter.post(
   '/search',
@@ -48,22 +66,15 @@ knowledgeRouter.post(
     const { container, user } = req;
     await container.access.requireRole(user!.sub, projectId, 'viewer');
 
-    const body = z.object({ query: z.string().min(1).max(500), kind: z.string().optional(), limit: z.number().int().min(1).max(20).optional() }).parse(req.body);
-    const provider = container.registry.getKnowledge('qdrant');
-    if (!provider) throw ApiError.notConfigured('No knowledge provider is configured on this server');
-    if (!container.config.env.QDRANT_URL || !hasEmbeddingKey()) {
-      throw ApiError.notConfigured(
-        'Knowledge search is not configured (set QDRANT_URL and an embedding key: EMBEDDINGS_API_KEY or OPENAI_API_KEY)',
-      );
-    }
-
-    const hits = await provider.search({
+    const body = searchSchema.parse(req.body);
+    const svc = new KnowledgeService(container);
+    const result = await svc.search(projectId, {
       query: body.query,
-      projectId,
-      filter: body.kind ? { kind: body.kind } : undefined,
-      limit: body.limit ?? 8,
+      limit: body.limit,
+      sourceTypes: body.source_types,
+      sourceIds: body.source_ids,
     });
-    res.json({ data: { results: hits } });
+    res.json({ data: result });
   }),
 );
 

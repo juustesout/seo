@@ -691,16 +691,83 @@ export interface EnqueueJobResult {
 // Knowledge
 // ---------------------------------------------------------------------------
 
-/** Vector search over the project knowledge base. */
+/**
+ * Retrieval (KB6) - canonical, attributed, bounded search over the project
+ * knowledge base. The retrieval index (Qdrant) is a ranking signal only:
+ * `score` is a similarity/retrieval score, never confidence, truth or quality.
+ * Result content is untrusted plain text and is always bounded server-side.
+ */
+
+/** Bounded default number of retrieval results returned per search. */
+export const KNOWLEDGE_SEARCH_DEFAULT_LIMIT = 10;
+
+/** Hard maximum number of retrieval results a client can request. */
+export const KNOWLEDGE_SEARCH_MAX_LIMIT = 50;
+
+/** Longest retrieval query accepted (bound before it reaches the provider). */
+export const KNOWLEDGE_SEARCH_QUERY_MAX_CHARS = 1000;
+
+/** Hard cap on the plain-text content returned for one retrieval hit. */
+export const KNOWLEDGE_SEARCH_CONTENT_MAX_CHARS = 1200;
+
+/** Maximum number of source ids a client may filter one search by. */
+export const KNOWLEDGE_SEARCH_MAX_SOURCE_FILTERS = 50;
+
+/** Retrieval request: a required query plus bounded, allowlisted filters. */
 export interface KnowledgeSearchRequest {
   query: string;
   limit?: number;
+  /** Restrict to these managed source types (project scoped). */
+  source_types?: KnowledgeSourceType[];
+  /** Restrict to these managed source ids (UUIDs, project scoped). */
+  source_ids?: string[];
 }
 
-/** Ranked knowledge hits for the query, scoped to one project. */
+/**
+ * One canonical retrieval hit. Source attribution is mandatory: a hit that
+ * cannot be attributed to a source is never returned (fail closed). `content`
+ * is a bounded plain-text excerpt and must be treated as untrusted data.
+ */
+export interface KnowledgeSearchHitDto {
+  /** Stable source identifier. For managed sources this is the project's
+   *  source UUID (open it in Source Detail); for system-indexed knowledge it is
+   *  the provider external id. Never a Qdrant/vector point id. */
+  source_id: string;
+  source_name: string;
+  source_type: KnowledgeSourceType;
+  /** Public source URL when the indexed item has one; never a storage path. */
+  source_url: string | null;
+  /** True when `source_id` is a managed Knowledge Source (KB5) and can be
+   *  opened in Source Detail. */
+  managed: boolean;
+  /** 0-based chunk position within the source, when the index recorded it. */
+  chunk_index: number | null;
+  /** Bounded plain-text excerpt of the matched chunk. Untrusted data. */
+  content: string;
+  /** Provider retrieval/similarity score (higher = closer). A ranking signal
+   *  only - it is not evidence of correctness and is never normalized here. */
+  score: number;
+}
+
+/** Honest, server-measured retrieval metadata. Never raw provider internals. */
+export interface KnowledgeSearchDiagnosticsDto {
+  /** Number of attributed results in this response. */
+  result_count: number;
+  /** Registered retrieval provider id (e.g. `qdrant`). */
+  provider: string;
+  /** Wall time spent in the provider retrieval call, in milliseconds. */
+  search_duration_ms: number;
+}
+
+/** Canonical retrieval response, scoped to one project. */
 export interface KnowledgeSearchResponse {
-  results: Array<{ id: string; score: number; payload: Record<string, unknown> }>;
   project_id: string;
+  /** The normalized query that was actually executed. */
+  query: string;
+  /** The bounded result limit that was applied. */
+  limit: number;
+  results: KnowledgeSearchHitDto[];
+  diagnostics: KnowledgeSearchDiagnosticsDto;
 }
 
 /** Whether the project knowledge base is ready and which kinds are indexed. */

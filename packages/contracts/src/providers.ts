@@ -115,11 +115,25 @@ export interface SeoDataSource {
 // Knowledge provider
 // ---------------------------------------------------------------------------
 
+/**
+ * Allowlisted retrieval filters. The knowledge service validates and projects
+ * user input onto this shape, so a provider never receives raw, user-supplied
+ * filter keys - only a bounded, typed filter it knows how to apply.
+ */
+export interface KnowledgeSearchFilter {
+  /** Logical document kinds (`kind` payload field). */
+  kind?: string | string[];
+  /** Managed source types (`text` | `url` | `file`) via `meta.source_type`. */
+  sourceTypes?: string[];
+  /** Managed source external ids (`source:<id>`) via the `source_id` payload. */
+  sourceIds?: string[];
+}
+
 export interface KnowledgeSearchOptions {
   projectId: string;
   query: string;
   limit?: number;
-  filter?: Record<string, string | string[]>;
+  filter?: KnowledgeSearchFilter;
 }
 
 export interface KnowledgeProvider {

@@ -50,23 +50,6 @@ function nullableNumber(value: unknown): number | null {
   return null;
 }
 
-/** Knowledge hit payload fields the provider writes at index time. */
-interface KnowledgeHitPayload {
-  source_id?: unknown;
-  title?: unknown;
-  url?: unknown;
-  text?: unknown;
-}
-
-function mapKnowledgeHit(hit: { id: string; payload: Record<string, unknown> }): WriterKnowledgeChunk | null {
-  const payload = hit.payload as KnowledgeHitPayload;
-  const text = typeof payload.text === 'string' ? payload.text : '';
-  const title = typeof payload.title === 'string' ? payload.title.trim() : '';
-  const sourceId = nullableString(payload.source_id) ?? hit.id;
-  if (!text) return null;
-  return { sourceId, title: title || undefined, text };
-}
-
 function mapContentRow(row: Row): WriterContentItem | null {
   const id = nullableString(row.id);
   const title = typeof row.title === 'string' ? row.title.trim() : '';
@@ -106,13 +89,21 @@ export function createWriterContextDependencies(container: ServiceContainer): Wr
     if (reason) {
       return { status: 'not_configured', note: reason, chunks: [] };
     }
-    const provider = container.registry.getKnowledge('qdrant');
-    if (!provider) {
-      return { status: 'not_configured', note: 'The knowledge provider is not registered on this server.', chunks: [] };
-    }
     try {
-      const hits = await provider.search({ query: input.topic, projectId: input.projectId, limit: KNOWLEDGE_SEARCH_LIMIT });
-      const chunks = hits.map(mapKnowledgeHit).filter((c): c is WriterKnowledgeChunk => c !== null);
+      // Canonical, attributed retrieval (KB6): bounded content, real source
+      // identity, no internal vector ids. The graph still labels every chunk
+      // untrusted - this adapter never elevates retrieved text to instructions.
+      const { results } = await knowledgeService.search(input.projectId, {
+        query: input.topic,
+        limit: KNOWLEDGE_SEARCH_LIMIT,
+      });
+      const chunks: WriterKnowledgeChunk[] = results
+        .filter((r) => r.content.trim().length > 0)
+        .map((r) => ({
+          sourceId: r.source_id,
+          title: r.source_name.trim() || undefined,
+          text: r.content,
+        }));
       return {
         status: chunks.length > 0 ? 'available' : 'empty',
         note: null,

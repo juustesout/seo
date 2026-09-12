@@ -175,6 +175,35 @@ describe('search (embed -> Qdrant with project filter)', () => {
       body.filter.must.some((m) => m.key === 'kind' && (m.match as { any: string[] }).any.includes('page')),
     ).toBe(true);
   });
+
+  it('adds allowlisted source_type and source_id filters without dropping project scope', async () => {
+    const { calls } = makeHarness();
+    const p = provider();
+    await p.search({
+      query: 'q',
+      projectId: 'p9',
+      filter: { sourceTypes: ['url', 'file'], sourceIds: ['source:abc'] },
+      limit: 3,
+    });
+
+    const searchCall = calls.find((c) => c.url.includes('/points/search'));
+    const body = searchCall!.body as { filter: { must: Array<Record<string, unknown>> } };
+    expect(
+      body.filter.must.some(
+        (m) => m.key === 'project_id' && (m.match as { value: string }).value === 'p9',
+      ),
+    ).toBe(true);
+    expect(
+      body.filter.must.some(
+        (m) => m.key === 'meta.source_type' && (m.match as { any: string[] }).any.join(',') === 'url,file',
+      ),
+    ).toBe(true);
+    expect(
+      body.filter.must.some(
+        (m) => m.key === 'source_id' && (m.match as { any: string[] }).any.join(',') === 'source:abc',
+      ),
+    ).toBe(true);
+  });
 });
 
 describe('delete', () => {

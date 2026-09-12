@@ -113,8 +113,26 @@ const summary = {
 
 const detailDto = { ...sourceDto, preview: { text: 'My note body', truncated: false, characters: 12 } };
 
+const searchHit = {
+  source_id: SOURCE,
+  source_name: 'My note',
+  source_type: 'text',
+  source_url: null,
+  managed: true,
+  chunk_index: 0,
+  content: 'My note body',
+  score: 0.87,
+};
+
 beforeEach(() => {
   vi.spyOn(KnowledgeService.prototype, 'configuredReason').mockReturnValue(null);
+  vi.spyOn(KnowledgeService.prototype, 'search').mockResolvedValue({
+    project_id: PROJECT,
+    query: 'seo',
+    limit: 10,
+    results: [searchHit],
+    diagnostics: { result_count: 1, provider: 'qdrant', search_duration_ms: 3 },
+  } as never);
   vi.spyOn(KnowledgeService.prototype, 'listSources').mockResolvedValue({
     items: [sourceDto],
     total: 1,
@@ -333,5 +351,96 @@ describe('knowledge source library (KB5)', () => {
     const res = await request('/sources/not-a-uuid', { token: 'viewer-token' });
     expect(res.status).toBe(400);
     expect(vi.mocked(KnowledgeService.prototype.getSourceDetail)).not.toHaveBeenCalled();
+  });
+});
+
+describe('knowledge retrieval route (KB6)', () => {
+  it('lets a viewer search and passes a validated request to the service', async () => {
+    const res = await request('/search', { method: 'POST', token: 'viewer-token', body: { query: 'seo' } });
+    expect(res.status).toBe(200);
+    expect(vi.mocked(KnowledgeService.prototype.search)).toHaveBeenLastCalledWith(PROJECT, {
+      query: 'seo',
+      limit: undefined,
+      sourceTypes: undefined,
+      sourceIds: undefined,
+    });
+    expect(res.json).toMatchObject({
+      data: {
+        project_id: PROJECT,
+        limit: 10,
+        diagnostics: { result_count: 1, provider: 'qdrant' },
+        results: [{ source_id: SOURCE, managed: true, score: 0.87 }],
+      },
+    });
+  });
+
+  it('lets an editor search too', async () => {
+    const res = await request('/search', { method: 'POST', token: 'editor-token', body: { query: 'seo' } });
+    expect(res.status).toBe(200);
+  });
+
+  it('passes allowlisted filters and the bounded limit through', async () => {
+    const res = await request('/search', {
+      method: 'POST',
+      token: 'viewer-token',
+      body: { query: 'seo', limit: 5, source_types: ['url', 'file'], source_ids: [SOURCE] },
+    });
+    expect(res.status).toBe(200);
+    expect(vi.mocked(KnowledgeService.prototype.search)).toHaveBeenLastCalledWith(PROJECT, {
+      query: 'seo',
+      limit: 5,
+      sourceTypes: ['url', 'file'],
+      sourceIds: [SOURCE],
+    });
+  });
+
+  it('rejects an invalid query at the edge', async () => {
+    for (const body of [{}, { query: '' }, { query: '   ' }, { query: 'x'.repeat(1001) }, { query: 42 }]) {
+      const res = await request('/search', { method: 'POST', token: 'viewer-token', body });
+      expect(res.status, JSON.stringify(body)).toBe(400);
+      expect((res.json as { error: { code: string } }).error.code).toBe('validation_error');
+    }
+    expect(vi.mocked(KnowledgeService.prototype.search)).not.toHaveBeenCalled();
+  });
+
+  it('rejects over-max or malformed limits and filters', async () => {
+    for (const body of [
+      { query: 'seo', limit: 0 },
+      { query: 'seo', limit: 51 },
+      { query: 'seo', source_types: ['bogus'] },
+      { query: 'seo', source_ids: ['not-a-uuid'] },
+    ]) {
+      const res = await request('/search', { method: 'POST', token: 'viewer-token', body });
+      expect(res.status, JSON.stringify(body)).toBe(400);
+      expect((res.json as { error: { code: string } }).error.code).toBe('validation_error');
+    }
+  });
+
+  it('surfaces a safe not-configured state', async () => {
+    vi.mocked(KnowledgeService.prototype.search).mockRejectedValue(
+      ApiError.notConfigured('Knowledge search is not available.') as never,
+    );
+    const res = await request('/search', { method: 'POST', token: 'viewer-token', body: { query: 'seo' } });
+    expect(res.status).toBe(503);
+    expect(res.json).toMatchObject({ error: { code: 'not_configured' } });
+  });
+
+  it('surfaces a safe provider failure without raw internals', async () => {
+    vi.mocked(KnowledgeService.prototype.search).mockRejectedValue(
+      new ApiError(502, 'knowledge_search_failed', 'Knowledge search is temporarily unavailable.') as never,
+    );
+    const res = await request('/search', { method: 'POST', token: 'viewer-token', body: { query: 'seo' } });
+    expect(res.status).toBe(502);
+    expect(res.json).toMatchObject({
+      error: { code: 'knowledge_search_failed', message: 'Knowledge search is temporarily unavailable.' },
+    });
+    expect(JSON.stringify(res.json)).not.toContain('secret');
+  });
+
+  it('never returns raw vector ids or provider payloads', async () => {
+    const res = await request('/search', { method: 'POST', token: 'viewer-token', body: { query: 'seo' } });
+    const hit = (res.json as { data: { results: Array<Record<string, unknown>> } }).data.results[0]!;
+    expect(hit.payload).toBeUndefined();
+    expect(hit.id).toBeUndefined();
   });
 });

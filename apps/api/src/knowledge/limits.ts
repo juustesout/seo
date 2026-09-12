@@ -42,3 +42,16 @@ export const KNOWLEDGE_SEARCH_MAX_CHARS = 200;
 
 /** Hard cap on the plain-text content preview returned by the detail surface. */
 export const KNOWLEDGE_PREVIEW_MAX_CHARS = 2000;
+
+/**
+ * Retrieval bounds (KB6). Defined once in `@seo/contracts` so the API and the
+ * web app share the exact same caps; re-exported here so every knowledge limit
+ * stays discoverable in one place.
+ */
+export {
+  KNOWLEDGE_SEARCH_CONTENT_MAX_CHARS,
+  KNOWLEDGE_SEARCH_DEFAULT_LIMIT,
+  KNOWLEDGE_SEARCH_MAX_LIMIT,
+  KNOWLEDGE_SEARCH_MAX_SOURCE_FILTERS,
+  KNOWLEDGE_SEARCH_QUERY_MAX_CHARS,
+} from '@seo/contracts';
