@@ -1,11 +1,11 @@
 /**
- * Knowledge Sources workspace behaviour tests (KB5/KB8, refactored in KBUI1).
+ * Knowledge Sources workspace behaviour tests (KB5/KB8/KBUI2).
  *
  * Verifies the Sources section end to end against a mocked transport: summary +
- * bounded list, type/status filtering and debounced metadata search, distinct
- * empty vs filtered-empty vs load-failure states, source detail with a bounded
- * preview, status-aware lifecycle actions, deliberate delete confirmation,
- * viewer read-only behaviour and the KB8 collection controls.
+ * bounded list, filtering and debounced metadata search, distinct empty vs
+ * filtered-empty vs load-failure states, the detail drawer (deep link, missing
+ * source cleanup, safe error copy) and the lifecycle actions that now live in
+ * the detail, plus the KB8 collection controls.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, within } from '@testing-library/react';
@@ -85,6 +85,11 @@ function deleteCalls(): string[] {
 
 function mockApi(handler: (path: string, init?: { method?: string; body?: unknown }) => unknown) {
   apiMock.api.mockImplementation(async (path: string, init?: { method?: string; body?: unknown }) => handler(String(path), init));
+}
+
+/** List requests end at `/knowledge/sources`; detail requests end with an id. */
+function isDetail(path: string, id = 's-1'): boolean {
+  return new RegExp(`/knowledge/sources/${id}$`).test(path);
 }
 
 function renderSources(props: Partial<Parameters<typeof SourcesPage>[0]> = {}) {
@@ -175,42 +180,57 @@ describe('SourcesPage empty states', () => {
 });
 
 describe('SourcesPage source detail', () => {
-  it('opens a detail drawer with the bounded preview', async () => {
-    mockApi(async (path: string) => {
-      if (/\/sources\/s-1$/.test(String(path))) return detail();
-      return response([source()]);
-    });
-    renderSources();
+  it('opens a detail drawer from a row and surfaces the deep link', async () => {
+    const onSourceOpen = vi.fn();
+    mockApi((path) => (isDetail(path) ? detail() : response([source()])));
+    renderSources({ onSourceOpen });
 
     fireEvent.click(await screen.findByRole('button', { name: 'Reference' }));
 
     expect(await screen.findByRole('dialog', { name: 'Source detail' })).toBeTruthy();
     expect(await screen.findByText('preview body')).toBeTruthy();
+    expect(onSourceOpen).toHaveBeenCalledWith('s-1');
   });
 
   it('deep-links straight to a source from the Overview', async () => {
-    mockApi(async (path: string) => {
-      if (/\/sources\/s-1$/.test(String(path))) return detail();
-      return response([source()]);
-    });
+    mockApi((path) => (isDetail(path) ? detail() : response([source()])));
     renderSources({ initialSourceId: 's-1' });
 
     expect(await screen.findByRole('dialog', { name: 'Source detail' })).toBeTruthy();
     expect(await screen.findByText('preview body')).toBeTruthy();
   });
 
+  it('closes a missing deep-linked source and clears the query', async () => {
+    const onSourceClosed = vi.fn();
+    apiMock.api.mockImplementation(async () => {
+      throw Object.assign(new Error('Not found'), { status: 404 });
+    });
+    renderSources({ initialSourceId: 'gone-1', onSourceClosed });
+
+    await vi.waitFor(() => expect(onSourceClosed).toHaveBeenCalled());
+    expect(screen.queryByRole('dialog', { name: 'Source detail' })).toBeNull();
+  });
+
   it('renders a safe sentence for a stored error code, never the raw code', async () => {
-    mockApi(() => response([source({ status: 'failed', error: 'knowledge_file_extract_failed' })]));
+    mockApi((path) =>
+      isDetail(path)
+        ? detail({ status: 'failed', error: 'knowledge_file_extract_failed' })
+        : response([source({ status: 'failed', error: 'knowledge_file_extract_failed' })]),
+    );
     renderSources();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Reference' }));
     expect(await screen.findByText('The file could not be read. It may be corrupt or password-protected.')).toBeTruthy();
     expect(screen.queryByText('knowledge_file_extract_failed')).toBeNull();
   });
 });
 
-describe('SourcesPage lifecycle actions', () => {
+describe('SourcesPage lifecycle actions (KBUI2, in the detail)', () => {
   it('retries a failed source and reindexes a ready one', async () => {
-    mockApi(async (_path: string, init?: { method?: string }) => {
+    mockApi((path, init) => {
       if (init?.method === 'POST') return { job: { id: 'j' } };
+      if (isDetail(path, 's-1')) return detail({ status: 'failed', error: 'knowledge_fetch_timeout' });
+      if (isDetail(path, 's-2')) return detail({ id: 's-2', name: 'Ready one', status: 'ready' });
       return response([
         source({ status: 'failed' }),
         source({ id: 's-2', name: 'Ready one', status: 'ready' }),
@@ -218,33 +238,40 @@ describe('SourcesPage lifecycle actions', () => {
     });
     renderSources();
 
+    fireEvent.click(await screen.findByRole('button', { name: 'Reference' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Retry' }));
     await vi.waitFor(() => expect(paths()).toContain(`/projects/${PROJECT}/knowledge/sources/s-1/ingest`));
 
-    fireEvent.click(screen.getByRole('button', { name: 'Reindex' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Ready one' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Reindex' }));
     await vi.waitFor(() => expect(paths()).toContain(`/projects/${PROJECT}/knowledge/sources/s-2/reindex`));
   });
 
   it('requires confirmation before sending a delete', async () => {
-    mockApi(async (_path: string, init?: { method?: string }) => {
+    mockApi((path, init) => {
       if (init?.method === 'DELETE') return { job: { id: 'j' } };
+      if (isDetail(path)) return detail();
       return response([source()]);
     });
     renderSources();
-    await screen.findByText('Reference');
+    fireEvent.click(await screen.findByRole('button', { name: 'Reference' }));
 
-    fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
-    expect(screen.getByText('Delete source?')).toBeTruthy();
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete' }));
+    expect(screen.getByText('Delete "Reference"?')).toBeTruthy();
     expect(deleteCalls()).toEqual([]);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+    const dialog = screen.getByRole('dialog', { name: 'Delete source' });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Delete' }));
     await vi.waitFor(() => expect(deleteCalls()).toContain(`/projects/${PROJECT}/knowledge/sources/s-1`));
   });
 
   it('hides lifecycle actions for a viewer', async () => {
-    mockApi(() => response([source()]));
+    mockApi((path) => (isDetail(path) ? detail() : response([source()])));
     renderSources({ canEdit: false });
-    await screen.findByText('Reference');
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Reference' }));
+    expect(await screen.findByRole('dialog', { name: 'Source detail' })).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Reindex' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Delete' })).toBeNull();
   });

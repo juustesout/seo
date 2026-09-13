@@ -77,6 +77,10 @@ export function KnowledgeWorkspace({
           initialStatus={initialStatus}
           initialSourceId={initialSourceId}
           onDiscover={() => onNavigate('discover')}
+          onSourceOpen={(id) =>
+            onNavigate('sources', { ...(initialStatus ? { status: initialStatus } : {}), source: id })
+          }
+          onSourceClosed={() => onNavigate('sources', initialStatus ? { status: initialStatus } : undefined)}
         />
       )}
 

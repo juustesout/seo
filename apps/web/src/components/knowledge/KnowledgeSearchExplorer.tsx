@@ -28,7 +28,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
-import { KnowledgeSourceDetail } from './KnowledgeSourceDetail';
+import { SourceDetail } from './sources/SourceDetail';
 import { KnowledgeOrganizationFilter, type OrganizationFilter } from './KnowledgeCollections';
 import { SOURCE_TYPE_LABELS } from './format';
 
@@ -278,7 +278,7 @@ export function KnowledgeSearchExplorer({
       </Card>
 
       {selectedId && (
-        <KnowledgeSourceDetail
+        <SourceDetail
           projectId={projectId}
           detail={detail}
           loading={detailLoading}

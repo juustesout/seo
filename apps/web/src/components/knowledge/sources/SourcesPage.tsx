@@ -9,7 +9,7 @@
  * error. Empty states are distinct: an empty knowledge base, filters that match
  * nothing, and a load failure each get their own honest message.
  */
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   KNOWLEDGE_SOURCE_STATUSES,
   type KnowledgeCollectionDto,
@@ -20,9 +20,9 @@ import {
 } from '@seo/contracts';
 import { api } from '../../../lib/api';
 import { Button } from '@/components/ui/button';
-import { KnowledgeSourceDetail } from '../KnowledgeSourceDetail';
+import { SourceDetail } from './SourceDetail';
 import { KnowledgeSourceFilters, type KnowledgeFilterState } from '../KnowledgeSourceFilters';
-import { KnowledgeSourceList } from '../KnowledgeSourceList';
+import { SourceList } from './SourceList';
 import { KnowledgeBulkAssign, KnowledgeCollectionManager } from '../KnowledgeCollections';
 import { AddSourceDialog, type AddSourceKind } from './AddSourceDialog';
 
@@ -52,6 +52,8 @@ export function SourcesPage({
   initialStatus = '',
   initialSourceId = null,
   onDiscover,
+  onSourceOpen,
+  onSourceClosed,
 }: {
   projectId: string;
   canEdit: boolean;
@@ -61,6 +63,8 @@ export function SourcesPage({
   initialStatus?: string;
   initialSourceId?: string | null;
   onDiscover?: () => void;
+  onSourceOpen?: (id: string) => void;
+  onSourceClosed?: () => void;
 }) {
   const [filters, setFilters] = useState<KnowledgeFilterState>(() =>
     initialStatus && VALID_STATUSES.has(initialStatus)
@@ -86,6 +90,7 @@ export function SourcesPage({
   const [detail, setDetail] = useState<KnowledgeSourceDetailDto | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState<string | null>(null);
+  const openedRef = useRef<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -157,37 +162,59 @@ export function SourcesPage({
     setSelectedId(null);
     setDetail(null);
     setDetailError(null);
-  }, []);
+    openedRef.current = null;
+    if (initialSourceId) onSourceClosed?.();
+  }, [initialSourceId, onSourceClosed]);
 
   const openSourceById = useCallback(
     async (id: string) => {
+      openedRef.current = id;
       setSelectedId(id);
       setDetail(null);
       setDetailError(null);
       setDetailLoading(true);
       try {
-        setDetail(await api<KnowledgeSourceDetailDto>(`/projects/${projectId}/knowledge/sources/${id}`));
+        const next = await api<KnowledgeSourceDetailDto>(`/projects/${projectId}/knowledge/sources/${id}`);
+        // Ignore a late response for a source the user has since navigated away
+        // from, so a slow request can never overwrite the open source.
+        if (openedRef.current !== id) return;
+        setDetail(next);
       } catch (e) {
-        setDetailError(message(e));
+        if (openedRef.current !== id) return;
+        // A source that no longer exists must not leave an endless error
+        // drawer: close it and drop the deep link so a refresh stays clean.
+        if ((e as { status?: number } | null)?.status === 404) {
+          closeDetail();
+        } else {
+          setDetailError(message(e));
+        }
       } finally {
-        setDetailLoading(false);
+        if (openedRef.current === id) setDetailLoading(false);
       }
     },
-    [projectId],
+    [projectId, closeDetail],
   );
 
-  const openDetail = useCallback((source: KnowledgeSourceDto) => void openSourceById(source.id), [openSourceById]);
+  const openDetail = useCallback(
+    (source: KnowledgeSourceDto) => {
+      onSourceOpen?.(source.id);
+      void openSourceById(source.id);
+    },
+    [onSourceOpen, openSourceById],
+  );
 
-  // Deep link straight to one source (from the Overview or a shared URL).
+  // Deep link straight to one source (from the Overview or a shared URL) and
+  // restore it after a browser refresh; skip if it is already open.
   useEffect(() => {
-    if (!initialSourceId) return;
+    if (!initialSourceId || openedRef.current === initialSourceId) return;
     void openSourceById(initialSourceId);
   }, [initialSourceId, openSourceById]);
 
   const refreshDetail = useCallback(
     async (id: string) => {
       try {
-        setDetail(await api<KnowledgeSourceDetailDto>(`/projects/${projectId}/knowledge/sources/${id}`));
+        const next = await api<KnowledgeSourceDetailDto>(`/projects/${projectId}/knowledge/sources/${id}`);
+        if (openedRef.current === id) setDetail(next);
       } catch {
         // keep the current detail; the list reload already surfaced the state
       }
@@ -281,6 +308,7 @@ export function SourcesPage({
       try {
         if (action === 'delete') {
           await api(`/projects/${projectId}/knowledge/sources/${id}`, { method: 'DELETE' });
+          setCheckedIds((ids) => ids.filter((x) => x !== id));
           if (selectedId === id) closeDetail();
         } else {
           await api(`/projects/${projectId}/knowledge/sources/${id}/${action}`, { method: 'POST', body: {} });
@@ -408,18 +436,13 @@ export function SourcesPage({
             </div>
           </div>
         ) : (
-          <KnowledgeSourceList
+          <SourceList
             items={data?.items ?? []}
             selectedId={selectedId}
-            canEdit={canEdit}
-            busyId={busyId}
             selectable={canEdit}
             selectedIds={checkedIds}
             onToggleSelect={toggleChecked}
             onSelect={openDetail}
-            onIngest={(id) => void runAction(id, 'ingest')}
-            onReindex={(id) => void runAction(id, 'reindex')}
-            onDelete={(id) => void runAction(id, 'delete')}
           />
         )}
 
@@ -448,6 +471,7 @@ export function SourcesPage({
         onClose={() => {
           setAddOpen(false);
           if (pendingOpenId) {
+            onSourceOpen?.(pendingOpenId);
             void openSourceById(pendingOpenId);
             setPendingOpenId(null);
           }
@@ -459,7 +483,7 @@ export function SourcesPage({
       />
 
       {selectedId && (
-        <KnowledgeSourceDetail
+        <SourceDetail
           projectId={projectId}
           detail={detail}
           loading={detailLoading}
