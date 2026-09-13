@@ -23,6 +23,7 @@ import {
   KNOWLEDGE_DISCOVERY_MAX_URLS,
   KNOWLEDGE_DISCOVERY_SCOPES,
   KNOWLEDGE_DISCOVERY_SEED_MAX_CHARS,
+  KNOWLEDGE_FRESHNESS_STATES,
   KNOWLEDGE_REFRESH_POLICIES,
   KNOWLEDGE_SOURCE_BULK_MAX_IDS,
   KNOWLEDGE_SOURCE_STATUSES,
@@ -148,6 +149,7 @@ const listSourcesSchema = z.object({
   type: z.enum(KNOWLEDGE_SOURCE_TYPES).optional(),
   status: z.enum(KNOWLEDGE_SOURCE_STATUSES).optional(),
   search: z.string().trim().max(KNOWLEDGE_SEARCH_MAX_CHARS).optional(),
+  freshness: z.enum(KNOWLEDGE_FRESHNESS_STATES).optional(),
   collection_id: z.string().uuid().optional(),
   uncategorized: z
     .enum(['true', 'false'])

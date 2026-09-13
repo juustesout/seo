@@ -637,10 +637,25 @@ export class KnowledgeService {
     if (term) {
       q = q.or(`name.ilike.%${term}%,url.ilike.%${term}%,original_filename.ilike.%${term}%`);
     }
-    const { data, error, count } = await q
-      .order(sort.column, { ascending: sort.ascending, nullsFirst: false })
-      .order('id', { ascending: true })
-      .range(offset, offset + limit - 1);
+    const ordered = q.order(sort.column, { ascending: sort.ascending, nullsFirst: false }).order('id', { ascending: true });
+
+    // Freshness is derived, not stored, and policy-relative (due vs stale), so
+    // it cannot be expressed as a PostgREST filter. Only when the caller asks
+    // for a freshness state do we scan this project's matching rows and apply
+    // the single `computeFreshness` owner, then paginate in memory. The common
+    // unfiltered path keeps DB-side pagination.
+    if (query.freshness) {
+      const { data, error } = await ordered;
+      if (error) throw ApiError.badRequest('Could not list knowledge sources');
+      const now = new Date();
+      const matched = ((data ?? []) as SourceRow[])
+        .map((row) => mapSourceRow(row, now))
+        .filter((source) => source.freshness?.state === query.freshness);
+      const summary = await this.summarizeSources(projectId);
+      return { items: matched.slice(offset, offset + limit), total: matched.length, limit, offset, summary };
+    }
+
+    const { data, error, count } = await ordered.range(offset, offset + limit - 1);
     if (error) throw ApiError.badRequest('Could not list knowledge sources');
     const items = ((data ?? []) as SourceRow[]).map((row) => mapSourceRow(row));
     const summary = await this.summarizeSources(projectId);
@@ -655,7 +670,9 @@ export class KnowledgeService {
   async summarizeSources(projectId: string): Promise<KnowledgeSourceSummaryDto> {
     const { data, error } = await this.sb
       .from('seo_knowledge_sources')
-      .select('status, chunk_count')
+      .select(
+        'status, chunk_count, source_type, refresh_policy, last_fetched_at, last_changed_at, next_refresh_at, refresh_failures',
+      )
       .eq('project_id', projectId)
       .neq('status', 'deleted');
     if (error) throw ApiError.badRequest('Could not summarize knowledge sources');
@@ -666,6 +683,8 @@ export class KnowledgeService {
       processing: 0,
       ready: 0,
       failed: 0,
+      due: 0,
+      stale: 0,
       total_chunks: 0,
     };
     const countable: ReadonlyArray<'draft' | 'queued' | 'processing' | 'ready' | 'failed'> = [
@@ -675,13 +694,32 @@ export class KnowledgeService {
       'ready',
       'failed',
     ];
-    for (const row of (data ?? []) as Array<{ status?: string; chunk_count?: unknown }>) {
+    const now = new Date();
+    for (const row of (data ?? []) as SourceRow[]) {
       summary.total += 1;
-      if ((countable as readonly string[]).includes(row.status ?? '')) {
+      const status = (row.status as string) ?? '';
+      if ((countable as readonly string[]).includes(status)) {
         summary[row.status as (typeof countable)[number]] += 1;
       }
       const chunks = Number(row.chunk_count ?? 0);
       if (Number.isFinite(chunks) && chunks > 0) summary.total_chunks += chunks;
+
+      // Due/stale are a derived subset of `ready` URL sources; reuse the single
+      // freshness owner so the summary can never drift from the per-source DTO.
+      const freshness = computeFreshness(
+        {
+          sourceType: (row.source_type as KnowledgeSourceType) ?? 'text',
+          status: (row.status as KnowledgeSourceStatus) ?? 'draft',
+          refreshPolicy: row.refresh_policy,
+          lastFetchedAt: row.last_fetched_at ? String(row.last_fetched_at) : null,
+          lastChangedAt: row.last_changed_at ? String(row.last_changed_at) : null,
+          nextRefreshAt: row.next_refresh_at ? String(row.next_refresh_at) : null,
+          refreshFailures: Number(row.refresh_failures ?? 0),
+        },
+        now,
+      );
+      if (freshness.state === 'due') summary.due += 1;
+      else if (freshness.state === 'stale') summary.stale += 1;
     }
     return summary;
   }

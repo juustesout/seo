@@ -921,6 +921,12 @@ export interface KnowledgeSourceListQuery {
   status?: KnowledgeSourceStatus;
   /** Metadata search over name/url/filename (never vector search). */
   search?: string;
+  /**
+   * Restrict to sources with a given derived freshness state (KBUI3). Derives
+   * from the stored KB7 facts - never a stored column - so it can only be a
+   * bounded project-scoped scan, like the summary.
+   */
+  freshness?: KnowledgeFreshnessState;
   /** Restrict to one collection (KB8, project scoped). */
   collection_id?: string;
   /** Restrict to sources in no collection (KB8). Mutually exclusive with `collection_id`. */
@@ -945,6 +951,14 @@ export interface KnowledgeSourceSummaryDto {
   processing: number;
   ready: number;
   failed: number;
+  /**
+   * URL sources whose scheduled refresh is due (KBUI3). Derived from the same
+   * `computeFreshness` facts as the per-source DTO, never stored; a subset of
+   * `ready` and disjoint from `stale`.
+   */
+  due: number;
+  /** URL sources whose refresh is strongly overdue (KBUI3). Subset of `ready`. */
+  stale: number;
   total_chunks: number;
 }
 
@@ -983,6 +997,12 @@ export const KNOWLEDGE_REFRESH_POLICIES = ['manual', 'daily', 'weekly', 'monthly
 export type KnowledgeRefreshPolicy = (typeof KNOWLEDGE_REFRESH_POLICIES)[number];
 
 /**
+ * Canonical freshness states, exposed for API/UI filters (single vocabulary).
+ * Ordered from healthiest to most in need of attention.
+ */
+export const KNOWLEDGE_FRESHNESS_STATES = ['fresh', 'due', 'stale', 'unknown'] as const;
+
+/**
  * Derived freshness of a URL source. It is computed centrally from the stored
  * facts and the current time - never stored and never computed ad hoc in a
  * route or the UI:
@@ -991,7 +1011,7 @@ export type KnowledgeRefreshPolicy = (typeof KNOWLEDGE_REFRESH_POLICIES)[number]
  *   stale   -> ready and the schedule is strongly overdue
  *   unknown -> text/file sources, or a URL without a successful fetch
  */
-export type KnowledgeFreshnessState = 'fresh' | 'due' | 'stale' | 'unknown';
+export type KnowledgeFreshnessState = (typeof KNOWLEDGE_FRESHNESS_STATES)[number];
 
 /** Safe freshness metadata. Never carries a content hash, provider field or path. */
 export interface KnowledgeFreshnessDto {

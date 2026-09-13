@@ -61,6 +61,8 @@ function response(items: KnowledgeSourceDto[], overrides: Partial<KnowledgeSourc
       processing: 0,
       ready: items.filter((s) => s.status === 'ready').length,
       failed: items.filter((s) => s.status === 'failed').length,
+      due: 0,
+      stale: 0,
       total_chunks: items.reduce((n, s) => n + s.chunk_count, 0),
     },
     ...overrides,
@@ -155,7 +157,7 @@ describe('SourcesPage empty states', () => {
   });
 
   it('shows a distinct filtered-empty state with a clear-filters action', async () => {
-    mockApi(() => response([], { summary: { total: 5, draft: 0, queued: 0, processing: 0, ready: 5, failed: 0, total_chunks: 9 } }));
+    mockApi(() => response([], { summary: { total: 5, draft: 0, queued: 0, processing: 0, ready: 5, failed: 0, due: 0, stale: 0, total_chunks: 9 } }));
     renderSources();
     await screen.findByText('No sources match these filters.');
 
@@ -181,15 +183,15 @@ describe('SourcesPage empty states', () => {
 
 describe('SourcesPage source detail', () => {
   it('opens a detail drawer from a row and surfaces the deep link', async () => {
-    const onSourceOpen = vi.fn();
+    const onQueryChange = vi.fn();
     mockApi((path) => (isDetail(path) ? detail() : response([source()])));
-    renderSources({ onSourceOpen });
+    renderSources({ onQueryChange });
 
     fireEvent.click(await screen.findByRole('button', { name: 'Reference' }));
 
     expect(await screen.findByRole('dialog', { name: 'Source detail' })).toBeTruthy();
     expect(await screen.findByText('preview body')).toBeTruthy();
-    expect(onSourceOpen).toHaveBeenCalledWith('s-1');
+    expect(onQueryChange).toHaveBeenCalledWith(expect.objectContaining({ source: 's-1' }));
   });
 
   it('deep-links straight to a source from the Overview', async () => {
@@ -201,13 +203,13 @@ describe('SourcesPage source detail', () => {
   });
 
   it('closes a missing deep-linked source and clears the query', async () => {
-    const onSourceClosed = vi.fn();
+    const onQueryChange = vi.fn();
     apiMock.api.mockImplementation(async () => {
       throw Object.assign(new Error('Not found'), { status: 404 });
     });
-    renderSources({ initialSourceId: 'gone-1', onSourceClosed });
+    renderSources({ initialSourceId: 'gone-1', onQueryChange });
 
-    await vi.waitFor(() => expect(onSourceClosed).toHaveBeenCalled());
+    await vi.waitFor(() => expect(onQueryChange).toHaveBeenCalledWith(expect.objectContaining({ source: null })));
     expect(screen.queryByRole('dialog', { name: 'Source detail' })).toBeNull();
   });
 

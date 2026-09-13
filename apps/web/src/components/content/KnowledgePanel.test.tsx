@@ -27,7 +27,7 @@ function response(sources: KnowledgeSourceDto[]): KnowledgeSourcesResponse {
     total: sources.length,
     limit: 50,
     offset: 0,
-    summary: { total: sources.length, draft: 0, queued: 0, processing: 0, ready: 0, failed: 0, total_chunks: 0 },
+    summary: { total: sources.length, draft: 0, queued: 0, processing: 0, ready: 0, failed: 0, due: 0, stale: 0, total_chunks: 0 },
   };
 }
 

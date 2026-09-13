@@ -7,10 +7,12 @@
  * reaches the API.
  */
 import {
+  KNOWLEDGE_FRESHNESS_STATES,
   KNOWLEDGE_SOURCE_SORTS,
   KNOWLEDGE_SOURCE_STATUSES,
   KNOWLEDGE_SOURCE_TYPES,
   type KnowledgeCollectionDto,
+  type KnowledgeFreshnessState,
   type KnowledgeSourceSort,
   type KnowledgeSourceStatus,
   type KnowledgeSourceSummaryDto,
@@ -18,11 +20,12 @@ import {
 } from '@seo/contracts';
 import { Input } from '@/components/ui/input';
 import { KnowledgeOrganizationFilter } from './KnowledgeCollections';
-import { SOURCE_STATUS_LABELS, SOURCE_TYPE_LABELS } from './format';
+import { FRESHNESS_LABELS, SOURCE_STATUS_LABELS, SOURCE_TYPE_LABELS } from './format';
 
 export interface KnowledgeFilterState {
   type: KnowledgeSourceType | '';
   status: KnowledgeSourceStatus | '';
+  freshness: KnowledgeFreshnessState | '';
   search: string;
   sort: KnowledgeSourceSort;
   collectionId: string;
@@ -106,6 +109,19 @@ export function KnowledgeSourceFilters({
           {KNOWLEDGE_SOURCE_STATUSES.map((s) => (
             <option key={s} value={s}>
               {SOURCE_STATUS_LABELS[s]}
+            </option>
+          ))}
+        </select>
+        <select
+          aria-label="Filter by freshness"
+          className={selectClass}
+          value={value.freshness}
+          onChange={(e) => onChange({ freshness: e.target.value as KnowledgeFilterState['freshness'] })}
+        >
+          <option value="">Any freshness</option>
+          {KNOWLEDGE_FRESHNESS_STATES.map((state) => (
+            <option key={state} value={state}>
+              {FRESHNESS_LABELS[state]}
             </option>
           ))}
         </select>

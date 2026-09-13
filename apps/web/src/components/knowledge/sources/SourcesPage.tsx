@@ -1,5 +1,6 @@
 /**
- * Knowledge Sources workspace (KBUI1, built on KB5/KB7/KB8).
+ * Knowledge Sources workspace (KBUI1, built on KB5/KB7/KB8; KBUI3 adds
+ * URL-driven freshness/collection filters).
  *
  * The daily workplace for managing knowledge: compact filters, a bounded source
  * list with bulk selection, a status-aware detail drawer and one consistent
@@ -8,11 +9,18 @@
  * sees a storage path, a content body outside the bounded preview, or a raw
  * error. Empty states are distinct: an empty knowledge base, filters that match
  * nothing, and a load failure each get their own honest message.
+ *
+ * The deep-linkable slice of the filter state (status, freshness, collection,
+ * source) is mirrored to the URL through `onQueryChange`, so a health card or
+ * activity link arrives at a real filtered view and survives a refresh. Type,
+ * sort and the metadata search stay local to this view.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
+  KNOWLEDGE_FRESHNESS_STATES,
   KNOWLEDGE_SOURCE_STATUSES,
   type KnowledgeCollectionDto,
+  type KnowledgeFreshnessState,
   type KnowledgeSourceDetailDto,
   type KnowledgeSourceDto,
   type KnowledgeSourceStatus,
@@ -27,10 +35,12 @@ import { KnowledgeBulkAssign, KnowledgeCollectionManager } from '../KnowledgeCol
 import { AddSourceDialog, type AddSourceKind } from './AddSourceDialog';
 
 const PAGE_SIZE = 50;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const EMPTY_FILTERS: KnowledgeFilterState = {
   type: '',
   status: '',
+  freshness: '',
   search: '',
   sort: 'updated_desc',
   collectionId: '',
@@ -38,6 +48,26 @@ const EMPTY_FILTERS: KnowledgeFilterState = {
 };
 
 const VALID_STATUSES = new Set<string>(KNOWLEDGE_SOURCE_STATUSES);
+const VALID_FRESHNESS = new Set<string>(KNOWLEDGE_FRESHNESS_STATES);
+
+/** The URL-restorable slice of this view's state (KBUI3). */
+export interface SourcesQueryParams {
+  status: string | null;
+  freshness: string | null;
+  collection: string | null;
+  uncategorized: string | null;
+  source: string | null;
+}
+
+function buildQuery(filters: KnowledgeFilterState, source: string | null): SourcesQueryParams {
+  return {
+    status: filters.status || null,
+    freshness: filters.freshness || null,
+    collection: filters.collectionId || null,
+    uncategorized: filters.uncategorized ? 'true' : null,
+    source,
+  };
+}
 
 function message(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
@@ -50,10 +80,12 @@ export function SourcesPage({
   collections = [],
   onCollectionsChanged,
   initialStatus = '',
+  initialFreshness = '',
+  initialCollectionId = '',
+  initialUncategorized = false,
   initialSourceId = null,
   onDiscover,
-  onSourceOpen,
-  onSourceClosed,
+  onQueryChange,
 }: {
   projectId: string;
   canEdit: boolean;
@@ -61,16 +93,21 @@ export function SourcesPage({
   collections?: KnowledgeCollectionDto[];
   onCollectionsChanged?: () => void;
   initialStatus?: string;
+  initialFreshness?: string;
+  initialCollectionId?: string;
+  initialUncategorized?: boolean;
   initialSourceId?: string | null;
   onDiscover?: () => void;
-  onSourceOpen?: (id: string) => void;
-  onSourceClosed?: () => void;
+  onQueryChange?: (params: SourcesQueryParams) => void;
 }) {
-  const [filters, setFilters] = useState<KnowledgeFilterState>(() =>
-    initialStatus && VALID_STATUSES.has(initialStatus)
-      ? { ...EMPTY_FILTERS, status: initialStatus as KnowledgeSourceStatus }
-      : EMPTY_FILTERS,
-  );
+  const [filters, setFilters] = useState<KnowledgeFilterState>(() => ({
+    ...EMPTY_FILTERS,
+    status: initialStatus && VALID_STATUSES.has(initialStatus) ? (initialStatus as KnowledgeSourceStatus) : '',
+    freshness:
+      initialFreshness && VALID_FRESHNESS.has(initialFreshness) ? (initialFreshness as KnowledgeFreshnessState) : '',
+    collectionId: initialCollectionId && UUID_RE.test(initialCollectionId) ? initialCollectionId : '',
+    uncategorized: initialUncategorized && !initialCollectionId,
+  }));
   const [searchInput, setSearchInput] = useState('');
   const [offset, setOffset] = useState(0);
   const [data, setData] = useState<KnowledgeSourcesResponse | null>(null);
@@ -91,6 +128,10 @@ export function SourcesPage({
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState<string | null>(null);
   const openedRef = useRef<string | null>(null);
+  // Refs so async/close handlers always emit the latest filter state, even when
+  // they were created in an earlier render (e.g. a 404 closing a deep link).
+  const filtersRef = useRef(filters);
+  filtersRef.current = filters;
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -98,6 +139,7 @@ export function SourcesPage({
       const params = new URLSearchParams();
       if (filters.type) params.set('type', filters.type);
       if (filters.status) params.set('status', filters.status);
+      if (filters.freshness) params.set('freshness', filters.freshness);
       if (filters.search.trim()) params.set('search', filters.search.trim());
       if (filters.uncategorized) params.set('uncategorized', 'true');
       else if (filters.collectionId) params.set('collection_id', filters.collectionId);
@@ -118,12 +160,34 @@ export function SourcesPage({
     void load();
   }, [load]);
 
-  // Pick up a status filter when arriving from the Overview health links.
+  // Mirror a deep-linked query (from the Overview, a shared URL, or browser
+  // back/forward) into the local filters. No-ops when nothing actually changes
+  // so it can never loop with the emit below.
   useEffect(() => {
-    if (!initialStatus || !VALID_STATUSES.has(initialStatus)) return;
-    setFilters((f) => (f.status === initialStatus ? f : { ...f, status: initialStatus as KnowledgeSourceStatus }));
+    setFilters((f) => {
+      const next = { ...f };
+      let changed = false;
+      if (initialStatus && VALID_STATUSES.has(initialStatus) && next.status !== initialStatus) {
+        next.status = initialStatus as KnowledgeSourceStatus;
+        changed = true;
+      }
+      if (initialFreshness && VALID_FRESHNESS.has(initialFreshness) && next.freshness !== initialFreshness) {
+        next.freshness = initialFreshness as KnowledgeFreshnessState;
+        changed = true;
+      }
+      if (initialCollectionId && UUID_RE.test(initialCollectionId) && next.collectionId !== initialCollectionId) {
+        next.collectionId = initialCollectionId;
+        next.uncategorized = false;
+        changed = true;
+      } else if (initialUncategorized && !next.uncategorized) {
+        next.uncategorized = true;
+        next.collectionId = '';
+        changed = true;
+      }
+      return changed ? next : f;
+    });
     setOffset(0);
-  }, [initialStatus]);
+  }, [initialStatus, initialFreshness, initialCollectionId, initialUncategorized]);
 
   // Debounce the search box so typing does not fire a request per keystroke.
   useEffect(() => {
@@ -147,24 +211,44 @@ export function SourcesPage({
     return () => window.clearInterval(id);
   }, [busy, load]);
 
-  const applyFilter = useCallback((patch: Partial<KnowledgeFilterState>) => {
-    setFilters((f) => ({ ...f, ...patch }));
-    setOffset(0);
-  }, []);
+  const applyFilter = useCallback(
+    (patch: Partial<KnowledgeFilterState>) => {
+      const next = { ...filters, ...patch };
+      setFilters(next);
+      setOffset(0);
+      const touchesQuery =
+        'status' in patch || 'freshness' in patch || 'collectionId' in patch || 'uncategorized' in patch;
+      if (touchesQuery) {
+        // A filter change invalidates whatever detail is open.
+        setSelectedId(null);
+        setDetail(null);
+        setDetailError(null);
+        openedRef.current = null;
+        onQueryChange?.(buildQuery(next, null));
+      }
+    },
+    [filters, onQueryChange],
+  );
 
   const clearFilters = useCallback(() => {
     setFilters(EMPTY_FILTERS);
     setSearchInput('');
     setOffset(0);
-  }, []);
-
-  const closeDetail = useCallback(() => {
     setSelectedId(null);
     setDetail(null);
     setDetailError(null);
     openedRef.current = null;
-    if (initialSourceId) onSourceClosed?.();
-  }, [initialSourceId, onSourceClosed]);
+    onQueryChange?.(buildQuery(EMPTY_FILTERS, null));
+  }, [onQueryChange]);
+
+  const closeDetail = useCallback(() => {
+    const hadSource = openedRef.current !== null;
+    openedRef.current = null;
+    setSelectedId(null);
+    setDetail(null);
+    setDetailError(null);
+    if (hadSource) onQueryChange?.(buildQuery(filtersRef.current, null));
+  }, [onQueryChange]);
 
   const openSourceById = useCallback(
     async (id: string) => {
@@ -197,10 +281,10 @@ export function SourcesPage({
 
   const openDetail = useCallback(
     (source: KnowledgeSourceDto) => {
-      onSourceOpen?.(source.id);
+      onQueryChange?.(buildQuery(filters, source.id));
       void openSourceById(source.id);
     },
-    [onSourceOpen, openSourceById],
+    [filters, onQueryChange, openSourceById],
   );
 
   // Deep link straight to one source (from the Overview or a shared URL) and
@@ -334,7 +418,14 @@ export function SourcesPage({
   const canPrev = offset > 0;
   const canNext = offset + limit < total;
   const summary = data?.summary ?? null;
-  const hasFilters = Boolean(filters.type || filters.status || filters.search.trim() || filters.collectionId || filters.uncategorized);
+  const hasFilters = Boolean(
+    filters.type ||
+      filters.status ||
+      filters.freshness ||
+      filters.search.trim() ||
+      filters.collectionId ||
+      filters.uncategorized,
+  );
   const showEmpty = !loading && data !== null && data.items.length === 0;
 
   return (
@@ -471,7 +562,7 @@ export function SourcesPage({
         onClose={() => {
           setAddOpen(false);
           if (pendingOpenId) {
-            onSourceOpen?.(pendingOpenId);
+            onQueryChange?.(buildQuery(filters, pendingOpenId));
             void openSourceById(pendingOpenId);
             setPendingOpenId(null);
           }

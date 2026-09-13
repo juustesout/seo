@@ -109,6 +109,8 @@ const summary = {
   processing: 0,
   ready: 0,
   failed: 0,
+  due: 0,
+  stale: 0,
   total_chunks: 0,
 };
 
@@ -381,13 +383,14 @@ describe('knowledge file upload route', () => {
 
 describe('knowledge source library (KB5)', () => {
   it('passes validated filter/sort/pagination to the service and returns the page', async () => {
-    const res = await request('/sources?type=file&status=ready&search=guide&sort=name_asc&limit=10&offset=20', {
+    const res = await request('/sources?type=file&status=ready&freshness=due&search=guide&sort=name_asc&limit=10&offset=20', {
       token: 'viewer-token',
     });
     expect(res.status).toBe(200);
     expect(vi.mocked(KnowledgeService.prototype.listSources)).toHaveBeenLastCalledWith(PROJECT, {
       type: 'file',
       status: 'ready',
+      freshness: 'due',
       search: 'guide',
       sort: 'name_asc',
       limit: 10,
@@ -408,7 +411,7 @@ describe('knowledge source library (KB5)', () => {
   });
 
   it('rejects invalid type, status, sort and over-max limit at the edge', async () => {
-    for (const qs of ['type=bogus', 'status=nope', 'sort=id_asc', 'limit=1000', 'offset=-1']) {
+    for (const qs of ['type=bogus', 'status=nope', 'freshness=rotten', 'sort=id_asc', 'limit=1000', 'offset=-1']) {
       const res = await request(`/sources?${qs}`, { token: 'viewer-token' });
       expect(res.status, qs).toBe(400);
       expect((res.json as { error: { code: string } }).error.code).toBe('validation_error');

@@ -13,7 +13,7 @@ import { api } from '../../../lib/api';
 import { useAsync } from '../../../lib/ui';
 import { PageHeader } from '@/components/ui/page-header';
 import { KnowledgeNavigation, type KnowledgeSection } from './KnowledgeNavigation';
-import { KnowledgeOverview } from './KnowledgeOverview';
+import { KnowledgeOverview } from '../overview/KnowledgeOverview';
 import { SourcesPage } from '../sources/SourcesPage';
 import { KnowledgeSearchExplorer } from '../KnowledgeSearchExplorer';
 import { KnowledgeDiscoveryPanel } from '../KnowledgeDiscovery';
@@ -52,6 +52,9 @@ export function KnowledgeWorkspace({
 
   const params = new URLSearchParams(search);
   const initialStatus = params.get('status') ?? '';
+  const initialFreshness = params.get('freshness') ?? '';
+  const initialCollectionId = params.get('collection') ?? '';
+  const initialUncategorized = params.get('uncategorized') === 'true';
   const initialSourceId = params.get('source');
 
   return (
@@ -75,12 +78,20 @@ export function KnowledgeWorkspace({
           collections={collections}
           onCollectionsChanged={() => collectionsQuery.reload()}
           initialStatus={initialStatus}
+          initialFreshness={initialFreshness}
+          initialCollectionId={initialCollectionId}
+          initialUncategorized={initialUncategorized}
           initialSourceId={initialSourceId}
           onDiscover={() => onNavigate('discover')}
-          onSourceOpen={(id) =>
-            onNavigate('sources', { ...(initialStatus ? { status: initialStatus } : {}), source: id })
+          onQueryChange={(p) =>
+            onNavigate('sources', {
+              status: p.status,
+              freshness: p.freshness,
+              collection: p.collection,
+              uncategorized: p.uncategorized,
+              source: p.source,
+            })
           }
-          onSourceClosed={() => onNavigate('sources', initialStatus ? { status: initialStatus } : undefined)}
         />
       )}
 

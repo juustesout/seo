@@ -7,6 +7,7 @@
 import type {
   KnowledgeFreshnessState,
   KnowledgeRefreshPolicy,
+  KnowledgeSourceDto,
   KnowledgeSourceStatus,
   KnowledgeSourceType,
 } from '@seo/contracts';
@@ -97,3 +98,40 @@ export const REFRESH_POLICY_LABELS: Record<KnowledgeRefreshPolicy, string> = {
   weekly: 'Weekly',
   monthly: 'Monthly',
 };
+
+/**
+ * Derive one "recent activity" line for a source from stored timestamps only -
+ * there is no event log. The latest of a successful refresh and a (re)index
+ * wins; a never-processed source falls back to Added/Updated. Honest by design:
+ * it can only ever describe timestamps the API actually recorded.
+ */
+export function sourceActivity(
+  source: Pick<KnowledgeSourceDto, 'freshness' | 'last_indexed_at' | 'created_at' | 'updated_at'>,
+): { label: 'Refreshed' | 'Processed' | 'Added' | 'Updated'; at: string } {
+  const fetched = source.freshness?.last_fetched_at ?? null;
+  const indexed = source.last_indexed_at;
+  if (fetched && (!indexed || Date.parse(fetched) > Date.parse(indexed))) {
+    return { label: 'Refreshed', at: fetched };
+  }
+  if (indexed) return { label: 'Processed', at: indexed };
+  if (source.created_at && source.created_at === source.updated_at) return { label: 'Added', at: source.created_at };
+  return { label: 'Updated', at: source.updated_at };
+}
+
+/** Compact relative time for the activity feed (falls back to a date). */
+export function fmtRelative(iso: string, now: Date = new Date()): string {
+  const then = Date.parse(iso);
+  if (!Number.isFinite(then)) return '';
+  const diff = now.getTime() - then;
+  if (diff < 60_000) return 'just now';
+  const minutes = Math.floor(diff / 60_000);
+  if (minutes < 60) return `${minutes} minute${minutes === 1 ? '' : 's'} ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} hour${hours === 1 ? '' : 's'} ago`;
+  const days = Math.floor(hours / 24);
+  if (days === 1) return 'yesterday';
+  if (days < 30) return `${days} days ago`;
+  const d = new Date(then);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}

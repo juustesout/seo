@@ -55,6 +55,8 @@ function response(items: KnowledgeSourceDto[]): KnowledgeSourcesResponse {
       processing: 0,
       ready: items.length,
       failed: 0,
+      due: 0,
+      stale: 0,
       total_chunks: items.reduce((n, s) => n + s.chunk_count, 0),
     },
   };
@@ -69,7 +71,10 @@ beforeEach(() => {
       return { project_id: PROJECT, provider: { id: 'qdrant', name: 'Qdrant', description: '' }, configured: true, note: null };
     }
     if (p.includes('/knowledge/collections')) return { items: [], total: 0, limit: 100, offset: 0 };
-    if (p.includes('/knowledge/sources')) return response([source()]);
+    if (p.includes('/knowledge/sources')) {
+      if (p.includes('status=failed') || p.includes('freshness=') || p.includes('status=processing')) return response([]);
+      return response([source()]);
+    }
     return {};
   });
   // Overview composes useJobs, which polls /api/...; keep it off the network.
@@ -91,7 +96,7 @@ describe('KnowledgeWorkspace', () => {
     expect(nav.textContent).toContain('Discover');
 
     expect(screen.getByText('Knowledge Base')).toBeTruthy();
-    expect(await screen.findByText('Total sources')).toBeTruthy();
+    expect(await screen.findByText('Everything looks healthy.')).toBeTruthy();
   });
 
   it('routes a nav click through onNavigate', () => {

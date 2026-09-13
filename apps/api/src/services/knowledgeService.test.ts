@@ -1195,7 +1195,71 @@ describe('knowledge source library (KB5)', () => {
   it('summarizes non-deleted sources and total chunks', async () => {
     const svc = svcWith(SEED);
     const { summary } = await svc.listSources(PROJECT);
-    expect(summary).toEqual({ total: 3, draft: 0, queued: 0, processing: 0, ready: 2, failed: 1, total_chunks: 8 });
+    expect(summary).toEqual({
+      total: 3,
+      draft: 0,
+      queued: 0,
+      processing: 0,
+      ready: 2,
+      failed: 1,
+      due: 0,
+      stale: 0,
+      total_chunks: 8,
+    });
+  });
+
+  it('counts due and stale URL sources and filters the list by derived freshness (KBUI3)', async () => {
+    const now = Date.now();
+    const iso = (ms: number) => new Date(ms).toISOString();
+    const seed: DbRow[] = [
+      {
+        ...ROW,
+        id: 'u-fresh',
+        source_type: 'url',
+        status: 'ready',
+        url: 'https://fresh.example/',
+        refresh_policy: 'daily',
+        last_fetched_at: iso(now - HOUR_MS),
+        next_refresh_at: iso(now + 86_400_000),
+      },
+      {
+        ...ROW,
+        id: 'u-due',
+        source_type: 'url',
+        status: 'ready',
+        url: 'https://due.example/',
+        refresh_policy: 'daily',
+        last_fetched_at: iso(now - 86_400_000 - HOUR_MS),
+        next_refresh_at: iso(now - HOUR_MS),
+      },
+      {
+        ...ROW,
+        id: 'u-stale',
+        source_type: 'url',
+        status: 'ready',
+        url: 'https://stale.example/',
+        refresh_policy: 'daily',
+        last_fetched_at: iso(now - 10 * 86_400_000),
+        next_refresh_at: iso(now - 10 * 86_400_000),
+      },
+      { ...ROW, id: 't-text', source_type: 'text', status: 'ready', url: null },
+    ];
+    const svc = svcWith(seed);
+
+    const { summary } = await svc.listSources(PROJECT, { limit: 1 });
+    expect(summary.total).toBe(4);
+    expect(summary.ready).toBe(4);
+    expect(summary.due).toBe(1);
+    expect(summary.stale).toBe(1);
+
+    expect((await svc.listSources(PROJECT, { freshness: 'due' })).items.map((i) => i.id)).toEqual(['u-due']);
+    expect((await svc.listSources(PROJECT, { freshness: 'stale' })).items.map((i) => i.id)).toEqual(['u-stale']);
+    expect((await svc.listSources(PROJECT, { freshness: 'fresh' })).items.map((i) => i.id)).toEqual(['u-fresh']);
+    expect((await svc.listSources(PROJECT, { freshness: 'unknown' })).items.map((i) => i.id)).toEqual(['t-text']);
+
+    const duePage = await svc.listSources(PROJECT, { freshness: 'due', limit: 1, offset: 0 });
+    expect(duePage.total).toBe(1);
+    expect(duePage.items).toHaveLength(1);
   });
 
   it('returns a bounded detail preview and never leaks private columns', async () => {
