@@ -1447,7 +1447,9 @@ export class KnowledgeService {
    * turned into a deterministic query plan whose canonical scope is projected
    * onto both origins - no raw client filter ever reaches a provider. Vector
    * and (in hybrid mode) lexical candidates are reconciled against the scope
-   * BEFORE fusion, fused deterministically, then mapped to attributed results.
+   * BEFORE fusion, fused deterministically, optionally reranked (KB10.3, a
+   * quality layer that can never fail the request), then mapped to attributed
+   * results.
    * A hit without a real source identity is dropped rather than invented, and a
    * hit without content never enters the result set. Diagnostics are measured
    * inside this boundary only (never a raw provider payload, origin list or
@@ -1480,7 +1482,10 @@ export class KnowledgeService {
           freshness: input.freshness,
         },
       });
-      outcome = await retrieveCandidates({ provider, sb: this.sb }, plan);
+      outcome = await retrieveCandidates(
+        { provider, sb: this.sb, reranker: this.container.knowledgeReranker },
+        plan,
+      );
     } catch (err) {
       throw KnowledgeService.mapSearchError(err);
     }

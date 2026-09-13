@@ -54,6 +54,10 @@ export interface RetrievalDiagnostics {
   lexicalFailed: boolean;
   /** True when a derived (freshness) filter was honoured via a source allowlist. */
   derivedScope: boolean;
+  /** True when a configured reranker returned a usable ranking (KB10.3). */
+  rerankApplied: boolean;
+  /** True when a reranker was configured, tried and failed (RRF fallback used). */
+  rerankFailed: boolean;
 }
 
 /** Fused candidates, resolved managed-source facts and internal diagnostics. */

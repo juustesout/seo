@@ -23,6 +23,7 @@ import {
   toProviderSearchFilter,
 } from './scope.js';
 import { filterCandidatesToScope, managedIdsFromCandidates } from './reconcile.js';
+import type { KnowledgeRerankRequest, KnowledgeReranker } from './rerank.js';
 import type { ManagedSourceFacts } from './sourceFacts.js';
 import type { KnowledgeCandidate } from './types.js';
 
@@ -513,5 +514,144 @@ describe('hybrid pipeline (KB10/KB10.2)', () => {
       'seo_knowledge_lexical_search',
       expect.objectContaining({ p_collection_id: COLLECTION, p_source_types: ['url'], p_source_ids: null }),
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// KB10.3 - optional reranking after reconcile + fusion
+// ---------------------------------------------------------------------------
+
+describe('reranking integration (KB10.3)', () => {
+  function reranker(overrides: Partial<KnowledgeReranker> = {}): KnowledgeReranker {
+    return {
+      id: 'fake',
+      name: 'Fake',
+      isConfigured: () => true,
+      rerank: vi.fn(async () => ({ rankings: [] })),
+      ...overrides,
+    } as KnowledgeReranker;
+  }
+
+  function twoHits(): { search: ReturnType<typeof vi.fn>; rpc: ReturnType<typeof vi.fn> } {
+    const search = vi.fn(async () => [
+      { id: 'p1', score: 0.9, payload: { source_id: sourceExternalId(SOURCE_A), text: 'vec a', chunk_index: 0 } },
+      { id: 'p2', score: 0.8, payload: { source_id: sourceExternalId(SOURCE_B), text: 'vec b', chunk_index: 0 } },
+    ]);
+    const rpc = vi.fn(async () => ({
+      data: [
+        { source_id: SOURCE_A, chunk_index: 0, score: 2.0, content: 'lex a' },
+        { source_id: SOURCE_B, chunk_index: 0, score: 1.0, content: 'lex b' },
+      ],
+      error: null,
+    }));
+    return { search, rpc };
+  }
+
+  it('reranks the fused order and reports that reranking was applied', async () => {
+    const { search, rpc } = twoHits();
+    const loadSourceFacts = vi.fn(
+      async () =>
+        new Map([
+          [SOURCE_A, facts(SOURCE_A)],
+          [SOURCE_B, facts(SOURCE_B)],
+        ]),
+    );
+    const fake = reranker({
+      rerank: vi.fn(async (req: KnowledgeRerankRequest) => ({
+        rankings: [...req.candidates].reverse().map((c, i) => ({ id: c.id, score: 100 - i })),
+      })),
+    });
+
+    const outcome = await retrieveCandidates(
+      { provider: fakeProvider(search), sb: fakeSb(rpc), loadSourceFacts, reranker: fake },
+      await planFor(),
+    );
+
+    expect(outcome.diagnostics.rerankApplied).toBe(true);
+    expect(outcome.diagnostics.rerankFailed).toBe(false);
+    expect(outcome.candidates.map((c) => c.sourceId)).toEqual([SOURCE_B, SOURCE_A]);
+    expect(outcome.candidates).toHaveLength(2);
+  });
+
+  it('keeps the RRF order when no reranker is configured', async () => {
+    const { search, rpc } = twoHits();
+    const loadSourceFacts = vi.fn(
+      async () => new Map([[SOURCE_A, facts(SOURCE_A)], [SOURCE_B, facts(SOURCE_B)]]),
+    );
+
+    const outcome = await retrieveCandidates(
+      { provider: fakeProvider(search), sb: fakeSb(rpc), loadSourceFacts },
+      await planFor(),
+    );
+
+    expect(outcome.diagnostics.rerankApplied).toBe(false);
+    expect(outcome.candidates.map((c) => c.sourceId)).toEqual([SOURCE_A, SOURCE_B]);
+  });
+
+  it('keeps the RRF order when the reranker fails', async () => {
+    const { search, rpc } = twoHits();
+    const loadSourceFacts = vi.fn(
+      async () => new Map([[SOURCE_A, facts(SOURCE_A)], [SOURCE_B, facts(SOURCE_B)]]),
+    );
+    const fake = reranker({
+      rerank: vi.fn(async () => {
+        throw new Error('rerank down');
+      }),
+    });
+
+    const outcome = await retrieveCandidates(
+      { provider: fakeProvider(search), sb: fakeSb(rpc), loadSourceFacts, reranker: fake },
+      await planFor(),
+    );
+
+    expect(outcome.diagnostics.rerankApplied).toBe(false);
+    expect(outcome.diagnostics.rerankFailed).toBe(true);
+    expect(outcome.candidates.map((c) => c.sourceId)).toEqual([SOURCE_A, SOURCE_B]);
+  });
+
+  it('keeps the RRF order when the reranker returns an unusable ranking', async () => {
+    const { search, rpc } = twoHits();
+    const loadSourceFacts = vi.fn(
+      async () => new Map([[SOURCE_A, facts(SOURCE_A)], [SOURCE_B, facts(SOURCE_B)]]),
+    );
+    const fake = reranker({ rerank: vi.fn(async () => ({ rankings: [{ id: 'foreign', score: 1 }] })) });
+
+    const outcome = await retrieveCandidates(
+      { provider: fakeProvider(search), sb: fakeSb(rpc), loadSourceFacts, reranker: fake },
+      await planFor(),
+    );
+
+    expect(outcome.diagnostics.rerankApplied).toBe(false);
+    expect(outcome.diagnostics.rerankFailed).toBe(true);
+    expect(outcome.candidates.map((c) => c.sourceId)).toEqual([SOURCE_A, SOURCE_B]);
+  });
+
+  it('only offers post-reconcile candidates to the reranker', async () => {
+    const search = vi.fn(async () => [
+      { id: 'p1', score: 0.9, payload: { source_id: sourceExternalId(SOURCE_A), text: 'vec a', chunk_index: 0 } },
+      { id: 'p2', score: 0.8, payload: { source_id: sourceExternalId(SOURCE_B), text: 'vec b', chunk_index: 0 } },
+    ]);
+    const rpc = vi.fn(async () => ({ data: [], error: null }));
+    const loadSourceFacts = vi.fn(
+      async () =>
+        new Map([
+          [SOURCE_A, facts(SOURCE_A)],
+          [SOURCE_B, facts(SOURCE_B, { status: 'failed' })],
+        ]),
+    );
+    const fake = reranker({
+      rerank: vi.fn(async (req: KnowledgeRerankRequest) => ({
+        rankings: req.candidates.map((c) => ({ id: c.id, score: 1 })),
+      })),
+    });
+
+    const outcome = await retrieveCandidates(
+      { provider: fakeProvider(search), sb: fakeSb(rpc), loadSourceFacts, reranker: fake },
+      await planFor(),
+    );
+
+    const request = vi.mocked(fake.rerank).mock.calls[0]![0];
+    expect(request.candidates.map((c) => c.id)).toEqual([`${SOURCE_A}::0`]);
+    expect(outcome.candidates.map((c) => c.sourceId)).toEqual([SOURCE_A]);
   });
 });

@@ -16,6 +16,8 @@ import { ApiError } from './apiErrors.js';
 import { buildRegistry } from './providers/registry.js';
 import { createKnowledgeFetcher } from './providers/knowledgeFetcher.js';
 import { createKnowledgeDiscoveryProvider } from './providers/knowledgeDiscoveryProvider.js';
+import { createKnowledgeReranker } from './providers/reranker.js';
+import type { KnowledgeReranker } from './knowledge/retrieval/rerank.js';
 import { createKnowledgeFileExtractors, type KnowledgeFileExtractorRegistry } from './providers/knowledgeFileExtractors.js';
 import { SupabaseKnowledgeFileStore, type KnowledgeFileStore } from './infra/knowledgeFileStorage.js';
 import { SupabaseJobStore } from './jobs/supabaseJobStore.js';
@@ -44,6 +46,11 @@ export interface ServiceContainer {
   knowledgeFetcher: KnowledgeFetcher | null;
   /** Bounded link-discovery provider (KB9); null when the fetcher is absent. */
   knowledgeDiscoveryProvider: KnowledgeDiscoveryProvider | null;
+  /**
+   * Optional, provider-agnostic knowledge reranker (KB10.3); the no-op reranker
+   * when none is configured, so search keeps the deterministic RRF order.
+   */
+  knowledgeReranker: KnowledgeReranker;
   /** Private object storage for uploaded knowledge files (KB4). */
   knowledgeFileStore: KnowledgeFileStore;
   /** Format -> text extractor registry for uploaded knowledge files (KB4). */
@@ -98,6 +105,17 @@ export function getContainer(): ServiceContainer {
     logger,
   });
 
+  const knowledgeReranker = createKnowledgeReranker({
+    config: {
+      KNOWLEDGE_RERANKER_PROVIDER: config.env.KNOWLEDGE_RERANKER_PROVIDER,
+      KNOWLEDGE_RERANKER_API_KEY: config.env.KNOWLEDGE_RERANKER_API_KEY,
+      KNOWLEDGE_RERANKER_BASE_URL: config.env.KNOWLEDGE_RERANKER_BASE_URL,
+      KNOWLEDGE_RERANKER_MODEL: config.env.KNOWLEDGE_RERANKER_MODEL,
+      KNOWLEDGE_RERANKER_TIMEOUT_MS: String(config.env.KNOWLEDGE_RERANKER_TIMEOUT_MS),
+    },
+    logger,
+  });
+
   const container: ServiceContainer = {
     config,
     sb,
@@ -130,6 +148,7 @@ export function getContainer(): ServiceContainer {
     }),
     knowledgeFetcher,
     knowledgeDiscoveryProvider: createKnowledgeDiscoveryProvider({ fetcher: knowledgeFetcher, logger }),
+    knowledgeReranker,
     knowledgeFileStore: new SupabaseKnowledgeFileStore(sb),
     knowledgeFileExtractors: createKnowledgeFileExtractors(),
     jobStore,

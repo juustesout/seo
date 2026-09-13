@@ -72,6 +72,17 @@ const envSchema = z.object({
   // explicitly into the retrieval boundary - no per-component flags.
   KNOWLEDGE_RETRIEVAL_MODE: z.enum(['vector', 'hybrid']).default('hybrid'),
 
+  // Knowledge reranking (KB10.3): an optional, provider-agnostic quality layer
+  // on top of retrieval. Disabled by default (`none`); a provider is only used
+  // when explicitly selected AND it holds its own server-side key. Reranking is
+  // never required for search - an absent or failing reranker keeps the RRF
+  // order. Keys stay server-side and are never exposed to the browser.
+  KNOWLEDGE_RERANKER_PROVIDER: z.enum(['none', 'cohere']).default('none'),
+  KNOWLEDGE_RERANKER_API_KEY: z.string().optional(),
+  KNOWLEDGE_RERANKER_BASE_URL: z.string().url().optional(),
+  KNOWLEDGE_RERANKER_MODEL: z.string().optional(),
+  KNOWLEDGE_RERANKER_TIMEOUT_MS: z.coerce.number().int().positive().default(8000),
+
   // OpenAI (AI chat/generation/embeddings - BYOK key, server-side only).
   OPENAI_API_KEY: z.string().optional(),
   OPENAI_BASE_URL: z.string().url().optional(),

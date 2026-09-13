@@ -66,11 +66,13 @@ function container(
   sb: ReturnType<typeof fakeSupabase>['sb'],
   env: Record<string, string>,
   registry: unknown,
+  knowledgeReranker?: unknown,
 ): ServiceContainer {
   return {
     config: { env },
     sb,
     registry,
+    knowledgeReranker,
   } as unknown as ServiceContainer;
 }
 
@@ -152,6 +154,35 @@ describe('writer context dependencies (production adapters)', () => {
 
     expect(result.status).toBe('empty');
     expect(result.chunks).toEqual([]);
+  });
+
+  it('writer knowledge context reflects the canonical rerank order (no provider bypass)', async () => {
+    const registry = {
+      getKnowledge: () => ({
+        id: 'qdrant',
+        search: async () => [
+          { id: 'p1', score: 0.9, payload: { source_id: 'src-low', title: 'Low', text: 'low text' } },
+          { id: 'p2', score: 0.8, payload: { source_id: 'src-high', title: 'High', text: 'high text' } },
+        ],
+      }),
+    };
+    const rerankRequests: unknown[] = [];
+    const knowledgeReranker = {
+      id: 'fake',
+      name: 'Fake',
+      isConfigured: () => true,
+      rerank: async (req: { candidates: Array<{ id: string; content: string }> }) => {
+        rerankRequests.push(req);
+        return { rankings: [...req.candidates].reverse().map((c, i) => ({ id: c.id, score: 100 - i })) };
+      },
+    };
+    const { sb } = fakeSupabase({});
+    const deps = createWriterContextDependencies(container(sb, configEnv, registry, knowledgeReranker));
+    const result = await deps.getKnowledge(baseInput);
+
+    expect(result.status).toBe('available');
+    expect(result.chunks.map((c) => c.sourceId)).toEqual(['src-high', 'src-low']);
+    expect(rerankRequests).toHaveLength(1);
   });
 
   it('intelligence reports not_configured when DataForSEO is not connected', async () => {

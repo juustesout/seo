@@ -12,7 +12,9 @@
  *   - an empty canonical scope     -> no origin is called (honest empty result)
  * Metadata-aware reconciliation happens BEFORE fusion, so budgets are spent on
  * the canonical universe and no non-ready/out-of-scope chunk can influence a
- * fused rank. The public DTO is untouched: the service maps the fused
+ * fused rank. An optional reranker (KB10.3) then reorders the bounded fusion
+ * head; it can never fail the request, widen the scope, or add/drop a
+ * candidate. The public DTO is untouched: the service maps the final
  * candidates and the resolved source facts onto the stable response shape.
  */
 
@@ -23,6 +25,7 @@ import { fuseCandidates } from './fusion.js';
 import { retrieveLexicalCandidates } from './lexical.js';
 import type { KnowledgeQueryPlan } from './plan.js';
 import { filterCandidatesToScope, managedIdsFromCandidates } from './reconcile.js';
+import { NO_KNOWLEDGE_RERANKER, rerankCandidates, type KnowledgeReranker } from './rerank.js';
 import { loadManagedSourceFacts, type ManagedSourceFacts, type ManagedSourceFactsLoader } from './sourceFacts.js';
 import type { KnowledgeCandidate, RetrievalOutcome } from './types.js';
 import { retrieveVectorCandidates } from './vector.js';
@@ -32,6 +35,8 @@ export interface RetrievalDependencies {
   sb: SupabaseClient;
   /** Injectable for tests; defaults to the project-scoped Postgres loader. */
   loadSourceFacts?: ManagedSourceFactsLoader;
+  /** Optional reranking layer (KB10.3); absent means RRF is the final order. */
+  reranker?: KnowledgeReranker;
 }
 
 function emptyOutcome(plan: KnowledgeQueryPlan): RetrievalOutcome {
@@ -46,6 +51,8 @@ function emptyOutcome(plan: KnowledgeQueryPlan): RetrievalOutcome {
       vectorFailed: false,
       lexicalFailed: false,
       derivedScope: plan.scope.freshness.length > 0,
+      rerankApplied: false,
+      rerankFailed: false,
     },
   };
 }
@@ -60,13 +67,16 @@ export async function retrieveCandidates(
 
   const loadFacts: ManagedSourceFactsLoader =
     deps.loadSourceFacts ?? ((projectId, ids) => loadManagedSourceFacts(deps.sb, projectId, ids));
+  const reranker: KnowledgeReranker = deps.reranker ?? NO_KNOWLEDGE_RERANKER;
 
   if (!plan.retrieval.lexical) {
     // Safe fallback: the previous vector-only behavior, including its errors.
     const candidates = await retrieveVectorCandidates(deps.provider, plan, plan.limit);
     const sourceFacts = await resolveFacts(loadFacts, plan, candidates);
+    const scoped = filterCandidatesToScope(plan.scope, candidates, sourceFacts);
+    const reranked = await rerankCandidates(reranker, plan, scoped);
     return {
-      candidates: filterCandidatesToScope(plan.scope, candidates, sourceFacts),
+      candidates: reranked.candidates,
       sourceFacts,
       diagnostics: {
         mode: plan.mode,
@@ -76,6 +86,8 @@ export async function retrieveCandidates(
         vectorFailed: false,
         lexicalFailed: false,
         derivedScope: plan.scope.freshness.length > 0,
+        rerankApplied: reranked.applied,
+        rerankFailed: reranked.failed,
       },
     };
   }
@@ -109,9 +121,11 @@ export async function retrieveCandidates(
   const { candidates, fused } = fuseCandidates(vectorCandidates, lexicalCandidates, {
     limit: plan.budgets.fused,
   });
+  // Optional quality layer over the deterministic fusion order (KB10.3).
+  const reranked = await rerankCandidates(reranker, plan, candidates);
 
   return {
-    candidates,
+    candidates: reranked.candidates,
     sourceFacts,
     diagnostics: {
       mode: plan.mode,
@@ -121,6 +135,8 @@ export async function retrieveCandidates(
       vectorFailed,
       lexicalFailed,
       derivedScope: plan.scope.freshness.length > 0,
+      rerankApplied: reranked.applied,
+      rerankFailed: reranked.failed,
     },
   };
 }
