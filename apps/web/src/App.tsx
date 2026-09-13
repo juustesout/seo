@@ -24,6 +24,7 @@ import {
   Newspaper,
   PenSquare,
   Plug,
+  Search,
   Send,
   Settings,
 } from 'lucide-react';
@@ -36,6 +37,7 @@ import { cn } from '@/lib/utils';
 import { Dashboard } from './views/Dashboard';
 import { Integrations } from './views/Integrations';
 import { DataViews } from './views/Data';
+import { Keywords } from './views/Keywords';
 import { Knowledge } from './views/Knowledge';
 import { Publishing } from './views/Publishing';
 import { Content } from './views/Content';
@@ -102,6 +104,7 @@ const TOP_NAV: Array<{ id: TopArea; label: string; icon: NavIcon }> = [
 
 const PROJECT_NAV: Array<{ id: string; label: string; icon: NavIcon }> = [
   { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
+  { id: 'keywords', label: 'Keywords', icon: Search },
   { id: 'data', label: 'Keywords & Rankings', icon: LineChart },
   { id: 'integrations', label: 'Integrations', icon: Plug },
   { id: 'knowledge', label: 'Knowledge Base', icon: BookOpen },
@@ -299,6 +302,7 @@ export function App() {
           <ProjectSidebar projectId={pid} view={view} onNavigate={goProject} />
           <main className="min-w-0 flex-1 px-6 py-6">
             {view === 'dashboard' && <Dashboard projectId={pid} onOpenSettings={() => goProject(pid, 'settings')} />}
+            {view === 'keywords' && <Keywords projectId={pid} />}
             {view === 'data' && <DataViews projectId={pid} />}
             {view === 'integrations' && <Integrations projectId={pid} />}
             {view === 'knowledge' && (

@@ -1519,3 +1519,35 @@ export interface ProjectGscAttachRequest {
   siteUrl?: string;
   name?: string;
 }
+
+// ---------------------------------------------------------------------------
+// Keywords (KW1): the Search Console queries the project's linked property is
+// actually seen for. A pure read over already-synced seo_gsc_queries - never a
+// live Google call and never research metrics (volume/difficulty). Tracked,
+// DataForSEO-researched keywords remain the separate seo_keywords feature.
+// ---------------------------------------------------------------------------
+
+/** One Search Console query aggregated over the requested period. */
+export interface KeywordDto {
+  /** The query text exactly as reported by Google Search Console. */
+  keyword: string;
+  /** Total clicks over the period. */
+  clicks: number;
+  /** Total impressions over the period. */
+  impressions: number;
+  /** Click-through rate (clicks / impressions); 0 when there were no impressions. */
+  ctr: number;
+  /** Impression-weighted average position; 0 when there were no impressions. */
+  position: number;
+}
+
+/**
+ * Project keywords read. `propertyId` is null until the project links a GSC
+ * property (the UI then shows the connect prompt); `lastSyncedAt` is the last
+ * successful sync for that property, or null when it has never synced.
+ */
+export interface ProjectKeywordsDto {
+  propertyId: string | null;
+  lastSyncedAt: string | null;
+  keywords: KeywordDto[];
+}

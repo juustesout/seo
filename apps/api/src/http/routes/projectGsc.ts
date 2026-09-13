@@ -21,6 +21,7 @@ import { asyncHandler } from '../asyncHandler.js';
 import { ApiError } from '../../apiErrors.js';
 import { parseProjectId } from './utils.js';
 import { googleConnectionState, registryProperties } from '../../services/accountService.js';
+import { KeywordService, resolveKeywordRange } from '../../services/keywordService.js';
 import type { GscRegistryPropertyDto } from '@seo/contracts';
 
 export const projectGscRouter: Router = Router({ mergeParams: true });
@@ -111,6 +112,29 @@ projectGscRouter.get(
     }
 
     res.json({ data: { google, current, candidates } });
+  }),
+);
+
+// ---------------------------------------------------------------------------
+// GET /keywords - the Search Console queries the linked property appears for
+// ---------------------------------------------------------------------------
+
+/**
+ * GET /keywords - the queries Google Search Console reports for this project's
+ * linked property, aggregated over a bounded period (default: last 28 days).
+ * Viewer+ read of data the account already synced - never a live Google call.
+ * Returns `propertyId: null` when no property is linked so the UI can show the
+ * connect prompt, and an empty list when a property is linked but never synced.
+ */
+projectGscRouter.get(
+  '/keywords',
+  asyncHandler(async (req, res) => {
+    const projectId = parseProjectId(req);
+    const { container, user } = req;
+    await container.access.requireRole(user!.sub, projectId, 'viewer');
+    const range = resolveKeywordRange(req.query);
+    const data = await new KeywordService(container).listProjectKeywords(projectId, range);
+    res.json({ data });
   }),
 );
 
