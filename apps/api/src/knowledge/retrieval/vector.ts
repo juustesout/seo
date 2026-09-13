@@ -1,17 +1,21 @@
 /**
- * Vector candidate retrieval (KB10).
+ * Vector candidate retrieval (KB10.2).
  *
  * Wraps the registered `KnowledgeProvider.search` unchanged: project isolation,
  * provider filters, attribution metadata and fail-closed behavior all stay in
- * the provider/service. The adapter only converts provider hits into the
- * canonical internal candidate shape (identity + bounded content) and asks for
- * a bounded candidate window instead of the public result limit, so fusion has
- * a real pool to rank while the provider is never asked for an unbounded list.
+ * the provider/service. The adapter projects the canonical retrieval scope onto
+ * the provider's allowlisted filter (the same scope the lexical adapter uses),
+ * converts hits into the canonical internal candidate shape (identity + bounded
+ * content), and asks for a bounded candidate window instead of the public result
+ * limit so fusion has a real pool to rank while the provider is never asked for
+ * an unbounded list.
  */
 
-import type { KnowledgeProvider, KnowledgeSearchFilter, KnowledgeSearchResult } from '@seo/contracts';
+import type { KnowledgeProvider, KnowledgeSearchResult } from '@seo/contracts';
 import { buildSearchContent } from './content.js';
 import { candidateKey, chunkIndexFromPayload, managedSourceIdFromPayload } from './identity.js';
+import type { KnowledgeQueryPlan } from './plan.js';
+import { toProviderSearchFilter } from './scope.js';
 import type { KnowledgeCandidate } from './types.js';
 
 /** Convert one provider hit into a candidate, or null when it has no content. */
@@ -39,17 +43,17 @@ export function vectorHitToCandidate(hit: KnowledgeSearchResult): KnowledgeCandi
   };
 }
 
-/** Ask the provider for up to `candidateLimit` vector candidates. */
+/** Ask the provider for up to `candidateLimit` vector candidates within the plan scope. */
 export async function retrieveVectorCandidates(
   provider: KnowledgeProvider,
-  request: { projectId: string; query: string; filter?: KnowledgeSearchFilter },
+  plan: KnowledgeQueryPlan,
   candidateLimit: number,
 ): Promise<KnowledgeCandidate[]> {
   const hits = await provider.search({
-    projectId: request.projectId,
-    query: request.query,
+    projectId: plan.projectId,
+    query: plan.query,
     limit: candidateLimit,
-    filter: request.filter,
+    filter: toProviderSearchFilter(plan.scope),
   });
   const candidates: KnowledgeCandidate[] = [];
   for (const hit of hits) {

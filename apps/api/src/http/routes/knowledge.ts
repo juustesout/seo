@@ -65,6 +65,7 @@ const searchSchema = z
     source_ids: z.array(z.string().uuid()).min(1).max(KNOWLEDGE_SEARCH_MAX_SOURCE_FILTERS).optional(),
     collection_id: z.string().uuid().optional(),
     uncategorized: z.boolean().optional(),
+    freshness: z.array(z.enum(KNOWLEDGE_FRESHNESS_STATES)).min(1).max(KNOWLEDGE_FRESHNESS_STATES.length).optional(),
   })
   .refine((value) => !(value.collection_id && value.uncategorized), {
     message: 'collection_id and uncategorized are mutually exclusive',
@@ -92,6 +93,7 @@ knowledgeRouter.post(
       sourceIds: body.source_ids,
       collectionId: body.collection_id,
       uncategorized: body.uncategorized,
+      freshness: body.freshness,
     });
     res.json({ data: result });
   }),

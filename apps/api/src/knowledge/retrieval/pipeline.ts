@@ -1,54 +1,88 @@
 /**
- * Hybrid retrieval pipeline (KB10).
+ * Hybrid retrieval pipeline (KB10/KB10.2).
  *
- * Orchestrates the two candidate origins and fuses them. This is the only place
- * that decides which origins run and how failures degrade; the origins
- * themselves only supply candidates. Fail-closed rules:
+ * Orchestrates the two candidate origins, reconciles them against the canonical
+ * retrieval scope, then fuses them. This is the only place that decides which
+ * origins run and how failures degrade; the origins themselves only supply
+ * candidates, and the reconcile step only narrows (never widens) their output.
+ * Fail-closed rules:
  *   - both origins fail            -> the request fails (canonical search error)
  *   - one origin fails (hybrid)    -> the surviving origin's candidates are used
  *   - a single-origin result       -> returned unchanged (no RRF re-scoring)
- * The public DTO is untouched: the service maps the fused candidates back onto
- * the stable response shape and owns attribution.
+ *   - an empty canonical scope     -> no origin is called (honest empty result)
+ * Metadata-aware reconciliation happens BEFORE fusion, so budgets are spent on
+ * the canonical universe and no non-ready/out-of-scope chunk can influence a
+ * fused rank. The public DTO is untouched: the service maps the fused
+ * candidates and the resolved source facts onto the stable response shape.
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { KnowledgeProvider } from '@seo/contracts';
 import { logger } from '../../logger.js';
 import { fuseCandidates } from './fusion.js';
-import { KNOWLEDGE_RETRIEVAL_VECTOR_CANDIDATES } from './limits.js';
 import { retrieveLexicalCandidates } from './lexical.js';
+import type { KnowledgeQueryPlan } from './plan.js';
+import { filterCandidatesToScope, managedIdsFromCandidates } from './reconcile.js';
+import { loadManagedSourceFacts, type ManagedSourceFacts, type ManagedSourceFactsLoader } from './sourceFacts.js';
+import type { KnowledgeCandidate, RetrievalOutcome } from './types.js';
 import { retrieveVectorCandidates } from './vector.js';
-import type { KnowledgeCandidate, RetrievalOutcome, RetrievalRequest } from './types.js';
 
 export interface RetrievalDependencies {
   provider: KnowledgeProvider;
   sb: SupabaseClient;
+  /** Injectable for tests; defaults to the project-scoped Postgres loader. */
+  loadSourceFacts?: ManagedSourceFactsLoader;
+}
+
+function emptyOutcome(plan: KnowledgeQueryPlan): RetrievalOutcome {
+  return {
+    candidates: [],
+    sourceFacts: new Map(),
+    diagnostics: {
+      mode: plan.mode,
+      vectorCandidates: 0,
+      lexicalCandidates: 0,
+      fused: false,
+      vectorFailed: false,
+      lexicalFailed: false,
+      derivedScope: plan.scope.freshness.length > 0,
+    },
+  };
 }
 
 export async function retrieveCandidates(
   deps: RetrievalDependencies,
-  request: RetrievalRequest,
+  plan: KnowledgeQueryPlan,
 ): Promise<RetrievalOutcome> {
-  if (request.mode === 'vector') {
+  // A provably empty scope (e.g. a freshness filter with no matching ready
+  // source) means there is nothing to retrieve; do not call any origin.
+  if (plan.scope.empty) return emptyOutcome(plan);
+
+  const loadFacts: ManagedSourceFactsLoader =
+    deps.loadSourceFacts ?? ((projectId, ids) => loadManagedSourceFacts(deps.sb, projectId, ids));
+
+  if (!plan.retrieval.lexical) {
     // Safe fallback: the previous vector-only behavior, including its errors.
-    const candidates = await retrieveVectorCandidates(deps.provider, request, request.limit);
+    const candidates = await retrieveVectorCandidates(deps.provider, plan, plan.limit);
+    const sourceFacts = await resolveFacts(loadFacts, plan, candidates);
     return {
-      candidates,
+      candidates: filterCandidatesToScope(plan.scope, candidates, sourceFacts),
+      sourceFacts,
       diagnostics: {
-        mode: 'vector',
+        mode: plan.mode,
         vectorCandidates: candidates.length,
         lexicalCandidates: 0,
         fused: false,
         vectorFailed: false,
         lexicalFailed: false,
+        derivedScope: plan.scope.freshness.length > 0,
       },
     };
   }
 
-  const vectorLimit = KNOWLEDGE_RETRIEVAL_VECTOR_CANDIDATES;
   const [vectorResult, lexicalResult] = await Promise.allSettled([
-    retrieveVectorCandidates(deps.provider, request, vectorLimit),
-    retrieveLexicalCandidates(deps.sb, request),
+    retrieveVectorCandidates(deps.provider, plan, plan.budgets.vector),
+    retrieveLexicalCandidates(deps.sb, plan),
   ]);
 
   const vectorFailed = vectorResult.status === 'rejected';
@@ -65,19 +99,39 @@ export async function retrieveCandidates(
     logger.warn({ err: lexicalResult.reason }, 'knowledge lexical retrieval failed; degrading to vector candidates');
   }
 
-  const vectorCandidates: KnowledgeCandidate[] = vectorResult.status === 'fulfilled' ? vectorResult.value : [];
-  const lexicalCandidates: KnowledgeCandidate[] = lexicalResult.status === 'fulfilled' ? lexicalResult.value : [];
-  const { candidates, fused } = fuseCandidates(vectorCandidates, lexicalCandidates);
+  const vectorRaw: KnowledgeCandidate[] = vectorResult.status === 'fulfilled' ? vectorResult.value : [];
+  const lexicalRaw: KnowledgeCandidate[] = lexicalResult.status === 'fulfilled' ? lexicalResult.value : [];
+
+  const union = [...vectorRaw, ...lexicalRaw];
+  const sourceFacts = await resolveFacts(loadFacts, plan, union);
+  const vectorCandidates = filterCandidatesToScope(plan.scope, vectorRaw, sourceFacts);
+  const lexicalCandidates = filterCandidatesToScope(plan.scope, lexicalRaw, sourceFacts);
+  const { candidates, fused } = fuseCandidates(vectorCandidates, lexicalCandidates, {
+    limit: plan.budgets.fused,
+  });
 
   return {
     candidates,
+    sourceFacts,
     diagnostics: {
-      mode: 'hybrid',
+      mode: plan.mode,
       vectorCandidates: vectorCandidates.length,
       lexicalCandidates: lexicalCandidates.length,
       fused,
       vectorFailed,
       lexicalFailed,
+      derivedScope: plan.scope.freshness.length > 0,
     },
   };
+}
+
+/** Load managed facts for every managed source referenced by the candidates. */
+async function resolveFacts(
+  loadFacts: ManagedSourceFactsLoader,
+  plan: KnowledgeQueryPlan,
+  candidates: readonly KnowledgeCandidate[],
+): Promise<Map<string, ManagedSourceFacts>> {
+  const ids = managedIdsFromCandidates(candidates);
+  if (ids.length === 0) return new Map();
+  return loadFacts(plan.projectId, ids);
 }

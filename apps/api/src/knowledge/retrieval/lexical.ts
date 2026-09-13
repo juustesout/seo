@@ -16,11 +16,11 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js';
-import type { KnowledgeSearchFilter } from '@seo/contracts';
 import { chunkKnowledgeText } from '../chunker.js';
-import { KNOWLEDGE_RETRIEVAL_LEXICAL_CANDIDATES } from './limits.js';
 import { candidateKey, sourceExternalId } from './identity.js';
-import type { KnowledgeCandidate, RetrievalRequest } from './types.js';
+import type { KnowledgeQueryPlan } from './plan.js';
+import { toLexicalParams } from './scope.js';
+import type { KnowledgeCandidate } from './types.js';
 
 /** Rows returned by the `seo_knowledge_lexical_search` RPC. */
 interface LexicalRow {
@@ -95,36 +95,27 @@ export async function clearProjectLexicalChunks(sb: SupabaseClient, projectId: s
   if (error) throw new Error(error.message);
 }
 
-/** Managed source UUIDs from the `source:<uuid>` filter values, deduplicated. */
-function lexicalSourceIds(filter: KnowledgeSearchFilter | undefined): string[] {
-  const ids = new Set<string>();
-  for (const value of filter?.sourceIds ?? []) {
-    const raw = value.trim().replace(/^source:/i, '');
-    if (raw) ids.add(raw);
-  }
-  return [...ids];
-}
-
 /**
- * Query the lexical index for a bounded, filtered, ranked candidate list.
- * Throws on any database/RPC failure so the pipeline can degrade to vector.
+ * Query the lexical index for a bounded, filtered, ranked candidate list. The
+ * canonical plan scope is projected onto the RPC parameters so Postgres filters
+ * on exactly the same universe (collection, uncategorized, source type, source
+ * ids) as the vector origin. Throws on any database/RPC failure so the pipeline
+ * can degrade to vector.
  */
 export async function retrieveLexicalCandidates(
   sb: SupabaseClient,
-  request: RetrievalRequest,
+  plan: KnowledgeQueryPlan,
 ): Promise<KnowledgeCandidate[]> {
-  const filter = request.filter;
-  const sourceIds = lexicalSourceIds(filter);
-  const sourceTypes = [...new Set(filter?.sourceTypes ?? [])];
+  const params = toLexicalParams(plan.scope);
 
   const { data, error } = await sb.rpc('seo_knowledge_lexical_search', {
-    p_project: request.projectId,
-    p_query: request.query,
-    p_limit: KNOWLEDGE_RETRIEVAL_LEXICAL_CANDIDATES,
-    p_source_ids: sourceIds.length > 0 ? sourceIds : null,
-    p_source_types: sourceTypes.length > 0 ? sourceTypes : null,
-    p_collection_id: filter?.collectionId ?? null,
-    p_uncategorized: filter?.uncategorized === true,
+    p_project: plan.projectId,
+    p_query: plan.query,
+    p_limit: plan.budgets.lexical,
+    p_source_ids: params.sourceIds,
+    p_source_types: params.sourceTypes,
+    p_collection_id: params.collectionId,
+    p_uncategorized: params.uncategorized,
   });
   if (error) throw new Error(error.message);
 

@@ -1455,6 +1455,77 @@ describe('knowledge retrieval service (KB6)', () => {
     });
   });
 
+  // -------------------------------------------------------------------------
+  // KB10.2 - metadata-aware scope wired through the service
+  // -------------------------------------------------------------------------
+
+  it('resolves a freshness filter to a bounded source allowlist before retrieval', async () => {
+    const now = Date.now();
+    const db = makeDb([
+      {
+        ...ROW,
+        id: SOURCE_ID,
+        status: 'ready',
+        source_type: 'url',
+        refresh_policy: 'daily',
+        last_fetched_at: new Date(now - 1000).toISOString(),
+        next_refresh_at: new Date(now + 86_400_000).toISOString(),
+        refresh_failures: 0,
+      },
+    ]);
+    const { provider } = fakeProvider({ search: vi.fn(async () => []) });
+    const svc = new KnowledgeService(containerWith(db, provider));
+
+    await svc.search(PROJECT, { query: 'q', freshness: ['fresh'] });
+
+    expect(vi.mocked(provider.search)).toHaveBeenCalledWith(
+      expect.objectContaining({ filter: { sourceIds: [sourceExternalId(SOURCE_ID)] } }),
+    );
+  });
+
+  it('fails closed when a freshness filter matches too many sources', async () => {
+    const seed = Array.from({ length: 501 }, (_, i) => ({
+      ...ROW,
+      id: `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`,
+      status: 'ready',
+      source_type: 'url',
+      refresh_policy: 'daily',
+      last_fetched_at: '2026-01-01T00:00:00.000Z',
+      next_refresh_at: null,
+      refresh_failures: 0,
+    }));
+    const svc = new KnowledgeService(containerWith(makeDb(seed), fakeProvider().provider));
+
+    await expect(svc.search(PROJECT, { query: 'q', freshness: ['fresh'] })).rejects.toMatchObject({
+      code: 'knowledge_scope_too_broad',
+    });
+  });
+
+  it('never returns a non-ready source even when the provider still has its vectors', async () => {
+    const db = makeDb([{ ...ROW, id: SOURCE_ID, status: 'processing' }]);
+    const provider = searchProvider([
+      { id: 'p1', score: 0.9, payload: { source_id: sourceExternalId(SOURCE_ID), text: 'a' } },
+    ]);
+    const svc = new KnowledgeService(containerWith(db, provider));
+
+    const res = await svc.search(PROJECT, { query: 'q' });
+
+    expect(res.results).toEqual([]);
+  });
+
+  it('does not leak system knowledge into an uncategorized filter', async () => {
+    const db = makeDb([{ ...ROW, id: SOURCE_ID, status: 'ready', source_type: 'text', collection_id: null }]);
+    const provider = searchProvider([
+      { id: 'p1', score: 0.9, payload: { source_id: sourceExternalId(SOURCE_ID), text: 'managed' } },
+      { id: 'p2', score: 0.8, payload: { source_id: 'page:https://a.example', title: 'Page A', text: 'system' } },
+    ]);
+    const svc = new KnowledgeService(containerWith(db, provider));
+
+    const res = await svc.search(PROJECT, { query: 'q', uncategorized: true });
+
+    expect(res.results.map((r) => r.source_id)).toEqual([SOURCE_ID]);
+  });
+
   it('maps provider failures to a safe search error without leaking internals', async () => {
     const provider = fakeProvider({
       search: vi.fn(async () => {

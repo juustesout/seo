@@ -1,16 +1,17 @@
 /**
- * Internal hybrid retrieval model (KB10).
+ * Internal hybrid retrieval model (KB10/KB10.2).
  *
  * These types are private to the knowledge retrieval boundary: they are the
- * vocabulary the vector adapter, the lexical adapter, the fusion step and the
- * pipeline share while assembling candidates. They are deliberately NOT part
- * of `@seo/contracts` - a candidate's origin and origin-local score never leak
- * to the API surface. `KnowledgeService.search` remains the only public owner
- * and maps fused candidates back onto the stable search DTO (the fused score is
- * the only score exposed, and it is still just a ranking signal).
+ * vocabulary the vector adapter, the lexical adapter, the reconcile step, the
+ * fusion step and the pipeline share while assembling candidates. They are
+ * deliberately NOT part of `@seo/contracts` - a candidate's origin and
+ * origin-local score never leak to the API surface. `KnowledgeService.search`
+ * remains the only public owner and maps fused candidates back onto the stable
+ * search DTO (the fused score is the only score exposed, and it is still just a
+ * ranking signal).
  */
 
-import type { KnowledgeSearchFilter } from '@seo/contracts';
+import type { ManagedSourceFacts } from './sourceFacts.js';
 
 /**
  * How candidates are gathered for a request.
@@ -39,17 +40,6 @@ export interface KnowledgeCandidate {
   payload: Record<string, unknown>;
 }
 
-/** A validated, normalized retrieval request owned by the service. */
-export interface RetrievalRequest {
-  projectId: string;
-  /** Already normalized and verified non-empty by the service. */
-  query: string;
-  /** Already clamped public result limit. */
-  limit: number;
-  filter?: KnowledgeSearchFilter;
-  mode: RetrievalMode;
-}
-
 /**
  * Internal, non-public retrieval diagnostics. Used for logging only; the
  * public `KnowledgeSearchDiagnosticsDto` stays unchanged (no origin names,
@@ -62,10 +52,14 @@ export interface RetrievalDiagnostics {
   fused: boolean;
   vectorFailed: boolean;
   lexicalFailed: boolean;
+  /** True when a derived (freshness) filter was honoured via a source allowlist. */
+  derivedScope: boolean;
 }
 
-/** Fused candidates plus internal diagnostics. */
+/** Fused candidates, resolved managed-source facts and internal diagnostics. */
 export interface RetrievalOutcome {
   candidates: KnowledgeCandidate[];
+  /** Facts for every managed source referenced by the reconciled candidates. */
+  sourceFacts: Map<string, ManagedSourceFacts>;
   diagnostics: RetrievalDiagnostics;
 }

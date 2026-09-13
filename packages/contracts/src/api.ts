@@ -733,6 +733,15 @@ export interface KnowledgeSearchRequest {
    * Mutually exclusive with `collection_id`.
    */
   uncategorized?: boolean;
+  /**
+   * Restrict retrieval to managed sources with one of these derived freshness
+   * states (KB10.2). Freshness is derived centrally from stored facts, never
+   * stored, so the server resolves this to a bounded project-scoped source
+   * scope; if that scope cannot be bounded, the request fails closed rather
+   * than ignoring the filter. Applies to URL sources (the only sources that
+   * have a freshness state).
+   */
+  freshness?: KnowledgeFreshnessState[];
 }
 
 /**

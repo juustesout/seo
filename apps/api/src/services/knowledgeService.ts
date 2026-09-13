@@ -53,9 +53,9 @@ import type {
   KnowledgeDueRefreshDto,
   KnowledgeFetcher,
   KnowledgeFile,
+  KnowledgeFreshnessState,
   KnowledgeProvider,
   KnowledgeRefreshPolicy,
-  KnowledgeSearchFilter,
   KnowledgeSearchHitDto,
   KnowledgeSearchResponse,
   KnowledgeSearchResult,
@@ -103,7 +103,6 @@ import {
   KNOWLEDGE_SEARCH_DEFAULT_LIMIT,
   KNOWLEDGE_SEARCH_MAX_CHARS,
   KNOWLEDGE_SEARCH_MAX_LIMIT,
-  KNOWLEDGE_SEARCH_QUERY_MAX_CHARS,
   MAX_CHUNKS,
   MAX_NORMALIZED_CHARS,
 } from '../knowledge/limits.js';
@@ -120,6 +119,10 @@ import { buildSearchContent } from '../knowledge/retrieval/content.js';
 import { retrieveCandidates } from '../knowledge/retrieval/pipeline.js';
 import { clearProjectLexicalChunks, clearSourceLexicalChunks, replaceLexicalChunks } from '../knowledge/retrieval/lexical.js';
 import { resolveRetrievalMode } from '../knowledge/retrieval/mode.js';
+import { normalizeKnowledgeQuery } from '../knowledge/retrieval/normalize.js';
+import { buildKnowledgeQueryPlan } from '../knowledge/retrieval/plan.js';
+import { RetrievalScopeError } from '../knowledge/retrieval/scope.js';
+import type { ManagedSourceFacts } from '../knowledge/retrieval/sourceFacts.js';
 import type { RetrievalOutcome } from '../knowledge/retrieval/types.js';
 
 /** Largest single source body accepted for indexing (bytes/chars). Bounding it
@@ -219,7 +222,7 @@ const NOOP_CREDENTIALS: ProviderContext['credentials'] = {
  * home is the internal retrieval boundary (`knowledge/retrieval/*`), shared by
  * the vector and lexical candidate adapters.
  */
-export { sourceExternalId, managedSourceIdFromPayload, buildSearchContent };
+export { sourceExternalId, managedSourceIdFromPayload, buildSearchContent, normalizeKnowledgeQuery as normalizeSearchQuery };
 
 /**
  * Builds the provider document for one source row by running the type's
@@ -399,23 +402,15 @@ export interface KnowledgeSearchInput {
   /** Restrict to one collection (KB8) or, with `uncategorized`, to none. */
   collectionId?: string;
   uncategorized?: boolean;
+  /**
+   * Restrict to managed sources with one of these derived freshness states
+   * (KB10.2). Derived via the single `computeFreshness` owner; a derived filter
+   * is resolved to a bounded source allowlist or the request fails closed.
+   */
+  freshness?: KnowledgeFreshnessState[];
 }
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-/**
- * Normalize a retrieval query: control characters become spaces, runs of
- * whitespace collapse, and the result is hard-capped. Returns '' for a blank
- * query so the caller can reject it instead of searching for whitespace.
- */
-export function normalizeSearchQuery(value: string | undefined): string {
-  if (!value) return '';
-  return value
-    .replace(/[\u0000-\u001f\u007f]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .slice(0, KNOWLEDGE_SEARCH_QUERY_MAX_CHARS);
-}
 
 /** Clamp a requested result count into [1, max]; non-finite falls back to default. */
 export function clampSearchLimit(value: number | undefined): number {
@@ -1446,16 +1441,17 @@ export class KnowledgeService {
   }
 
   /**
-   * Canonical retrieval (KB6, hybrid foundation in KB10): one bounded,
+   * Canonical retrieval (KB6, metadata-aware hybrid in KB10.2): one bounded,
    * attributed result envelope for the API, the Search Explorer and the writer.
-   * The query is normalized, the limit is clamped, and filters are projected
-   * onto the shared allowlisted shape - no raw client filter ever reaches a
-   * provider. Vector and (in hybrid mode) lexical candidates are gathered behind
-   * the internal retrieval boundary, fused deterministically, then mapped to
-   * attributed results; a hit without a real source identity is dropped rather
-   * than invented, and a hit without content never enters the result set.
-   * Diagnostics are measured inside this boundary only (never a raw provider
-   * payload, origin list or score detail).
+   * The query is normalized once, the limit is clamped, and the request is
+   * turned into a deterministic query plan whose canonical scope is projected
+   * onto both origins - no raw client filter ever reaches a provider. Vector
+   * and (in hybrid mode) lexical candidates are reconciled against the scope
+   * BEFORE fusion, fused deterministically, then mapped to attributed results.
+   * A hit without a real source identity is dropped rather than invented, and a
+   * hit without content never enters the result set. Diagnostics are measured
+   * inside this boundary only (never a raw provider payload, origin list or
+   * score detail).
    */
   async search(projectId: string, input: KnowledgeSearchInput): Promise<KnowledgeSearchResponse> {
     const reason = this.configuredReason();
@@ -1463,16 +1459,28 @@ export class KnowledgeService {
     const provider = this.knowledgeProvider();
     if (!provider) throw ApiError.notConfigured('The knowledge provider is not registered on this server.');
 
-    const query = normalizeSearchQuery(input.query);
+    const query = normalizeKnowledgeQuery(input.query);
     if (!query) throw ApiError.badRequest('Enter a search query.');
     const limit = clampSearchLimit(input.limit);
-    const filter = KnowledgeService.buildSearchFilter(input);
     const mode = resolveRetrievalMode(this.container.config.env);
 
     const started = Date.now();
     let outcome: RetrievalOutcome;
     try {
-      outcome = await retrieveCandidates({ provider, sb: this.sb }, { projectId, query, limit, filter, mode });
+      const plan = await buildKnowledgeQueryPlan(this.sb, {
+        projectId,
+        query,
+        limit,
+        mode,
+        filter: {
+          sourceTypes: input.sourceTypes,
+          sourceIds: input.sourceIds,
+          collectionId: input.collectionId,
+          uncategorized: input.uncategorized,
+          freshness: input.freshness,
+        },
+      });
+      outcome = await retrieveCandidates({ provider, sb: this.sb }, plan);
     } catch (err) {
       throw KnowledgeService.mapSearchError(err);
     }
@@ -1483,7 +1491,7 @@ export class KnowledgeService {
       score: candidate.score,
       payload: candidate.payload,
     }));
-    const results = (await this.attributeSearchHits(projectId, hits)).slice(0, limit);
+    const results = this.attributeSearchHits(hits, outcome.sourceFacts).slice(0, limit);
     return {
       project_id: projectId,
       query,
@@ -1498,56 +1506,17 @@ export class KnowledgeService {
   }
 
   /**
-   * Project a validated request onto the provider filter allowlist. Source ids
-   * are the project's source UUIDs; they are mapped to the `source:<id>` index
-   * key. Anything else is ignored rather than forwarded, and an invalid id is a
-   * bad request instead of a silently broadened search.
-   */
-  private static buildSearchFilter(input: KnowledgeSearchInput): KnowledgeSearchFilter | undefined {
-    const filter: KnowledgeSearchFilter = {};
-    const sourceTypes = [...new Set(input.sourceTypes ?? [])];
-    if (sourceTypes.length > 0) filter.sourceTypes = sourceTypes;
-    const ids = [...new Set((input.sourceIds ?? []).map((id) => id.trim()).filter(Boolean))];
-    if (ids.some((id) => !UUID.test(id))) throw ApiError.badRequest('Invalid source id filter');
-    if (ids.length > 0) filter.sourceIds = ids.map(sourceExternalId);
-    if (input.collectionId) {
-      const collectionId = input.collectionId.trim();
-      if (!UUID.test(collectionId)) throw ApiError.badRequest('Invalid collection id filter');
-      filter.collectionId = collectionId;
-    } else if (input.uncategorized) {
-      filter.uncategorized = true;
-    }
-    return Object.keys(filter).length > 0 ? filter : undefined;
-  }
-
-  /**
-   * Attribute raw provider hits to Knowledge Sources. Managed sources
-   * (`source:<uuid>`) are resolved against this project's registry so the name
-   * and type are authoritative; a hit whose managed source is missing from the
-   * project or is no longer freshly indexed is dropped (fail closed, no
+   * Attribute reconciled hits to Knowledge Sources using the facts the
+   * retrieval boundary already resolved (no second database read). Managed
+   * sources (`source:<uuid>`) use the authoritative project row; a hit whose
+   * managed source is missing or not `ready` is dropped (fail closed, no
    * cross-project or stale leak). System-indexed knowledge is attributed from
    * the hit's own safe metadata, never from a vector point id.
    */
-  private async attributeSearchHits(
-    projectId: string,
+  private attributeSearchHits(
     hits: KnowledgeSearchResult[],
-  ): Promise<KnowledgeSearchHitDto[]> {
-    const managedIds = [
-      ...new Set(
-        hits.map((h) => managedSourceIdFromPayload(h.payload)).filter((id): id is string => Boolean(id)),
-      ),
-    ];
-    const rows = new Map<string, SourceRow>();
-    if (managedIds.length > 0) {
-      const { data, error } = await this.sb
-        .from('seo_knowledge_sources')
-        .select('id, name, source_type, url, status, collection_id, collection:seo_knowledge_collections(name)')
-        .eq('project_id', projectId)
-        .in('id', managedIds);
-      if (error) throw ApiError.badRequest('Could not attribute knowledge results');
-      for (const row of (data ?? []) as SourceRow[]) rows.set(String(row.id), row);
-    }
-
+    facts: ReadonlyMap<string, ManagedSourceFacts>,
+  ): KnowledgeSearchHitDto[] {
     const results: KnowledgeSearchHitDto[] = [];
     for (const hit of hits) {
       const score = Number(hit.score);
@@ -1558,16 +1527,16 @@ export class KnowledgeService {
 
       const managedId = managedSourceIdFromPayload(payload);
       if (managedId) {
-        const row = rows.get(managedId);
-        if (!row || String(row.status ?? '') !== 'ready') continue;
+        const row = facts.get(managedId);
+        if (!row || row.status !== 'ready') continue;
         results.push({
           source_id: managedId,
-          source_name: String(row.name ?? '').trim() || managedId,
-          source_type: (row.source_type as KnowledgeSourceType) ?? 'text',
-          source_url: typeof row.url === 'string' && row.url.trim() ? row.url.trim() : null,
+          source_name: row.name.trim() || managedId,
+          source_type: row.sourceType,
+          source_url: row.url,
           managed: true,
-          collection_id: row.collection_id ? String(row.collection_id) : null,
-          collection_name: row.collection_id ? embeddedCollectionName(row) : null,
+          collection_id: row.collectionId,
+          collection_name: row.collectionName,
           chunk_index: chunkIndexFromPayload(payload),
           content,
           score,
@@ -1598,6 +1567,7 @@ export class KnowledgeService {
   /** Maps retrieval failures to clean ApiErrors; provider internals never leak. */
   private static mapSearchError(err: unknown): ApiError {
     if (err instanceof ApiError) return err;
+    if (err instanceof RetrievalScopeError) return new ApiError(err.status, err.code, err.message);
     if (isKnowledgeIngestError(err)) return new ApiError(err.status, err.code, err.message);
     const message = err instanceof Error ? err.message : String(err);
     if (/not configured/i.test(message)) {

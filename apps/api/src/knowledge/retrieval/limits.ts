@@ -22,3 +22,13 @@ export const KNOWLEDGE_RETRIEVAL_FUSED_CANDIDATES = 50;
  * widely used default; keeping it here means the ranking policy has one owner.
  */
 export const KNOWLEDGE_RETRIEVAL_RRF_K = 60;
+
+/**
+ * Hard cap on the derived source scope a metadata filter may resolve to. Some
+ * filters (freshness) are derived in the app from stored facts rather than
+ * stored in the vector index, so honouring them means materialising a bounded
+ * set of managed source ids and restricting both origins to it. A project with
+ * more matching ready sources than this cannot be scoped efficiently, so the
+ * request fails closed instead of silently scanning or partially filtering.
+ */
+export const KNOWLEDGE_RETRIEVAL_MAX_SCOPE_SOURCES = 500;
