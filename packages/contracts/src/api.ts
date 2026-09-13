@@ -6,7 +6,7 @@
  * (PostgREST) under Row Level Security.
  */
 
-import type { JobType, MemberRole, PublicationStatus, PublishContentKind, ScheduleStatus } from './common.js';
+import type { JobStatus, JobType, MemberRole, PublicationStatus, PublishContentKind, ScheduleStatus } from './common.js';
 import type {
   DataSource,
   Integration,
@@ -1550,4 +1550,56 @@ export interface ProjectKeywordsDto {
   propertyId: string | null;
   lastSyncedAt: string | null;
   keywords: KeywordDto[];
+}
+
+// ---------------------------------------------------------------------------
+// Keyword research (KW2): the DataForSEO research feature. One explicit seed
+// starts one background job (the single existing dataforseo_keyword_research
+// execution path) and the run's bounded results live on that job row
+// (seo_sync_jobs.result) - so the UI reads the exact run it started and never
+// guesses which keywords belong to which research. Research rows are also
+// upserted into the shared seo_keywords store; that store is not a run history.
+// ---------------------------------------------------------------------------
+
+/** Longest seed keyword accepted (trimmed, whitespace-normalized). */
+export const KEYWORD_RESEARCH_SEED_MAX_CHARS = 200;
+
+/** Hard cap on keyword rows carried on one run (never a raw provider blob). */
+export const KEYWORD_RESEARCH_RUN_MAX_KEYWORDS = 100;
+
+/** Start one keyword research run from a single seed keyword. */
+export interface KeywordResearchRequest {
+  seed: string;
+}
+
+/** One bounded research result. Market metrics are null when unreported. */
+export interface KeywordResearchKeywordDto {
+  keyword: string;
+  searchVolume: number | null;
+  difficulty: number | null;
+  cpc: number | null;
+}
+
+/** The queued run handle returned when research starts. */
+export interface KeywordResearchStartDto {
+  jobId: string;
+  status: JobStatus;
+  seed: string;
+}
+
+/**
+ * A research run as read back by its owning project. `keywords` is populated
+ * only once the run completes; a failed run reports a safe, generic `error`.
+ * This is a safe projection of exactly one job - never raw provider output.
+ */
+export interface KeywordResearchRunDto {
+  jobId: string;
+  seed: string;
+  status: JobStatus;
+  /** Number of keyword rows the run produced (0 until it completes). */
+  results: number;
+  keywords: KeywordResearchKeywordDto[];
+  error: string | null;
+  createdAt: string;
+  completedAt: string | null;
 }

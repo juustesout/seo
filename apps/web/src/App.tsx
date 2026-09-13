@@ -302,7 +302,7 @@ export function App() {
           <ProjectSidebar projectId={pid} view={view} onNavigate={goProject} />
           <main className="min-w-0 flex-1 px-6 py-6">
             {view === 'dashboard' && <Dashboard projectId={pid} onOpenSettings={() => goProject(pid, 'settings')} />}
-            {view === 'keywords' && <Keywords projectId={pid} />}
+            {view === 'keywords' && <Keywords projectId={pid} role={project.role} />}
             {view === 'data' && <DataViews projectId={pid} />}
             {view === 'integrations' && <Integrations projectId={pid} />}
             {view === 'knowledge' && (

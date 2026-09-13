@@ -1,20 +1,36 @@
 /**
- * Keywords view tests (KW1 web).
+ * Keywords view tests (KW1 + KW2 web).
  *
- * The page is a thin read: it must render the four honest states from the API
- * payload - loading, no property linked, linked but no data yet, and data - and
- * never leak a raw error message. The API module is mocked; the shared
- * `useAsync` hook runs for real.
+ * Two separated surfaces are covered:
+ *   - Research (DataForSEO): idle, viewer gating, submit + running, results,
+ *     not-configured and honest failure states.
+ *   - My keywords (Search Console): the four honest read states from KW1.
+ *
+ * The API module is mocked; the shared `useAsync` hook runs for real.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
-import type { ProjectKeywordsDto } from '@seo/contracts';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import type { KeywordResearchRunDto, ProjectKeywordsDto } from '@seo/contracts';
 import { Keywords } from './Keywords';
 
-const { apiMock } = vi.hoisted(() => ({ apiMock: { api: vi.fn() } }));
-vi.mock('../lib/api', () => ({ api: apiMock.api }));
+const { apiMock, ApiRequestErrorMock } = vi.hoisted(() => {
+  class ApiRequestErrorMock extends Error {
+    constructor(
+      public code: string,
+      message: string,
+      public status: number,
+    ) {
+      super(message);
+      this.name = 'ApiRequestError';
+    }
+  }
+  return { apiMock: { api: vi.fn() }, ApiRequestErrorMock };
+});
+vi.mock('../lib/api', () => ({ api: apiMock.api, ApiRequestError: ApiRequestErrorMock }));
 
 const PROJECT = 'p-1';
+
+const EMPTY_GSC: ProjectKeywordsDto = { propertyId: null, lastSyncedAt: null, keywords: [] };
 
 beforeEach(() => {
   apiMock.api.mockReset();
@@ -24,10 +40,10 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe('Keywords view', () => {
+describe('Keywords view - GSC read states', () => {
   it('shows a loading state while the request is in flight', () => {
     apiMock.api.mockReturnValue(new Promise<ProjectKeywordsDto>(() => {}));
-    render(<Keywords projectId={PROJECT} />);
+    render(<Keywords projectId={PROJECT} role="viewer" />);
     expect(screen.getByText('Loading keywords…')).toBeTruthy();
   });
 
@@ -38,7 +54,7 @@ describe('Keywords view', () => {
       keywords: [{ keyword: 'seo tools', clicks: 1200, impressions: 40000, ctr: 0.03, position: 4.25 }],
     } satisfies ProjectKeywordsDto);
 
-    render(<Keywords projectId={PROJECT} />);
+    render(<Keywords projectId={PROJECT} role="viewer" />);
 
     expect(await screen.findByText('seo tools')).toBeTruthy();
     expect(screen.getByText('1,200')).toBeTruthy();
@@ -49,14 +65,14 @@ describe('Keywords view', () => {
   });
 
   it('prompts to connect Search Console when no property is linked', async () => {
-    apiMock.api.mockResolvedValue({ propertyId: null, lastSyncedAt: null, keywords: [] } satisfies ProjectKeywordsDto);
-    render(<Keywords projectId={PROJECT} />);
+    apiMock.api.mockResolvedValue(EMPTY_GSC);
+    render(<Keywords projectId={PROJECT} role="viewer" />);
     expect(await screen.findByText('Google Search Console is not connected to this project.')).toBeTruthy();
   });
 
   it('prompts to run a sync when a property is linked but has no data', async () => {
     apiMock.api.mockResolvedValue({ propertyId: 'prop-1', lastSyncedAt: null, keywords: [] } satisfies ProjectKeywordsDto);
-    render(<Keywords projectId={PROJECT} />);
+    render(<Keywords projectId={PROJECT} role="viewer" />);
     expect(
       await screen.findByText('No keyword data is available yet. Run a Google Search Console sync first.'),
     ).toBeTruthy();
@@ -64,8 +80,137 @@ describe('Keywords view', () => {
 
   it('shows a generic message on failure without leaking the raw error', async () => {
     apiMock.api.mockRejectedValue(new Error('boom: raw database secret'));
-    render(<Keywords projectId={PROJECT} />);
+    render(<Keywords projectId={PROJECT} role="viewer" />);
     expect(await screen.findByText('Could not load keyword data. Please try again.')).toBeTruthy();
     expect(screen.queryByText(/raw database secret/)).toBeNull();
+  });
+});
+
+describe('Keywords view - Research (KW2)', () => {
+  function mockResearch(handlers: {
+    gsc?: ProjectKeywordsDto;
+    post?: () => Promise<unknown>;
+    get?: () => Promise<KeywordResearchRunDto>;
+  }) {
+    apiMock.api.mockImplementation(async (path: string, opts?: { method?: string }) => {
+      if (path.endsWith('/gsc/keywords')) return handlers.gsc ?? EMPTY_GSC;
+      if (path.endsWith('/keyword/research') && opts?.method === 'POST') {
+        return handlers.post ? handlers.post() : Promise.reject(new Error('no post handler'));
+      }
+      if (path.includes('/keyword/research/')) {
+        if (!handlers.get) throw new Error('no get handler');
+        return handlers.get();
+      }
+      throw new Error(`unexpected ${path}`);
+    });
+  }
+
+  const STARTED = { jobId: 'run-1', status: 'queued' as const, seed: 'seo tools' };
+
+  function run(overrides: Partial<KeywordResearchRunDto> = {}): KeywordResearchRunDto {
+    return {
+      jobId: 'run-1',
+      seed: 'seo tools',
+      status: 'completed',
+      results: 0,
+      keywords: [],
+      error: null,
+      createdAt: '2026-09-13T10:00:00.000Z',
+      completedAt: '2026-09-13T10:00:10.000Z',
+      ...overrides,
+    };
+  }
+
+  it('shows the idle prompt and does not start anything', async () => {
+    mockResearch({});
+    render(<Keywords projectId={PROJECT} role="editor" />);
+    expect(await screen.findByText('Enter a keyword to research.')).toBeTruthy();
+  });
+
+  it('blocks viewers from starting research', async () => {
+    mockResearch({});
+    render(<Keywords projectId={PROJECT} role="viewer" />);
+    expect(await screen.findByText('Only editors and above can start keyword research.')).toBeTruthy();
+    expect((screen.getByLabelText('Seed keyword') as HTMLInputElement).disabled).toBe(true);
+    expect((screen.getByRole('button', { name: 'Start research' }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('validates an empty seed before calling the API', async () => {
+    mockResearch({});
+    render(<Keywords projectId={PROJECT} role="editor" />);
+    fireEvent.change(screen.getByLabelText('Seed keyword'), { target: { value: '   ' } });
+    const button = screen.getByRole('button', { name: 'Start research' }) as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+  });
+
+  it('submits a trimmed seed, then shows the running state', async () => {
+    let posted: Record<string, unknown> | null = null;
+    apiMock.api.mockImplementation(async (path: string, opts?: { method?: string; body?: unknown }) => {
+      if (path.endsWith('/gsc/keywords')) return EMPTY_GSC;
+      if (path.endsWith('/keyword/research') && opts?.method === 'POST') {
+        posted = opts.body as Record<string, unknown>;
+        return STARTED;
+      }
+      if (path.includes('/keyword/research/')) return run({ status: 'running', completedAt: null });
+      throw new Error(`unexpected ${path}`);
+    });
+
+    render(<Keywords projectId={PROJECT} role="editor" />);
+    fireEvent.change(screen.getByLabelText('Seed keyword'), { target: { value: '  seo tools  ' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Start research' }));
+
+    expect(await screen.findByText('Researching keywords…')).toBeTruthy();
+    expect(posted).toEqual({ seed: 'seo tools' });
+  });
+
+  it('renders the run results once completed', async () => {
+    mockResearch({
+      post: async () => STARTED,
+      get: async () =>
+        run({
+          results: 2,
+          keywords: [
+            { keyword: 'seo software', searchVolume: 1200, difficulty: 40, cpc: 2.5 },
+            { keyword: 'seo tools', searchVolume: null, difficulty: null, cpc: null },
+          ],
+        }),
+    });
+
+    render(<Keywords projectId={PROJECT} role="editor" />);
+    fireEvent.change(screen.getByLabelText('Seed keyword'), { target: { value: 'seo tools' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Start research' }));
+
+    expect(await screen.findByText('seo software')).toBeTruthy();
+    expect(await screen.findByText('1,200')).toBeTruthy();
+    expect(screen.getByText('$2.50')).toBeTruthy();
+    expect(screen.getByText(/2 results/)).toBeTruthy();
+  });
+
+  it('maps a not-configured server error to an honest message', async () => {
+    mockResearch({
+      post: async () => {
+        throw new ApiRequestErrorMock('not_configured', 'No dataforseo provider is registered', 503);
+      },
+    });
+
+    render(<Keywords projectId={PROJECT} role="editor" />);
+    fireEvent.change(screen.getByLabelText('Seed keyword'), { target: { value: 'seo tools' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Start research' }));
+
+    expect(await screen.findByText('Keyword research is not configured.')).toBeTruthy();
+  });
+
+  it('shows an honest failure without leaking provider internals', async () => {
+    mockResearch({
+      post: async () => STARTED,
+      get: async () => run({ status: 'failed', completedAt: '2026-09-13T10:00:10.000Z', error: 'Keyword research failed. Please try again.' }),
+    });
+
+    render(<Keywords projectId={PROJECT} role="editor" />);
+    fireEvent.change(screen.getByLabelText('Seed keyword'), { target: { value: 'seo tools' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Start research' }));
+
+    expect(await screen.findByText('Keyword research failed. Please try again.')).toBeTruthy();
+    await waitFor(() => expect(screen.queryByText(/api\.dataforseo\.com/)).toBeNull());
   });
 });

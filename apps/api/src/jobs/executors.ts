@@ -22,7 +22,7 @@ import { KnowledgeService } from '../services/knowledgeService.js';
 import { ContentAgentService } from '../services/contentAgentService.js';
 import { ContentAnalysisService } from '../services/contentAnalysisService.js';
 import { isDataImage, storeImageDataUrl } from '../infra/mediaStorage.js';
-import { asContentBlocks, type ContentBlock } from '@seo/contracts';
+import { asContentBlocks, KEYWORD_RESEARCH_RUN_MAX_KEYWORDS, type ContentBlock, type KeywordResearchKeywordDto } from '@seo/contracts';
 
 export interface JobExecContext {
   container: ServiceContainer;
@@ -296,8 +296,17 @@ const dataForSeoKeywordResearch: JobExecutor = async ({ container, job, writer, 
   const results = await dfseo.researchKeywords(ctx, seeds);
   await report(70, `Persisting ${results.length} suggested keywords`);
   await writer.persistKeywordResearch(job.project_id, results);
+  // The run's own bounded result (seo_sync_jobs.result) so the UI can show the
+  // exact keywords this job produced. Capped, normalized DTOs only - never a
+  // raw provider blob.
+  const keywords: KeywordResearchKeywordDto[] = results.slice(0, KEYWORD_RESEARCH_RUN_MAX_KEYWORDS).map((r) => ({
+    keyword: r.keyword,
+    searchVolume: r.search_volume ?? null,
+    difficulty: r.difficulty ?? null,
+    cpc: r.cpc ?? null,
+  }));
   await report(100, 'Keyword research complete');
-  return { seeds: seeds.length, results: results.length };
+  return { seed: seeds[0] ?? null, seeds: seeds.length, results: results.length, keywords };
 };
 
 // ---------------------------------------------------------------------------

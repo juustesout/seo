@@ -4,10 +4,11 @@
  *
  * Mounted at /api/projects/:projectId/jobs. Session-authenticated with role
  * gates: viewers list jobs, editors enqueue, admins cancel. Enqueuing is thin -
- * the route validates the job_type against the platform's known vocabulary,
- * checks the backing provider is honestly configured/connected (never silently
- * queuing a job whose provider is absent), and delegates row creation to the
- * container job store. Long provider work never blocks an HTTP handler here.
+ * it delegates to the shared job-enqueue gate (../../jobs/enqueue.ts), which
+ * validates the job_type, checks the backing provider is honestly
+ * configured/connected (never silently queuing a job whose provider is absent)
+ * and resolves the project data source. Long provider work never blocks an
+ * HTTP handler here.
  */
 
 import { Router } from 'express';
@@ -15,111 +16,12 @@ import { z } from 'zod';
 import { requireAuth } from '../middleware.js';
 import { asyncHandler } from '../asyncHandler.js';
 import { ApiError } from '../../apiErrors.js';
+import { enqueueJob } from '../../jobs/enqueue.js';
 import { parseId, parseProjectId } from './utils.js';
 
 export const jobsRouter: Router = Router({ mergeParams: true });
 
 jobsRouter.use(requireAuth);
-
-/** Maps every platform job_type to its owning provider (drives gating + data source resolution). */
-const JOB_PROVIDER: Record<string, string> = {
-  gsc_sync: 'gsc',
-  dataforseo_rank_sync: 'dataforseo',
-  dataforseo_keyword_research: 'dataforseo',
-  serp_retrieval: 'dataforseo',
-  competitor_research: 'dataforseo',
-  website_crawl: 'crawler',
-  website_audit: 'crawler',
-  knowledge_index: 'qdrant',
-  knowledge_reindex: 'qdrant',
-  knowledge_delete: 'qdrant',
-  knowledge_discovery: 'qdrant',
-};
-
-const KNOWN_JOB_TYPES = Object.keys(JOB_PROVIDER);
-
-/** The most recently created data source of a provider for this project, if any. */
-async function resolveDataSource(container: ReturnType<typeof import('../../context.js').getContainer>, projectId: string, provider: string) {
-  const { data } = await container.sb
-    .from('seo_data_sources')
-    .select('*')
-    .eq('project_id', projectId)
-    .eq('provider_type', provider)
-    .order('created_at', { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  return data ? (data as Record<string, unknown>) : null;
-}
-
-/**
- * The connected GSC integration behind a project's linked property. Since
- * Stage 4 the Google connection lives at the account level (integration has
- * project_id NULL) and the project's property references it; legacy rows
- * reference a project-scoped integration. Returns null when unresolved.
- */
-async function resolveGscIntegrationForProject(
-  container: ReturnType<typeof import('../../context.js').getContainer>,
-  projectId: string,
-): Promise<string | null> {
-  const { data: link } = await container.sb
-    .from('seo_project_properties')
-    .select('property_id')
-    .eq('project_id', projectId)
-    .order('is_primary', { ascending: false })
-    .order('created_at', { ascending: true })
-    .limit(1)
-    .maybeSingle();
-  if (!link) return null;
-  const { data: property } = await container.sb
-    .from('seo_gsc_properties')
-    .select('integration_id')
-    .eq('id', (link as Record<string, unknown>).property_id as string)
-    .maybeSingle();
-  const integrationId = (property as Record<string, unknown> | null)?.integration_id as string | null;
-  if (!integrationId) return null;
-  const { data: integration } = await container.sb
-    .from('seo_integrations')
-    .select('id, project_id, account_id')
-    .eq('id', integrationId)
-    .eq('status', 'connected')
-    .maybeSingle();
-  if (!integration) return null;
-  const { data: project } = await container.sb.from('seo_projects').select('account_id').eq('id', projectId).maybeSingle();
-  const accountId = (project as Record<string, unknown> | null)?.account_id as string | null;
-  const row = integration as Record<string, unknown>;
-  const ownedByProject = (row.project_id as string | null) === projectId;
-  const ownedByProjectAccount = (row.project_id as string | null) === null && (row.account_id as string | null) === accountId;
-  return ownedByProject || ownedByProjectAccount ? integrationId : null;
-}
-
-/**
- * Verify a provider has a connected integration before a job is enqueued, and
- * return its id. GSC goes through the account/property link (resolveGsc...);
- * every other provider needs a connected project-scoped integration row.
- * Enqueuing without this check would produce jobs that fail at run time
- * instead of telling the user what to connect.
- */
-async function assertConnectedIntegration(
-  container: ReturnType<typeof import('../../context.js').getContainer>,
-  projectId: string,
-  provider: string,
-) {
-  if (provider === 'gsc') {
-    const linked = await resolveGscIntegrationForProject(container, projectId);
-    if (linked) return linked;
-  }
-  const { data } = await container.sb
-    .from('seo_integrations')
-    .select('id')
-    .eq('project_id', projectId)
-    .eq('provider_type', provider)
-    .eq('status', 'connected')
-    .maybeSingle();
-  if (!data) {
-    throw ApiError.badRequest(`No connected ${provider} integration for this project`);
-  }
-  return data.id as string;
-}
 
 /** Enqueue a background job. The job row is inserted server-side only. */
 jobsRouter.post(
@@ -139,46 +41,14 @@ jobsRouter.post(
       })
       .parse(req.body);
 
-    if (!KNOWN_JOB_TYPES.includes(body.job_type)) {
-      throw ApiError.badRequest(`Unknown job_type '${body.job_type}'. Known: ${KNOWN_JOB_TYPES.join(', ')}`);
-    }
-    const provider = JOB_PROVIDER[body.job_type]!;
-
-    // crawler job types exist in the platform vocabulary but no crawler
-    // provider is registered yet -> honest "not configured", never silent fake.
-    if (provider === 'crawler' || (provider !== 'qdrant' && !container.registry.getDataSource(provider))) {
-      throw ApiError.notConfigured(`No ${provider} provider is registered on this server yet`);
-    }
-    if (provider === 'qdrant' && !container.registry.getKnowledge('qdrant')) {
-      throw ApiError.notConfigured('The qdrant knowledge provider is not registered on this server yet');
-    }
-
-    // Knowledge indexing is server-configured (env), not a user-connected
-    // integration; everything else requires a connected integration.
-    let integrationId: string | null = null;
-    if (provider !== 'qdrant') {
-      integrationId = await assertConnectedIntegration(container, projectId, provider);
-    }
-
-    let dataSourceId: string | null = body.data_source_id ?? null;
-    if (!dataSourceId && provider !== 'qdrant') {
-      const ds = await resolveDataSource(container, projectId, provider);
-      dataSourceId = ds ? (ds.id as string) : null;
-    }
-    if (!dataSourceId && provider !== 'qdrant') {
-      throw ApiError.badRequest(`Attach a ${provider} data source to this project before syncing`);
-    }
-
-    const job = await container.jobStore.enqueue({
-      project_id: projectId,
-      provider,
-      job_type: body.job_type,
+    const job = await enqueueJob(container, {
+      projectId,
+      userId: user!.sub,
+      jobType: body.job_type,
       params: body.params,
-      integration_id: integrationId,
-      data_source_id: dataSourceId,
-      created_by: user!.sub,
-      run_after: body.run_after,
-      max_retries: body.max_retries,
+      dataSourceId: body.data_source_id ?? null,
+      runAfter: body.run_after,
+      maxRetries: body.max_retries,
     });
     res.status(202).json({ data: { job } });
   }),
