@@ -128,7 +128,28 @@ export interface SeoDataSource {
     competitors: string[],
     opts?: { minSearchVolume?: number; maxRank?: number; limitPerCompetitor?: number },
   ): Promise<import('./models.js').CompetitorKeywordGap[]>;
-  researchKeywords?(ctx: ProviderContext, keywords: string[]): Promise<KeywordResearchResult[]>;
+  researchKeywords?(ctx: ProviderContext, keywords: string[], opts?: { limit?: number; minSearchVolume?: number }): Promise<KeywordResearchResult[]>;
+  /**
+   * Keywords related to one seed (KW4 related expansion). `depth` (0-4) widens
+   * the provider's ring; `minSearchVolume` is pushed provider-side so only
+   * relevant rows return. Optional: an adapter that cannot expand this way
+   * simply omits the method and the run reports it skipped.
+   */
+  relatedKeywords?(
+    ctx: ProviderContext,
+    seed: string,
+    opts?: { depth?: number; limit?: number; minSearchVolume?: number },
+  ): Promise<KeywordResearchResult[]>;
+  /**
+   * Keyword ideas for a set of seeds (KW4 ideas expansion), one provider call.
+   * `closelyVariants` restricts the vendor result to close variants;
+   * `minSearchVolume` is pushed provider-side.
+   */
+  keywordIdeas?(
+    ctx: ProviderContext,
+    seeds: string[],
+    opts?: { limit?: number; closelyVariants?: boolean; minSearchVolume?: number },
+  ): Promise<KeywordResearchResult[]>;
   crawl?(ctx: ProviderContext, startUrls: string[]): Promise<{ pages: Page[]; findings: AuditFinding[] }>;
 }
 

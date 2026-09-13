@@ -10,7 +10,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import type { CompetitorResearchRunDto, KeywordResearchRunDto, ProjectKeywordsDto } from '@seo/contracts';
+import type { CompetitorResearchRunDto, KeywordExpansionRunDto, KeywordResearchRunDto, ProjectKeywordsDto } from '@seo/contracts';
 import { Keywords } from './Keywords';
 
 const { apiMock, ApiRequestErrorMock } = vi.hoisted(() => {
@@ -344,5 +344,99 @@ describe('Keywords view - Competitors (KW3)', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Find competitors' }));
 
     expect(await screen.findByText('Competitor research is not configured.')).toBeTruthy();
+  });
+});
+
+describe('Keywords view - Expand (KW4)', () => {
+  const JOB = 'exp-1';
+
+  function expansionRun(overrides: Partial<KeywordExpansionRunDto> = {}): KeywordExpansionRunDto {
+    return {
+      jobId: JOB,
+      status: 'completed',
+      seeds: ['seo tools'],
+      methods: ['suggestions'],
+      methodStatus: { suggestions: { status: 'success', count: 1 } },
+      candidates: [
+        {
+          keyword: 'seo software',
+          searchVolume: 1200,
+          difficulty: 40,
+          cpc: 2.5,
+          competition: 'HIGH',
+          intent: 'commercial',
+          methods: ['suggestions'],
+          seeds: ['seo tools'],
+        },
+      ],
+      count: 1,
+      error: null,
+      createdAt: '2026-09-13T10:00:00.000Z',
+      completedAt: '2026-09-13T10:00:10.000Z',
+      ...overrides,
+    };
+  }
+
+  function renderExpand(role = 'editor') {
+    render(<Keywords projectId={PROJECT} role={role} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Expand' }));
+  }
+
+  it('blocks viewers from running keyword expansion', async () => {
+    apiMock.api.mockResolvedValue(EMPTY_GSC);
+    renderExpand('viewer');
+    expect(await screen.findByText('Only editors and above can run keyword expansion.')).toBeTruthy();
+    expect((screen.getByRole('button', { name: 'Start expansion' }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('runs an expansion, shows partial method status, and saves a selected keyword', async () => {
+    let savedBody: Record<string, unknown> | null = null;
+    apiMock.api.mockImplementation(async (path: string, opts?: { method?: string; body?: unknown }) => {
+      if (path.endsWith('/gsc/keywords')) return EMPTY_GSC;
+      if (path.endsWith('/keyword/expansion') && opts?.method === 'POST') {
+        return { jobId: JOB, status: 'queued', seeds: ['seo tools'], methods: ['suggestions', 'related'] };
+      }
+      if (path.endsWith(`/keyword/expansion/${JOB}/save`) && opts?.method === 'POST') {
+        savedBody = opts.body as Record<string, unknown>;
+        return { saved: 1, skipped: 0 };
+      }
+      if (path.includes(`/keyword/expansion/${JOB}`)) {
+        return expansionRun({
+          methods: ['suggestions', 'related'],
+          methodStatus: { suggestions: { status: 'success', count: 1 }, related: { status: 'failed', count: 0 } },
+        });
+      }
+      throw new Error(`unexpected ${path}`);
+    });
+
+    renderExpand();
+    fireEvent.change(screen.getByLabelText('Seed keywords'), { target: { value: 'seo tools' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Start expansion' }));
+
+    expect(await screen.findByText('seo software')).toBeTruthy();
+    expect(screen.getByText('Related: failed')).toBeTruthy();
+    expect(screen.getByText('1,200')).toBeTruthy();
+
+    fireEvent.click(screen.getByLabelText('Select seo software'));
+    fireEvent.click(screen.getByRole('button', { name: 'Save selected' }));
+
+    await waitFor(() => expect(savedBody).toEqual({ keywords: ['seo software'] }));
+    expect(await screen.findByText(/Saved 1 keyword/)).toBeTruthy();
+  });
+
+  it('maps a not-configured server error to an honest message', async () => {
+    apiMock.api.mockImplementation(async (path: string, opts?: { method?: string }) => {
+      if (path.endsWith('/gsc/keywords')) return EMPTY_GSC;
+      if (path.endsWith('/keyword/expansion') && opts?.method === 'POST') {
+        throw new ApiRequestErrorMock('not_configured', 'No dataforseo provider is registered', 503);
+      }
+      throw new Error(`unexpected ${path}`);
+    });
+
+    renderExpand();
+    fireEvent.change(screen.getByLabelText('Seed keywords'), { target: { value: 'seo tools' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Start expansion' }));
+
+    expect(await screen.findByText('Keyword expansion is not configured.')).toBeTruthy();
   });
 });

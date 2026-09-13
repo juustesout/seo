@@ -100,6 +100,7 @@ export interface KeywordSuggestion {
       search_intent?: string;
       cpc?: number;
     };
+    search_intent_info?: { main_intent?: string };
     serp_info?: unknown;
   };
   keyword_info?: KeywordInfo;
@@ -371,21 +372,94 @@ export class DataForSeoClient {
   /**
    * Keyword suggestions for one seed (DataForSEO Labs). include_serp_info is
    * off because the platform only stores the suggestion metrics, not the SERP
-   * preview - keeping the response small and the quota spend low.
+   * preview - keeping the response small and the quota spend low. When
+   * `minSearchVolume` is supplied it is pushed provider-side as a filter; call
+   * with no opts for the exact legacy KW2 request.
    */
-  async keywordSuggestions(keyword: string, opts: { locationCode?: number; languageCode?: string; limit?: number } = {}): Promise<KeywordSuggestion[]> {
+  async keywordSuggestions(
+    keyword: string,
+    opts: { locationCode?: number; languageCode?: string; limit?: number; minSearchVolume?: number } = {},
+  ): Promise<KeywordSuggestion[]> {
+    const conditions: unknown[][] = [];
+    if (opts.minSearchVolume != null) {
+      conditions.push(['keyword_info.search_volume', '>=', opts.minSearchVolume]);
+    }
+    const filters = andFilters(conditions);
+    const body: Record<string, unknown> = {
+      keyword,
+      location_code: opts.locationCode ?? 2840,
+      language_code: opts.languageCode ?? 'en',
+      limit: opts.limit ?? 20,
+      include_serp_info: false,
+    };
+    if (filters) body.filters = filters;
     const data = await this.request<{ tasks?: Array<{ result?: Array<{ items?: KeywordSuggestion[] }> }> }>(
       'POST',
       '/v3/dataforseo_labs/google/keyword_suggestions/live',
-      [
-        {
-          keyword,
-          location_code: opts.locationCode ?? 2840,
-          language_code: opts.languageCode ?? 'en',
-          limit: opts.limit ?? 20,
-          include_serp_info: false,
-        },
-      ],
+      [body],
+    );
+    return data.tasks?.[0]?.result?.[0]?.items ?? [];
+  }
+
+  /**
+   * Keywords related to one seed (KW4 related expansion). Items nest their
+   * metrics under `keyword_data`, so volume/difficulty filters use the
+   * `keyword_data.*` path. `depth` widens the provider's ring (0-4).
+   */
+  async relatedKeywords(
+    keyword: string,
+    opts: { locationCode?: number; languageCode?: string; depth?: number; limit?: number; minSearchVolume?: number } = {},
+  ): Promise<KeywordSuggestion[]> {
+    const conditions: unknown[][] = [];
+    if (opts.minSearchVolume != null) {
+      conditions.push(['keyword_data.keyword_info.search_volume', '>=', opts.minSearchVolume]);
+    }
+    const filters = andFilters(conditions);
+    const body: Record<string, unknown> = {
+      keyword,
+      location_code: opts.locationCode ?? 2840,
+      language_code: opts.languageCode ?? 'en',
+      depth: opts.depth ?? 1,
+      limit: opts.limit ?? 100,
+      include_serp_info: false,
+    };
+    if (filters) body.filters = filters;
+    const data = await this.request<{ tasks?: Array<{ result?: Array<{ items?: KeywordSuggestion[] }> }> }>(
+      'POST',
+      '/v3/dataforseo_labs/google/related_keywords/live',
+      [body],
+    );
+    return data.tasks?.[0]?.result?.[0]?.items ?? [];
+  }
+
+  /**
+   * Keyword ideas for a set of seeds (KW4 ideas expansion) in one vendor call.
+   * `keywords` accepts up to the vendor maximum of 200; the caller caps the
+   * seed count. Metrics are flat on each item, so volume filters use the
+   * `keyword_info.*` path.
+   */
+  async keywordIdeas(
+    keywords: string[],
+    opts: { locationCode?: number; languageCode?: string; limit?: number; closelyVariants?: boolean; minSearchVolume?: number } = {},
+  ): Promise<KeywordSuggestion[]> {
+    const conditions: unknown[][] = [];
+    if (opts.minSearchVolume != null) {
+      conditions.push(['keyword_info.search_volume', '>=', opts.minSearchVolume]);
+    }
+    const filters = andFilters(conditions);
+    const body: Record<string, unknown> = {
+      keywords,
+      location_code: opts.locationCode ?? 2840,
+      language_code: opts.languageCode ?? 'en',
+      limit: opts.limit ?? 200,
+      closely_variants: opts.closelyVariants ?? false,
+      include_serp_info: false,
+    };
+    if (filters) body.filters = filters;
+    const data = await this.request<{ tasks?: Array<{ result?: Array<{ items?: KeywordSuggestion[] }> }> }>(
+      'POST',
+      '/v3/dataforseo_labs/google/keyword_ideas/live',
+      [body],
     );
     return data.tasks?.[0]?.result?.[0]?.items ?? [];
   }

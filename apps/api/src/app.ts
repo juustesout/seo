@@ -44,6 +44,7 @@ import { writerRouter } from './http/routes/writer.js';
 import { mediaRouter } from './http/routes/media.js';
 import { jobsRouter } from './http/routes/jobs.js';
 import { keywordResearchRouter } from './http/routes/keywordResearch.js';
+import { keywordExpansionRouter } from './http/routes/keywordExpansion.js';
 import { competitorResearchRouter } from './http/routes/competitorResearch.js';
 import { seoRouter } from './http/routes/seo.js';
 import { projectApiKeysRouter } from './http/routes/projectApiKeys.js';
@@ -148,6 +149,7 @@ export function createApp(): Express {
   app.use('/api/projects/:projectId/media', mediaRouter);
   app.use('/api/projects/:projectId/jobs', jobsRouter);
   app.use('/api/projects/:projectId/keyword', keywordResearchRouter);
+  app.use('/api/projects/:projectId/keyword', keywordExpansionRouter);
   app.use('/api/projects/:projectId/keyword', competitorResearchRouter);
   app.use('/api/projects/:projectId/api-keys', projectApiKeysRouter);
   app.use('/api/projects/:projectId/gsc', projectGscRouter);

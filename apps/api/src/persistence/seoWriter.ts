@@ -71,6 +71,21 @@ export interface SerpSnapshotInput {
 }
 
 /**
+ * One explicitly saved KW4 expansion candidate, ready to upsert. `meta`
+ * carries the run-derived provenance (run id, methods, seeds, related depth)
+ * computed server-side; it is never accepted from the client.
+ */
+export interface ExpansionKeywordInput {
+  keyword: string;
+  volume: number | null;
+  difficulty: number | null;
+  cpc: number | null;
+  competition: string | null;
+  intent: string | null;
+  meta: Record<string, unknown>;
+}
+
+/**
  * The single persistence gateway for normalized provider SEO data. Takes the
  * Supabase service-role client; RLS remains the boundary and every write is
  * project-scoped by the caller-supplied projectId.
@@ -250,6 +265,36 @@ export class SeoWriter {
     await chunkedUpsert(this.sb, 'seo_keywords', rows, {
       onConflict: 'project_id,provider,source,keyword',
     });
+  }
+
+  /**
+   * Persist an explicitly saved KW4 expansion selection into the shared
+   * keyword store under `source = 'keyword_expansion'`. The service has
+   * already verified every row against the run snapshot and derived its
+   * provenance, so the writer only maps columns and upserts on the natural key
+   * (re-saving the same selection updates metrics rather than duplicating).
+   */
+  async persistExpansionKeywords(projectId: string, rows: ExpansionKeywordInput[]) {
+    if (rows.length === 0) return;
+    const now = new Date().toISOString();
+    await chunkedUpsert(
+      this.sb,
+      'seo_keywords',
+      rows.map((r) => ({
+        project_id: projectId,
+        keyword: r.keyword,
+        volume: r.volume,
+        difficulty: r.difficulty,
+        cpc: r.cpc,
+        competition: r.competition,
+        source: 'keyword_expansion',
+        provider: 'dataforseo',
+        intent: r.intent,
+        meta: r.meta,
+        last_seen_at: now,
+      })),
+      { onConflict: 'project_id,provider,source,keyword' },
+    );
   }
 
   /**

@@ -16,12 +16,17 @@
 import { useEffect, useState } from 'react';
 import { useAsync, num, fmtNum, fmtDate } from '../lib/ui';
 import { api, ApiRequestError } from '../lib/api';
-import { COMPETITOR_RESEARCH_MAX_COMPETITORS } from '@seo/contracts';
+import { COMPETITOR_RESEARCH_MAX_COMPETITORS, KEYWORD_EXPANSION_MAX_SEEDS, KEYWORD_EXPANSION_METHODS } from '@seo/contracts';
 import type {
   CompetitorDiscoveryStartDto,
   CompetitorGapStartDto,
   CompetitorResearchRunDto,
   KeywordDto,
+  KeywordExpansionMethod,
+  KeywordExpansionRunDto,
+  KeywordExpansionSaveDto,
+  KeywordExpansionStartDto,
+  KeywordQuery,
   KeywordResearchRunDto,
   KeywordResearchStartDto,
   ProjectKeywordsDto,
@@ -520,6 +525,378 @@ function CompetitorResearch({ projectId, role }: { projectId: string; role: stri
   );
 }
 
+const EXPANSION_METHOD_LABELS: Record<KeywordExpansionMethod, string> = {
+  suggestions: 'Suggestions',
+  related: 'Related',
+  ideas: 'Ideas',
+};
+
+/**
+ * Keyword expansion workspace (KW4): discover -> review -> select -> save.
+ *
+ * One run combines an explicit set of methods on the existing keyword-research
+ * job and returns a bounded snapshot. The provider-side "minimum volume" field
+ * is a discovery filter (it changes what the run fetches); the result-view
+ * filters narrow the stored snapshot and never start a provider call. Only an
+ * explicit, checked selection is saved, and the server derives its provenance.
+ */
+function KeywordExpansion({ projectId, role }: { projectId: string; role: string }) {
+  const [seedsText, setSeedsText] = useState('');
+  const [methods, setMethods] = useState<KeywordExpansionMethod[]>(['suggestions']);
+  const [providerMinVolume, setProviderMinVolume] = useState('');
+  const [run, setRun] = useState<KeywordExpansionRunDto | null>(null);
+  const [selected, setSelected] = useState<string[]>([]);
+  const [starting, setStarting] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [minVolume, setMinVolume] = useState('');
+  const [methodFilter, setMethodFilter] = useState<'all' | KeywordExpansionMethod>('all');
+  const [sort, setSort] = useState<KeywordQuery['sort']>('volume_desc');
+
+  // Poll the specific run while it is in flight; stop once it is terminal.
+  useEffect(() => {
+    if (!run || (run.status !== 'queued' && run.status !== 'running')) return;
+    let alive = true;
+    const tick = async () => {
+      try {
+        const next = await api<KeywordExpansionRunDto>(`/projects/${projectId}/keyword/expansion/${run.jobId}`);
+        if (alive) setRun(next);
+      } catch {
+        /* transient poll error: the next tick retries */
+      }
+    };
+    void tick();
+    const id = setInterval(tick, 2500);
+    return () => {
+      alive = false;
+      clearInterval(id);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [run?.jobId, run?.status, projectId]);
+
+  // Re-read the completed run through the result-view filters. This only
+  // narrows a stored snapshot; it never asks the provider for anything.
+  useEffect(() => {
+    if (!run || run.status !== 'completed') return;
+    const params = new URLSearchParams();
+    if (minVolume.trim()) params.set('minVolume', minVolume.trim());
+    if (methodFilter !== 'all') params.set('method', methodFilter);
+    if (sort) params.set('sort', sort);
+    const qs = params.toString();
+    let alive = true;
+    api<KeywordExpansionRunDto>(`/projects/${projectId}/keyword/expansion/${run.jobId}${qs ? `?${qs}` : ''}`)
+      .then((next) => {
+        if (alive) setRun((cur) => (cur && cur.jobId === next.jobId ? next : cur));
+      })
+      .catch(() => {
+        /* keep showing the snapshot already loaded */
+      });
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [run?.jobId, run?.status, minVolume, methodFilter, sort, projectId]);
+
+  const toggleMethod = (method: KeywordExpansionMethod) => {
+    setMethods((prev) => (prev.includes(method) ? prev.filter((m) => m !== method) : [...prev, method]));
+  };
+
+  const start = async () => {
+    const seeds = seedsText
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+    if (seeds.length === 0) {
+      setError('Enter at least one seed keyword');
+      return;
+    }
+    if (seeds.length > KEYWORD_EXPANSION_MAX_SEEDS) {
+      setError(`Expand at most ${KEYWORD_EXPANSION_MAX_SEEDS} seeds per run`);
+      return;
+    }
+    if (methods.length === 0) {
+      setError('Select at least one method');
+      return;
+    }
+    setError(null);
+    setNotice(null);
+    setSelected([]);
+    setStarting(true);
+    try {
+      const body: Record<string, unknown> = { seeds, methods };
+      if (providerMinVolume.trim()) body.providerMinVolume = Number(providerMinVolume.trim());
+      const started = await api<KeywordExpansionStartDto>(`/projects/${projectId}/keyword/expansion`, {
+        method: 'POST',
+        body,
+      });
+      setRun({
+        jobId: started.jobId,
+        status: started.status,
+        seeds: started.seeds,
+        methods: started.methods,
+        methodStatus: {},
+        candidates: [],
+        count: 0,
+        error: null,
+        createdAt: new Date().toISOString(),
+        completedAt: null,
+      });
+    } catch (e) {
+      if (e instanceof ApiRequestError && e.code === 'not_configured') setError('Keyword expansion is not configured.');
+      else if (e instanceof ApiRequestError && e.code === 'forbidden') setError('You do not have permission to run keyword expansion.');
+      else setError(e instanceof Error ? e.message : 'Could not start keyword expansion. Please try again.');
+    } finally {
+      setStarting(false);
+    }
+  };
+
+  const save = async () => {
+    if (!run || selected.length === 0) return;
+    setError(null);
+    setNotice(null);
+    setSaving(true);
+    try {
+      const out = await api<KeywordExpansionSaveDto>(`/projects/${projectId}/keyword/expansion/${run.jobId}/save`, {
+        method: 'POST',
+        body: { keywords: selected },
+      });
+      setNotice(`Saved ${out.saved} keyword${out.saved === 1 ? '' : 's'}${out.skipped ? ` (${out.skipped} duplicate skipped)` : ''}.`);
+      setSelected([]);
+    } catch (e) {
+      if (e instanceof ApiRequestError && e.code === 'forbidden') setError('You do not have permission to save keywords.');
+      else setError(e instanceof Error ? e.message : 'Could not save keywords. Please try again.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const toggleSelection = (keyword: string) => {
+    setSelected((prev) => (prev.includes(keyword) ? prev.filter((k) => k !== keyword) : [...prev, keyword]));
+  };
+
+  const allowed = canStartResearch(role);
+  const inFlight = run?.status === 'queued' || run?.status === 'running';
+  const candidates = run?.status === 'completed' ? run.candidates : [];
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Expand</CardTitle>
+        <CardDescription>
+          Discover related, suggested and idea keywords for one or more seeds, review the run, then save only the
+          keywords you choose.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="grid gap-4">
+        {!allowed && (
+          <div className="rounded-md border bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
+            Only editors and above can run keyword expansion.
+          </div>
+        )}
+
+        <div className="grid gap-3 md:grid-cols-2">
+          <div className="grid gap-1.5">
+            <label className="text-sm font-medium" htmlFor="keyword-expansion-seeds">
+              Seed keywords
+            </label>
+            <Input
+              id="keyword-expansion-seeds"
+              value={seedsText}
+              onChange={(e) => setSeedsText(e.target.value)}
+              placeholder="seo software, keyword research"
+              disabled={!allowed || inFlight}
+            />
+            <p className="text-xs text-muted-foreground">Comma-separated, up to {KEYWORD_EXPANSION_MAX_SEEDS} seeds.</p>
+          </div>
+          <div className="grid gap-1.5">
+            <label className="text-sm font-medium" htmlFor="keyword-expansion-min-volume">
+              Provider minimum volume
+            </label>
+            <Input
+              id="keyword-expansion-min-volume"
+              type="number"
+              min={0}
+              value={providerMinVolume}
+              onChange={(e) => setProviderMinVolume(e.target.value)}
+              placeholder="No minimum"
+              disabled={!allowed || inFlight}
+            />
+            <p className="text-xs text-muted-foreground">Discovery filter: narrows what the run fetches from the provider.</p>
+          </div>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-4">
+          {KEYWORD_EXPANSION_METHODS.map((method) => (
+            <label key={method} className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={methods.includes(method)}
+                disabled={!allowed || inFlight}
+                onChange={() => toggleMethod(method)}
+              />
+              {EXPANSION_METHOD_LABELS[method]}
+            </label>
+          ))}
+          <Button disabled={!allowed || starting || inFlight || !seedsText.trim() || methods.length === 0} onClick={() => void start()}>
+            {starting || inFlight ? 'Expanding…' : 'Start expansion'}
+          </Button>
+        </div>
+
+        {error && (
+          <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+            {error}
+          </div>
+        )}
+        {notice && (
+          <div className="rounded-md border border-emerald-500/30 bg-emerald-500/5 px-3 py-2 text-sm text-emerald-700">
+            {notice}
+          </div>
+        )}
+
+        {!error && !run && (
+          <div className="py-6 text-center text-sm text-muted-foreground">Enter seed keywords to expand.</div>
+        )}
+
+        {run?.status === 'failed' && (
+          <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+            {run.error ?? 'Keyword expansion failed. Please try again.'}
+          </div>
+        )}
+
+        {run && (run.status === 'queued' || run.status === 'running') && (
+          <div className="py-6 text-center text-sm text-muted-foreground">Expanding keywords…</div>
+        )}
+
+        {run?.status === 'completed' && (
+          <>
+            <div className="flex flex-wrap gap-3 text-xs text-muted-foreground">
+              {run.methods.map((method) => {
+                const status = run.methodStatus[method];
+                if (!status) return null;
+                const label = EXPANSION_METHOD_LABELS[method];
+                return (
+                  <span key={method} className="rounded-md border px-2 py-1">
+                    {status.status === 'failed'
+                      ? `${label}: failed`
+                      : status.status === 'skipped'
+                        ? `${label}: skipped`
+                        : `${label}: ${fmtNum(status.count)}`}
+                  </span>
+                );
+              })}
+            </div>
+
+            <div className="flex flex-wrap items-end gap-3">
+              <div className="grid gap-1.5">
+                <label className="text-xs font-medium" htmlFor="keyword-expansion-view-min">
+                  Show minimum volume
+                </label>
+                <Input
+                  id="keyword-expansion-view-min"
+                  type="number"
+                  min={0}
+                  value={minVolume}
+                  onChange={(e) => setMinVolume(e.target.value)}
+                  placeholder="Any"
+                  className="w-32"
+                />
+              </div>
+              <div className="grid gap-1.5">
+                <label className="text-xs font-medium" htmlFor="keyword-expansion-view-method">
+                  Method
+                </label>
+                <select
+                  id="keyword-expansion-view-method"
+                  className="h-9 rounded-md border bg-background px-2 text-sm"
+                  value={methodFilter}
+                  onChange={(e) => setMethodFilter(e.target.value as 'all' | KeywordExpansionMethod)}
+                >
+                  <option value="all">All</option>
+                  {KEYWORD_EXPANSION_METHODS.map((method) => (
+                    <option key={method} value={method}>
+                      {EXPANSION_METHOD_LABELS[method]}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="grid gap-1.5">
+                <label className="text-xs font-medium" htmlFor="keyword-expansion-view-sort">
+                  Sort
+                </label>
+                <select
+                  id="keyword-expansion-view-sort"
+                  className="h-9 rounded-md border bg-background px-2 text-sm"
+                  value={sort}
+                  onChange={(e) => setSort(e.target.value as KeywordQuery['sort'])}
+                >
+                  <option value="volume_desc">Volume high to low</option>
+                  <option value="volume_asc">Volume low to high</option>
+                  <option value="keyword_asc">Keyword A-Z</option>
+                </select>
+              </div>
+            </div>
+
+            {candidates.length === 0 ? (
+              <div className="py-6 text-center text-sm text-muted-foreground">No candidates match these filters.</div>
+            ) : (
+              <>
+                <div className="flex items-center justify-between">
+                  <p className="text-xs text-muted-foreground">
+                    {fmtNum(candidates.length)} candidate{candidates.length === 1 ? '' : 's'} · select the ones to save.
+                  </p>
+                  <span className="text-xs text-muted-foreground">{selected.length} selected</span>
+                </div>
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead className="w-10" />
+                      <TableHead>Keyword</TableHead>
+                      <TableHead className="text-right">Volume</TableHead>
+                      <TableHead className="text-right">Difficulty</TableHead>
+                      <TableHead className="text-right">CPC</TableHead>
+                      <TableHead>Methods</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {candidates.map((c) => (
+                      <TableRow key={c.keyword}>
+                        <TableCell>
+                          <input
+                            type="checkbox"
+                            aria-label={`Select ${c.keyword}`}
+                            checked={selected.includes(c.keyword)}
+                            disabled={!allowed || saving}
+                            onChange={() => toggleSelection(c.keyword)}
+                          />
+                        </TableCell>
+                        <TableCell className="max-w-[26rem] truncate font-medium" title={c.keyword}>
+                          {c.keyword}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums">{fmtMetric(c.searchVolume, 'int')}</TableCell>
+                        <TableCell className="text-right tabular-nums">{fmtMetric(c.difficulty, 'int')}</TableCell>
+                        <TableCell className="text-right tabular-nums">{fmtMetric(c.cpc, 'money')}</TableCell>
+                        <TableCell className="text-xs text-muted-foreground">
+                          {c.methods.map((m) => EXPANSION_METHOD_LABELS[m]).join(', ')}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+                <div>
+                  <Button disabled={!allowed || saving || selected.length === 0} onClick={() => void save()}>
+                    {saving ? 'Saving…' : 'Save selected'}
+                  </Button>
+                </div>
+              </>
+            )}
+          </>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 function GscKeywordTable({ keywords }: { keywords: KeywordDto[] }) {
   return (
     <Table>
@@ -549,11 +926,12 @@ function GscKeywordTable({ keywords }: { keywords: KeywordDto[] }) {
   );
 }
 
-type KeywordsTab = 'mine' | 'research' | 'competitors';
+type KeywordsTab = 'mine' | 'research' | 'expansion' | 'competitors';
 
 const KEYWORDS_TABS: Array<{ id: KeywordsTab; label: string }> = [
   { id: 'mine', label: 'My keywords' },
   { id: 'research', label: 'Research' },
+  { id: 'expansion', label: 'Expand' },
   { id: 'competitors', label: 'Competitors' },
 ];
 
@@ -580,6 +958,7 @@ export function Keywords({ projectId, role }: { projectId: string; role: string 
       </div>
 
       {tab === 'research' && <KeywordResearch projectId={projectId} role={role} />}
+      {tab === 'expansion' && <KeywordExpansion projectId={projectId} role={role} />}
       {tab === 'competitors' && <CompetitorResearch projectId={projectId} role={role} />}
 
       {tab === 'mine' && (

@@ -1699,3 +1699,136 @@ export interface CompetitorResearchRunDto {
   createdAt: string;
   completedAt: string | null;
 }
+
+// ---------------------------------------------------------------------------
+// Keyword expansion (KW4): a discover -> review -> select -> save workflow on
+// the SAME `dataforseo_keyword_research` job type as KW2. The executor branches
+// on the presence of `params.methods`: absent = the legacy KW2
+// "research-and-add" path (auto-persisted, unchanged); present = a KW4
+// expansion run whose bounded candidates live on the job result snapshot and
+// are persisted ONLY when the user explicitly saves a verified selection.
+//
+// Two filter families are deliberately kept apart:
+//   - KeywordExpansionRequest.providerMinVolume is a *discovery* filter pushed
+//     to DataForSEO (it changes what the provider returns and therefore what
+//     the run snapshot contains).
+//   - KeywordQuery.minVolume is a *result-view* filter applied to the already
+//     bounded job.result. It never starts a provider call.
+// ---------------------------------------------------------------------------
+
+/** The explicit expansion methods a KW4 run may combine. */
+export type KeywordExpansionMethod = 'suggestions' | 'related' | 'ideas';
+
+/** Canonical method order (fixes execution order and merge metric precedence). */
+export const KEYWORD_EXPANSION_METHODS: readonly KeywordExpansionMethod[] = ['suggestions', 'related', 'ideas'];
+
+/** Longest expansion seed accepted (trimmed, whitespace-normalized). */
+export const KEYWORD_EXPANSION_SEED_MAX_CHARS = 200;
+
+/** Hard cap on how many seeds one expansion run may expand from. */
+export const KEYWORD_EXPANSION_MAX_SEEDS = 5;
+
+/** Hard cap on candidate rows carried on one expansion run snapshot. */
+export const KEYWORD_EXPANSION_MAX_RESULTS = 500;
+
+/** Default related-keywords depth (0-4); 1 is a shallow, cheap first ring. */
+export const KEYWORD_EXPANSION_RELATED_DEFAULT_DEPTH = 1;
+
+/** Per-method provider result cap (kept well inside the vendor maximum). */
+export const KEYWORD_EXPANSION_MAX_LIMIT_PER_METHOD = 200;
+
+/**
+ * Start a KW4 expansion run. Unlike the KW2 request this always carries an
+ * explicit, non-empty `methods` array - that presence is the contract's
+ * discriminator between the legacy and the expansion execution paths.
+ */
+export interface KeywordExpansionRequest {
+  seeds: string[];
+  methods: KeywordExpansionMethod[];
+  /** Discovery filter pushed provider-side (not a result-view filter). */
+  providerMinVolume?: number;
+  /** Related-keywords depth (0-4); defaults to KEYWORD_EXPANSION_RELATED_DEFAULT_DEPTH. */
+  relatedDepth?: number;
+  /** Per-method provider cap; clamped to KEYWORD_EXPANSION_MAX_LIMIT_PER_METHOD. */
+  limitPerMethod?: number;
+}
+
+/**
+ * Per-method outcome of one expansion run. Partial success is first-class: a
+ * run may report 184 usable candidates even when one method failed, and a
+ * `skipped` method is shown as such rather than silently absent.
+ */
+export interface KeywordExpansionMethodStatusDto {
+  status: 'success' | 'failed' | 'skipped';
+  count: number;
+}
+
+/**
+ * One merged expansion candidate. `methods`/`seeds` record which expansion
+ * method(s) and seed(s) surfaced the keyword so the snapshot carries its own
+ * provenance. Metrics are null when unreported - never a fabricated zero.
+ */
+export interface KeywordExpansionCandidateDto {
+  keyword: string;
+  searchVolume: number | null;
+  difficulty: number | null;
+  cpc: number | null;
+  competition: string | null;
+  intent: string | null;
+  methods: KeywordExpansionMethod[];
+  seeds: string[];
+}
+
+/** The queued run handle returned when an expansion run starts. */
+export interface KeywordExpansionStartDto {
+  jobId: string;
+  status: JobStatus;
+  seeds: string[];
+  methods: KeywordExpansionMethod[];
+}
+
+/**
+ * Result-view filters applied to an already completed run snapshot. They only
+ * narrow what is shown; they never trigger a new provider call. `method`
+ * matches candidates surfaced by that method, `minVolume` compares against the
+ * stored search volume (nulls are excluded when a minimum is set).
+ */
+export interface KeywordQuery {
+  minVolume?: number;
+  method?: KeywordExpansionMethod;
+  sort?: 'volume_desc' | 'volume_asc' | 'keyword_asc';
+}
+
+/**
+ * A KW4 expansion run as read back by its owning project. `candidates` is
+ * populated only once the run completes; a failed run reports a safe, generic
+ * `error`. This is a safe projection of exactly one job - never raw provider
+ * output.
+ */
+export interface KeywordExpansionRunDto {
+  jobId: string;
+  status: JobStatus;
+  seeds: string[];
+  methods: KeywordExpansionMethod[];
+  methodStatus: Record<string, KeywordExpansionMethodStatusDto>;
+  candidates: KeywordExpansionCandidateDto[];
+  count: number;
+  error: string | null;
+  createdAt: string;
+  completedAt: string | null;
+}
+
+/**
+ * Explicit save of selected candidates into the shared keyword store. The
+ * client sends keyword strings only; the server verifies each one exists in
+ * this exact run snapshot and derives provenance itself.
+ */
+export interface KeywordExpansionSaveRequest {
+  keywords: string[];
+}
+
+/** Outcome of an explicit save: how many were added/updated vs already present. */
+export interface KeywordExpansionSaveDto {
+  saved: number;
+  skipped: number;
+}

@@ -139,16 +139,22 @@ export class DataForSeoDataSource implements SeoDataSource {
    * Expand a list of seed keywords into suggested keywords. Seeds are capped
    * at 20 and suggestions at 25 each so a single research request stays
    * inside a reasonable quota/time budget; callers wanting broader sweeps run
-   * a dataforseo_keyword_research job instead.
+   * a dataforseo_keyword_research job instead. No `opts` reproduces the exact
+   * legacy KW2 request; KW4 passes a per-method limit and discovery filter.
    */
-  async researchKeywords(ctx: ProviderContext, seeds: string[]): Promise<KeywordResearchResult[]> {
+  async researchKeywords(
+    ctx: ProviderContext,
+    seeds: string[],
+    opts: { limit?: number; minSearchVolume?: number } = {},
+  ): Promise<KeywordResearchResult[]> {
     const client = await this.clientFor(ctx);
     const results: KeywordResearchResult[] = [];
     for (const seed of seeds.slice(0, 20)) {
       const suggestions = await client.keywordSuggestions(seed, {
         locationCode: LOCATION_CODE,
         languageCode: LANGUAGE_CODE,
-        limit: 25,
+        limit: opts.limit ?? 25,
+        minSearchVolume: opts.minSearchVolume,
       });
       for (const s of suggestions) {
         const normalized = normalizeSuggestion(s);
@@ -156,6 +162,58 @@ export class DataForSeoDataSource implements SeoDataSource {
       }
     }
     return results;
+  }
+
+  /**
+   * Keywords related to one seed (KW4 related expansion). Metrics nest under
+   * `keyword_data`; the provider applies any volume filter. Optional in the
+   * interface - this adapter always supports it, but a run on an adapter that
+   * does not reports the method as skipped rather than silently empty.
+   */
+  async relatedKeywords(
+    ctx: ProviderContext,
+    seed: string,
+    opts: { depth?: number; limit?: number; minSearchVolume?: number } = {},
+  ): Promise<KeywordResearchResult[]> {
+    const client = await this.clientFor(ctx);
+    const items = await client.relatedKeywords(seed, {
+      locationCode: LOCATION_CODE,
+      languageCode: LANGUAGE_CODE,
+      depth: opts.depth,
+      limit: opts.limit,
+      minSearchVolume: opts.minSearchVolume,
+    });
+    const out: KeywordResearchResult[] = [];
+    for (const item of items) {
+      const normalized = normalizeSuggestion(item);
+      if (normalized) out.push(normalized);
+    }
+    return out;
+  }
+
+  /**
+   * Keyword ideas for a set of seeds (KW4 ideas expansion) in one provider
+   * call. The caller caps the seed count to the platform maximum.
+   */
+  async keywordIdeas(
+    ctx: ProviderContext,
+    seeds: string[],
+    opts: { limit?: number; closelyVariants?: boolean; minSearchVolume?: number } = {},
+  ): Promise<KeywordResearchResult[]> {
+    const client = await this.clientFor(ctx);
+    const items = await client.keywordIdeas(seeds, {
+      locationCode: LOCATION_CODE,
+      languageCode: LANGUAGE_CODE,
+      limit: opts.limit,
+      closelyVariants: opts.closelyVariants,
+      minSearchVolume: opts.minSearchVolume,
+    });
+    const out: KeywordResearchResult[] = [];
+    for (const item of items) {
+      const normalized = normalizeSuggestion(item);
+      if (normalized) out.push(normalized);
+    }
+    return out;
   }
 
   // -- capability: SERP / competitors -----------------------------------------

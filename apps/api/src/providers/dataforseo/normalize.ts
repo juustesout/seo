@@ -108,7 +108,11 @@ export function normalizeSuggestion(item: KeywordSuggestion): KeywordResearchRes
   const kd = item.keyword_data;
   const info = kd?.keyword_info ?? item.keyword_info;
   const props = kd?.keyword_properties ?? item.keyword_properties;
-  const intent = kd?.keyword_properties?.search_intent ?? item.search_intent_info?.main_intent ?? null;
+  const intent =
+    kd?.search_intent_info?.main_intent ??
+    kd?.keyword_properties?.search_intent ??
+    item.search_intent_info?.main_intent ??
+    null;
   const keyword = kd?.keyword ?? item.keyword;
   if (!keyword) return null;
   const competitionNum = asNumber(info?.competition);

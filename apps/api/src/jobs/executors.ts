@@ -29,13 +29,23 @@ import {
   COMPETITOR_RESEARCH_MAX_CANDIDATES,
   COMPETITOR_RESEARCH_MAX_COMPETITORS,
   COMPETITOR_RESEARCH_RUN_MAX_GAPS,
+  KEYWORD_EXPANSION_METHODS,
+  KEYWORD_EXPANSION_MAX_LIMIT_PER_METHOD,
+  KEYWORD_EXPANSION_RELATED_DEFAULT_DEPTH,
   KEYWORD_RESEARCH_RUN_MAX_KEYWORDS,
   type CompetitorCandidateDto,
   type CompetitorGapDto,
   type ContentBlock,
+  type KeywordExpansionMethod,
+  type KeywordExpansionMethodStatusDto,
   type KeywordResearchKeywordDto,
+  type KeywordResearchResult,
 } from '@seo/contracts';
 import { normalizeDomain } from '../services/competitorResearchService.js';
+import {
+  mergeExpansionCandidates,
+  type ExpansionMethodOutput,
+} from '../services/keywordExpansionService.js';
 
 export interface JobExecContext {
   container: ServiceContainer;
@@ -291,6 +301,78 @@ const serpRetrieval: JobExecutor = async ({ container, job, writer, report }) =>
   return { snapshots: outcomes.length };
 };
 
+/**
+ * KW4 expansion branch of the shared `dataforseo_keyword_research` executor.
+ * It runs each requested method, records a per-method status, merges the
+ * successful outputs deterministically and carries ONLY the bounded snapshot on
+ * the job result. Unlike legacy KW2 it never auto-persists: candidates enter
+ * the shared keyword store only through an explicit, verified save.
+ *
+ * Partial success is first-class: one failed method does not fail the run while
+ * the others produced usable rows. Only when every requested method fails does
+ * the job fail.
+ */
+async function runKeywordExpansion(args: {
+  job: JobRecord;
+  report: (progress: number, message?: string) => Promise<void>;
+  dfseo: DataForSeoDataSource;
+  ctx: ProviderContext;
+  seeds: string[];
+}): Promise<Record<string, unknown>> {
+  const { job, report, dfseo, ctx, seeds } = args;
+  const requested = Array.isArray(job.params.methods) ? (job.params.methods as unknown[]) : [];
+  const requestedSet = new Set(requested.filter((m): m is KeywordExpansionMethod => (KEYWORD_EXPANSION_METHODS as readonly string[]).includes(m as string)));
+  const methods = KEYWORD_EXPANSION_METHODS.filter((m) => requestedSet.has(m));
+  if (methods.length === 0) throw new ApiError(400, 'bad_request', 'keyword expansion requires at least one method');
+
+  const relatedDepth = typeof job.params.relatedDepth === 'number' && Number.isInteger(job.params.relatedDepth)
+    ? (job.params.relatedDepth as number)
+    : KEYWORD_EXPANSION_RELATED_DEFAULT_DEPTH;
+  const limit = typeof job.params.limitPerMethod === 'number' && Number.isInteger(job.params.limitPerMethod)
+    ? (job.params.limitPerMethod as number)
+    : KEYWORD_EXPANSION_MAX_LIMIT_PER_METHOD;
+  const minSearchVolume = typeof job.params.providerMinVolume === 'number' ? (job.params.providerMinVolume as number) : undefined;
+
+  const outputs: ExpansionMethodOutput[] = [];
+  const methodStatus: Record<string, KeywordExpansionMethodStatusDto> = {};
+  let failed = 0;
+
+  for (const method of methods) {
+    try {
+      let results: KeywordResearchResult[] = [];
+      if (method === 'suggestions') {
+        results = await dfseo.researchKeywords(ctx, seeds, { limit, minSearchVolume });
+        outputs.push({ method, seeds, results });
+      } else if (method === 'related') {
+        for (let i = 0; i < seeds.length; i += 1) {
+          if (i > 0) await delay(400);
+          results.push(...(await dfseo.relatedKeywords(ctx, seeds[i], { depth: relatedDepth, limit, minSearchVolume })));
+        }
+        outputs.push({ method, seeds, results });
+      } else {
+        results = await dfseo.keywordIdeas(ctx, seeds, { limit, minSearchVolume });
+        outputs.push({ method, seeds, results });
+      }
+      methodStatus[method] = { status: 'success', count: results.length };
+      await report(20 + Math.round((methods.indexOf(method) + 1) * (60 / methods.length)), `Expanded via ${method}`);
+    } catch {
+      // One method failing must not discard the others' usable rows; the status
+      // map makes the partial failure visible instead of returning silent zeros.
+      failed += 1;
+      methodStatus[method] = { status: 'failed', count: 0 };
+      logger.warn({ projectId: job.project_id, method }, 'keyword expansion method failed');
+    }
+  }
+
+  if (failed === methods.length) {
+    throw new ApiError(502, 'provider_error', 'All requested keyword expansion methods failed');
+  }
+
+  const candidates = mergeExpansionCandidates(outputs);
+  await report(100, `Keyword expansion complete: ${candidates.length} candidates`);
+  return { seeds, methods, methodStatus, candidates, count: candidates.length };
+}
+
 const dataForSeoKeywordResearch: JobExecutor = async ({ container, job, writer, report }) => {
   const ds = await dataSourceRow(container.sb, job.project_id, job.data_source_id);
   const adapter = container.registry.getDataSource('dataforseo');
@@ -305,6 +387,13 @@ const dataForSeoKeywordResearch: JobExecutor = async ({ container, job, writer, 
     owner: { integrationId: String(ds.integration_id), providerType: 'dataforseo' },
     config: { ...(ds.config as Record<string, unknown>) },
   });
+
+  // The presence of an explicit `methods` array switches this shared job to the
+  // KW4 expansion snapshot; its absence keeps the exact legacy KW2 path below.
+  if (Array.isArray(job.params.methods)) {
+    return runKeywordExpansion({ job, report, dfseo, ctx, seeds });
+  }
+
   await report(10, `Researching keywords from ${seeds.length} seed(s)`);
   const results = await dfseo.researchKeywords(ctx, seeds);
   await report(70, `Persisting ${results.length} suggested keywords`);
