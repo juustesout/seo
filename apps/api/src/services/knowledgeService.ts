@@ -100,7 +100,6 @@ import {
   KNOWLEDGE_MAX_EXTRACTED_CHARS,
   KNOWLEDGE_MAX_FILE_BYTES,
   KNOWLEDGE_PREVIEW_MAX_CHARS,
-  KNOWLEDGE_SEARCH_CONTENT_MAX_CHARS,
   KNOWLEDGE_SEARCH_DEFAULT_LIMIT,
   KNOWLEDGE_SEARCH_MAX_CHARS,
   KNOWLEDGE_SEARCH_MAX_LIMIT,
@@ -112,6 +111,16 @@ import { KnowledgeIngestError, isKnowledgeIngestError, type KnowledgeIngestError
 import { validateExternalUrl } from '../knowledge/url.js';
 import { isWithinScope, normalizeDiscoveryUrl } from '../knowledge/discovery.js';
 import { hasValidSignature, resolveFileType, sanitizeFilename } from '../knowledge/files/fileTypes.js';
+import {
+  chunkIndexFromPayload,
+  managedSourceIdFromPayload,
+  sourceExternalId,
+} from '../knowledge/retrieval/identity.js';
+import { buildSearchContent } from '../knowledge/retrieval/content.js';
+import { retrieveCandidates } from '../knowledge/retrieval/pipeline.js';
+import { clearProjectLexicalChunks, clearSourceLexicalChunks, replaceLexicalChunks } from '../knowledge/retrieval/lexical.js';
+import { resolveRetrievalMode } from '../knowledge/retrieval/mode.js';
+import type { RetrievalOutcome } from '../knowledge/retrieval/types.js';
 
 /** Largest single source body accepted for indexing (bytes/chars). Bounding it
  *  keeps chunking latency and Qdrant payloads sane for a UI/managed item. */
@@ -205,10 +214,12 @@ const NOOP_CREDENTIALS: ProviderContext['credentials'] = {
   delete: async () => {},
 };
 
-/** Stable Qdrant external id for a knowledge source. */
-export function sourceExternalId(sourceId: string): string {
-  return `source:${sourceId}`;
-}
+/**
+ * Retrieval helpers re-exported for existing consumers/tests. Their canonical
+ * home is the internal retrieval boundary (`knowledge/retrieval/*`), shared by
+ * the vector and lexical candidate adapters.
+ */
+export { sourceExternalId, managedSourceIdFromPayload, buildSearchContent };
 
 /**
  * Builds the provider document for one source row by running the type's
@@ -390,9 +401,6 @@ export interface KnowledgeSearchInput {
   uncategorized?: boolean;
 }
 
-/** Managed source ids live in the index as `source:<uuid>` external ids. */
-const MANAGED_SOURCE_EXTERNAL_ID =
-  /^source:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
@@ -413,37 +421,6 @@ export function normalizeSearchQuery(value: string | undefined): string {
 export function clampSearchLimit(value: number | undefined): number {
   if (typeof value !== 'number' || !Number.isFinite(value)) return KNOWLEDGE_SEARCH_DEFAULT_LIMIT;
   return Math.min(KNOWLEDGE_SEARCH_MAX_LIMIT, Math.max(1, Math.floor(value)));
-}
-
-/** Managed source UUID from a hit's `source:<uuid>` external id, else null. */
-export function managedSourceIdFromPayload(payload: Record<string, unknown>): string | null {
-  const raw =
-    typeof payload.source_id === 'string'
-      ? payload.source_id
-      : typeof payload.external_id === 'string'
-        ? payload.external_id
-        : '';
-  const match = MANAGED_SOURCE_EXTERNAL_ID.exec(raw.trim());
-  return match ? match[1]!.toLowerCase() : null;
-}
-
-/**
- * Bounded plain-text content of one hit. Retrieved content is untrusted data -
- * it is never interpreted as markup here and is always truncated server-side so
- * the browser can never receive an unbounded body through search. Returns null
- * when the hit carries no usable text.
- */
-export function buildSearchContent(payload: Record<string, unknown>): string | null {
-  const raw = typeof payload.text === 'string' ? payload.text : '';
-  const text = raw.trim();
-  if (!text) return null;
-  return text.slice(0, KNOWLEDGE_SEARCH_CONTENT_MAX_CHARS);
-}
-
-/** 0-based chunk index recorded by the provider, or null when absent. */
-function searchChunkIndex(payload: Record<string, unknown>): number | null {
-  const value = Number(payload.chunk_index);
-  return Number.isInteger(value) && value >= 0 ? value : null;
 }
 
 /**
@@ -1469,13 +1446,16 @@ export class KnowledgeService {
   }
 
   /**
-   * Canonical retrieval (KB6): one bounded, attributed result envelope for the
-   * API, the Search Explorer and the writer. The query is normalized, the limit
-   * is clamped, and filters are projected onto the provider's allowlisted shape
-   * - no raw client filter ever reaches Qdrant. Raw provider hits are then
-   * mapped to attributed results; a hit without a real source identity is
-   * dropped rather than invented. Diagnostics are measured inside this boundary
-   * only (never a raw provider payload).
+   * Canonical retrieval (KB6, hybrid foundation in KB10): one bounded,
+   * attributed result envelope for the API, the Search Explorer and the writer.
+   * The query is normalized, the limit is clamped, and filters are projected
+   * onto the shared allowlisted shape - no raw client filter ever reaches a
+   * provider. Vector and (in hybrid mode) lexical candidates are gathered behind
+   * the internal retrieval boundary, fused deterministically, then mapped to
+   * attributed results; a hit without a real source identity is dropped rather
+   * than invented, and a hit without content never enters the result set.
+   * Diagnostics are measured inside this boundary only (never a raw provider
+   * payload, origin list or score detail).
    */
   async search(projectId: string, input: KnowledgeSearchInput): Promise<KnowledgeSearchResponse> {
     const reason = this.configuredReason();
@@ -1487,17 +1467,23 @@ export class KnowledgeService {
     if (!query) throw ApiError.badRequest('Enter a search query.');
     const limit = clampSearchLimit(input.limit);
     const filter = KnowledgeService.buildSearchFilter(input);
+    const mode = resolveRetrievalMode(this.container.config.env);
 
     const started = Date.now();
-    let hits: KnowledgeSearchResult[];
+    let outcome: RetrievalOutcome;
     try {
-      hits = await provider.search({ projectId, query, limit, filter });
+      outcome = await retrieveCandidates({ provider, sb: this.sb }, { projectId, query, limit, filter, mode });
     } catch (err) {
       throw KnowledgeService.mapSearchError(err);
     }
     const searchDurationMs = Date.now() - started;
 
-    const results = await this.attributeSearchHits(projectId, hits);
+    const hits: KnowledgeSearchResult[] = outcome.candidates.map((candidate) => ({
+      id: candidate.key,
+      score: candidate.score,
+      payload: candidate.payload,
+    }));
+    const results = (await this.attributeSearchHits(projectId, hits)).slice(0, limit);
     return {
       project_id: projectId,
       query,
@@ -1582,7 +1568,7 @@ export class KnowledgeService {
           managed: true,
           collection_id: row.collection_id ? String(row.collection_id) : null,
           collection_name: row.collection_id ? embeddedCollectionName(row) : null,
-          chunk_index: searchChunkIndex(payload),
+          chunk_index: chunkIndexFromPayload(payload),
           content,
           score,
         });
@@ -1601,7 +1587,7 @@ export class KnowledgeService {
         managed: false,
         collection_id: null,
         collection_name: null,
-        chunk_index: searchChunkIndex(payload),
+        chunk_index: chunkIndexFromPayload(payload),
         content,
         score,
       });
@@ -2110,6 +2096,7 @@ export class KnowledgeService {
         await provider.delete(ctx, doc.externalId).catch(() => undefined);
         return { source_id: sourceId, skipped: true, message: 'Source was removed during indexing' };
       }
+      await this.syncLexicalIndex(projectId, sourceId, doc.text);
       await report?.(100, `Indexed ${indexed} chunk(s)`);
       return { source_id: sourceId, chunks: indexed };
     } catch (err) {
@@ -2208,6 +2195,7 @@ export class KnowledgeService {
         await provider.delete(ctx, doc.externalId).catch(() => undefined);
         return { source_id: sourceId, skipped: true, message: 'Source was removed during refresh' };
       }
+      await this.syncLexicalIndex(projectId, sourceId, doc.text);
       await report?.(100, `Updated and reindexed ${indexed} chunk(s)`);
       return { source_id: sourceId, refreshed: true, changed: true, chunks: indexed };
     } catch (err) {
@@ -2233,11 +2221,11 @@ export class KnowledgeService {
   }
 
   /**
-   * Reflect a project-wide vector wipe on the source read-model. Called by the
-   * `knowledge_delete` executor after `provider.deleteProject`: sources with
-   * captured text or a stored file return to `queued` (re-ingestable); only
-   * bare URL sources with no captured body return to `draft`. Kept here so
-   * status writes never live in the executor.
+   * Reflect a project-wide vector wipe on the source read-model and its derived
+   * lexical index. Called by the `knowledge_delete` executor after
+   * `provider.deleteProject`: sources with captured text or a stored file return
+   * to `queued` (re-ingestable); only bare URL sources with no captured body
+   * return to `draft`. Kept here so status writes never live in the executor.
    */
   async resetStatusesAfterProjectWipe(projectId: string): Promise<void> {
     const { error: resetError } = await this.sb
@@ -2256,6 +2244,29 @@ export class KnowledgeService {
       .is('storage_path', null);
     if (draftError) {
       throw new ApiError(502, 'knowledge_provider_error', 'Knowledge cleared but URL source flags could not be reset');
+    }
+    // The lexical projection is derived from the same vectors we just wiped;
+    // clear it alongside. Best effort: every source is non-ready afterwards, so
+    // a stale chunk cannot be retrieved, and the next ingest rebuilds it.
+    try {
+      await clearProjectLexicalChunks(this.sb, projectId);
+    } catch (err) {
+      logger.warn({ err, projectId }, 'knowledge lexical index wipe failed');
+    }
+  }
+
+  /**
+   * Best-effort refresh of the derived lexical projection for one source. The
+   * lexical index is a derived candidate source, not the system of record: a
+   * failure here must never fail an ingest that already committed its vectors
+   * and body (search simply degrades to vector-only for that source until the
+   * next successful ingest).
+   */
+  private async syncLexicalIndex(projectId: string, sourceId: string, text: string): Promise<void> {
+    try {
+      await replaceLexicalChunks(this.sb, projectId, sourceId, text);
+    } catch (err) {
+      logger.warn({ err, projectId, sourceId }, 'knowledge lexical index update failed');
     }
   }
 
@@ -2295,6 +2306,10 @@ export class KnowledgeService {
         throw KnowledgeService.mapError(wrapped);
       }
     }
+    // The lexical projection has no value once the source is gone; the database
+    // cascade guarantees removal on the row delete, and this explicit clear
+    // keeps the derived index correct even outside a cascade.
+    await clearSourceLexicalChunks(this.sb, projectId, sourceId).catch(() => undefined);
     const { error } = await this.sb.from('seo_knowledge_sources').delete().eq('project_id', projectId).eq('id', sourceId);
     if (error) throw ApiError.badRequest('Could not remove the knowledge source row');
     return { source_id: sourceId, deleted: true };

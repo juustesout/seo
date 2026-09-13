@@ -255,7 +255,7 @@ export function KnowledgeSearchExplorer({
                         )}
                       </div>
                       <div className="flex items-center gap-1.5">
-                        <Badge variant="outline" title="Retrieval/similarity score from the ranking provider">
+                        <Badge variant="outline" title="Retrieval ranking score (higher is more relevant)">
                           score {r.score.toFixed(3)}
                         </Badge>
                         {r.managed && (

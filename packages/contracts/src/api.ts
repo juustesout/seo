@@ -761,8 +761,11 @@ export interface KnowledgeSearchHitDto {
   chunk_index: number | null;
   /** Bounded plain-text excerpt of the matched chunk. Untrusted data. */
   content: string;
-  /** Provider retrieval/similarity score (higher = closer). A ranking signal
-   *  only - it is not evidence of correctness and is never normalized here. */
+  /** Retrieval ranking score (higher = more relevant). A ranking signal only -
+   *  it is not evidence of correctness and is never normalized here. It is the
+   *  origin's own score when a single source of candidates is in play (vector
+   *  similarity or lexical rank) and a fused rank score when hybrid retrieval
+   *  combines both. */
   score: number;
 }
 

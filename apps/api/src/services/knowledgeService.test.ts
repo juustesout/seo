@@ -11,6 +11,7 @@ import {
   KNOWLEDGE_SEARCH_MAX_LIMIT,
   KNOWLEDGE_SEARCH_QUERY_MAX_CHARS,
 } from '../knowledge/limits.js';
+import { KNOWLEDGE_RETRIEVAL_VECTOR_CANDIDATES } from '../knowledge/retrieval/limits.js';
 import { createKnowledgeFileExtractors } from '../providers/knowledgeFileExtractors.js';
 import type { KnowledgeFileExtractorRegistry } from '../providers/knowledgeFileExtractors.js';
 import type { KnowledgeFileStore } from '../infra/knowledgeFileStorage.js';
@@ -92,7 +93,7 @@ function makeDb(seed: DbRow[], opts: { failUpdate?: boolean; collections?: DbRow
       const filters: Filter[] = [];
       let op: 'select' | 'insert' | 'update' | 'delete' = 'select';
       let patch: DbRow | null = null;
-      let insert: DbRow | null = null;
+      let insert: DbRow | DbRow[] | null = null;
       let mode: 'many' | 'single' | 'maybeSingle' = 'many';
       let orders: Array<{ col: string; ascending: boolean }> = [];
       let limitN: number | null = null;
@@ -102,21 +103,26 @@ function makeDb(seed: DbRow[], opts: { failUpdate?: boolean; collections?: DbRow
 
       const exec = async () => {
         if (op === 'insert') {
-          const created: DbRow = {
-            id: table === 'seo_knowledge_sources' ? SOURCE_ID : nextUuid(),
-            created_at: '2026-01-01T00:00:00.000Z',
-            updated_at: '2026-01-01T00:00:00.000Z',
-            ...insert,
-          };
-          const createdName = typeof created.name === 'string' ? created.name.toLowerCase() : null;
-          if (table === 'seo_knowledge_collections' && createdName !== null) {
-            const duplicate = tableRows.some(
-              (r) => r.project_id === created.project_id && String(r.name).toLowerCase() === createdName,
-            );
-            if (duplicate) return { data: null, error: { code: '23505', message: 'duplicate key' } };
+          const items = Array.isArray(insert) ? insert : [insert];
+          const created: DbRow[] = [];
+          for (const item of items) {
+            const row: DbRow = {
+              id: table === 'seo_knowledge_sources' ? SOURCE_ID : nextUuid(),
+              created_at: '2026-01-01T00:00:00.000Z',
+              updated_at: '2026-01-01T00:00:00.000Z',
+              ...item,
+            };
+            if (table === 'seo_knowledge_collections' && typeof row.name === 'string') {
+              const createdName = row.name.toLowerCase();
+              const duplicate = tableRows.some(
+                (r) => r.project_id === row.project_id && String(r.name).toLowerCase() === createdName,
+              );
+              if (duplicate) return { data: null, error: { code: '23505', message: 'duplicate key' } };
+            }
+            tableRows.push(row);
+            created.push(row);
           }
-          tableRows.push(created);
-          return { data: mode === 'many' ? [created] : created, error: null };
+          return { data: mode === 'many' ? created : (created[0] ?? null), error: null };
         }
         if (op === 'update') {
           if (opts.failUpdate) return { data: null, error: { message: 'update failed' } };
@@ -163,7 +169,7 @@ function makeDb(seed: DbRow[], opts: { failUpdate?: boolean; collections?: DbRow
         if (selectOpts?.count) countRequested = true;
         return q;
       };
-      q.insert = (row: DbRow) => {
+      q.insert = (row: DbRow | DbRow[]) => {
         op = 'insert';
         insert = row;
         return q;
@@ -1432,7 +1438,9 @@ describe('knowledge retrieval service (KB6)', () => {
       expect.objectContaining({
         projectId: PROJECT,
         query: 'q',
-        limit: KNOWLEDGE_SEARCH_DEFAULT_LIMIT,
+        // Hybrid mode asks the provider for the bounded candidate window, not
+        // the public result limit; fusion trims the attributed results.
+        limit: KNOWLEDGE_RETRIEVAL_VECTOR_CANDIDATES,
         filter: { sourceTypes: ['url', 'file'], sourceIds: [sourceExternalId(SOURCE_ID)] },
       }),
     );
@@ -1473,6 +1481,100 @@ describe('knowledge retrieval service (KB6)', () => {
 
     await expect(svc.search(PROJECT, { query: 'q' })).rejects.toMatchObject({ code: 'not_configured' });
     expect(vi.mocked(provider.search)).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// KB10 - Hybrid retrieval foundation: the derived lexical projection is written
+// on the same successful ingest/refresh that writes vectors, replaced wholesale
+// on change, left alone when content is unchanged, and removed on delete.
+// ---------------------------------------------------------------------------
+
+describe('knowledge lexical projection lifecycle (KB10)', () => {
+  function projection(db: ReturnType<typeof makeDb>): DbRow[] {
+    return (db.tables.seo_knowledge_lexical_chunks ?? []) as DbRow[];
+  }
+
+  it('projects ingested text into the derived lexical index', async () => {
+    const db = makeDb([{ ...ROW, status: 'queued', content_text: 'Original body about crawling' }]);
+    const svc = new KnowledgeService(containerWith(db, fakeProvider().provider));
+
+    await svc.ingestSource(PROJECT, SOURCE_ID);
+
+    const chunks = projection(db);
+    expect(chunks).toHaveLength(1);
+    expect(chunks[0]).toMatchObject({ project_id: PROJECT, source_id: SOURCE_ID, chunk_index: 0 });
+    expect(String(chunks[0]!.content)).toContain('Original body');
+  });
+
+  it('replaces the projection wholesale when a refresh changes the content', async () => {
+    const BODY = 'Old captured body';
+    const db = makeDb([
+      {
+        ...ROW,
+        source_type: 'url',
+        status: 'ready',
+        content_text: BODY,
+        content_hash: contentHash(BODY),
+        refresh_policy: 'daily',
+        refresh_failures: 0,
+        last_fetched_at: '2026-01-01T00:00:00.000Z',
+        last_changed_at: '2025-12-01T00:00:00.000Z',
+      },
+    ]);
+    db.tables.seo_knowledge_lexical_chunks = [
+      { id: 'stale', project_id: PROJECT, source_id: SOURCE_ID, chunk_index: 0, content: BODY },
+    ];
+    const svc = new KnowledgeService(
+      containerWith(db, fakeProvider().provider, undefined, fakeFetcher({ contentText: 'Brand new body' })),
+    );
+
+    await svc.refreshSource(PROJECT, SOURCE_ID);
+
+    const chunks = projection(db);
+    expect(chunks).toHaveLength(1);
+    expect(String(chunks[0]!.content)).toBe('Brand new body');
+  });
+
+  it('leaves the projection untouched when a refresh finds no change', async () => {
+    const BODY = 'Unchanged body';
+    const db = makeDb([
+      {
+        ...ROW,
+        source_type: 'url',
+        status: 'ready',
+        content_text: BODY,
+        content_hash: contentHash(BODY),
+        refresh_policy: 'daily',
+        refresh_failures: 0,
+        last_fetched_at: '2026-01-01T00:00:00.000Z',
+        last_changed_at: '2025-12-01T00:00:00.000Z',
+      },
+    ]);
+    db.tables.seo_knowledge_lexical_chunks = [
+      { id: 'existing', project_id: PROJECT, source_id: SOURCE_ID, chunk_index: 0, content: BODY },
+    ];
+    const svc = new KnowledgeService(
+      containerWith(db, fakeProvider().provider, undefined, fakeFetcher({ contentText: BODY })),
+    );
+
+    const result = await svc.refreshSource(PROJECT, SOURCE_ID);
+
+    expect(result).toMatchObject({ refreshed: true, changed: false });
+    expect(projection(db)).toHaveLength(1);
+    expect(String(projection(db)[0]!.content)).toBe(BODY);
+  });
+
+  it('removes the projection when the source is deleted', async () => {
+    const db = makeDb([{ ...ROW, status: 'ready', content_text: 'Body to delete' }]);
+    db.tables.seo_knowledge_lexical_chunks = [
+      { id: 'c1', project_id: PROJECT, source_id: SOURCE_ID, chunk_index: 0, content: 'Body to delete' },
+    ];
+    const svc = new KnowledgeService(containerWith(db, fakeProvider().provider));
+
+    await svc.deleteSource(PROJECT, SOURCE_ID);
+
+    expect(projection(db)).toHaveLength(0);
   });
 });
 

@@ -635,6 +635,103 @@ if [ -z "${DISCOVERY_LEAK_COUNT}" ] || [ "${DISCOVERY_LEAK_COUNT}" != "0" ]; the
 fi
 echo "   smoke: non-member cannot read a foreign project discovery session (RLS isolation OK)"
 
+echo "==> smoke test: knowledge lexical index (KB10) + hybrid search + isolation"
+PSQL -d "${DB_NAME}" <<'SQL'
+set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-000000000001"}';
+do $$
+declare
+  v_project uuid;
+  v_project2 uuid;
+  v_source uuid;
+  v_collection uuid;
+  v_matches integer;
+  v_top text;
+begin
+  select id into v_project from public.seo_projects where slug = 'demo' limit 1;
+  select id into v_project2 from public.seo_projects where slug = 'second-user-project' limit 1;
+  if v_project is null or v_project2 is null then raise exception 'smoke: KB10 projects missing'; end if;
+
+  insert into public.seo_knowledge_sources (project_id, source_type, name, content_text, status, chunk_count)
+  values (v_project, 'text', 'Lexical smoke', 'Running the lexical migration smoke test.', 'ready', 2)
+  returning id into v_source;
+
+  insert into public.seo_knowledge_lexical_chunks (project_id, source_id, chunk_index, content)
+  values (v_project, v_source, 0, 'Running the lexical migration smoke test.'),
+         (v_project, v_source, 1, 'A second chunk about hybrid retrieval.');
+
+  -- Normal match.
+  select count(*) into v_matches
+  from public.seo_knowledge_lexical_search(v_project, 'lexical migration', 10);
+  if v_matches < 1 then raise exception 'smoke: KB10 normal lexical query returned nothing'; end if;
+
+  -- Word variation: `run` matches `Running` through english stemming.
+  select content into v_top from public.seo_knowledge_lexical_search(v_project, 'run', 10) limit 1;
+  if v_top is null then raise exception 'smoke: KB10 stemming query returned nothing'; end if;
+
+  -- Non-ready sources are excluded before fusion.
+  update public.seo_knowledge_sources set status = 'processing' where id = v_source;
+  select count(*) into v_matches
+  from public.seo_knowledge_lexical_search(v_project, 'lexical migration', 10);
+  if v_matches <> 0 then raise exception 'smoke: KB10 non-ready source was searchable'; end if;
+  update public.seo_knowledge_sources set status = 'ready' where id = v_source;
+
+  -- Project isolation: the second project has no matching chunks.
+  select count(*) into v_matches
+  from public.seo_knowledge_lexical_search(v_project2, 'lexical migration', 10);
+  if v_matches <> 0 then raise exception 'smoke: KB10 cross-project lexical leak'; end if;
+
+  -- Collection + uncategorized filters.
+  insert into public.seo_knowledge_collections (project_id, name, created_by)
+  values (v_project, 'Lexical target', '00000000-0000-0000-0000-000000000001')
+  returning id into v_collection;
+  update public.seo_knowledge_sources set collection_id = v_collection where id = v_source;
+
+  select count(*) into v_matches
+  from public.seo_knowledge_lexical_search(v_project, 'lexical migration', 10, null, null, v_collection, false);
+  if v_matches < 1 then raise exception 'smoke: KB10 collection filter returned nothing'; end if;
+
+  select count(*) into v_matches
+  from public.seo_knowledge_lexical_search(v_project, 'lexical migration', 10, null, null, null, true);
+  if v_matches <> 0 then raise exception 'smoke: KB10 uncategorized filter matched a categorized source'; end if;
+
+  -- Source-id filter (as the API passes managed source uuids).
+  select count(*) into v_matches
+  from public.seo_knowledge_lexical_search(v_project, 'lexical migration', 10, array[v_source], null, null, false);
+  if v_matches < 1 then raise exception 'smoke: KB10 source-id filter returned nothing'; end if;
+  select count(*) into v_matches
+  from public.seo_knowledge_lexical_search(v_project, 'lexical migration', 10, array[gen_random_uuid()], null, null, false);
+  if v_matches <> 0 then raise exception 'smoke: KB10 source-id filter ignored the filter'; end if;
+
+  if not exists (
+    select 1 from pg_indexes
+    where schemaname = 'public' and indexname = 'seo_knowledge_lexical_chunks_search_idx'
+  ) then raise exception 'smoke: KB10 GIN lexical index missing'; end if;
+
+  -- Deleting the source cascades to its projection (no orphan chunk).
+  delete from public.seo_knowledge_sources where id = v_source;
+  if exists (select 1 from public.seo_knowledge_lexical_chunks where source_id = v_source) then
+    raise exception 'smoke: KB10 source delete left orphan lexical chunks';
+  end if;
+
+  raise notice 'smoke: knowledge lexical index (match/stem/isolate/filter/cascade) OK';
+end $$;
+SQL
+
+# RLS can only be exercised as a non-superuser role (superusers bypass RLS).
+LEXICAL_LEAK_COUNT="$(PSQL -d "${DB_NAME}" -t -A <<'SQL'
+grant usage on schema public to authenticated;
+grant select on public.seo_knowledge_lexical_chunks to authenticated;
+set role authenticated;
+set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-000000000002"}';
+select count(*) from public.seo_knowledge_lexical_chunks;
+SQL
+)"
+if [ -z "${LEXICAL_LEAK_COUNT}" ] || [ "${LEXICAL_LEAK_COUNT}" != "0" ]; then
+  echo "!! RLS leak: non-member read ${LEXICAL_LEAK_COUNT} lexical chunks" >&2
+  exit 1
+fi
+echo "   smoke: non-member cannot read foreign project lexical chunks (RLS isolation OK)"
+
 echo "==> smoke test: media library (phase F) + safe deletion + isolation"
 PSQL -d "${DB_NAME}" <<'SQL'
 set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-000000000001"}';

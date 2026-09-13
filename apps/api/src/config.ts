@@ -66,6 +66,12 @@ const envSchema = z.object({
   JINA_API_KEY: z.string().optional(),
   JINA_BASE_URL: z.string().url().optional(),
 
+  // Knowledge retrieval (KB10): explicit retrieval mode for the knowledge
+  // search pipeline. `hybrid` gathers vector + lexical candidates and fuses
+  // them; `vector` is the safe vector-only fallback. Read once here and passed
+  // explicitly into the retrieval boundary - no per-component flags.
+  KNOWLEDGE_RETRIEVAL_MODE: z.enum(['vector', 'hybrid']).default('hybrid'),
+
   // OpenAI (AI chat/generation/embeddings - BYOK key, server-side only).
   OPENAI_API_KEY: z.string().optional(),
   OPENAI_BASE_URL: z.string().url().optional(),
