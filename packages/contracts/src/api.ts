@@ -1603,3 +1603,99 @@ export interface KeywordResearchRunDto {
   createdAt: string;
   completedAt: string | null;
 }
+
+// ---------------------------------------------------------------------------
+// Competitor intelligence (KW3): domain-based competitor discovery plus a
+// competitor keyword gap. One existing `competitor_research` job type backs
+// both modes (discover | gap); the bounded, normalized run output lives on the
+// job row (seo_sync_jobs.result). A gap is a point-in-time analysis, so there
+// is deliberately no opportunity table: the job is the source of truth.
+// ---------------------------------------------------------------------------
+
+/** The two explicit modes of one competitor_research job. */
+export type CompetitorResearchMode = 'discover' | 'gap';
+
+/** Longest target/competitor domain accepted (DNS hostname limit). */
+export const COMPETITOR_RESEARCH_DOMAIN_MAX_CHARS = 253;
+
+/** Hard cap on competitor-domain candidates carried on a discovery run. */
+export const COMPETITOR_RESEARCH_MAX_CANDIDATES = 20;
+
+/** Hard cap on how many competitors a single gap analysis may cover. */
+export const COMPETITOR_RESEARCH_MAX_COMPETITORS = 3;
+
+/** Hard cap on gap rows carried on one run (compact, never a raw provider blob). */
+export const COMPETITOR_RESEARCH_RUN_MAX_GAPS = 200;
+
+/** Rankings beyond this position are not a worthwhile organic gap (page one). */
+export const COMPETITOR_GAP_MAX_RANK = 10;
+
+/** Default minimum monthly search volume applied provider-side to gap rows. */
+export const COMPETITOR_GAP_MIN_SEARCH_VOLUME = 10;
+
+/** Start competitor discovery for a project domain (domain falls back to the project's own). */
+export interface CompetitorDiscoveryRequest {
+  domain?: string;
+}
+
+/** One discovered competitor domain and its overlap signals with the target. */
+export interface CompetitorCandidateDto {
+  domain: string;
+  sharedKeywords: number | null;
+  keywordsCount: number | null;
+  avgPosition: number | null;
+  etv: number | null;
+}
+
+/** One keyword gap: the competitor ranks, the target domain does not. */
+export interface CompetitorGapDto {
+  keyword: string;
+  searchVolume: number | null;
+  difficulty: number | null;
+  cpc: number | null;
+  competitorDomain: string;
+  position: number | null;
+}
+
+/** Start a keyword-gap analysis for up to COMPETITOR_RESEARCH_MAX_COMPETITORS competitors. */
+export interface CompetitorGapRequest {
+  domain?: string;
+  competitors: string[];
+}
+
+/** The queued run handle returned when competitor discovery starts. */
+export interface CompetitorDiscoveryStartDto {
+  jobId: string;
+  status: JobStatus;
+  mode: 'discover';
+  domain: string;
+}
+
+/** The queued run handle returned when a gap analysis starts. */
+export interface CompetitorGapStartDto {
+  jobId: string;
+  status: JobStatus;
+  mode: 'gap';
+  domain: string;
+  competitors: string[];
+}
+
+/**
+ * A competitor research run as read back by its owning project. Only the array
+ * matching `mode` is populated once the run completes; a failed run reports a
+ * safe, generic `error` - never raw provider output.
+ */
+export interface CompetitorResearchRunDto {
+  jobId: string;
+  mode: CompetitorResearchMode;
+  status: JobStatus;
+  domain: string;
+  candidates: CompetitorCandidateDto[];
+  selectedCompetitors: string[];
+  gaps: CompetitorGapDto[];
+  /** Rows the run produced (candidates or gaps; 0 until it completes). */
+  count: number;
+  error: string | null;
+  createdAt: string;
+  completedAt: string | null;
+}

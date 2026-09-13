@@ -10,7 +10,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import type { KeywordResearchRunDto, ProjectKeywordsDto } from '@seo/contracts';
+import type { CompetitorResearchRunDto, KeywordResearchRunDto, ProjectKeywordsDto } from '@seo/contracts';
 import { Keywords } from './Keywords';
 
 const { apiMock, ApiRequestErrorMock } = vi.hoisted(() => {
@@ -124,12 +124,14 @@ describe('Keywords view - Research (KW2)', () => {
   it('shows the idle prompt and does not start anything', async () => {
     mockResearch({});
     render(<Keywords projectId={PROJECT} role="editor" />);
+    fireEvent.click(screen.getByRole('button', { name: 'Research' }));
     expect(await screen.findByText('Enter a keyword to research.')).toBeTruthy();
   });
 
   it('blocks viewers from starting research', async () => {
     mockResearch({});
     render(<Keywords projectId={PROJECT} role="viewer" />);
+    fireEvent.click(screen.getByRole('button', { name: 'Research' }));
     expect(await screen.findByText('Only editors and above can start keyword research.')).toBeTruthy();
     expect((screen.getByLabelText('Seed keyword') as HTMLInputElement).disabled).toBe(true);
     expect((screen.getByRole('button', { name: 'Start research' }) as HTMLButtonElement).disabled).toBe(true);
@@ -138,6 +140,7 @@ describe('Keywords view - Research (KW2)', () => {
   it('validates an empty seed before calling the API', async () => {
     mockResearch({});
     render(<Keywords projectId={PROJECT} role="editor" />);
+    fireEvent.click(screen.getByRole('button', { name: 'Research' }));
     fireEvent.change(screen.getByLabelText('Seed keyword'), { target: { value: '   ' } });
     const button = screen.getByRole('button', { name: 'Start research' }) as HTMLButtonElement;
     expect(button.disabled).toBe(true);
@@ -156,6 +159,7 @@ describe('Keywords view - Research (KW2)', () => {
     });
 
     render(<Keywords projectId={PROJECT} role="editor" />);
+    fireEvent.click(screen.getByRole('button', { name: 'Research' }));
     fireEvent.change(screen.getByLabelText('Seed keyword'), { target: { value: '  seo tools  ' } });
     fireEvent.click(screen.getByRole('button', { name: 'Start research' }));
 
@@ -177,6 +181,7 @@ describe('Keywords view - Research (KW2)', () => {
     });
 
     render(<Keywords projectId={PROJECT} role="editor" />);
+    fireEvent.click(screen.getByRole('button', { name: 'Research' }));
     fireEvent.change(screen.getByLabelText('Seed keyword'), { target: { value: 'seo tools' } });
     fireEvent.click(screen.getByRole('button', { name: 'Start research' }));
 
@@ -194,6 +199,7 @@ describe('Keywords view - Research (KW2)', () => {
     });
 
     render(<Keywords projectId={PROJECT} role="editor" />);
+    fireEvent.click(screen.getByRole('button', { name: 'Research' }));
     fireEvent.change(screen.getByLabelText('Seed keyword'), { target: { value: 'seo tools' } });
     fireEvent.click(screen.getByRole('button', { name: 'Start research' }));
 
@@ -207,10 +213,136 @@ describe('Keywords view - Research (KW2)', () => {
     });
 
     render(<Keywords projectId={PROJECT} role="editor" />);
+    fireEvent.click(screen.getByRole('button', { name: 'Research' }));
     fireEvent.change(screen.getByLabelText('Seed keyword'), { target: { value: 'seo tools' } });
     fireEvent.click(screen.getByRole('button', { name: 'Start research' }));
 
     expect(await screen.findByText('Keyword research failed. Please try again.')).toBeTruthy();
     await waitFor(() => expect(screen.queryByText(/api\.dataforseo\.com/)).toBeNull());
+  });
+});
+
+describe('Keywords view - Competitors (KW3)', () => {
+  const DISCOVER_JOB = 'disc-1';
+  const GAP_JOB = 'gap-1';
+
+  function discoveryRun(overrides: Partial<CompetitorResearchRunDto> = {}): CompetitorResearchRunDto {
+    return {
+      jobId: DISCOVER_JOB,
+      mode: 'discover',
+      status: 'completed',
+      domain: 'example.com',
+      candidates: [],
+      selectedCompetitors: [],
+      gaps: [],
+      count: 0,
+      error: null,
+      createdAt: '2026-09-13T10:00:00.000Z',
+      completedAt: '2026-09-13T10:00:10.000Z',
+      ...overrides,
+    };
+  }
+
+  function gapRun(overrides: Partial<CompetitorResearchRunDto> = {}): CompetitorResearchRunDto {
+    return {
+      jobId: GAP_JOB,
+      mode: 'gap',
+      status: 'completed',
+      domain: 'example.com',
+      candidates: [],
+      selectedCompetitors: ['rival.com'],
+      gaps: [],
+      count: 0,
+      error: null,
+      createdAt: '2026-09-13T10:00:00.000Z',
+      completedAt: '2026-09-13T10:00:10.000Z',
+      ...overrides,
+    };
+  }
+
+  function renderCompetitors(role = 'editor') {
+    render(<Keywords projectId={PROJECT} role={role} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Competitors' }));
+  }
+
+  it('blocks viewers from running competitor research', async () => {
+    apiMock.api.mockResolvedValue(EMPTY_GSC);
+    renderCompetitors('viewer');
+    expect(await screen.findByText('Only editors and above can run competitor research.')).toBeTruthy();
+    expect((screen.getByRole('button', { name: 'Find competitors' }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('discovers candidates, then shows the selected gap keywords', async () => {
+    apiMock.api.mockImplementation(async (path: string, opts?: { method?: string; body?: unknown }) => {
+      if (path.endsWith('/gsc/keywords')) return EMPTY_GSC;
+      if (path.endsWith('/keyword/competitors') && opts?.method === 'POST') {
+        return { jobId: DISCOVER_JOB, status: 'queued', mode: 'discover', domain: 'example.com' };
+      }
+      if (path.endsWith('/keyword/competitor-gap') && opts?.method === 'POST') {
+        return { jobId: GAP_JOB, status: 'queued', mode: 'gap', domain: 'example.com', competitors: ['rival.com'] };
+      }
+      if (path.includes(`/keyword/competitors/${DISCOVER_JOB}`)) {
+        return discoveryRun({
+          candidates: [
+            { domain: 'rival.com', sharedKeywords: 1842, keywordsCount: 5200, avgPosition: 12.4, etv: 900 },
+          ],
+          count: 1,
+        });
+      }
+      if (path.includes(`/keyword/competitors/${GAP_JOB}`)) {
+        return gapRun({
+          gaps: [
+            { keyword: 'blue widgets', searchVolume: 2400, difficulty: 42, cpc: 1.2, competitorDomain: 'rival.com', position: 4 },
+          ],
+          count: 1,
+        });
+      }
+      throw new Error(`unexpected ${path}`);
+    });
+
+    renderCompetitors();
+    fireEvent.click(screen.getByRole('button', { name: 'Find competitors' }));
+
+    expect(await screen.findByText('rival.com')).toBeTruthy();
+    expect(screen.getByText('1,842')).toBeTruthy();
+    expect(screen.getByText(/Your domain:/)).toBeTruthy();
+
+    fireEvent.click(screen.getByLabelText('Select rival.com'));
+    fireEvent.click(screen.getByRole('button', { name: 'Analyze keyword gaps' }));
+
+    expect(await screen.findByText('blue widgets')).toBeTruthy();
+    expect(screen.getByText('2,400')).toBeTruthy();
+  });
+
+  it('shows the honest server message when the project has no domain', async () => {
+    apiMock.api.mockImplementation(async (path: string, opts?: { method?: string }) => {
+      if (path.endsWith('/gsc/keywords')) return EMPTY_GSC;
+      if (path.endsWith('/keyword/competitors') && opts?.method === 'POST') {
+        throw new ApiRequestErrorMock('bad_request', 'Add a domain to this project before finding competitors', 400);
+      }
+      throw new Error(`unexpected ${path}`);
+    });
+
+    renderCompetitors();
+    fireEvent.click(screen.getByRole('button', { name: 'Find competitors' }));
+
+    expect(
+      await screen.findByText('Add a domain to this project before finding competitors'),
+    ).toBeTruthy();
+  });
+
+  it('maps a not-configured server error to an honest message', async () => {
+    apiMock.api.mockImplementation(async (path: string, opts?: { method?: string }) => {
+      if (path.endsWith('/gsc/keywords')) return EMPTY_GSC;
+      if (path.endsWith('/keyword/competitors') && opts?.method === 'POST') {
+        throw new ApiRequestErrorMock('not_configured', 'No dataforseo provider is registered', 503);
+      }
+      throw new Error(`unexpected ${path}`);
+    });
+
+    renderCompetitors();
+    fireEvent.click(screen.getByRole('button', { name: 'Find competitors' }));
+
+    expect(await screen.findByText('Competitor research is not configured.')).toBeTruthy();
   });
 });

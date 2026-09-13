@@ -9,8 +9,15 @@
  * SerpItems.
  */
 
-import type { KeywordResearchResult, SerpItem } from '@seo/contracts';
-import type { KeywordSuggestion, SerpItemRaw, SerpTask, SerpTaskResult } from './dataForSeoClient.js';
+import type { CompetitorCandidate, CompetitorKeywordGap, KeywordResearchResult, SerpItem } from '@seo/contracts';
+import type {
+  CompetitorDomainItem,
+  DomainIntersectionItem,
+  KeywordSuggestion,
+  SerpItemRaw,
+  SerpTask,
+  SerpTaskResult,
+} from './dataForSeoClient.js';
 import { asNumber } from '../../util.js';
 
 /** DataForSEO type tokens that denote a paid placement. */
@@ -157,4 +164,45 @@ export function difficultyLevel(value: number | null | undefined): string {
   if (value <= 49) return 'Possible';
   if (value <= 69) return 'Difficult';
   return 'Hard';
+}
+
+/**
+ * Normalize one competitor-domain item (KW3 discovery). The domain is the only
+ * required field - a candidate without one is dropped; absent metrics stay null
+ * (never a fabricated zero) so the UI can distinguish "no data" from "zero".
+ */
+export function normalizeCompetitorCandidate(item: CompetitorDomainItem): CompetitorCandidate | null {
+  const domain = typeof item.domain === 'string' ? item.domain.trim().toLowerCase() : '';
+  if (!domain) return null;
+  return {
+    domain,
+    shared_keywords: asNumber(item.intersections),
+    keywords_count: asNumber(item.keywords_count),
+    avg_position: asNumber(item.avg_position),
+    etv: asNumber(item.etv),
+  };
+}
+
+/**
+ * Normalize one domain-intersection item to a gap row (KW3). The keyword is
+ * required; metrics are read from the nested keyword_data when present. `rank`
+ * falls back to the element-level rank_group because the vendor has exposed the
+ * position at either level across endpoint revisions.
+ */
+export function normalizeDomainIntersectionGap(
+  item: DomainIntersectionItem,
+  competitorDomain: string,
+): CompetitorKeywordGap | null {
+  const keyword = item.keyword_data?.keyword;
+  if (typeof keyword !== 'string' || !keyword.trim()) return null;
+  const info = item.keyword_data?.keyword_info;
+  const rank = item.ranked_serp_element?.serp_item?.rank_group ?? item.ranked_serp_element?.rank_group;
+  return {
+    keyword: keyword.trim(),
+    search_volume: asNumber(info?.search_volume),
+    difficulty: asNumber(item.keyword_data?.keyword_properties?.keyword_difficulty),
+    cpc: asNumber(info?.cpc),
+    competitor_domain: competitorDomain,
+    position: asNumber(rank),
+  };
 }

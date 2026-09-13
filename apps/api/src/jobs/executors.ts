@@ -22,7 +22,20 @@ import { KnowledgeService } from '../services/knowledgeService.js';
 import { ContentAgentService } from '../services/contentAgentService.js';
 import { ContentAnalysisService } from '../services/contentAnalysisService.js';
 import { isDataImage, storeImageDataUrl } from '../infra/mediaStorage.js';
-import { asContentBlocks, KEYWORD_RESEARCH_RUN_MAX_KEYWORDS, type ContentBlock, type KeywordResearchKeywordDto } from '@seo/contracts';
+import {
+  asContentBlocks,
+  COMPETITOR_GAP_MAX_RANK,
+  COMPETITOR_GAP_MIN_SEARCH_VOLUME,
+  COMPETITOR_RESEARCH_MAX_CANDIDATES,
+  COMPETITOR_RESEARCH_MAX_COMPETITORS,
+  COMPETITOR_RESEARCH_RUN_MAX_GAPS,
+  KEYWORD_RESEARCH_RUN_MAX_KEYWORDS,
+  type CompetitorCandidateDto,
+  type CompetitorGapDto,
+  type ContentBlock,
+  type KeywordResearchKeywordDto,
+} from '@seo/contracts';
+import { normalizeDomain } from '../services/competitorResearchService.js';
 
 export interface JobExecContext {
   container: ServiceContainer;
@@ -307,6 +320,82 @@ const dataForSeoKeywordResearch: JobExecutor = async ({ container, job, writer, 
   }));
   await report(100, 'Keyword research complete');
   return { seed: seeds[0] ?? null, seeds: seeds.length, results: results.length, keywords };
+};
+
+/**
+ * Competitor research (KW3). One job type, two explicit modes: `discover`
+ * returns candidate competitor domains for the project's domain via one Labs
+ * task, `gap` returns the keywords up to three selected competitors rank for
+ * on page one that the project domain does not. Ranking/paid/volume filters run
+ * provider-side; only the bounded, normalized run result is carried on the job
+ * (and gap keywords are additionally upserted into the shared keyword store,
+ * under their own source, as provenance-tagged enrichment).
+ */
+const dataForSeoCompetitorResearch: JobExecutor = async ({ container, job, writer, report }) => {
+  const ds = await dataSourceRow(container.sb, job.project_id, job.data_source_id);
+  const adapter = container.registry.getDataSource('dataforseo');
+  if (!adapter) throw new ApiError(503, 'not_configured', 'DataForSEO provider is not registered');
+  const dfseo = adapter as DataForSeoDataSource;
+  const mode = job.params.mode;
+  const domain = normalizeDomain(typeof job.params.domain === 'string' ? job.params.domain : '');
+  if (!domain) throw new ApiError(400, 'bad_request', 'competitor_research requires a domain');
+
+  const ctx = buildProviderContext(container, {
+    projectId: job.project_id,
+    userId: job.created_by,
+    owner: { integrationId: String(ds.integration_id), providerType: 'dataforseo' },
+    config: { ...(ds.config as Record<string, unknown>) },
+  });
+
+  if (mode === 'discover') {
+    await report(10, `Finding competitors for ${domain}`);
+    const candidates = await dfseo.discoverCompetitors(ctx, domain, {
+      limit: COMPETITOR_RESEARCH_MAX_CANDIDATES,
+    });
+    const competitors: CompetitorCandidateDto[] = candidates.slice(0, COMPETITOR_RESEARCH_MAX_CANDIDATES).map((c) => ({
+      domain: c.domain,
+      sharedKeywords: c.shared_keywords,
+      keywordsCount: c.keywords_count,
+      avgPosition: c.avg_position,
+      etv: c.etv,
+    }));
+    await report(100, 'Competitor discovery complete');
+    return { mode: 'discover', domain, count: candidates.length, competitors };
+  }
+
+  if (mode === 'gap') {
+    const rawCompetitors = Array.isArray(job.params.competitors) ? (job.params.competitors as unknown[]) : [];
+    const competitors: string[] = [];
+    for (const raw of rawCompetitors) {
+      if (typeof raw !== 'string') continue;
+      const candidate = normalizeDomain(raw);
+      if (candidate && candidate !== domain && !competitors.includes(candidate)) competitors.push(candidate);
+      if (competitors.length >= COMPETITOR_RESEARCH_MAX_COMPETITORS) break;
+    }
+    if (competitors.length === 0) {
+      throw new ApiError(400, 'bad_request', 'competitor_research gap mode requires at least one competitor');
+    }
+    await report(10, `Analyzing keyword gaps for ${competitors.length} competitor(s)`);
+    const gaps = await dfseo.findCompetitorKeywordGaps(ctx, domain, competitors, {
+      minSearchVolume: COMPETITOR_GAP_MIN_SEARCH_VOLUME,
+      maxRank: COMPETITOR_GAP_MAX_RANK,
+      limitPerCompetitor: COMPETITOR_RESEARCH_RUN_MAX_GAPS,
+    });
+    const bounded: CompetitorGapDto[] = gaps.slice(0, COMPETITOR_RESEARCH_RUN_MAX_GAPS).map((g) => ({
+      keyword: g.keyword,
+      searchVolume: g.search_volume,
+      difficulty: g.difficulty,
+      cpc: g.cpc,
+      competitorDomain: g.competitor_domain,
+      position: g.position,
+    }));
+    await report(70, `Enriching ${bounded.length} gap keywords`);
+    await writer.persistCompetitorGapKeywords(job.project_id, gaps);
+    await report(100, 'Keyword gap analysis complete');
+    return { mode: 'gap', domain, competitors, count: gaps.length, gaps: bounded };
+  }
+
+  throw new ApiError(400, 'bad_request', "competitor_research mode must be 'discover' or 'gap'");
 };
 
 // ---------------------------------------------------------------------------
@@ -729,6 +818,7 @@ export const EXECUTORS: Record<string, JobExecutor> = {
   gsc_sync: gscSync,
   dataforseo_rank_sync: dataForSeoRankSync,
   dataforseo_keyword_research: dataForSeoKeywordResearch,
+  competitor_research: dataForSeoCompetitorResearch,
   serp_retrieval: serpRetrieval,
   knowledge_index: knowledgeIndex,
   knowledge_reindex: knowledgeReindex,

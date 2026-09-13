@@ -107,6 +107,27 @@ export interface SeoDataSource {
   }>;
   getSerp?(ctx: ProviderContext, keywords: string[], range?: DateRange): Promise<SerpSnapshot[]>;
   getCompetitors?(ctx: ProviderContext, keywords: string[]): Promise<import('./models.js').CompetitorItem[]>;
+  /**
+   * Domain-level competitor discovery for a target domain (KW3). Returns
+   * candidate domains with overlap/visibility signals; it never fires a gap
+   * analysis by itself.
+   */
+  discoverCompetitors?(
+    ctx: ProviderContext,
+    domain: string,
+    opts?: { limit?: number },
+  ): Promise<import('./models.js').CompetitorCandidate[]>;
+  /**
+   * Keywords a competitor ranks for that the target domain does not (KW3 gap).
+   * The adapter is expected to push ranking/volume filters to the provider so
+   * only relevant rows ever return.
+   */
+  findCompetitorKeywordGaps?(
+    ctx: ProviderContext,
+    domain: string,
+    competitors: string[],
+    opts?: { minSearchVolume?: number; maxRank?: number; limitPerCompetitor?: number },
+  ): Promise<import('./models.js').CompetitorKeywordGap[]>;
   researchKeywords?(ctx: ProviderContext, keywords: string[]): Promise<KeywordResearchResult[]>;
   crawl?(ctx: ProviderContext, startUrls: string[]): Promise<{ pages: Page[]; findings: AuditFinding[] }>;
 }

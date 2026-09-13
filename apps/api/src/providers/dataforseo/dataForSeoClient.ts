@@ -125,8 +125,76 @@ export interface KeywordDifficultyItem {
   keyword_properties?: { keyword_difficulty?: number; keyword_difficulty_info?: { level?: string } };
 }
 
+/**
+ * A competitor-domain item from `competitors_domain/live`. Metric fields are
+ * optional because the vendor omits them for some candidates; the normalizer
+ * maps absence to null rather than a fabricated zero.
+ */
+export interface CompetitorDomainItem {
+  domain?: string;
+  avg_position?: number;
+  median_position?: number;
+  rating?: number;
+  etv?: number;
+  keywords_count?: number;
+  /** Number of keywords the candidate domain has in common with the target. */
+  intersections?: number;
+  metrics?: {
+    organic?: { count?: number; etv?: number };
+    paid?: { count?: number; etv?: number };
+  };
+  full_domain_metrics?: Record<string, unknown>;
+  [key: string]: unknown;
+}
+
+/**
+ * One `domain_intersection/live` item: the keyword plus the competitor's ranked
+ * organic SERP element. With `intersections: false` the vendor returns keywords
+ * the second target ranks for and the first does not - the gap.
+ */
+export interface DomainIntersectionItem {
+  keyword_data?: {
+    keyword?: string;
+    keyword_info?: { search_volume?: number; cpc?: number; competition?: number };
+    keyword_properties?: { keyword_difficulty?: number };
+    search_intent_info?: { main_intent?: string };
+  };
+  ranked_serp_element?: {
+    rank_group?: number;
+    rank_absolute?: number;
+    se_type?: string;
+    serp_item?: {
+      rank_group?: number;
+      rank_absolute?: number;
+      domain?: string;
+      url?: string;
+      title?: string;
+      type?: string;
+      is_paid?: boolean;
+    };
+  };
+  [key: string]: unknown;
+}
+
 /** HTTP statuses where a retry (after backoff) has a real chance of succeeding. */
 const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
+
+/**
+ * Build a DataForSEO Labs `filters` array from ordered conditions, joining them
+ * with the `and` operator (the vendor documents up to eight filters per
+ * request). Returns undefined for no conditions so the request body stays
+ * minimal. Kept here so callers pass typed conditions instead of assembling the
+ * vendor's interleaved array shape by hand.
+ */
+function andFilters(conditions: unknown[][]): unknown[] | undefined {
+  if (conditions.length === 0) return undefined;
+  const out: unknown[] = [];
+  for (const condition of conditions) {
+    if (out.length > 0) out.push('and');
+    out.push(condition);
+  }
+  return out;
+}
 
 /**
  * One DataForSEO account's worth of HTTP. Shared across every data-source call
@@ -346,5 +414,79 @@ export class DataForSeoClient {
       if (kw && typeof diff === 'number') map.set(kw, diff);
     }
     return map;
+  }
+
+  // -- Competitor intelligence (DataForSEO Labs) ----------------------------
+
+  /**
+   * Domain-level competitor discovery for one target domain. `exclude_top_domains`
+   * keeps the list to realistic peers rather than global giants; the caller caps
+   * `limit` so discovery always stays a single cheap task.
+   */
+  async competitorDomains(
+    domain: string,
+    opts: { locationCode?: number; languageCode?: string; limit?: number } = {},
+  ): Promise<CompetitorDomainItem[]> {
+    const data = await this.request<{ tasks?: Array<{ result?: Array<{ items?: CompetitorDomainItem[] }> }> }>(
+      'POST',
+      '/v3/dataforseo_labs/google/competitors_domain/live',
+      [
+        {
+          target: domain,
+          location_code: opts.locationCode ?? 2840,
+          language_code: opts.languageCode ?? 'en',
+          limit: opts.limit ?? 20,
+          exclude_top_domains: true,
+        },
+      ],
+    );
+    return data.tasks?.[0]?.result?.[0]?.items ?? [];
+  }
+
+  /**
+   * Keywords the competitor (target2) ranks for that the target domain
+   * (target1) does not. Ranking, paid and volume filters are pushed to the
+   * vendor so only page-one, non-paid, sufficiently-searched rows return - the
+   * caller never receives thousands of rows to trim locally.
+   */
+  async domainIntersection(
+    target1: string,
+    target2: string,
+    opts: {
+      locationCode?: number;
+      languageCode?: string;
+      limit?: number;
+      minSearchVolume?: number;
+      maxRankGroup?: number;
+      excludePaid?: boolean;
+    } = {},
+  ): Promise<DomainIntersectionItem[]> {
+    const conditions: unknown[][] = [];
+    if (opts.maxRankGroup != null) {
+      conditions.push(['ranked_serp_element.serp_item.rank_group', '<=', opts.maxRankGroup]);
+    }
+    if (opts.excludePaid !== false) {
+      conditions.push(['ranked_serp_element.is_paid', '=', false]);
+    }
+    if (opts.minSearchVolume != null) {
+      conditions.push(['keyword_data.keyword_info.search_volume', '>=', opts.minSearchVolume]);
+    }
+    const filters = andFilters(conditions);
+    const body: Record<string, unknown> = {
+      target1,
+      target2,
+      location_code: opts.locationCode ?? 2840,
+      language_code: opts.languageCode ?? 'en',
+      intersections: false, // gap: target2 only
+      limit: opts.limit ?? 200,
+      order_by: ['keyword_data.keyword_info.search_volume,desc'],
+    };
+    if (filters) body.filters = filters;
+    const data = await this.request<{ tasks?: Array<{ result?: Array<{ items?: DomainIntersectionItem[] }> }> }>(
+      'POST',
+      '/v3/dataforseo_labs/google/domain_intersection/live',
+      [body],
+    );
+    return data.tasks?.[0]?.result?.[0]?.items ?? [];
   }
 }

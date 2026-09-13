@@ -13,7 +13,9 @@
  */
 
 import type {
+  CompetitorCandidate,
   CompetitorItem,
+  CompetitorKeywordGap,
   KeywordResearchResult,
   ProviderContext,
   ProviderDeps,
@@ -22,9 +24,12 @@ import type {
   SerpSnapshot,
 } from '@seo/contracts';
 import { ApiError } from '../../apiErrors.js';
+import { COMPETITOR_RESEARCH_MAX_COMPETITORS } from '@seo/contracts';
 import { DataForSeoClient, type SerpTask } from './dataForSeoClient.js';
 import {
   keywordOfTask,
+  normalizeCompetitorCandidate,
+  normalizeDomainIntersectionGap,
   normalizeSerpItems,
   normalizeSuggestion,
   resultOfTask,
@@ -237,6 +242,65 @@ export class DataForSeoDataSource implements SeoDataSource {
       }
     }
     return competitors;
+  }
+
+  // -- capability: competitor intelligence (KW3) -----------------------------
+
+  /**
+   * Domain-level competitor discovery. One Labs task returns candidate domains
+   * and their overlap with the own domain; the adapter caps the list and never
+   * triggers a gap analysis - the caller decides which peers to compare.
+   */
+  async discoverCompetitors(
+    ctx: ProviderContext,
+    domain: string,
+    opts: { limit?: number } = {},
+  ): Promise<CompetitorCandidate[]> {
+    const client = await this.clientFor(ctx);
+    const items = await client.competitorDomains(domain, {
+      locationCode: LOCATION_CODE,
+      languageCode: LANGUAGE_CODE,
+      limit: opts.limit ?? 20,
+    });
+    const out: CompetitorCandidate[] = [];
+    for (const item of items) {
+      const candidate = normalizeCompetitorCandidate(item);
+      if (candidate) out.push(candidate);
+    }
+    return out;
+  }
+
+  /**
+   * Competitor keyword gaps: for each competitor (bounded), ask the vendor for
+   * the keywords it ranks for on page one that the own domain does not. Ranking,
+   * paid and minimum-volume filters run provider-side so we only ever receive
+   * relevant rows; a per-competitor row cap keeps the run's cost bounded.
+   */
+  async findCompetitorKeywordGaps(
+    ctx: ProviderContext,
+    domain: string,
+    competitors: string[],
+    opts: { minSearchVolume?: number; maxRank?: number; limitPerCompetitor?: number } = {},
+  ): Promise<CompetitorKeywordGap[]> {
+    const client = await this.clientFor(ctx);
+    const out: CompetitorKeywordGap[] = [];
+    const targets = competitors.slice(0, COMPETITOR_RESEARCH_MAX_COMPETITORS);
+    for (let i = 0; i < targets.length; i += 1) {
+      const competitor = targets[i];
+      if (i > 0) await delay(600);
+      const items = await client.domainIntersection(domain, competitor, {
+        locationCode: LOCATION_CODE,
+        languageCode: LANGUAGE_CODE,
+        limit: opts.limitPerCompetitor ?? 200,
+        minSearchVolume: opts.minSearchVolume,
+        maxRankGroup: opts.maxRank,
+      });
+      for (const item of items) {
+        const gap = normalizeDomainIntersectionGap(item, competitor);
+        if (gap) out.push(gap);
+      }
+    }
+    return out;
   }
 
   // -- interface stubs (unused by generic core for this provider) -------------

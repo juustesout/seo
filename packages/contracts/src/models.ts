@@ -709,5 +709,35 @@ export interface CompetitorItem {
   serp_item: SerpItem | null;
 }
 
+/**
+ * A domain-level competitor discovered for a project's own domain (KW3
+ * discovery), not tied to one keyword. `shared_keywords` is how many keywords
+ * the candidate and the target have in common; `keywords_count` is the
+ * candidate's total ranked-keyword footprint. Metric fields are null when the
+ * provider did not report them - never fabricated.
+ */
+export interface CompetitorCandidate {
+  domain: string;
+  shared_keywords: number | null;
+  keywords_count: number | null;
+  avg_position: number | null;
+  etv: number | null;
+}
+
+/**
+ * One keyword a competitor ranks for while the project's own domain does not
+ * (KW3 gap). `position` is the competitor's ranking position. The gap is
+ * inherently a point-in-time observation; the run that produced it lives on
+ * the job, not in a dedicated table.
+ */
+export interface CompetitorKeywordGap {
+  keyword: string;
+  search_volume: number | null;
+  difficulty: number | null;
+  cpc: number | null;
+  competitor_domain: string;
+  position: number | null;
+}
+
 /** Alias over ProviderId so generic provider surfaces accept any registered provider id. */
 export type ProviderGeneric = ProviderId;

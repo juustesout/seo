@@ -14,7 +14,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { chunkedUpsert } from '../supabase.js';
 import { logger } from '../logger.js';
-import type { AuditFinding, IsoDate, IsoDateTime, KeywordResearchResult, SerpItem } from '@seo/contracts';
+import type { AuditFinding, CompetitorKeywordGap, IsoDate, IsoDateTime, KeywordResearchResult, SerpItem } from '@seo/contracts';
 import type { GscDailyRow, GscPageRowInput, GscQueryRowInput } from '../providers/gsc/gscDataSource.js';
 
 /** One gsc_sync job's full output: daily rollup + dimensioned query/page rows. */
@@ -212,6 +212,39 @@ export class SeoWriter {
       provider: 'dataforseo',
       intent: r.keyword_intents?.join(',') ?? null,
       meta: { monthly_searches: r.monthly_searches ?? [], intents: r.keyword_intents ?? [] },
+      last_seen_at: now,
+    }));
+    await chunkedUpsert(this.sb, 'seo_keywords', rows, {
+      onConflict: 'project_id,provider,source,keyword',
+    });
+  }
+
+  /**
+   * Enrich the shared keyword store with keywords discovered through a
+   * competitor gap (KW3). These rows are written under their own `source`
+   * ('competitor_gap') so they never overwrite research-owned rows for the same
+   * keyword; `meta` carries provenance (which competitor, which gap type). The
+   * run's authoritative, per-competitor mapping still lives on the job result -
+   * this is enrichment, not the source of truth.
+   */
+  async persistCompetitorGapKeywords(projectId: string, gaps: CompetitorKeywordGap[]) {
+    if (gaps.length === 0) return;
+    const now = new Date().toISOString();
+    const rows = gaps.map((g) => ({
+      project_id: projectId,
+      keyword: g.keyword,
+      volume: g.search_volume,
+      difficulty: g.difficulty,
+      cpc: g.cpc,
+      competition: null,
+      source: 'competitor_gap',
+      provider: 'dataforseo',
+      intent: null,
+      meta: {
+        discovered_via: 'competitor_gap',
+        competitor_domain: g.competitor_domain,
+        gap_type: 'competitor_only',
+      },
       last_seen_at: now,
     }));
     await chunkedUpsert(this.sb, 'seo_keywords', rows, {
