@@ -54,6 +54,18 @@ function baseStores(): Store {
   };
 }
 
+/** Stores with a Search Console property linked to the project. */
+function gscStores(siteUrl: string, seoDomain = 'legacy.example.org'): Store {
+  return {
+    ...baseStores(),
+    seo_domains: [{ id: 'dom-1', project_id: PROJECT, domain: seoDomain, is_primary: true }],
+    seo_project_properties: [
+      { id: 'link-1', project_id: PROJECT, property_id: 'prop-1', is_primary: true, created_at: '2026-01-01' },
+    ],
+    seo_gsc_properties: [{ id: 'prop-1', site_url: siteUrl }],
+  };
+}
+
 function containerWith(
   stores: Store,
   opts: { registered?: boolean; enqueued?: JobRecord | null; get?: JobRecord | null } = {},
@@ -148,7 +160,22 @@ describe('startCompetitorDiscovery', () => {
     expect(enqueue.mock.calls[0][0].params).toEqual({ mode: 'discover', domain: 'rival.com' });
   });
 
-  it('tells the user to add a domain when the project has none', async () => {
+  it('derives the domain from the linked Search Console property', async () => {
+    const { container, enqueue } = containerWith(gscStores('https://www.example.com/'));
+    const started = await startCompetitorDiscovery(container, PROJECT, USER);
+    expect(started.domain).toBe('example.com');
+    expect(enqueue.mock.calls[0][0].params).toEqual({ mode: 'discover', domain: 'example.com' });
+  });
+
+  it('normalizes an sc-domain Search Console property', async () => {
+    const stores = gscStores('sc-domain:example.com');
+    stores.seo_domains = [];
+    const { container } = containerWith(stores);
+    const started = await startCompetitorDiscovery(container, PROJECT, USER);
+    expect(started.domain).toBe('example.com');
+  });
+
+  it('tells the user to connect a property when the project has neither a property nor a domain', async () => {
     const stores = baseStores();
     stores.seo_domains = [];
     const { container, enqueue } = containerWith(stores);

@@ -24,6 +24,7 @@ import { ApiError } from '../apiErrors.js';
 import type { ServiceContainer } from '../context.js';
 import { enqueueJob } from '../jobs/enqueue.js';
 import type { JobRecord } from '../jobs/types.js';
+import { siteHostOf } from './contentIntelligence.js';
 
 /** The one job_type that backs both competitor-research modes. */
 export const COMPETITOR_RESEARCH_JOB_TYPE = 'competitor_research';
@@ -58,9 +59,40 @@ export function assertDomain(raw: string): string {
 }
 
 /**
+ * The hostname of the project's linked Search Console property, if any. Since
+ * the property registry went account-scoped, a project references its property
+ * through `seo_project_properties`; `site_url` covers both url-prefix and
+ * `sc-domain:` forms and is normalized to a bare host here. Returns null when
+ * the project has not linked a property, so callers can fall through honestly.
+ */
+async function linkedPropertyDomain(container: ServiceContainer, projectId: string): Promise<string | null> {
+  const { data: link, error: linkError } = await container.sb
+    .from('seo_project_properties')
+    .select('property_id')
+    .eq('project_id', projectId)
+    .order('is_primary', { ascending: false })
+    .order('created_at', { ascending: true })
+    .limit(1)
+    .maybeSingle();
+  if (linkError) throw new ApiError(500, 'storage_error', 'Could not read the project Search Console property');
+  const propertyId = (link as { property_id?: string } | null)?.property_id;
+  if (!propertyId) return null;
+
+  const { data: property, error: propertyError } = await container.sb
+    .from('seo_gsc_properties')
+    .select('site_url')
+    .eq('id', propertyId)
+    .maybeSingle();
+  if (propertyError) throw new ApiError(500, 'storage_error', 'Could not read the project Search Console property');
+  const siteUrl = (property as { site_url?: string } | null)?.site_url;
+  return siteUrl ? siteHostOf(siteUrl) : null;
+}
+
+/**
  * The project's own target domain: an explicitly supplied one wins, otherwise
- * the primary (else first) `seo_domains` row. A project with no domain is an
- * honest 400 telling the user to add one - never a silent guess.
+ * the domain of the project's linked Search Console property (the same domain
+ * all of its GSC data comes from), otherwise a primary (else first)
+ * `seo_domains` row. A project with neither is an honest 400 - never a guess.
  */
 export async function resolveProjectDomain(
   container: ServiceContainer,
@@ -68,6 +100,8 @@ export async function resolveProjectDomain(
   preferred?: string,
 ): Promise<string> {
   if (preferred && preferred.trim()) return assertDomain(preferred);
+  const linked = await linkedPropertyDomain(container, projectId);
+  if (linked) return assertDomain(linked);
   const { data, error } = await container.sb
     .from('seo_domains')
     .select('domain')
@@ -78,7 +112,9 @@ export async function resolveProjectDomain(
     .maybeSingle();
   if (error) throw new ApiError(500, 'storage_error', 'Could not read the project domain');
   const domain = (data as { domain?: string } | null)?.domain;
-  if (!domain) throw ApiError.badRequest('Add a domain to this project before finding competitors');
+  if (!domain) {
+    throw ApiError.badRequest('Connect a Search Console property to this project before finding competitors');
+  }
   return assertDomain(domain);
 }
 
