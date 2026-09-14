@@ -1900,3 +1900,113 @@ export interface KeywordExpansionSaveDto {
   saved: number;
   skipped: number;
 }
+
+// ---------------------------------------------------------------------------
+// Opportunity intelligence (KW5 v1): a deterministic analysis over the current
+// competitor-gap source snapshot (KW4.5). No provider call, no LLM, no
+// embedding and no persistence: a read loads the current-best-known gap
+// snapshot, canonicalizes keyword spelling variants, scores each consolidated
+// keyword with an explainable formula and returns a bounded projection on
+// demand. The scoring lives in one pure module, never in SQL or the UI.
+// ---------------------------------------------------------------------------
+
+/** Hard cap on opportunity rows returned in one response. */
+export const OPPORTUNITIES_MAX_LIMIT = 200;
+
+/** Default page size for an opportunities read. */
+export const OPPORTUNITIES_DEFAULT_LIMIT = 50;
+
+/**
+ * The deterministic reason tags behind an opportunity score. They explain the
+ * number to the user; they are not an LLM narrative.
+ */
+export const OPPORTUNITY_REASONS = [
+  'high_volume',
+  'low_difficulty',
+  'commercial_value',
+  'multiple_competitors_rank',
+  'top_competitor_rank',
+] as const;
+
+export type OpportunityReason = (typeof OPPORTUNITY_REASONS)[number];
+
+/** The fields an opportunities read can be ordered by. */
+export const OPPORTUNITY_SORTS = ['score', 'volume', 'difficulty', 'keyword'] as const;
+
+export type OpportunitySort = (typeof OPPORTUNITY_SORTS)[number];
+
+/** Sort direction for an opportunities read. */
+export const OPPORTUNITY_SORT_DIRS = ['asc', 'desc'] as const;
+
+export type OpportunitySortDir = (typeof OPPORTUNITY_SORT_DIRS)[number];
+
+/**
+ * Deterministic lexical intent labels derived from the keyword text (a small
+ * word-list heuristic, never a provider field and never an LLM). Null when no
+ * signal word is present - the value is never guessed.
+ */
+export const OPPORTUNITY_INTENTS = ['informational', 'commercial', 'transactional', 'navigational'] as const;
+
+export type OpportunityIntent = (typeof OPPORTUNITY_INTENTS)[number];
+
+/** One competitor ranking for a consolidated opportunity keyword. */
+export interface OpportunityCompetitorDto {
+  domain: string;
+  /** Best (lowest) observed rank for this domain, or null when unreported. */
+  rank: number | null;
+}
+
+/**
+ * One consolidated, explainable keyword opportunity. Keyword spelling variants
+ * (casing, spacing, hyphens) are merged into one row; every original spelling
+ * is kept in `variants` so consolidation never loses information. Metrics are
+ * null when the underlying gap rows did not report them - never a fake zero.
+ */
+export interface KeywordOpportunityDto {
+  /** The chosen display spelling for this consolidated keyword. */
+  keyword: string;
+  /** Every original spelling merged into this opportunity (provenance). */
+  variants: string[];
+  searchVolume: number | null;
+  difficulty: number | null;
+  cpc: number | null;
+  competition: string | null;
+  intent: OpportunityIntent | null;
+  competitors: OpportunityCompetitorDto[];
+  competitorCount: number;
+  score: number;
+  reasons: OpportunityReason[];
+}
+
+/** The current-best-known gap snapshot an opportunities read is based on. */
+export interface OpportunitySnapshotMetaDto {
+  id: string;
+  fetchedAt: string;
+  sourceJobId: string | null;
+  freshness: SourceSnapshotFreshnessDto;
+}
+
+/** Result of one deterministic opportunity analysis over a project's gap data. */
+export interface OpportunitiesDto {
+  /** The current-best-known gap snapshot, or null when none exists yet. */
+  snapshot: OpportunitySnapshotMetaDto | null;
+  opportunities: KeywordOpportunityDto[];
+  /** Consolidated opportunities before `limit` was applied. */
+  total: number;
+  /** Rows actually returned (bounded by `limit`). */
+  count: number;
+}
+
+/**
+ * Result-view filters for an opportunities read. They only narrow what is
+ * shown over the already stored gap snapshot and never start provider work.
+ * A metric filter excludes rows whose value is null (it cannot be verified).
+ */
+export interface OpportunityQuery {
+  limit?: number;
+  minVolume?: number;
+  maxDifficulty?: number;
+  intent?: OpportunityIntent;
+  sort?: OpportunitySort;
+  dir?: OpportunitySortDir;
+}

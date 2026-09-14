@@ -105,23 +105,8 @@ export function computeSnapshotFreshness(
   return { state, fetched_at: fetchedAt, age_ms: age };
 }
 
-/** Read the current snapshot for a canonical scope, or null when none exists. */
-export async function readSourceSnapshot(
-  container: ServiceContainer,
-  projectId: string,
-  type: SourceSnapshotType,
-  scope: Record<string, unknown>,
-): Promise<SourceSnapshotRecord | null> {
-  const { data, error } = await container.sb
-    .from('seo_source_snapshots')
-    .select('id, type, provider, scope, data, fetched_at, source_job_id')
-    .eq('project_id', projectId)
-    .eq('type', type)
-    .eq('scope_key', scopeKeyOf(scope))
-    .maybeSingle();
-  if (error) throw new ApiError(500, 'storage_error', 'Could not read the source snapshot');
-  if (!data) return null;
-  const row = data as Record<string, unknown>;
+/** Map a raw `seo_source_snapshots` row to the service record. */
+function mapSnapshotRow(row: Record<string, unknown>, type: SourceSnapshotType): SourceSnapshotRecord {
   return {
     id: String(row.id),
     type,
@@ -131,6 +116,53 @@ export async function readSourceSnapshot(
     fetchedAt: String(row.fetched_at),
     sourceJobId: row.source_job_id == null ? null : String(row.source_job_id),
   };
+}
+
+const SNAPSHOT_COLUMNS = 'id, type, provider, scope, data, fetched_at, source_job_id';
+
+/** Read the current snapshot for a canonical scope, or null when none exists. */
+export async function readSourceSnapshot(
+  container: ServiceContainer,
+  projectId: string,
+  type: SourceSnapshotType,
+  scope: Record<string, unknown>,
+): Promise<SourceSnapshotRecord | null> {
+  const { data, error } = await container.sb
+    .from('seo_source_snapshots')
+    .select(SNAPSHOT_COLUMNS)
+    .eq('project_id', projectId)
+    .eq('type', type)
+    .eq('scope_key', scopeKeyOf(scope))
+    .maybeSingle();
+  if (error) throw new ApiError(500, 'storage_error', 'Could not read the source snapshot');
+  if (!data) return null;
+  return mapSnapshotRow(data as Record<string, unknown>, type);
+}
+
+/**
+ * Read the most recently fetched snapshot of a type for a project. This is the
+ * "current best known" for callers (e.g. KW5 opportunities) that analyze the
+ * latest snapshot regardless of which canonical scope produced it. Freshness is
+ * not part of the ordering: an old snapshot is still returned (and reported as
+ * stale) rather than vanishing.
+ */
+export async function readLatestSourceSnapshot(
+  container: ServiceContainer,
+  projectId: string,
+  type: SourceSnapshotType,
+): Promise<SourceSnapshotRecord | null> {
+  const { data, error } = await container.sb
+    .from('seo_source_snapshots')
+    .select(SNAPSHOT_COLUMNS)
+    .eq('project_id', projectId)
+    .eq('type', type)
+    .order('fetched_at', { ascending: false })
+    .order('id', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw new ApiError(500, 'storage_error', 'Could not read the source snapshot');
+  if (!data) return null;
+  return mapSnapshotRow(data as Record<string, unknown>, type);
 }
 
 /** Project a stored record into the API DTO, deriving freshness on read. */

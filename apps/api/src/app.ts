@@ -46,6 +46,7 @@ import { jobsRouter } from './http/routes/jobs.js';
 import { keywordResearchRouter } from './http/routes/keywordResearch.js';
 import { keywordExpansionRouter } from './http/routes/keywordExpansion.js';
 import { competitorResearchRouter } from './http/routes/competitorResearch.js';
+import { opportunitiesRouter } from './http/routes/opportunities.js';
 import { seoRouter } from './http/routes/seo.js';
 import { projectApiKeysRouter } from './http/routes/projectApiKeys.js';
 import { projectGscRouter } from './http/routes/projectGsc.js';
@@ -151,6 +152,7 @@ export function createApp(): Express {
   app.use('/api/projects/:projectId/keyword', keywordResearchRouter);
   app.use('/api/projects/:projectId/keyword', keywordExpansionRouter);
   app.use('/api/projects/:projectId/keyword', competitorResearchRouter);
+  app.use('/api/projects/:projectId/keyword', opportunitiesRouter);
   app.use('/api/projects/:projectId/api-keys', projectApiKeysRouter);
   app.use('/api/projects/:projectId/gsc', projectGscRouter);
   app.use('/api/v1', v1Router);

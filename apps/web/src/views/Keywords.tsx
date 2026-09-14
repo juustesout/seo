@@ -16,7 +16,14 @@
 import { useEffect, useState } from 'react';
 import { useAsync, num, fmtNum, fmtDate } from '../lib/ui';
 import { api, ApiRequestError } from '../lib/api';
-import { COMPETITOR_RESEARCH_MAX_COMPETITORS, KEYWORD_EXPANSION_MAX_SEEDS, KEYWORD_EXPANSION_METHODS } from '@seo/contracts';
+import {
+  COMPETITOR_RESEARCH_MAX_COMPETITORS,
+  KEYWORD_EXPANSION_MAX_SEEDS,
+  KEYWORD_EXPANSION_METHODS,
+  OPPORTUNITY_INTENTS,
+  OPPORTUNITY_SORTS,
+  OPPORTUNITY_SORT_DIRS,
+} from '@seo/contracts';
 import type {
   CompetitorDiscoveryStartDto,
   CompetitorGapStartDto,
@@ -29,6 +36,11 @@ import type {
   KeywordQuery,
   KeywordResearchRunDto,
   KeywordResearchStartDto,
+  OpportunitiesDto,
+  OpportunityIntent,
+  OpportunityReason,
+  OpportunitySort,
+  OpportunitySortDir,
   ProjectKeywordsDto,
   SourceSnapshotDto,
   SourceSnapshotFreshnessState,
@@ -1071,13 +1083,247 @@ function GscKeywordTable({ keywords }: { keywords: KeywordDto[] }) {
   );
 }
 
-type KeywordsTab = 'mine' | 'research' | 'expansion' | 'competitors';
+const OPPORTUNITY_REASON_LABELS: Record<OpportunityReason, string> = {
+  high_volume: 'High volume',
+  low_difficulty: 'Low difficulty',
+  commercial_value: 'Commercial signal',
+  multiple_competitors_rank: 'Multiple competitors rank',
+  top_competitor_rank: 'Top competitor rank',
+};
+
+const OPPORTUNITY_INTENT_LABELS: Record<OpportunityIntent, string> = {
+  informational: 'Informational',
+  commercial: 'Commercial',
+  transactional: 'Transactional',
+  navigational: 'Navigational',
+};
+
+const OPPORTUNITY_SORT_LABELS: Record<OpportunitySort, string> = {
+  score: 'Score',
+  volume: 'Volume',
+  difficulty: 'Difficulty',
+  keyword: 'Keyword',
+};
+
+const OPPORTUNITY_SORT_DIR_LABELS: Record<OpportunitySortDir, string> = {
+  desc: 'Descending',
+  asc: 'Ascending',
+};
+
+const SELECT_CLASS =
+  'h-8 rounded-md border border-input bg-background px-2 text-sm shadow-xs outline-none transition-[color,box-shadow] focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-50';
+
+/**
+ * KW5: a deterministic, explainable read over the project's current-best-known
+ * competitor gap snapshot. It never starts provider work - when no gap snapshot
+ * exists it points the user at the Competitors tab instead. Every row shows why
+ * it scored the way it did; a missing metric renders as a dash, never a zero.
+ */
+function Opportunities({ projectId, onGoToCompetitors }: { projectId: string; onGoToCompetitors: () => void }) {
+  const [minVolume, setMinVolume] = useState('');
+  const [maxDifficulty, setMaxDifficulty] = useState('');
+  const [intent, setIntent] = useState<'all' | OpportunityIntent>('all');
+  const [sort, setSort] = useState<OpportunitySort>('score');
+  const [dir, setDir] = useState<OpportunitySortDir>('desc');
+
+  const params = new URLSearchParams();
+  const minVolumeNum = minVolume.trim() === '' ? null : Number(minVolume);
+  if (minVolumeNum != null && Number.isFinite(minVolumeNum) && minVolumeNum >= 0) {
+    params.set('minVolume', String(minVolumeNum));
+  }
+  const maxDifficultyNum = maxDifficulty.trim() === '' ? null : Number(maxDifficulty);
+  if (maxDifficultyNum != null && Number.isFinite(maxDifficultyNum) && maxDifficultyNum >= 0) {
+    params.set('maxDifficulty', String(maxDifficultyNum));
+  }
+  if (intent !== 'all') params.set('intent', intent);
+  params.set('sort', sort);
+  params.set('dir', dir);
+  const queryString = params.toString();
+
+  const { data, error, loading } = useAsync<OpportunitiesDto>(
+    () => api(`/projects/${projectId}/keyword/opportunities?${queryString}`),
+    [projectId, queryString],
+  );
+
+  const snapshot = data?.snapshot ?? null;
+  const opportunities = data?.opportunities ?? [];
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Opportunities</CardTitle>
+        <CardDescription>
+          Explainable keyword opportunities derived from your latest competitor gap analysis. Read-only - this makes
+          no provider calls.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="grid gap-4">
+        {loading && <div className="py-8 text-center text-sm text-muted-foreground">Analyzing opportunities…</div>}
+
+        {!loading && error && (
+          <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+            Could not load opportunities. Please try again.
+          </div>
+        )}
+
+        {!loading && !error && !snapshot && (
+          <div className="py-8 text-center text-sm text-muted-foreground">
+            No competitor gap data available yet. Run a competitor gap analysis first.{' '}
+            <button type="button" className="underline" onClick={onGoToCompetitors}>
+              Go to Competitors
+            </button>
+          </div>
+        )}
+
+        {!loading && !error && snapshot && (
+          <>
+            <div className="rounded-md border bg-muted/30 px-3 py-2 text-sm text-muted-foreground">
+              Gap snapshot from {fmtDate(snapshot.fetchedAt)} ·{' '}
+              <span className="font-medium text-foreground">
+                {SNAPSHOT_FRESHNESS_LABELS[snapshot.freshness.state]}
+              </span>
+              {snapshot.freshness.state === 'stale' && <span className="text-destructive"> · may be outdated</span>}
+            </div>
+
+            <div className="flex flex-wrap items-end gap-3">
+              <label className="grid gap-1 text-xs text-muted-foreground">
+                Min. volume
+                <Input
+                  aria-label="Minimum volume"
+                  inputMode="numeric"
+                  className="h-8 w-28"
+                  value={minVolume}
+                  onChange={(e) => setMinVolume(e.target.value)}
+                />
+              </label>
+              <label className="grid gap-1 text-xs text-muted-foreground">
+                Max. difficulty
+                <Input
+                  aria-label="Maximum difficulty"
+                  inputMode="numeric"
+                  className="h-8 w-28"
+                  value={maxDifficulty}
+                  onChange={(e) => setMaxDifficulty(e.target.value)}
+                />
+              </label>
+              <label className="grid gap-1 text-xs text-muted-foreground">
+                Intent
+                <select
+                  aria-label="Intent"
+                  className={SELECT_CLASS}
+                  value={intent}
+                  onChange={(e) => setIntent(e.target.value as 'all' | OpportunityIntent)}
+                >
+                  <option value="all">Any</option>
+                  {OPPORTUNITY_INTENTS.map((i) => (
+                    <option key={i} value={i}>
+                      {OPPORTUNITY_INTENT_LABELS[i]}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="grid gap-1 text-xs text-muted-foreground">
+                Sort
+                <select
+                  aria-label="Sort"
+                  className={SELECT_CLASS}
+                  value={sort}
+                  onChange={(e) => setSort(e.target.value as OpportunitySort)}
+                >
+                  {OPPORTUNITY_SORTS.map((s) => (
+                    <option key={s} value={s}>
+                      {OPPORTUNITY_SORT_LABELS[s]}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="grid gap-1 text-xs text-muted-foreground">
+                Direction
+                <select
+                  aria-label="Direction"
+                  className={SELECT_CLASS}
+                  value={dir}
+                  onChange={(e) => setDir(e.target.value as OpportunitySortDir)}
+                >
+                  {OPPORTUNITY_SORT_DIRS.map((d) => (
+                    <option key={d} value={d}>
+                      {OPPORTUNITY_SORT_DIR_LABELS[d]}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+
+            {opportunities.length === 0 ? (
+              <div className="py-8 text-center text-sm text-muted-foreground">
+                No opportunities match these filters.
+              </div>
+            ) : (
+              <>
+                <p className="text-xs text-muted-foreground">
+                  Showing {fmtNum(data!.count)} of {fmtNum(data!.total)} opportunities.
+                </p>
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Keyword</TableHead>
+                      <TableHead className="text-right">Volume</TableHead>
+                      <TableHead className="text-right">Difficulty</TableHead>
+                      <TableHead className="text-right">CPC</TableHead>
+                      <TableHead className="text-right">Competitors</TableHead>
+                      <TableHead className="text-right">Score</TableHead>
+                      <TableHead>Why</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {opportunities.map((o) => (
+                      <TableRow key={o.keyword}>
+                        <TableCell className="max-w-[22rem] truncate font-medium" title={o.variants.join(', ')}>
+                          {o.keyword}
+                          {o.intent && (
+                            <span className="ml-2 text-xs font-normal text-muted-foreground">
+                              {OPPORTUNITY_INTENT_LABELS[o.intent]}
+                            </span>
+                          )}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums">{fmtMetric(o.searchVolume, 'int')}</TableCell>
+                        <TableCell className="text-right tabular-nums">{fmtMetric(o.difficulty, 'int')}</TableCell>
+                        <TableCell className="text-right tabular-nums">{fmtMetric(o.cpc, 'money')}</TableCell>
+                        <TableCell
+                          className="text-right tabular-nums"
+                          title={o.competitors
+                            .map((c) => (c.rank != null ? `${c.domain} #${num(c.rank)}` : c.domain))
+                            .join(', ')}
+                        >
+                          {fmtNum(o.competitorCount)}
+                        </TableCell>
+                        <TableCell className="text-right font-semibold tabular-nums">{fmtNum(o.score)}</TableCell>
+                        <TableCell className="text-xs text-muted-foreground">
+                          {o.reasons.length === 0
+                            ? '—'
+                            : o.reasons.map((r) => OPPORTUNITY_REASON_LABELS[r]).join(' · ')}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </>
+            )}
+          </>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+type KeywordsTab = 'mine' | 'research' | 'expansion' | 'competitors' | 'opportunities';
 
 const KEYWORDS_TABS: Array<{ id: KeywordsTab; label: string }> = [
   { id: 'mine', label: 'My keywords' },
   { id: 'research', label: 'Research' },
   { id: 'expansion', label: 'Expand' },
   { id: 'competitors', label: 'Competitors' },
+  { id: 'opportunities', label: 'Opportunities' },
 ];
 
 export function Keywords({ projectId, role }: { projectId: string; role: string }) {
@@ -1105,6 +1351,9 @@ export function Keywords({ projectId, role }: { projectId: string; role: string 
       {tab === 'research' && <KeywordResearch projectId={projectId} role={role} />}
       {tab === 'expansion' && <KeywordExpansion projectId={projectId} role={role} />}
       {tab === 'competitors' && <CompetitorResearch projectId={projectId} role={role} />}
+      {tab === 'opportunities' && (
+        <Opportunities projectId={projectId} onGoToCompetitors={() => setTab('competitors')} />
+      )}
 
       {tab === 'mine' && (
         <Card>
