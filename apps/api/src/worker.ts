@@ -41,7 +41,7 @@ async function sweepStaleRunning(): Promise<void> {
   if (data && data.length > 0) logger.info({ ids: data.map((d) => d.id) }, 'requeued stale running jobs');
 }
 
-async function runOnce(container: ReturnType<typeof getContainer>): Promise<boolean> {
+export async function runOnce(container: ReturnType<typeof getContainer>): Promise<boolean> {
   const job: JobRecord | null = await container.jobStore.claimNext();
   if (!job) return false;
 
@@ -57,13 +57,17 @@ async function runOnce(container: ReturnType<typeof getContainer>): Promise<bool
   }
 
   if (!executor) {
-    const { error, retryable } = jobErrorPayload(
+    const { error } = jobErrorPayload(
       new Error(`Job type '${job.job_type}' has no executor registered`),
       { provider: job.provider, operation: job.job_type, project_id: job.project_id, job_type: job.job_type },
     );
     error.code = 'unsupported_job_type';
-    await container.jobStore.fail(job.id, error, false);
-    log.warn('unsupported job type failed permanently');
+    // A missing executor means this worker predates the job type - for example a
+    // worker still running the previous release during a deploy race - not that
+    // the job is invalid. Requeue it with backoff so a current worker can run it
+    // rather than permanently failing an otherwise valid job.
+    await container.jobStore.fail(job.id, error, true);
+    log.warn('unknown job type; requeued for another worker');
     return true;
   }
 
