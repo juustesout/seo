@@ -11,6 +11,7 @@ import type { AddressInfo } from 'node:net';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import express from 'express';
 import { ApiError, errorHandler } from '../../apiErrors.js';
+import { competitorGapScope, scopeKeyOf } from '../../services/sourceScope.js';
 import { opportunitiesRouter } from './opportunities.js';
 
 type Row = Record<string, unknown>;
@@ -67,14 +68,15 @@ function fakeSb() {
   };
 }
 
-function snapshotRow(projectId: string) {
+function snapshotRow(projectId: string, competitors: string[] = ['rival.com'], domain = 'example.com') {
+  const scope = competitorGapScope({ domain, competitors });
   return {
     id: 'snap-1',
     project_id: projectId,
     type: 'competitor_gap',
     provider: 'dataforseo',
-    scope: {},
-    scope_key: 'a'.repeat(64),
+    scope,
+    scope_key: scopeKeyOf(scope),
     data: {
       gaps: [
         { keyword: 'buy blue widgets', searchVolume: 2400, difficulty: 53, cpc: 3.2, competitorDomain: 'rival.com', position: 3 },
@@ -136,47 +138,72 @@ describe('opportunity routes', () => {
     await new Promise<void>((resolve, reject) => server.close((err) => (err ? reject(err) : resolve())));
   });
 
+  const set = 'competitors=rival.com&domain=example.com';
+
   it('rejects an anonymous read', async () => {
-    const res = await request('/opportunities');
+    const res = await request(`/opportunities?${set}`);
     expect(res.status).toBe(401);
   });
 
-  it('lets a viewer read the empty analysis when no snapshot exists', async () => {
+  it('requires a competitor set', async () => {
     const res = await request('/opportunities', 'viewer-token');
+    expect(res.status).toBe(400);
+  });
+
+  it('rejects an over-cap competitor set', async () => {
+    const res = await request('/opportunities?competitors=a.com,b.com,c.com,d.com', 'viewer-token');
+    expect(res.status).toBe(400);
+  });
+
+  it('lets a viewer read the empty analysis when no snapshot exists for the set', async () => {
+    const res = await request(`/opportunities?${set}`, 'viewer-token');
     expect(res.status).toBe(200);
     expect(res.json.data).toEqual({ snapshot: null, opportunities: [], total: 0, count: 0 });
   });
 
-  it('lets a viewer read the analysis of the current snapshot', async () => {
+  it('lets a viewer read the analysis of the exact-set snapshot', async () => {
     currentStores.seo_source_snapshots = [snapshotRow(PROJECT)];
-    const res = await request('/opportunities', 'viewer-token');
+    const res = await request(`/opportunities?${set}`, 'viewer-token');
     expect(res.status).toBe(200);
-    const data = res.json.data as { opportunities: Array<{ keyword: string; score: number }>; count: number };
+    const data = res.json.data as {
+      snapshot: { domain: string; competitors: string[] } | null;
+      opportunities: Array<{ keyword: string; score: number }>;
+      count: number;
+    };
+    expect(data.snapshot?.domain).toBe('example.com');
+    expect(data.snapshot?.competitors).toEqual(['rival.com']);
     expect(data.opportunities).toHaveLength(1);
     expect(data.opportunities[0]!.keyword).toBe('buy blue widgets');
     expect(typeof data.opportunities[0]!.score).toBe('number');
     expect(data.count).toBe(1);
   });
 
+  it('returns no snapshot when the requested set has no snapshot of its own', async () => {
+    currentStores.seo_source_snapshots = [snapshotRow(PROJECT, ['other.com'])];
+    const res = await request(`/opportunities?${set}`, 'viewer-token');
+    expect(res.status).toBe(200);
+    expect((res.json.data as { snapshot: unknown }).snapshot).toBeNull();
+  });
+
   it('does not return another project snapshot', async () => {
     currentStores.seo_source_snapshots = [snapshotRow(OTHER_PROJECT)];
-    const res = await request('/opportunities', 'viewer-token');
+    const res = await request(`/opportunities?${set}`, 'viewer-token');
     expect(res.status).toBe(200);
     expect((res.json.data as { snapshot: unknown }).snapshot).toBeNull();
   });
 
   it('rejects an out-of-range limit at the edge', async () => {
-    const res = await request('/opportunities?limit=100000', 'viewer-token');
+    const res = await request(`/opportunities?${set}&limit=100000`, 'viewer-token');
     expect(res.status).toBe(400);
   });
 
   it('rejects an unknown sort field', async () => {
-    const res = await request('/opportunities?sort=nonsense', 'viewer-token');
+    const res = await request(`/opportunities?${set}&sort=nonsense`, 'viewer-token');
     expect(res.status).toBe(400);
   });
 
   it('rejects an unknown intent', async () => {
-    const res = await request('/opportunities?intent=bogus', 'viewer-token');
+    const res = await request(`/opportunities?${set}&intent=bogus`, 'viewer-token');
     expect(res.status).toBe(400);
   });
 });

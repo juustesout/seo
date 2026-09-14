@@ -474,10 +474,14 @@ const dataForSeoCompetitorResearch: JobExecutor = async ({ container, job, write
       throw new ApiError(400, 'bad_request', 'competitor_research gap mode requires at least one competitor');
     }
     await report(10, `Analyzing keyword gaps for ${competitors.length} competitor(s)`);
+    // Fair share per competitor: never let the first competitor consume the
+    // whole bounded budget, which would leave later competitors with no
+    // evidence and an ambiguous empty matrix cell.
+    const perCompetitor = Math.max(1, Math.floor(COMPETITOR_RESEARCH_RUN_MAX_GAPS / competitors.length));
     const gaps = await dfseo.findCompetitorKeywordGaps(ctx, domain, competitors, {
       minSearchVolume: COMPETITOR_GAP_MIN_SEARCH_VOLUME,
       maxRank: COMPETITOR_GAP_MAX_RANK,
-      limitPerCompetitor: COMPETITOR_RESEARCH_RUN_MAX_GAPS,
+      limitPerCompetitor: perCompetitor,
     });
     const bounded: CompetitorGapDto[] = gaps.slice(0, COMPETITOR_RESEARCH_RUN_MAX_GAPS).map((g) => ({
       keyword: g.keyword,

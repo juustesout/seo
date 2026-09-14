@@ -183,6 +183,31 @@ describe('competitor_research executor (KW3)', () => {
     expect(targets.length).toBe(COMPETITOR_RESEARCH_MAX_COMPETITORS);
   });
 
+  it('gap gives each competitor a fair floor share of the bounded run cap', async () => {
+    const findCompetitorKeywordGaps = vi.fn(
+      async (_ctx: unknown, _domain: string, _targets: string[], _opts: Record<string, unknown>) => [],
+    );
+    const { container, writer } = build({ findCompetitorKeywordGaps });
+    const executor = getExecutor('competitor_research')!;
+
+    const run = (domain: string, competitors: string[]) =>
+      executor({
+        container,
+        job: { project_id: PROJECT, data_source_id: 'ds-1', created_by: 'u1', params: { mode: 'gap', domain, competitors } } as never,
+        writer,
+        report: vi.fn(),
+      });
+
+    await run('example.com', ['a.com']);
+    expect(findCompetitorKeywordGaps.mock.calls[0][3]).toMatchObject({ limitPerCompetitor: COMPETITOR_RESEARCH_RUN_MAX_GAPS });
+
+    await run('example.com', ['a.com', 'b.com']);
+    expect(findCompetitorKeywordGaps.mock.calls[1][3]).toMatchObject({ limitPerCompetitor: 100 });
+
+    await run('example.com', ['a.com', 'b.com', 'c.com']);
+    expect(findCompetitorKeywordGaps.mock.calls[2][3]).toMatchObject({ limitPerCompetitor: 66 });
+  });
+
   it('gap caps the carried result rows', async () => {
     const many = Array.from({ length: COMPETITOR_RESEARCH_RUN_MAX_GAPS + 5 }, (_, i) => gap(`kw-${i}`));
     const findCompetitorKeywordGaps = vi.fn(async () => many);

@@ -1984,6 +1984,10 @@ export interface OpportunitySnapshotMetaDto {
   fetchedAt: string;
   sourceJobId: string | null;
   freshness: SourceSnapshotFreshnessDto;
+  /** The resolved target domain this analysis is scoped to. */
+  domain: string;
+  /** The normalized competitor set this analysis is scoped to. */
+  competitors: string[];
 }
 
 /** Result of one deterministic opportunity analysis over a project's gap data. */

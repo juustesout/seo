@@ -16,6 +16,7 @@ import type {
   KeywordResearchRunDto,
   OpportunitiesDto,
   ProjectKeywordsDto,
+  SourceSnapshotDto,
 } from '@seo/contracts';
 import { Keywords } from './Keywords';
 
@@ -324,6 +325,38 @@ describe('Keywords view - Competitors (KW3)', () => {
     expect(screen.getByText('2,400')).toBeTruthy();
   });
 
+  it('collapses the candidate list to the active set and re-opens it on demand', async () => {
+    apiMock.api.mockImplementation(async (path: string) => {
+      if (path.endsWith('/gsc/keywords')) return EMPTY_GSC;
+      if (path.endsWith('/keyword/competitors/snapshot')) {
+        return {
+          id: 'dsnap-1',
+          type: 'competitor_discovery',
+          scope: { domain: 'example.com' },
+          candidates: [
+            { domain: 'rival.com', sharedKeywords: 1842, keywordsCount: 5200, avgPosition: 12.4, etv: 900 },
+          ],
+          gaps: [],
+          count: 1,
+          fetchedAt: '2026-09-13T00:00:00.000Z',
+          sourceJobId: 'job-1',
+          freshness: { state: 'fresh', fetched_at: '2026-09-13T00:00:00.000Z', age_ms: 3_600_000 },
+        };
+      }
+      throw new Error(`unexpected ${path}`);
+    });
+
+    renderCompetitors();
+    fireEvent.click(await screen.findByLabelText('Select rival.com'));
+    fireEvent.click(screen.getByRole('button', { name: 'Done' }));
+
+    expect(await screen.findByText('Analyzing:')).toBeTruthy();
+    expect(screen.queryByLabelText('Select rival.com')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Change competitors' }));
+    expect(await screen.findByLabelText('Select rival.com')).toBeTruthy();
+  });
+
   it('shows the honest server message when the project has no domain', async () => {
     apiMock.api.mockImplementation(async (path: string, opts?: { method?: string }) => {
       if (path.endsWith('/gsc/keywords')) return EMPTY_GSC;
@@ -451,7 +484,7 @@ describe('Keywords view - Expand (KW4)', () => {
   });
 });
 
-describe('Keywords view - Opportunities (KW5)', () => {
+describe('Keywords view - Opportunities (KW5/KW5.1)', () => {
   function opportunities(overrides: Partial<OpportunitiesDto> = {}): OpportunitiesDto {
     return {
       snapshot: {
@@ -459,6 +492,8 @@ describe('Keywords view - Opportunities (KW5)', () => {
         fetchedAt: '2026-09-13T00:00:00.000Z',
         sourceJobId: 'job-1',
         freshness: { state: 'fresh', fetched_at: '2026-09-13T00:00:00.000Z', age_ms: 3_600_000 },
+        domain: 'example.com',
+        competitors: ['rival.com'],
       },
       opportunities: [
         {
@@ -484,34 +519,71 @@ describe('Keywords view - Opportunities (KW5)', () => {
     };
   }
 
-  function renderOpportunities(role = 'viewer') {
+  function discoverySnapshot(): SourceSnapshotDto {
+    return {
+      id: 'dsnap-1',
+      type: 'competitor_discovery',
+      scope: { domain: 'example.com' },
+      candidates: [
+        { domain: 'rival.com', sharedKeywords: 1842, keywordsCount: 5200, avgPosition: 12.4, etv: 900 },
+        { domain: 'other.com', sharedKeywords: 1200, keywordsCount: 4200, avgPosition: 15.1, etv: 700 },
+      ],
+      gaps: [],
+      count: 2,
+      fetchedAt: '2026-09-13T00:00:00.000Z',
+      sourceJobId: 'job-1',
+      freshness: { state: 'fresh', fetched_at: '2026-09-13T00:00:00.000Z', age_ms: 3_600_000 },
+    };
+  }
+
+  function mockApi(opps: (path: string) => unknown) {
+    apiMock.api.mockImplementation(async (path: string) => {
+      if (path.endsWith('/gsc/keywords')) return EMPTY_GSC;
+      if (path.endsWith('/keyword/competitors/snapshot')) return discoverySnapshot();
+      if (path.includes('/keyword/opportunities')) return opps(path);
+      throw new Error(`unexpected ${path}`);
+    });
+  }
+
+  async function selectCompetitors(domains: string[], role = 'viewer') {
     render(<Keywords projectId={PROJECT} role={role} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Competitors' }));
+    for (const d of domains) {
+      fireEvent.click(await screen.findByLabelText(`Select ${d}`));
+    }
     fireEvent.click(screen.getByRole('button', { name: 'Opportunities' }));
   }
 
-  it('prompts to run a competitor gap analysis when no snapshot exists', async () => {
+  it('prompts to select competitors before reading any snapshot', async () => {
     apiMock.api.mockImplementation(async (path: string) => {
       if (path.endsWith('/gsc/keywords')) return EMPTY_GSC;
       if (path.includes('/keyword/opportunities')) return { snapshot: null, opportunities: [], total: 0, count: 0 };
       throw new Error(`unexpected ${path}`);
     });
 
-    renderOpportunities();
+    render(<Keywords projectId={PROJECT} role="viewer" />);
+    fireEvent.click(screen.getByRole('button', { name: 'Opportunities' }));
 
-    expect(await screen.findByText(/No competitor gap data available yet/)).toBeTruthy();
+    expect(await screen.findByText(/Select competitors to see their opportunities/)).toBeTruthy();
+    expect(apiMock.api).not.toHaveBeenCalledWith(expect.stringContaining('/keyword/opportunities'));
+  });
+
+  it('reads the exact active set and prompts to run a gap analysis when it has no snapshot', async () => {
+    mockApi(() => ({ snapshot: null, opportunities: [], total: 0, count: 0 }));
+
+    await selectCompetitors(['rival.com']);
+
+    expect(await screen.findByText(/No competitor gap data available yet for this competitor set/)).toBeTruthy();
     expect(apiMock.api).toHaveBeenCalledWith(
-      expect.stringContaining(`/projects/${PROJECT}/keyword/opportunities?sort=score&dir=desc`),
+      expect.stringContaining(`/projects/${PROJECT}/keyword/opportunities?competitors=rival.com`),
     );
+    expect(apiMock.api).toHaveBeenCalledWith(expect.stringContaining('sort=score&dir=desc'));
   });
 
   it('renders consolidated opportunities with metrics and explainable reasons', async () => {
-    apiMock.api.mockImplementation(async (path: string) => {
-      if (path.endsWith('/gsc/keywords')) return EMPTY_GSC;
-      if (path.includes('/keyword/opportunities')) return opportunities();
-      throw new Error(`unexpected ${path}`);
-    });
+    mockApi(() => opportunities());
 
-    renderOpportunities();
+    await selectCompetitors(['rival.com']);
 
     expect(await screen.findByText('seo tools')).toBeTruthy();
     expect(screen.getByText('1,200')).toBeTruthy();
@@ -522,70 +594,170 @@ describe('Keywords view - Opportunities (KW5)', () => {
   });
 
   it('passes result filters through the request and renders an empty result', async () => {
-    apiMock.api.mockImplementation(async (path: string) => {
-      if (path.endsWith('/gsc/keywords')) return EMPTY_GSC;
-      if (path.includes('/keyword/opportunities')) {
-        if (path.includes('minVolume=500')) return { snapshot: opportunities().snapshot, opportunities: [], total: 3, count: 0 };
-        return opportunities();
-      }
-      throw new Error(`unexpected ${path}`);
-    });
+    mockApi((path) =>
+      path.includes('minVolume=500') ? { snapshot: opportunities().snapshot, opportunities: [], total: 3, count: 0 } : opportunities(),
+    );
 
-    renderOpportunities();
+    await selectCompetitors(['rival.com']);
     await screen.findByText('seo tools');
 
     fireEvent.change(screen.getByLabelText('Minimum volume'), { target: { value: '500' } });
 
-    await waitFor(() =>
-      expect(apiMock.api).toHaveBeenCalledWith(expect.stringContaining('minVolume=500')),
-    );
+    await waitFor(() => expect(apiMock.api).toHaveBeenCalledWith(expect.stringContaining('minVolume=500')));
     expect(await screen.findByText('No opportunities match these filters.')).toBeTruthy();
   });
 
-  it('flags a stale snapshot and shows a generic error without leaking internals', async () => {
-    apiMock.api.mockImplementation(async (path: string) => {
-      if (path.endsWith('/gsc/keywords')) return EMPTY_GSC;
-      if (path.includes('/keyword/opportunities')) {
-        return opportunities({
-          snapshot: {
-            id: 'snap-1',
-            fetchedAt: '2026-08-01T00:00:00.000Z',
-            sourceJobId: null,
-            freshness: { state: 'stale', fetched_at: '2026-08-01T00:00:00.000Z', age_ms: 86_400_000 * 45 },
-          },
-        });
-      }
-      throw new Error(`unexpected ${path}`);
-    });
+  it('reveals the long list in bounded steps', async () => {
+    const rows = Array.from({ length: 40 }, (_, i) => ({
+      keyword: `kw-${i}`,
+      variants: [`kw-${i}`],
+      searchVolume: 100 + i,
+      difficulty: 20,
+      cpc: 1,
+      competition: 'HIGH',
+      intent: null,
+      competitors: [{ domain: 'rival.com', rank: 3 }],
+      competitorCount: 1,
+      score: 100 - i,
+      reasons: ['high_volume' as const],
+    }));
+    mockApi(() => ({ snapshot: opportunities().snapshot, opportunities: rows, total: 40, count: 40 }));
 
-    renderOpportunities();
+    await selectCompetitors(['rival.com']);
+
+    expect(await screen.findByText('kw-0')).toBeTruthy();
+    expect(screen.getByText('kw-24')).toBeTruthy();
+    expect(screen.queryByText('kw-25')).toBeNull();
+    expect(screen.getByText(/Showing 25 of 40 opportunities/)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show more' }));
+    expect(await screen.findByText('kw-25')).toBeTruthy();
+    expect(screen.getByText(/Showing 40 of 40 opportunities/)).toBeTruthy();
+  });
+
+  it('flags a stale snapshot and shows a generic error without leaking internals', async () => {
+    mockApi(() =>
+      opportunities({
+        snapshot: {
+          id: 'snap-1',
+          fetchedAt: '2026-08-01T00:00:00.000Z',
+          sourceJobId: null,
+          freshness: { state: 'stale', fetched_at: '2026-08-01T00:00:00.000Z', age_ms: 86_400_000 * 45 },
+          domain: 'example.com',
+          competitors: ['rival.com'],
+        },
+      }),
+    );
+
+    await selectCompetitors(['rival.com']);
     expect(await screen.findByText(/may be outdated/)).toBeTruthy();
   });
 
   it('shows a generic load error without leaking the raw message', async () => {
-    apiMock.api.mockImplementation(async (path: string) => {
-      if (path.endsWith('/gsc/keywords')) return EMPTY_GSC;
-      if (path.includes('/keyword/opportunities')) throw new Error('boom: raw database secret');
-      throw new Error(`unexpected ${path}`);
+    mockApi(() => {
+      throw new Error('boom: raw database secret');
     });
 
-    renderOpportunities();
+    await selectCompetitors(['rival.com']);
 
     expect(await screen.findByText('Could not load opportunities. Please try again.')).toBeTruthy();
     expect(screen.queryByText(/raw database secret/)).toBeNull();
   });
 
   it('links the empty state to the Competitors tab', async () => {
-    apiMock.api.mockImplementation(async (path: string) => {
-      if (path.endsWith('/gsc/keywords')) return EMPTY_GSC;
-      if (path.includes('/keyword/opportunities')) return { snapshot: null, opportunities: [], total: 0, count: 0 };
-      if (path.endsWith('/keyword/competitors/snapshot')) return null;
-      throw new Error(`unexpected ${path}`);
-    });
+    mockApi(() => ({ snapshot: null, opportunities: [], total: 0, count: 0 }));
 
-    renderOpportunities();
+    await selectCompetitors(['rival.com']);
     fireEvent.click(await screen.findByRole('button', { name: 'Go to Competitors' }));
 
     expect(await screen.findByRole('button', { name: 'Find competitors' })).toBeTruthy();
+  });
+});
+
+describe('Keywords view - Compare (KW5.1)', () => {
+  function compareData(): OpportunitiesDto {
+    return {
+      snapshot: {
+        id: 'snap-1',
+        fetchedAt: '2026-09-13T00:00:00.000Z',
+        sourceJobId: 'job-1',
+        freshness: { state: 'fresh', fetched_at: '2026-09-13T00:00:00.000Z', age_ms: 3_600_000 },
+        domain: 'example.com',
+        competitors: ['other.com', 'rival.com'],
+      },
+      opportunities: [
+        {
+          keyword: 'seo tools',
+          variants: ['seo tools'],
+          searchVolume: 1200,
+          difficulty: 30,
+          cpc: 2.5,
+          competition: 'HIGH',
+          intent: 'commercial',
+          competitors: [
+            { domain: 'rival.com', rank: 2 },
+            { domain: 'other.com', rank: null },
+          ],
+          competitorCount: 2,
+          score: 78,
+          reasons: ['high_volume'],
+        },
+      ],
+      total: 1,
+      count: 1,
+    };
+  }
+
+  function discoverySnapshot(): SourceSnapshotDto {
+    return {
+      id: 'dsnap-1',
+      type: 'competitor_discovery',
+      scope: { domain: 'example.com' },
+      candidates: [
+        { domain: 'rival.com', sharedKeywords: 1842, keywordsCount: 5200, avgPosition: 12.4, etv: 900 },
+        { domain: 'other.com', sharedKeywords: 1200, keywordsCount: 4200, avgPosition: 15.1, etv: 700 },
+      ],
+      gaps: [],
+      count: 2,
+      fetchedAt: '2026-09-13T00:00:00.000Z',
+      sourceJobId: 'job-1',
+      freshness: { state: 'fresh', fetched_at: '2026-09-13T00:00:00.000Z', age_ms: 3_600_000 },
+    };
+  }
+
+  async function selectAndCompare() {
+    apiMock.api.mockImplementation(async (path: string) => {
+      if (path.endsWith('/gsc/keywords')) return EMPTY_GSC;
+      if (path.endsWith('/keyword/competitors/snapshot')) return discoverySnapshot();
+      if (path.includes('/keyword/opportunities')) return compareData();
+      throw new Error(`unexpected ${path}`);
+    });
+    render(<Keywords projectId={PROJECT} role="viewer" />);
+    fireEvent.click(screen.getByRole('button', { name: 'Competitors' }));
+    fireEvent.click(await screen.findByLabelText('Select rival.com'));
+    fireEvent.click(screen.getByLabelText('Select other.com'));
+    fireEvent.click(screen.getByRole('button', { name: 'Compare' }));
+  }
+
+  it('asks for a selection before comparing', async () => {
+    apiMock.api.mockImplementation(async (path: string) => {
+      if (path.endsWith('/gsc/keywords')) return EMPTY_GSC;
+      if (path.endsWith('/keyword/competitors/snapshot')) return null;
+      throw new Error(`unexpected ${path}`);
+    });
+    render(<Keywords projectId={PROJECT} role="viewer" />);
+    fireEvent.click(screen.getByRole('button', { name: 'Compare' }));
+    expect(await screen.findByText(/Select competitors to compare/)).toBeTruthy();
+  });
+
+  it('renders a per-competitor rank matrix and uses a dash for missing evidence', async () => {
+    await selectAndCompare();
+
+    expect(await screen.findByText('seo tools')).toBeTruthy();
+    expect(screen.getAllByText('rival.com').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('other.com').length).toBeGreaterThan(0);
+    expect(screen.getByText('2')).toBeTruthy();
+    expect(screen.getByText('—')).toBeTruthy();
+    expect(apiMock.api).toHaveBeenCalledWith(expect.stringContaining('competitors=rival.com%2Cother.com'));
   });
 });

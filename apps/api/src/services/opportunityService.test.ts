@@ -7,6 +7,7 @@
 import { describe, expect, it } from 'vitest';
 import type { CompetitorGapDto } from '@seo/contracts';
 import { buildOpportunities, getOpportunities } from './opportunityService.js';
+import { competitorGapScope, scopeKeyOf } from './sourceScope.js';
 
 const PROJECT = '11111111-1111-4111-8111-111111111111';
 const OTHER_PROJECT = '99999999-9999-4999-8999-999999999999';
@@ -22,14 +23,22 @@ function gap(overrides: Partial<CompetitorGapDto> & { keyword: string }): Compet
   };
 }
 
-function snapshotRow(projectId: string, fetchedAt: string, gaps: CompetitorGapDto[]) {
+function snapshotRow(
+  projectId: string,
+  fetchedAt: string,
+  gaps: CompetitorGapDto[],
+  competitors: string[] = ['rival.com'],
+  domain = 'example.com',
+  id = 'snap-1',
+) {
+  const scope = competitorGapScope({ domain, competitors });
   return {
-    id: 'snap-1',
+    id,
     project_id: projectId,
     type: 'competitor_gap',
     provider: 'dataforseo',
-    scope: { domain: 'example.com', competitors: ['rival.com'] },
-    scope_key: 'a'.repeat(64),
+    scope,
+    scope_key: scopeKeyOf(scope),
     data: { gaps, total: gaps.length },
     fetched_at: fetchedAt,
     source_job_id: null,
@@ -122,30 +131,44 @@ describe('buildOpportunities', () => {
 });
 
 describe('getOpportunities', () => {
-  it('returns an empty result when no gap snapshot exists', async () => {
-    const result = await getOpportunities(containerWith([]), PROJECT, {});
+  const set = ['rival.com'];
+
+  it('returns an empty result when no gap snapshot exists for the set', async () => {
+    const result = await getOpportunities(containerWith([]), PROJECT, set, {}, 'example.com');
     expect(result.snapshot).toBeNull();
     expect(result.opportunities).toEqual([]);
     expect(result.total).toBe(0);
   });
 
-  it('reads the current-best-known gap snapshot and reports fresh freshness', async () => {
+  it('reads the exact-set snapshot and echoes its domain and competitors', async () => {
     const container = containerWith([snapshotRow(PROJECT, NOW.toISOString(), [gap({ keyword: 'blue widgets' })])]);
-    const result = await getOpportunities(container, PROJECT, {});
+    const result = await getOpportunities(container, PROJECT, set, {}, 'example.com');
     expect(result.snapshot?.freshness.state).toBe('fresh');
+    expect(result.snapshot?.domain).toBe('example.com');
+    expect(result.snapshot?.competitors).toEqual(['rival.com']);
     expect(result.opportunities).toHaveLength(1);
+  });
+
+  it('reads the requested set, not the newest snapshot for the project', async () => {
+    const container = containerWith([
+      snapshotRow(PROJECT, iso(1), [gap({ keyword: 'from set A' })], ['rival.com'], 'example.com', 'snap-a'),
+      snapshotRow(PROJECT, iso(0), [gap({ keyword: 'from set B' })], ['other.com'], 'example.com', 'snap-b'),
+    ]);
+    const result = await getOpportunities(container, PROJECT, ['rival.com'], {}, 'example.com');
+    expect(result.opportunities.map((o) => o.keyword)).toEqual(['from set A']);
+    expect(result.snapshot?.id).toBe('snap-a');
   });
 
   it('reports a stale snapshot without hiding it', async () => {
     const container = containerWith([snapshotRow(PROJECT, iso(40), [gap({ keyword: 'blue widgets' })])]);
-    const result = await getOpportunities(container, PROJECT, {});
+    const result = await getOpportunities(container, PROJECT, set, {}, 'example.com');
     expect(result.snapshot?.freshness.state).toBe('stale');
     expect(result.opportunities).toHaveLength(1);
   });
 
   it('never returns a snapshot from another project', async () => {
     const container = containerWith([snapshotRow(OTHER_PROJECT, NOW.toISOString(), [gap({ keyword: 'blue widgets' })])]);
-    const result = await getOpportunities(container, PROJECT, {});
+    const result = await getOpportunities(container, PROJECT, set, {}, 'example.com');
     expect(result.snapshot).toBeNull();
     expect(result.opportunities).toEqual([]);
   });
@@ -158,7 +181,7 @@ describe('getOpportunities', () => {
         gap({ keyword: 'unknown volume', searchVolume: null, difficulty: 30 }),
       ]),
     ]);
-    const result = await getOpportunities(container, PROJECT, { minVolume: 100 });
+    const result = await getOpportunities(container, PROJECT, set, { minVolume: 100 }, 'example.com');
     expect(result.opportunities.map((o) => o.keyword).sort()).toEqual(['high volume']);
   });
 
@@ -169,7 +192,7 @@ describe('getOpportunities', () => {
         gap({ keyword: 'frontend newsletter' }),
       ]),
     ]);
-    const result = await getOpportunities(container, PROJECT, { intent: 'transactional' });
+    const result = await getOpportunities(container, PROJECT, set, { intent: 'transactional' }, 'example.com');
     expect(result.opportunities.map((o) => o.keyword)).toEqual(['buy blue widgets']);
   });
 
@@ -181,7 +204,7 @@ describe('getOpportunities', () => {
         gap({ keyword: 'medium', searchVolume: 1000, difficulty: 50, cpc: 1 }),
       ]),
     ]);
-    const result = await getOpportunities(container, PROJECT, { limit: 2 });
+    const result = await getOpportunities(container, PROJECT, set, { limit: 2 }, 'example.com');
     expect(result.opportunities.map((o) => o.keyword)).toEqual(['strong', 'medium']);
     expect(result.total).toBe(3);
     expect(result.count).toBe(2);
@@ -191,7 +214,7 @@ describe('getOpportunities', () => {
     const container = containerWith([
       snapshotRow(PROJECT, NOW.toISOString(), [gap({ keyword: 'zebra' }), gap({ keyword: 'alpha' })]),
     ]);
-    const result = await getOpportunities(container, PROJECT, { sort: 'keyword', dir: 'asc' });
+    const result = await getOpportunities(container, PROJECT, set, { sort: 'keyword', dir: 'asc' }, 'example.com');
     expect(result.opportunities.map((o) => o.keyword)).toEqual(['alpha', 'zebra']);
   });
 });

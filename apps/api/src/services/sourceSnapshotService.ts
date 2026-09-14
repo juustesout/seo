@@ -140,11 +140,7 @@ export async function readSourceSnapshot(
 }
 
 /**
- * Read the most recently fetched snapshot of a type for a project. This is the
- * "current best known" for callers (e.g. KW5 opportunities) that analyze the
- * latest snapshot regardless of which canonical scope produced it. Freshness is
- * not part of the ordering: an old snapshot is still returned (and reported as
- * stale) rather than vanishing.
+ * Project a stored record into the API DTO, deriving freshness on read.
  */
 export async function readLatestSourceSnapshot(
   container: ServiceContainer,

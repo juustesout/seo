@@ -101,6 +101,62 @@ export interface SourceSnapshotInput {
   sourceJobId?: string | null;
 }
 
+/** One deduplicated seo_keywords row derived from competitor gap evidence. */
+export interface DedupedGapKeyword {
+  keyword: string;
+  volume: number | null;
+  difficulty: number | null;
+  cpc: number | null;
+  competitorDomains: string[];
+}
+
+/** Coerce a value to a finite number or null (never a fabricated zero). */
+function finiteOrNull(value: number | null): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+/** Highest finite value of two, or null when neither is a finite number. */
+function bestMetric(a: number | null, b: number | null): number | null {
+  const values = [a, b].filter((v): v is number => typeof v === 'number' && Number.isFinite(v));
+  return values.length > 0 ? Math.max(...values) : null;
+}
+
+/**
+ * Collapse competitor gap rows onto the `seo_keywords` persistence key
+ * (project, provider, source, keyword), which does not include the competitor.
+ * Without this, two competitors ranking for the same keyword would put two rows
+ * with the same conflict key in one upsert and Postgres would reject the whole
+ * batch - after the paid provider call. Metrics keep the highest finite value
+ * (they are keyword-level and identical across competitors) and every
+ * contributing competitor stays in `competitorDomains` as provenance. The full
+ * per-competitor evidence lives in the source snapshot, never here.
+ */
+export function dedupeGapKeywords(gaps: CompetitorKeywordGap[]): DedupedGapKeyword[] {
+  const byKeyword = new Map<string, DedupedGapKeyword>();
+  for (const gap of gaps) {
+    if (!gap.keyword) continue;
+    const domain = gap.competitor_domain;
+    const existing = byKeyword.get(gap.keyword);
+    if (!existing) {
+      byKeyword.set(gap.keyword, {
+        keyword: gap.keyword,
+        volume: finiteOrNull(gap.search_volume),
+        difficulty: finiteOrNull(gap.difficulty),
+        cpc: finiteOrNull(gap.cpc),
+        competitorDomains: domain ? [domain] : [],
+      });
+      continue;
+    }
+    existing.volume = bestMetric(existing.volume, finiteOrNull(gap.search_volume));
+    existing.difficulty = bestMetric(existing.difficulty, finiteOrNull(gap.difficulty));
+    existing.cpc = bestMetric(existing.cpc, finiteOrNull(gap.cpc));
+    if (domain && !existing.competitorDomains.includes(domain)) existing.competitorDomains.push(domain);
+  }
+  return [...byKeyword.values()]
+    .map((row) => ({ ...row, competitorDomains: [...row.competitorDomains].sort() }))
+    .sort((a, b) => (a.keyword < b.keyword ? -1 : a.keyword > b.keyword ? 1 : 0));
+}
+
 /**
  * The single persistence gateway for normalized provider SEO data. Takes the
  * Supabase service-role client; RLS remains the boundary and every write is
@@ -261,10 +317,10 @@ export class SeoWriter {
   async persistCompetitorGapKeywords(projectId: string, gaps: CompetitorKeywordGap[]) {
     if (gaps.length === 0) return;
     const now = new Date().toISOString();
-    const rows = gaps.map((g) => ({
+    const rows = dedupeGapKeywords(gaps).map((g) => ({
       project_id: projectId,
       keyword: g.keyword,
-      volume: g.search_volume,
+      volume: g.volume,
       difficulty: g.difficulty,
       cpc: g.cpc,
       competition: null,
@@ -273,8 +329,9 @@ export class SeoWriter {
       intent: null,
       meta: {
         discovered_via: 'competitor_gap',
-        competitor_domain: g.competitor_domain,
         gap_type: 'competitor_only',
+        competitor_domains: g.competitorDomains,
+        competitor_count: g.competitorDomains.length,
       },
       last_seen_at: now,
     }));

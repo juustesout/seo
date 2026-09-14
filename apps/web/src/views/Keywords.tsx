@@ -20,6 +20,7 @@ import {
   COMPETITOR_RESEARCH_MAX_COMPETITORS,
   KEYWORD_EXPANSION_MAX_SEEDS,
   KEYWORD_EXPANSION_METHODS,
+  OPPORTUNITIES_MAX_LIMIT,
   OPPORTUNITY_INTENTS,
   OPPORTUNITY_SORTS,
   OPPORTUNITY_SORT_DIRS,
@@ -320,13 +321,20 @@ const SNAPSHOT_FRESHNESS_LABELS: Record<SourceSnapshotFreshnessState, string> = 
  * re-paying. The server derives freshness; a stale snapshot stays visible with
  * its age and a Refresh action rather than disappearing.
  */
-function CompetitorResearch({ projectId, role }: { projectId: string; role: string }) {
+interface CompetitorResearchProps {
+  projectId: string;
+  role: string;
+  selected: string[];
+  onSelectedChange: (next: string[]) => void;
+}
+
+function CompetitorResearch({ projectId, role, selected, onSelectedChange }: CompetitorResearchProps) {
   const [discovery, setDiscovery] = useState<CompetitorResearchRunDto | null>(null);
   const [discoverySnapshot, setDiscoverySnapshot] = useState<SourceSnapshotDto | null>(null);
   const [gapRun, setGapRun] = useState<CompetitorResearchRunDto | null>(null);
   const [gapSnapshot, setGapSnapshot] = useState<SourceSnapshotDto | null>(null);
   const [gapSnapshotFor, setGapSnapshotFor] = useState<string[]>([]);
-  const [selected, setSelected] = useState<string[]>([]);
+  const [editingSelection, setEditingSelection] = useState(false);
   const [discovering, setDiscovering] = useState(false);
   const [analyzing, setAnalyzing] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
@@ -361,6 +369,7 @@ function CompetitorResearch({ projectId, role }: { projectId: string; role: stri
 
   useEffect(() => {
     void loadDiscoverySnapshot();
+    if (selected.length > 0) void loadGapSnapshot(selected);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId]);
 
@@ -399,7 +408,8 @@ function CompetitorResearch({ projectId, role }: { projectId: string; role: stri
       setGapRun(null);
       setGapSnapshot(null);
       setGapSnapshotFor([]);
-      setSelected([]);
+      onSelectedChange([]);
+      setEditingSelection(false);
       setDiscovery({
         jobId: started.jobId,
         mode: 'discover',
@@ -462,13 +472,12 @@ function CompetitorResearch({ projectId, role }: { projectId: string; role: stri
   };
 
   const toggle = (domain: string) => {
-    setSelected((prev) =>
-      prev.includes(domain)
-        ? prev.filter((d) => d !== domain)
-        : prev.length >= COMPETITOR_RESEARCH_MAX_COMPETITORS
-          ? prev
-          : [...prev, domain],
-    );
+    if (selected.includes(domain)) {
+      onSelectedChange(selected.filter((d) => d !== domain));
+    } else if (selected.length < COMPETITOR_RESEARCH_MAX_COMPETITORS) {
+      onSelectedChange([...selected, domain]);
+    }
+    setEditingSelection(true);
   };
 
   const allowed = canStartResearch(role);
@@ -559,7 +568,23 @@ function CompetitorResearch({ projectId, role }: { projectId: string; role: stri
           </div>
         )}
 
-        {candidates.length > 0 && (
+        {selected.length > 0 && !editingSelection && (
+          <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border bg-muted/30 px-3 py-2 text-sm">
+            <span className="flex flex-wrap items-center gap-2">
+              <span className="text-muted-foreground">Analyzing:</span>
+              {selected.map((d) => (
+                <span key={d} className="rounded-full border bg-background px-2 py-0.5 text-xs font-medium">
+                  {d}
+                </span>
+              ))}
+            </span>
+            <Button variant="outline" size="sm" disabled={gapInFlight} onClick={() => setEditingSelection(true)}>
+              Change competitors
+            </Button>
+          </div>
+        )}
+
+        {candidates.length > 0 && (selected.length === 0 || editingSelection) && (
           <>
             <div className="flex items-center justify-between">
               <p className="text-xs text-muted-foreground">
@@ -603,10 +628,15 @@ function CompetitorResearch({ projectId, role }: { projectId: string; role: stri
                 })}
               </TableBody>
             </Table>
-            <div>
+            <div className="flex flex-wrap gap-2">
               <Button disabled={!allowed || gapInFlight || selected.length === 0} onClick={() => void analyze(false)}>
                 {gapInFlight ? 'Analyzing…' : 'Analyze keyword gaps'}
               </Button>
+              {editingSelection && selected.length > 0 && (
+                <Button variant="outline" disabled={gapInFlight} onClick={() => setEditingSelection(false)}>
+                  Done
+                </Button>
+              )}
             </div>
           </>
         )}
@@ -1113,20 +1143,37 @@ const OPPORTUNITY_SORT_DIR_LABELS: Record<OpportunitySortDir, string> = {
 const SELECT_CLASS =
   'h-8 rounded-md border border-input bg-background px-2 text-sm shadow-xs outline-none transition-[color,box-shadow] focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-50';
 
+const OPPORTUNITY_REVEAL_STEP = 25;
+
 /**
  * KW5: a deterministic, explainable read over the project's current-best-known
- * competitor gap snapshot. It never starts provider work - when no gap snapshot
- * exists it points the user at the Competitors tab instead. Every row shows why
- * it scored the way it did; a missing metric renders as a dash, never a zero.
+ * competitor gap snapshot for the EXACT active competitor set. It never starts
+ * provider work - when no matching gap snapshot exists it points the user at the
+ * Competitors tab instead. Every row shows why it scored the way it did; a
+ * missing metric renders as a dash, never a zero.
  */
-function Opportunities({ projectId, onGoToCompetitors }: { projectId: string; onGoToCompetitors: () => void }) {
+function Opportunities({
+  projectId,
+  selected,
+  onGoToCompetitors,
+}: {
+  projectId: string;
+  selected: string[];
+  onGoToCompetitors: () => void;
+}) {
   const [minVolume, setMinVolume] = useState('');
   const [maxDifficulty, setMaxDifficulty] = useState('');
   const [intent, setIntent] = useState<'all' | OpportunityIntent>('all');
   const [sort, setSort] = useState<OpportunitySort>('score');
   const [dir, setDir] = useState<OpportunitySortDir>('desc');
+  const [visible, setVisible] = useState(OPPORTUNITY_REVEAL_STEP);
 
+  const competitorsParam = selected.join(',');
   const params = new URLSearchParams();
+  if (selected.length > 0) {
+    params.set('competitors', competitorsParam);
+    params.set('limit', String(OPPORTUNITIES_MAX_LIMIT));
+  }
   const minVolumeNum = minVolume.trim() === '' ? null : Number(minVolume);
   if (minVolumeNum != null && Number.isFinite(minVolumeNum) && minVolumeNum >= 0) {
     params.set('minVolume', String(minVolumeNum));
@@ -1140,21 +1187,30 @@ function Opportunities({ projectId, onGoToCompetitors }: { projectId: string; on
   params.set('dir', dir);
   const queryString = params.toString();
 
-  const { data, error, loading } = useAsync<OpportunitiesDto>(
-    () => api(`/projects/${projectId}/keyword/opportunities?${queryString}`),
+  const { data, error, loading } = useAsync<OpportunitiesDto | null>(
+    () =>
+      selected.length === 0
+        ? Promise.resolve(null)
+        : api(`/projects/${projectId}/keyword/opportunities?${queryString}`),
     [projectId, queryString],
   );
 
   const snapshot = data?.snapshot ?? null;
   const opportunities = data?.opportunities ?? [];
 
+  useEffect(() => {
+    setVisible(OPPORTUNITY_REVEAL_STEP);
+  }, [queryString]);
+
+  const shown = opportunities.slice(0, visible);
+
   return (
     <Card>
       <CardHeader>
         <CardTitle>Opportunities</CardTitle>
         <CardDescription>
-          Explainable keyword opportunities derived from your latest competitor gap analysis. Read-only - this makes
-          no provider calls.
+          Explainable keyword opportunities derived from your selected competitors' gap analysis. Read-only - this
+          makes no provider calls.
         </CardDescription>
       </CardHeader>
       <CardContent className="grid gap-4">
@@ -1166,9 +1222,18 @@ function Opportunities({ projectId, onGoToCompetitors }: { projectId: string; on
           </div>
         )}
 
-        {!loading && !error && !snapshot && (
+        {!loading && !error && selected.length === 0 && (
           <div className="py-8 text-center text-sm text-muted-foreground">
-            No competitor gap data available yet. Run a competitor gap analysis first.{' '}
+            Select competitors to see their opportunities.{' '}
+            <button type="button" className="underline" onClick={onGoToCompetitors}>
+              Go to Competitors
+            </button>
+          </div>
+        )}
+
+        {!loading && !error && selected.length > 0 && !snapshot && (
+          <div className="py-8 text-center text-sm text-muted-foreground">
+            No competitor gap data available yet for this competitor set. Run a competitor gap analysis first.{' '}
             <button type="button" className="underline" onClick={onGoToCompetitors}>
               Go to Competitors
             </button>
@@ -1261,7 +1326,7 @@ function Opportunities({ projectId, onGoToCompetitors }: { projectId: string; on
             ) : (
               <>
                 <p className="text-xs text-muted-foreground">
-                  Showing {fmtNum(data!.count)} of {fmtNum(data!.total)} opportunities.
+                  Showing {fmtNum(shown.length)} of {fmtNum(data!.total)} opportunities.
                 </p>
                 <Table>
                   <TableHeader>
@@ -1276,7 +1341,7 @@ function Opportunities({ projectId, onGoToCompetitors }: { projectId: string; on
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {opportunities.map((o) => (
+                    {shown.map((o) => (
                       <TableRow key={o.keyword}>
                         <TableCell className="max-w-[22rem] truncate font-medium" title={o.variants.join(', ')}>
                           {o.keyword}
@@ -1307,6 +1372,17 @@ function Opportunities({ projectId, onGoToCompetitors }: { projectId: string; on
                     ))}
                   </TableBody>
                 </Table>
+                {shown.length < opportunities.length && (
+                  <div>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setVisible((v) => v + OPPORTUNITY_REVEAL_STEP)}
+                    >
+                      Show more
+                    </Button>
+                  </div>
+                )}
               </>
             )}
           </>
@@ -1316,18 +1392,154 @@ function Opportunities({ projectId, onGoToCompetitors }: { projectId: string; on
   );
 }
 
-type KeywordsTab = 'mine' | 'research' | 'expansion' | 'competitors' | 'opportunities';
+/**
+ * KW5.1: the Compare projection of the SAME gap evidence as Opportunities - no
+ * new endpoint, no new scoring. It reuses the exact-set opportunities read and
+ * lays each opportunity's competitor ranks out as a matrix. A missing cell
+ * renders as an em dash: "no page-one gap evidence for this keyword/competitor
+ * in this bounded analysis", never rank 0.
+ */
+function CompetitorCompare({
+  projectId,
+  selected,
+  onGoToCompetitors,
+}: {
+  projectId: string;
+  selected: string[];
+  onGoToCompetitors: () => void;
+}) {
+  const competitorsParam = selected.join(',');
+  const params = new URLSearchParams();
+  if (selected.length > 0) {
+    params.set('competitors', competitorsParam);
+    params.set('limit', String(OPPORTUNITIES_MAX_LIMIT));
+    params.set('sort', 'score');
+    params.set('dir', 'desc');
+  }
+  const queryString = params.toString();
+
+  const { data, error, loading } = useAsync<OpportunitiesDto | null>(
+    () =>
+      selected.length === 0
+        ? Promise.resolve(null)
+        : api(`/projects/${projectId}/keyword/opportunities?${queryString}`),
+    [projectId, competitorsParam],
+  );
+
+  const columns =
+    data?.snapshot && data.snapshot.competitors.length > 0 ? data.snapshot.competitors : selected;
+  const opportunities = data?.opportunities ?? [];
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Compare</CardTitle>
+        <CardDescription>
+          The same gap evidence as Opportunities, laid out per competitor. Read-only - this makes no provider calls.
+          A dash means no page-one gap was observed for that keyword and competitor.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="grid gap-4">
+        {selected.length === 0 && (
+          <div className="py-8 text-center text-sm text-muted-foreground">
+            Select competitors to compare.{' '}
+            <button type="button" className="underline" onClick={onGoToCompetitors}>
+              Go to Competitors
+            </button>
+          </div>
+        )}
+
+        {selected.length > 0 && loading && (
+          <div className="py-8 text-center text-sm text-muted-foreground">Loading comparison…</div>
+        )}
+
+        {selected.length > 0 && !loading && error && (
+          <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+            Could not load the comparison. Please try again.
+          </div>
+        )}
+
+        {selected.length > 0 && !loading && !error && data && !data.snapshot && (
+          <div className="py-8 text-center text-sm text-muted-foreground">
+            No gap snapshot for this competitor set yet. Run a competitor gap analysis first.{' '}
+            <button type="button" className="underline" onClick={onGoToCompetitors}>
+              Go to Competitors
+            </button>
+          </div>
+        )}
+
+        {selected.length > 0 && !loading && !error && data?.snapshot && (
+          <>
+            <div className="rounded-md border bg-muted/30 px-3 py-2 text-sm text-muted-foreground">
+              Gap snapshot from {fmtDate(data.snapshot.fetchedAt)} ·{' '}
+              <span className="font-medium text-foreground">
+                {SNAPSHOT_FRESHNESS_LABELS[data.snapshot.freshness.state]}
+              </span>
+              {data.snapshot.freshness.state === 'stale' && <span className="text-destructive"> · may be outdated</span>}
+            </div>
+
+            {opportunities.length === 0 ? (
+              <div className="py-8 text-center text-sm text-muted-foreground">
+                No page-one keyword gaps were found for this competitor set.
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Keyword</TableHead>
+                      <TableHead className="text-right">Volume</TableHead>
+                      <TableHead className="text-right">Difficulty</TableHead>
+                      {columns.map((domain) => (
+                        <TableHead key={domain} className="text-right">
+                          {domain}
+                        </TableHead>
+                      ))}
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {opportunities.map((o) => (
+                      <TableRow key={o.keyword}>
+                        <TableCell className="max-w-[24rem] truncate font-medium" title={o.variants.join(', ')}>
+                          {o.keyword}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums">{fmtMetric(o.searchVolume, 'int')}</TableCell>
+                        <TableCell className="text-right tabular-nums">{fmtMetric(o.difficulty, 'int')}</TableCell>
+                        {columns.map((domain) => {
+                          const match = o.competitors.find((c) => c.domain === domain);
+                          return (
+                            <TableCell key={domain} className="text-right tabular-nums">
+                              {match?.rank == null ? '—' : fmtNum(match.rank)}
+                            </TableCell>
+                          );
+                        })}
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            )}
+          </>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+type KeywordsTab = 'mine' | 'research' | 'expansion' | 'competitors' | 'compare' | 'opportunities';
 
 const KEYWORDS_TABS: Array<{ id: KeywordsTab; label: string }> = [
   { id: 'mine', label: 'My keywords' },
   { id: 'research', label: 'Research' },
   { id: 'expansion', label: 'Expand' },
   { id: 'competitors', label: 'Competitors' },
+  { id: 'compare', label: 'Compare' },
   { id: 'opportunities', label: 'Opportunities' },
 ];
 
 export function Keywords({ projectId, role }: { projectId: string; role: string }) {
   const [tab, setTab] = useState<KeywordsTab>('mine');
+  const [selectedCompetitors, setSelectedCompetitors] = useState<string[]>([]);
   const { data, error, loading } = useAsync<ProjectKeywordsDto>(
     () => api(`/projects/${projectId}/gsc/keywords`),
     [projectId],
@@ -1350,9 +1562,27 @@ export function Keywords({ projectId, role }: { projectId: string; role: string 
 
       {tab === 'research' && <KeywordResearch projectId={projectId} role={role} />}
       {tab === 'expansion' && <KeywordExpansion projectId={projectId} role={role} />}
-      {tab === 'competitors' && <CompetitorResearch projectId={projectId} role={role} />}
+      {tab === 'competitors' && (
+        <CompetitorResearch
+          projectId={projectId}
+          role={role}
+          selected={selectedCompetitors}
+          onSelectedChange={setSelectedCompetitors}
+        />
+      )}
+      {tab === 'compare' && (
+        <CompetitorCompare
+          projectId={projectId}
+          selected={selectedCompetitors}
+          onGoToCompetitors={() => setTab('competitors')}
+        />
+      )}
       {tab === 'opportunities' && (
-        <Opportunities projectId={projectId} onGoToCompetitors={() => setTab('competitors')} />
+        <Opportunities
+          projectId={projectId}
+          selected={selectedCompetitors}
+          onGoToCompetitors={() => setTab('competitors')}
+        />
       )}
 
       {tab === 'mine' && (

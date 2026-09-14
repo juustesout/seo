@@ -22,9 +22,9 @@ import {
   type OpportunitySortDir,
 } from '@seo/contracts';
 import type { ServiceContainer } from '../context.js';
+import { readCurrentCompetitorGap } from './competitorResearchService.js';
 import { canonicalKeywordKey, chooseCanonicalLabel, classifyIntent, type KeywordVariantCount } from './keywordCanonical.js';
 import { scoreOpportunity } from './opportunityScoring.js';
-import { computeSnapshotFreshness, projectGapRows, readLatestSourceSnapshot } from './sourceSnapshotService.js';
 
 /** A mutable accumulation bucket for one canonical keyword. */
 interface KeywordGroup {
@@ -178,28 +178,40 @@ function applyQuery(
 }
 
 /**
- * Read the current gap snapshot, analyze it and return the bounded projection.
- * When no gap snapshot exists the result carries a null snapshot and no rows,
- * so the UI can prompt the user to run a competitor gap analysis first without
+ * Read the exact competitor-set gap snapshot, analyze it and return the bounded
+ * projection. The read is scoped to the active competitor set (via the same
+ * canonical scope the gap run wrote), never to whichever snapshot happens to be
+ * newest - otherwise the analysis could silently describe a different set than
+ * the user selected. When no snapshot exists for this set the result carries a
+ * null snapshot and no rows, so the UI can prompt for a gap analysis without
  * this call ever spending provider credits.
  */
 export async function getOpportunities(
   container: ServiceContainer,
   projectId: string,
+  competitors: string[],
   query: OpportunityQuery,
+  domain?: string,
 ): Promise<OpportunitiesDto> {
-  const record = await readLatestSourceSnapshot(container, projectId, 'competitor_gap');
-  if (!record) return { snapshot: null, opportunities: [], total: 0, count: 0 };
+  const snapshot = await readCurrentCompetitorGap(container, projectId, domain, competitors);
+  if (!snapshot) return { snapshot: null, opportunities: [], total: 0, count: 0 };
 
-  const opportunities = buildOpportunities(projectGapRows(record.data.gaps));
+  const opportunities = buildOpportunities(snapshot.gaps);
   const { rows, total } = applyQuery(opportunities, query);
+
+  const scopeDomain = typeof snapshot.scope.domain === 'string' ? snapshot.scope.domain : '';
+  const scopeCompetitors = Array.isArray(snapshot.scope.competitors)
+    ? snapshot.scope.competitors.filter((value): value is string => typeof value === 'string')
+    : [];
 
   return {
     snapshot: {
-      id: record.id,
-      fetchedAt: record.fetchedAt,
-      sourceJobId: record.sourceJobId,
-      freshness: computeSnapshotFreshness('competitor_gap', record.fetchedAt),
+      id: snapshot.id,
+      fetchedAt: snapshot.fetchedAt,
+      sourceJobId: snapshot.sourceJobId,
+      freshness: snapshot.freshness,
+      domain: scopeDomain,
+      competitors: scopeCompetitors,
     },
     opportunities: rows,
     total,
