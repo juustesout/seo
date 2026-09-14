@@ -1163,4 +1163,38 @@ if [ -z "${W7_LEAK_COUNT}" ] || [ "${W7_LEAK_COUNT}" != "0" ]; then
 fi
 echo "   smoke: non-member cannot read a foreign project writer run (RLS isolation OK)"
 
+echo "==> smoke test: data source upsert is ON CONFLICT-usable (non-deferrable unique)"
+PSQL -d "${DB_NAME}" <<'SQL'
+set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-000000000001"}';
+do $$
+declare
+  v_project uuid;
+  v_id uuid;
+  v_deferrable boolean;
+begin
+  select id into v_project from public.seo_projects where slug = 'demo' limit 1;
+  if v_project is null then raise exception 'smoke: data source upsert project missing'; end if;
+
+  select condeferrable into v_deferrable
+  from pg_constraint
+  where conname = 'seo_data_sources_unique_external'
+    and conrelid = 'public.seo_data_sources'::regclass;
+  if v_deferrable is null then raise exception 'smoke: seo_data_sources unique constraint missing'; end if;
+  if v_deferrable then raise exception 'smoke: seo_data_sources unique constraint is still deferrable'; end if;
+
+  -- The exact upsert shape the GSC attach routes use must now succeed.
+  insert into public.seo_data_sources
+    (project_id, provider_type, kind, name, status, external_id, external_url, config, capabilities)
+  values
+    (v_project, 'gsc', 'gsc_property', 'https://www.example.com/', 'active',
+     'https://www.example.com/', 'https://www.example.com/', '{}'::jsonb, '[]'::jsonb)
+  on conflict (project_id, provider_type, external_id)
+  do update set status = excluded.status, name = excluded.name
+  returning id into v_id;
+  if v_id is null then raise exception 'smoke: data source ON CONFLICT upsert returned no row'; end if;
+
+  raise notice 'smoke: data source ON CONFLICT upsert OK';
+end $$;
+SQL
+
 echo "==> migration validation OK (${DB_NAME})"
