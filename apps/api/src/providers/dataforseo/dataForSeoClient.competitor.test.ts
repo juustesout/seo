@@ -1,8 +1,8 @@
 /**
  * DataForSEO client competitor endpoints (KW3). Verifies the exact request
  * bodies: the Labs paths, the gap's `intersections: false` and the provider-side
- * `filters` (ranking, paid and volume conditions joined with `and`) so the
- * vendor trims rows before we ever store them.
+ * `filters` (ranking and volume conditions joined with `and`) plus `item_types`
+ * so the vendor trims rows before we ever store them.
  */
 import { describe, expect, it } from 'vitest';
 import { DataForSeoClient } from './dataForSeoClient.js';
@@ -41,11 +41,11 @@ describe('DataForSeoClient.competitorDomains', () => {
 });
 
 describe('DataForSeoClient.domainIntersection', () => {
-  it('requests the gap and pushes rank, paid and volume filters vendor-side', async () => {
+  it('requests target1-only keywords and pushes rank and volume constraints vendor-side', async () => {
     const calls: CapturedCall[] = [];
     const client = clientWith(calls, { status_code: 20000, tasks: [{ result: [{ items: [{ keyword_data: {} }] }] }] });
 
-    await client.domainIntersection('example.com', 'rival.com', {
+    await client.domainIntersection('rival.com', 'example.com', {
       maxRankGroup: 10,
       minSearchVolume: 50,
       limit: 200,
@@ -54,15 +54,14 @@ describe('DataForSeoClient.domainIntersection', () => {
     expect(calls[0].url).toContain('/v3/dataforseo_labs/google/domain_intersection/live');
     const body = calls[0].body?.[0] ?? {};
     expect(body).toMatchObject({
-      target1: 'example.com',
-      target2: 'rival.com',
+      target1: 'rival.com',
+      target2: 'example.com',
       intersections: false,
+      item_types: ['organic'],
       limit: 200,
     });
     expect(body.filters).toEqual([
-      ['ranked_serp_element.serp_item.rank_group', '<=', 10],
-      'and',
-      ['ranked_serp_element.is_paid', '=', false],
+      ['first_domain_serp_element.rank_group', '<=', 10],
       'and',
       ['keyword_data.keyword_info.search_volume', '>=', 50],
     ]);
@@ -72,8 +71,9 @@ describe('DataForSeoClient.domainIntersection', () => {
     const calls: CapturedCall[] = [];
     const client = clientWith(calls, { status_code: 20000, tasks: [{ result: [{ items: [] }] }] });
 
-    await client.domainIntersection('example.com', 'rival.com', { excludePaid: false });
+    await client.domainIntersection('rival.com', 'example.com', { excludePaid: false });
 
     expect(calls[0].body?.[0].filters).toBeUndefined();
+    expect(calls[0].body?.[0].item_types).toEqual(['organic', 'paid']);
   });
 });

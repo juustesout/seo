@@ -330,9 +330,11 @@ export class DataForSeoDataSource implements SeoDataSource {
 
   /**
    * Competitor keyword gaps: for each competitor (bounded), ask the vendor for
-   * the keywords it ranks for on page one that the own domain does not. Ranking,
-   * paid and minimum-volume filters run provider-side so we only ever receive
-   * relevant rows; a per-competitor row cap keeps the run's cost bounded.
+   * the keywords it ranks for on page one that the own domain does not. The
+   * competitor is passed as `target1` because the vendor only returns SERP
+   * elements for the first domain; ranking, paid and minimum-volume constraints
+   * run provider-side so we only ever receive relevant rows and a per-competitor
+   * row cap keeps the run's cost bounded.
    */
   async findCompetitorKeywordGaps(
     ctx: ProviderContext,
@@ -346,7 +348,7 @@ export class DataForSeoDataSource implements SeoDataSource {
     for (let i = 0; i < targets.length; i += 1) {
       const competitor = targets[i];
       if (i > 0) await delay(600);
-      const items = await client.domainIntersection(domain, competitor, {
+      const items = await client.domainIntersection(competitor, domain, {
         locationCode: LOCATION_CODE,
         languageCode: LANGUAGE_CODE,
         limit: opts.limitPerCompetitor ?? 200,

@@ -148,10 +148,21 @@ export interface CompetitorDomainItem {
   [key: string]: unknown;
 }
 
+/** SERP element returned for one of the two domains in a domain intersection. */
+export interface DomainSerpElement {
+  type?: string;
+  rank_group?: number;
+  rank_absolute?: number;
+  domain?: string;
+  url?: string;
+  title?: string;
+}
+
 /**
- * One `domain_intersection/live` item: the keyword plus the competitor's ranked
- * organic SERP element. With `intersections: false` the vendor returns keywords
- * the second target ranks for and the first does not - the gap.
+ * One `domain_intersection/live` item: the keyword plus the SERP element for the
+ * domain that ranks. With `intersections: false` only the first domain gets a
+ * SERP element, so a gap query passes the ranking domain (the competitor) as
+ * `target1`.
  */
 export interface DomainIntersectionItem {
   keyword_data?: {
@@ -160,20 +171,8 @@ export interface DomainIntersectionItem {
     keyword_properties?: { keyword_difficulty?: number };
     search_intent_info?: { main_intent?: string };
   };
-  ranked_serp_element?: {
-    rank_group?: number;
-    rank_absolute?: number;
-    se_type?: string;
-    serp_item?: {
-      rank_group?: number;
-      rank_absolute?: number;
-      domain?: string;
-      url?: string;
-      title?: string;
-      type?: string;
-      is_paid?: boolean;
-    };
-  };
+  first_domain_serp_element?: DomainSerpElement;
+  second_domain_serp_element?: DomainSerpElement;
   [key: string]: unknown;
 }
 
@@ -518,10 +517,12 @@ export class DataForSeoClient {
   }
 
   /**
-   * Keywords the competitor (target2) ranks for that the target domain
-   * (target1) does not. Ranking, paid and volume filters are pushed to the
-   * vendor so only page-one, non-paid, sufficiently-searched rows return - the
-   * caller never receives thousands of rows to trim locally.
+   * Domain-intersection query with `intersections: false`: the keywords `target1`
+   * ranks for that `target2` does not. The vendor only returns a SERP element for
+   * `target1`, so pass the domain whose exclusive keywords you want as `target1`
+   * (for a gap, the competitor). Rank, paid and volume constraints run
+   * vendor-side; `item_types` keeps paid placements out unless `excludePaid` is
+   * explicitly false.
    */
   async domainIntersection(
     target1: string,
@@ -537,10 +538,7 @@ export class DataForSeoClient {
   ): Promise<DomainIntersectionItem[]> {
     const conditions: unknown[][] = [];
     if (opts.maxRankGroup != null) {
-      conditions.push(['ranked_serp_element.serp_item.rank_group', '<=', opts.maxRankGroup]);
-    }
-    if (opts.excludePaid !== false) {
-      conditions.push(['ranked_serp_element.is_paid', '=', false]);
+      conditions.push(['first_domain_serp_element.rank_group', '<=', opts.maxRankGroup]);
     }
     if (opts.minSearchVolume != null) {
       conditions.push(['keyword_data.keyword_info.search_volume', '>=', opts.minSearchVolume]);
@@ -551,7 +549,8 @@ export class DataForSeoClient {
       target2,
       location_code: opts.locationCode ?? 2840,
       language_code: opts.languageCode ?? 'en',
-      intersections: false, // gap: target2 only
+      intersections: false, // target1 only
+      item_types: opts.excludePaid === false ? ['organic', 'paid'] : ['organic'],
       limit: opts.limit ?? 200,
       order_by: ['keyword_data.keyword_info.search_volume,desc'],
     };

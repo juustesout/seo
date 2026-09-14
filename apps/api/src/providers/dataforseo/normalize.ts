@@ -190,8 +190,9 @@ export function normalizeCompetitorCandidate(item: CompetitorDomainItem): Compet
 /**
  * Normalize one domain-intersection item to a gap row (KW3). The keyword is
  * required; metrics are read from the nested keyword_data when present. `rank`
- * falls back to the element-level rank_group because the vendor has exposed the
- * position at either level across endpoint revisions.
+ * comes from `first_domain_serp_element` because the gap query passes the
+ * ranking domain (the competitor) as `target1`, the only element the vendor
+ * returns for `intersections: false`.
  */
 export function normalizeDomainIntersectionGap(
   item: DomainIntersectionItem,
@@ -200,7 +201,7 @@ export function normalizeDomainIntersectionGap(
   const keyword = item.keyword_data?.keyword;
   if (typeof keyword !== 'string' || !keyword.trim()) return null;
   const info = item.keyword_data?.keyword_info;
-  const rank = item.ranked_serp_element?.serp_item?.rank_group ?? item.ranked_serp_element?.rank_group;
+  const rank = item.first_domain_serp_element?.rank_group;
   return {
     keyword: keyword.trim(),
     search_volume: asNumber(info?.search_volume),

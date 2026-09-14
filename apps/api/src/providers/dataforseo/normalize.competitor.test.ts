@@ -35,7 +35,7 @@ describe('normalizeCompetitorCandidate', () => {
 });
 
 describe('normalizeDomainIntersectionGap', () => {
-  it('reads metrics from keyword_data and rank from the ranked serp element', () => {
+  it('reads metrics from keyword_data and rank from the first domain serp element', () => {
     expect(
       normalizeDomainIntersectionGap(
         {
@@ -44,7 +44,7 @@ describe('normalizeDomainIntersectionGap', () => {
             keyword_info: { search_volume: 2400, cpc: 1.2 },
             keyword_properties: { keyword_difficulty: 42 },
           },
-          ranked_serp_element: { serp_item: { rank_group: 4, is_paid: false } },
+          first_domain_serp_element: { rank_group: 4, type: 'organic' },
         },
         'rival.com',
       ),
@@ -58,23 +58,20 @@ describe('normalizeDomainIntersectionGap', () => {
     });
   });
 
-  it('falls back to the element-level rank and tolerates missing metrics', () => {
+  it('tolerates a missing serp element and absent metrics', () => {
     expect(
-      normalizeDomainIntersectionGap(
-        { keyword_data: { keyword: 'cheap widgets' }, ranked_serp_element: { rank_group: 7 } },
-        'rival.com',
-      ),
+      normalizeDomainIntersectionGap({ keyword_data: { keyword: 'cheap widgets' } }, 'rival.com'),
     ).toEqual({
       keyword: 'cheap widgets',
       search_volume: null,
       difficulty: null,
       cpc: null,
       competitor_domain: 'rival.com',
-      position: 7,
+      position: null,
     });
   });
 
   it('drops an item without a keyword', () => {
-    expect(normalizeDomainIntersectionGap({ keyword_data: {}, ranked_serp_element: {} }, 'rival.com')).toBeNull();
+    expect(normalizeDomainIntersectionGap({ keyword_data: {}, first_domain_serp_element: {} }, 'rival.com')).toBeNull();
   });
 });
