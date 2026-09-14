@@ -42,6 +42,7 @@ import {
   type KeywordResearchResult,
 } from '@seo/contracts';
 import { normalizeDomain } from '../services/competitorResearchService.js';
+import { competitorDiscoveryScope, competitorGapScope } from '../services/sourceScope.js';
 import {
   mergeExpansionCandidates,
   type ExpansionMethodOutput,
@@ -448,6 +449,14 @@ const dataForSeoCompetitorResearch: JobExecutor = async ({ container, job, write
       avgPosition: c.avg_position,
       etv: c.etv,
     }));
+    await report(90, 'Saving competitor snapshot');
+    await writer.persistSourceSnapshot(job.project_id, {
+      type: 'competitor_discovery',
+      provider: 'dataforseo',
+      scope: competitorDiscoveryScope({ domain }),
+      data: { competitors, total: candidates.length },
+      sourceJobId: job.id,
+    });
     await report(100, 'Competitor discovery complete');
     return { mode: 'discover', domain, count: candidates.length, competitors };
   }
@@ -480,6 +489,13 @@ const dataForSeoCompetitorResearch: JobExecutor = async ({ container, job, write
     }));
     await report(70, `Enriching ${bounded.length} gap keywords`);
     await writer.persistCompetitorGapKeywords(job.project_id, gaps);
+    await writer.persistSourceSnapshot(job.project_id, {
+      type: 'competitor_gap',
+      provider: 'dataforseo',
+      scope: competitorGapScope({ domain, competitors }),
+      data: { gaps: bounded, total: gaps.length },
+      sourceJobId: job.id,
+    });
     await report(100, 'Keyword gap analysis complete');
     return { mode: 'gap', domain, competitors, count: gaps.length, gaps: bounded };
   }

@@ -17,6 +17,8 @@ import { asyncHandler } from '../asyncHandler.js';
 import { parseId, parseProjectId } from './utils.js';
 import {
   readCompetitorResearchRun,
+  readCurrentCompetitorDiscovery,
+  readCurrentCompetitorGap,
   startCompetitorDiscovery,
   startCompetitorGap,
 } from '../../services/competitorResearchService.js';
@@ -29,6 +31,7 @@ const domainField = z.string().trim().max(COMPETITOR_RESEARCH_DOMAIN_MAX_CHARS).
 
 const discoverySchema = z.object({
   domain: domainField,
+  refresh: z.boolean().optional(),
 });
 
 const gapSchema = z.object({
@@ -37,6 +40,25 @@ const gapSchema = z.object({
     .array(z.string().trim().min(1).max(COMPETITOR_RESEARCH_DOMAIN_MAX_CHARS))
     .min(1)
     .max(COMPETITOR_RESEARCH_MAX_COMPETITORS),
+  refresh: z.boolean().optional(),
+});
+
+const gapSnapshotQuerySchema = z.object({
+  domain: domainField,
+  competitors: z
+    .string()
+    .transform((value) =>
+      value
+        .split(',')
+        .map((part) => part.trim())
+        .filter((part) => part.length > 0),
+    )
+    .pipe(
+      z
+        .array(z.string().max(COMPETITOR_RESEARCH_DOMAIN_MAX_CHARS))
+        .min(1)
+        .max(COMPETITOR_RESEARCH_MAX_COMPETITORS),
+    ),
 });
 
 /** Start domain-based competitor discovery for the project's domain. */
@@ -47,8 +69,23 @@ competitorResearchRouter.post(
     const { container, user } = req;
     await container.access.requireRole(user!.sub, projectId, 'editor');
     const body = discoverySchema.parse(req.body);
-    const run = await startCompetitorDiscovery(container, projectId, user!.sub, body.domain);
+    const run = await startCompetitorDiscovery(container, projectId, user!.sub, body.domain, {
+      refresh: body.refresh,
+    });
     res.status(202).json({ data: run });
+  }),
+);
+
+/** Read the current discovery snapshot for the project, or null when none. */
+competitorResearchRouter.get(
+  '/competitors/snapshot',
+  asyncHandler(async (req, res) => {
+    const projectId = parseProjectId(req);
+    const { container, user } = req;
+    await container.access.requireRole(user!.sub, projectId, 'viewer');
+    const domain = typeof req.query.domain === 'string' ? req.query.domain : undefined;
+    const snapshot = await readCurrentCompetitorDiscovery(container, projectId, domain);
+    res.json({ data: snapshot });
   }),
 );
 
@@ -60,8 +97,23 @@ competitorResearchRouter.post(
     const { container, user } = req;
     await container.access.requireRole(user!.sub, projectId, 'editor');
     const body = gapSchema.parse(req.body);
-    const run = await startCompetitorGap(container, projectId, user!.sub, body.domain, body.competitors);
+    const run = await startCompetitorGap(container, projectId, user!.sub, body.domain, body.competitors, {
+      refresh: body.refresh,
+    });
     res.status(202).json({ data: run });
+  }),
+);
+
+/** Read the current gap snapshot for a competitor set, or null when none. */
+competitorResearchRouter.get(
+  '/competitor-gap/snapshot',
+  asyncHandler(async (req, res) => {
+    const projectId = parseProjectId(req);
+    const { container, user } = req;
+    await container.access.requireRole(user!.sub, projectId, 'viewer');
+    const query = gapSnapshotQuerySchema.parse(req.query);
+    const snapshot = await readCurrentCompetitorGap(container, projectId, query.domain, query.competitors);
+    res.json({ data: snapshot });
   }),
 );
 

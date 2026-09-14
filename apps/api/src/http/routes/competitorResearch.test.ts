@@ -11,6 +11,7 @@ import type { AddressInfo } from 'node:net';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import express from 'express';
 import { ApiError, errorHandler } from '../../apiErrors.js';
+import { competitorDiscoveryScope, competitorGapScope, scopeKeyOf } from '../../services/sourceScope.js';
 import { competitorResearchRouter } from './competitorResearch.js';
 
 type Row = Record<string, unknown>;
@@ -143,7 +144,14 @@ describe('competitor research routes', () => {
   it('lets an editor start discovery and returns a safe run handle', async () => {
     const res = await request('/competitors', 'editor-token', 'POST', {});
     expect(res.status).toBe(202);
-    expect(res.json.data).toEqual({ jobId: JOB, status: 'queued', mode: 'discover', domain: 'example.com' });
+    expect(res.json.data).toEqual({
+      jobId: JOB,
+      status: 'queued',
+      mode: 'discover',
+      domain: 'example.com',
+      reused: false,
+      snapshotId: null,
+    });
     expect(enqueueCalls).toHaveLength(1);
     expect(enqueueCalls[0]).toMatchObject({
       project_id: PROJECT,
@@ -163,6 +171,8 @@ describe('competitor research routes', () => {
       mode: 'gap',
       domain: 'example.com',
       competitors: ['rival.com', 'other.com'],
+      reused: false,
+      snapshotId: null,
     });
     expect(enqueueCalls[0]).toMatchObject({
       job_type: 'competitor_research',
@@ -219,6 +229,60 @@ describe('competitor research routes', () => {
       count: 1,
       candidates: [{ domain: 'rival.com', sharedKeywords: 10, keywordsCount: 20, avgPosition: 5, etv: 100 }],
     });
+  });
+
+  it('returns the current discovery snapshot for a viewer without starting a job', async () => {
+    const scope = competitorDiscoveryScope({ domain: 'example.com' });
+    currentStores.seo_source_snapshots = [
+      {
+        id: 'snap-1',
+        project_id: PROJECT,
+        type: 'competitor_discovery',
+        provider: 'dataforseo',
+        scope,
+        scope_key: scopeKeyOf(scope),
+        data: { competitors: [{ domain: 'rival.com' }], total: 1 },
+        fetched_at: new Date().toISOString(),
+        source_job_id: null,
+      },
+    ];
+    const res = await request('/competitors/snapshot', 'viewer-token');
+    expect(res.status).toBe(200);
+    expect(res.json.data).toMatchObject({
+      id: 'snap-1',
+      type: 'competitor_discovery',
+      count: 1,
+      freshness: { state: 'fresh' },
+    });
+    expect(enqueueCalls).toHaveLength(0);
+  });
+
+  it('returns null when no discovery snapshot exists yet', async () => {
+    const res = await request('/competitors/snapshot', 'viewer-token');
+    expect(res.status).toBe(200);
+    expect(res.json.data).toBeNull();
+    expect(enqueueCalls).toHaveLength(0);
+  });
+
+  it('returns the current gap snapshot for the selected competitors', async () => {
+    const scope = competitorGapScope({ domain: 'example.com', competitors: ['rival.com'] });
+    currentStores.seo_source_snapshots = [
+      {
+        id: 'snap-2',
+        project_id: PROJECT,
+        type: 'competitor_gap',
+        provider: 'dataforseo',
+        scope,
+        scope_key: scopeKeyOf(scope),
+        data: { gaps: [{ keyword: 'blue widgets', competitorDomain: 'rival.com' }], total: 1 },
+        fetched_at: new Date().toISOString(),
+        source_job_id: null,
+      },
+    ];
+    const res = await request('/competitor-gap/snapshot?competitors=rival.com', 'viewer-token');
+    expect(res.status).toBe(200);
+    expect(res.json.data).toMatchObject({ id: 'snap-2', type: 'competitor_gap', count: 1 });
+    expect(enqueueCalls).toHaveLength(0);
   });
 
   it('does not return a run from another project', async () => {

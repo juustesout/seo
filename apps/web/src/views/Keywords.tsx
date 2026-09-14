@@ -30,6 +30,8 @@ import type {
   KeywordResearchRunDto,
   KeywordResearchStartDto,
   ProjectKeywordsDto,
+  SourceSnapshotDto,
+  SourceSnapshotFreshnessState,
 } from '@seo/contracts';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -231,26 +233,38 @@ function KeywordResearch({ projectId, role }: { projectId: string; role: string 
 
 /**
  * Poll a competitor run by id while it is in flight; stop once it is terminal
- * so an idle panel never polls forever.
+ * so an idle panel never polls forever. `onDone` fires once on terminal status
+ * so the caller can refresh the (free) source snapshot it is displaying.
  */
 function useRunPoll(
   projectId: string,
   run: CompetitorResearchRunDto | null,
   setRun: (next: CompetitorResearchRunDto) => void,
+  onDone?: (done: CompetitorResearchRunDto) => void,
 ) {
   useEffect(() => {
     if (!run || (run.status !== 'queued' && run.status !== 'running')) return;
     let alive = true;
+    let done = false;
+    let id: ReturnType<typeof setInterval> | undefined;
     const tick = async () => {
       try {
         const next = await api<CompetitorResearchRunDto>(`/projects/${projectId}/keyword/competitors/${run.jobId}`);
-        if (alive) setRun(next);
+        if (!alive) return;
+        setRun(next);
+        if (next.status === 'completed' || next.status === 'failed') {
+          done = true;
+          if (id !== undefined) clearInterval(id);
+          onDone?.(next);
+        }
       } catch {
         /* transient poll error: the next tick retries */
       }
     };
     void tick();
-    const id = setInterval(tick, 2500);
+    id = setInterval(() => {
+      if (!done) void tick();
+    }, 2500);
     return () => {
       alive = false;
       clearInterval(id);
@@ -265,22 +279,85 @@ function fmtNullable(v: number | null, kind: 'int' | 'money' = 'int'): string {
   return kind === 'money' ? `$${num(v).toFixed(2)}` : fmtNum(v);
 }
 
+/** Human age of a snapshot, coarse on purpose (never invents precision). */
+function fmtAge(ms: number | null): string {
+  if (ms == null) return 'age unknown';
+  const minutes = Math.floor(ms / 60_000);
+  if (minutes < 1) return 'just now';
+  if (minutes < 60) return `${minutes}m old`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h old`;
+  return `${Math.floor(hours / 24)}d old`;
+}
+
+/** Plain-language labels for the derived snapshot freshness states. */
+const SNAPSHOT_FRESHNESS_LABELS: Record<SourceSnapshotFreshnessState, string> = {
+  fresh: 'Up to date',
+  due: 'Aging',
+  stale: 'Out of date',
+  unknown: 'Unverified',
+};
+
 /**
  * Competitors workspace (KW3): discover peers for the project's domain, select
  * up to the cap, then analyze page-one keyword gaps. Both operations are backed
- * by the existing competitor_research job; the panel reads back exactly the run
- * it started and never guesses from the shared keyword store.
+ * by the existing competitor_research job, but reads are answered from the
+ * project's saved source snapshots (KW4.5): opening the tab or inspecting a
+ * snapshot never calls a provider. Only the explicit Find/Refresh/Analyze
+ * buttons may start a paid run, and a fresh snapshot is reused instead of
+ * re-paying. The server derives freshness; a stale snapshot stays visible with
+ * its age and a Refresh action rather than disappearing.
  */
 function CompetitorResearch({ projectId, role }: { projectId: string; role: string }) {
   const [discovery, setDiscovery] = useState<CompetitorResearchRunDto | null>(null);
+  const [discoverySnapshot, setDiscoverySnapshot] = useState<SourceSnapshotDto | null>(null);
   const [gapRun, setGapRun] = useState<CompetitorResearchRunDto | null>(null);
+  const [gapSnapshot, setGapSnapshot] = useState<SourceSnapshotDto | null>(null);
+  const [gapSnapshotFor, setGapSnapshotFor] = useState<string[]>([]);
   const [selected, setSelected] = useState<string[]>([]);
   const [discovering, setDiscovering] = useState(false);
   const [analyzing, setAnalyzing] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  useRunPoll(projectId, discovery, setDiscovery);
-  useRunPoll(projectId, gapRun, setGapRun);
+  const loadDiscoverySnapshot = async (): Promise<void> => {
+    try {
+      const next = await api<SourceSnapshotDto | null>(`/projects/${projectId}/keyword/competitors/snapshot`);
+      setDiscoverySnapshot(next);
+    } catch {
+      /* a free snapshot read must never block the workspace */
+    }
+  };
+
+  const loadGapSnapshot = async (competitors: string[]): Promise<void> => {
+    if (competitors.length === 0) {
+      setGapSnapshot(null);
+      setGapSnapshotFor([]);
+      return;
+    }
+    try {
+      const query = encodeURIComponent(competitors.join(','));
+      const next = await api<SourceSnapshotDto | null>(
+        `/projects/${projectId}/keyword/competitor-gap/snapshot?competitors=${query}`,
+      );
+      setGapSnapshot(next);
+      setGapSnapshotFor([...competitors].sort());
+    } catch {
+      /* a free snapshot read must never block the workspace */
+    }
+  };
+
+  useEffect(() => {
+    void loadDiscoverySnapshot();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId]);
+
+  useRunPoll(projectId, discovery, setDiscovery, () => {
+    void loadDiscoverySnapshot();
+  });
+  useRunPoll(projectId, gapRun, setGapRun, (done) => {
+    void loadGapSnapshot(done.selectedCompetitors);
+  });
 
   /** Map a start failure to an honest, non-leaking message. */
   const startError = (e: unknown, fallback: string): string => {
@@ -292,15 +369,25 @@ function CompetitorResearch({ projectId, role }: { projectId: string; role: stri
     return fallback;
   };
 
-  const findCompetitors = async () => {
+  const findCompetitors = async (refresh: boolean) => {
     setError(null);
-    setGapRun(null);
-    setSelected([]);
+    setNotice(null);
     setDiscovering(true);
     try {
       const started = await api<CompetitorDiscoveryStartDto>(`/projects/${projectId}/keyword/competitors`, {
         method: 'POST',
+        body: { refresh },
       });
+      if (started.reused) {
+        setNotice('Showing the saved competitor snapshot - no provider call was made.');
+        await loadDiscoverySnapshot();
+        return;
+      }
+      if (!started.jobId) throw new Error('missing job id');
+      setGapRun(null);
+      setGapSnapshot(null);
+      setGapSnapshotFor([]);
+      setSelected([]);
       setDiscovery({
         jobId: started.jobId,
         mode: 'discover',
@@ -321,18 +408,27 @@ function CompetitorResearch({ projectId, role }: { projectId: string; role: stri
     }
   };
 
-  const analyze = async () => {
+  const analyze = async (refresh: boolean) => {
     if (selected.length === 0) {
       setError('Select at least one competitor to analyze');
       return;
     }
     setError(null);
+    setNotice(null);
     setAnalyzing(true);
     try {
       const started = await api<CompetitorGapStartDto>(`/projects/${projectId}/keyword/competitor-gap`, {
         method: 'POST',
-        body: { competitors: selected },
+        body: { competitors: selected, refresh },
       });
+      if (started.reused) {
+        setNotice('Showing the saved gap snapshot - no provider call was made.');
+        await loadGapSnapshot(started.competitors);
+        return;
+      }
+      if (!started.jobId) throw new Error('missing job id');
+      setGapSnapshot(null);
+      setGapSnapshotFor([]);
       setGapRun({
         jobId: started.jobId,
         mode: 'gap',
@@ -366,8 +462,14 @@ function CompetitorResearch({ projectId, role }: { projectId: string; role: stri
   const allowed = canStartResearch(role);
   const discoveryInFlight = discovery?.status === 'queued' || discovery?.status === 'running';
   const gapInFlight = gapRun?.status === 'queued' || gapRun?.status === 'running';
-  const candidates = discovery?.status === 'completed' ? discovery.candidates : [];
-  const gaps = gapRun?.status === 'completed' ? gapRun.gaps : [];
+  const runCandidates = discovery?.status === 'completed' ? discovery.candidates : [];
+  const candidates = discoverySnapshot && discoverySnapshot.candidates.length > 0 ? discoverySnapshot.candidates : runCandidates;
+  const runGaps = gapRun?.status === 'completed' ? gapRun.gaps : [];
+  const gaps = gapSnapshot && gapSnapshot.gaps.length > 0 ? gapSnapshot.gaps : runGaps;
+  const gapCount = gapSnapshot?.count ?? gapRun?.count ?? gaps.length;
+  const gapSnapshotVisible = gapSnapshot !== null && gapSnapshotFor.join(',') === [...selected].sort().join(',');
+  const discoveryDomain =
+    typeof discoverySnapshot?.scope.domain === 'string' ? discoverySnapshot.scope.domain : discovery?.domain;
 
   return (
     <Card>
@@ -385,7 +487,7 @@ function CompetitorResearch({ projectId, role }: { projectId: string; role: stri
         )}
 
         <div className="flex flex-wrap items-center gap-3">
-          <Button disabled={!allowed || discovering || discoveryInFlight} onClick={() => void findCompetitors()}>
+          <Button disabled={!allowed || discovering || discoveryInFlight} onClick={() => void findCompetitors(false)}>
             {discovering || discoveryInFlight ? 'Finding competitors…' : 'Find competitors'}
           </Button>
           {discovery?.domain && (
@@ -394,6 +496,32 @@ function CompetitorResearch({ projectId, role }: { projectId: string; role: stri
             </span>
           )}
         </div>
+
+        {discoverySnapshot && (
+          <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border bg-muted/30 px-3 py-2 text-sm">
+            <span className="text-muted-foreground">
+              Competitor snapshot from {fmtDate(discoverySnapshot.fetchedAt)} ·{' '}
+              <span className="font-medium text-foreground">
+                {SNAPSHOT_FRESHNESS_LABELS[discoverySnapshot.freshness.state]}
+              </span>{' '}
+              · {fmtAge(discoverySnapshot.freshness.age_ms)}
+            </span>
+            {allowed && (
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={discovering || discoveryInFlight}
+                onClick={() => void findCompetitors(true)}
+              >
+                Refresh
+              </Button>
+            )}
+          </div>
+        )}
+
+        {notice && (
+          <div className="rounded-md border bg-muted/40 px-3 py-2 text-sm text-muted-foreground">{notice}</div>
+        )}
 
         {error && (
           <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
@@ -407,15 +535,15 @@ function CompetitorResearch({ projectId, role }: { projectId: string; role: stri
           </div>
         )}
 
-        {!discovery && !error && (
+        {!discovery && !discoverySnapshot && !error && (
           <div className="py-6 text-center text-sm text-muted-foreground">
             Find competitors for this project&apos;s domain.
           </div>
         )}
 
-        {discovery?.status === 'completed' && candidates.length === 0 && (
+        {candidates.length === 0 && !discoveryInFlight && !discovering && (discovery?.status === 'completed' || discoverySnapshot) && (
           <div className="py-6 text-center text-sm text-muted-foreground">
-            No competitor domains were found for {discovery.domain}.
+            No competitor domains were found for {discoveryDomain}.
           </div>
         )}
 
@@ -464,7 +592,7 @@ function CompetitorResearch({ projectId, role }: { projectId: string; role: stri
               </TableBody>
             </Table>
             <div>
-              <Button disabled={!allowed || gapInFlight || selected.length === 0} onClick={() => void analyze()}>
+              <Button disabled={!allowed || gapInFlight || selected.length === 0} onClick={() => void analyze(false)}>
                 {gapInFlight ? 'Analyzing…' : 'Analyze keyword gaps'}
               </Button>
             </div>
@@ -481,7 +609,24 @@ function CompetitorResearch({ projectId, role }: { projectId: string; role: stri
           <div className="py-6 text-center text-sm text-muted-foreground">Analyzing keyword gaps…</div>
         )}
 
-        {gapRun?.status === 'completed' && gaps.length === 0 && (
+        {gapSnapshotVisible && gapSnapshot && (
+          <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border bg-muted/30 px-3 py-2 text-sm">
+            <span className="text-muted-foreground">
+              Gap snapshot from {fmtDate(gapSnapshot.fetchedAt)} ·{' '}
+              <span className="font-medium text-foreground">
+                {SNAPSHOT_FRESHNESS_LABELS[gapSnapshot.freshness.state]}
+              </span>{' '}
+              · {fmtAge(gapSnapshot.freshness.age_ms)}
+            </span>
+            {allowed && (
+              <Button variant="outline" size="sm" disabled={gapInFlight || analyzing} onClick={() => void analyze(true)}>
+                Refresh
+              </Button>
+            )}
+          </div>
+        )}
+
+        {gaps.length === 0 && !gapInFlight && !analyzing && (gapRun?.status === 'completed' || gapSnapshotVisible) && (
           <div className="py-6 text-center text-sm text-muted-foreground">
             No page-one keyword gaps were found for the selected competitors.
           </div>
@@ -490,7 +635,7 @@ function CompetitorResearch({ projectId, role }: { projectId: string; role: stri
         {gaps.length > 0 && (
           <>
             <p className="text-xs text-muted-foreground">
-              {fmtNum(gapRun?.count ?? gaps.length)} gap{gaps.length === 1 ? '' : 's'} · Google · United States · English
+              {fmtNum(gapCount)} gap{gaps.length === 1 ? '' : 's'} · Google · United States · English
             </p>
             <Table>
               <TableHeader>

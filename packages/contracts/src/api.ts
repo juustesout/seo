@@ -1636,6 +1636,8 @@ export const COMPETITOR_GAP_MIN_SEARCH_VOLUME = 10;
 /** Start competitor discovery for a project domain (domain falls back to the project's own). */
 export interface CompetitorDiscoveryRequest {
   domain?: string;
+  /** Bypass a fresh source snapshot and force a paid provider refresh. */
+  refresh?: boolean;
 }
 
 /** One discovered competitor domain and its overlap signals with the target. */
@@ -1661,23 +1663,35 @@ export interface CompetitorGapDto {
 export interface CompetitorGapRequest {
   domain?: string;
   competitors: string[];
+  /** Bypass a fresh source snapshot and force a paid provider refresh. */
+  refresh?: boolean;
 }
 
 /** The queued run handle returned when competitor discovery starts. */
 export interface CompetitorDiscoveryStartDto {
-  jobId: string;
+  /** The queued/started job, or null when a fresh source snapshot was reused. */
+  jobId: string | null;
   status: JobStatus;
   mode: 'discover';
   domain: string;
+  /** True when no provider call was made because a fresh snapshot existed. */
+  reused: boolean;
+  /** The reused snapshot id, or null when a new run was enqueued. */
+  snapshotId: string | null;
 }
 
 /** The queued run handle returned when a gap analysis starts. */
 export interface CompetitorGapStartDto {
-  jobId: string;
+  /** The queued/started job, or null when a fresh source snapshot was reused. */
+  jobId: string | null;
   status: JobStatus;
   mode: 'gap';
   domain: string;
   competitors: string[];
+  /** True when no provider call was made because a fresh snapshot existed. */
+  reused: boolean;
+  /** The reused snapshot id, or null when a new run was enqueued. */
+  snapshotId: string | null;
 }
 
 /**
@@ -1698,6 +1712,60 @@ export interface CompetitorResearchRunDto {
   error: string | null;
   createdAt: string;
   completedAt: string | null;
+}
+
+// ---------------------------------------------------------------------------
+// Source snapshots (KW4.5 foundation): reusable, project-scoped provider
+// intelligence. A job is an execution record; a source snapshot is the
+// addressable "current best known" copy of what a provider returned for one
+// canonical scope. Reads/analyses reuse a fresh snapshot (no provider cost);
+// only an explicit user action refreshes a stale/missing one. The canonical
+// scope holds every parameter that can change the substantive provider result
+// and never jobId/userId/time. Freshness is derived on read, never stored, so
+// an expired snapshot stays available instead of being deleted.
+// ---------------------------------------------------------------------------
+
+/** The source-data categories a snapshot may hold (extended per provider feature). */
+export const SOURCE_SNAPSHOT_TYPES = ['competitor_discovery', 'competitor_gap'] as const;
+
+export type SourceSnapshotType = (typeof SOURCE_SNAPSHOT_TYPES)[number];
+
+/** Canonical freshness vocabulary, mirroring the KB7 knowledge freshness states. */
+export const SOURCE_SNAPSHOT_FRESHNESS_STATES = ['fresh', 'due', 'stale', 'unknown'] as const;
+
+export type SourceSnapshotFreshnessState = (typeof SOURCE_SNAPSHOT_FRESHNESS_STATES)[number];
+
+/** Per-type freshness window (ms) before a snapshot becomes `due`. */
+export const SOURCE_SNAPSHOT_FRESH_MS: Record<SourceSnapshotType, number> = {
+  competitor_discovery: 14 * 86_400_000,
+  competitor_gap: 7 * 86_400_000,
+};
+
+/** Multiplier of the fresh window past which a snapshot is reported `stale`. */
+export const SOURCE_SNAPSHOT_STALE_FACTOR = 3;
+
+/** Derived freshness of a snapshot. `fetched_at` is the provider response time. */
+export interface SourceSnapshotFreshnessDto {
+  state: SourceSnapshotFreshnessState;
+  fetched_at: string | null;
+  /** Age in milliseconds, or null when the fetch time is unparseable. */
+  age_ms: number | null;
+}
+
+/**
+ * One current-best-known source snapshot. Exactly one of `candidates`/`gaps`
+ * is populated per `type`; `scope` is the canonical provider-affecting identity.
+ */
+export interface SourceSnapshotDto {
+  id: string;
+  type: SourceSnapshotType;
+  scope: Record<string, unknown>;
+  candidates: CompetitorCandidateDto[];
+  gaps: CompetitorGapDto[];
+  count: number;
+  fetchedAt: string;
+  sourceJobId: string | null;
+  freshness: SourceSnapshotFreshnessDto;
 }
 
 // ---------------------------------------------------------------------------

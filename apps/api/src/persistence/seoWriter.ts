@@ -14,8 +14,10 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { chunkedUpsert } from '../supabase.js';
 import { logger } from '../logger.js';
-import type { AuditFinding, CompetitorKeywordGap, IsoDate, IsoDateTime, KeywordResearchResult, SerpItem } from '@seo/contracts';
+import { ApiError } from '../apiErrors.js';
+import type { AuditFinding, CompetitorKeywordGap, IsoDate, IsoDateTime, KeywordResearchResult, SerpItem, SourceSnapshotType } from '@seo/contracts';
 import type { GscDailyRow, GscPageRowInput, GscQueryRowInput } from '../providers/gsc/gscDataSource.js';
+import { scopeKeyOf } from '../services/sourceScope.js';
 
 /** One gsc_sync job's full output: daily rollup + dimensioned query/page rows. */
 export interface GscSyncPayload {
@@ -83,6 +85,20 @@ export interface ExpansionKeywordInput {
   competition: string | null;
   intent: string | null;
   meta: Record<string, unknown>;
+}
+
+/**
+ * One reusable source snapshot ready to upsert (KW4.5). `scope` is the
+ * canonical provider-affecting identity; the writer derives `scope_key` from it
+ * so a caller can never store a row whose key does not match its scope.
+ */
+export interface SourceSnapshotInput {
+  type: SourceSnapshotType;
+  provider: string;
+  scope: Record<string, unknown>;
+  data: Record<string, unknown>;
+  schemaVersion?: number;
+  sourceJobId?: string | null;
 }
 
 /**
@@ -295,6 +311,33 @@ export class SeoWriter {
       })),
       { onConflict: 'project_id,provider,source,keyword' },
     );
+  }
+
+  /**
+   * Upsert the current best-known snapshot for one canonical scope (KW4.5).
+   * A refresh overwrites in place on (project_id, type, scope_key); this table
+   * is deliberately not a history. `fetched_at` is set to now because the
+   * caller only persists after a provider call actually returned.
+   */
+  async persistSourceSnapshot(projectId: string, input: SourceSnapshotInput) {
+    const { error } = await this.sb.from('seo_source_snapshots').upsert(
+      {
+        project_id: projectId,
+        type: input.type,
+        provider: input.provider,
+        scope: input.scope,
+        scope_key: scopeKeyOf(input.scope),
+        data: input.data,
+        schema_version: input.schemaVersion ?? 1,
+        fetched_at: new Date().toISOString(),
+        source_job_id: input.sourceJobId ?? null,
+      },
+      { onConflict: 'project_id,type,scope_key' },
+    );
+    if (error) {
+      logger.error({ error, type: input.type }, 'source snapshot upsert failed');
+      throw new ApiError(500, 'storage_error', 'Failed to store the source snapshot', error.message);
+    }
   }
 
   /**

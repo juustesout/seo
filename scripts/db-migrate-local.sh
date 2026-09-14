@@ -1197,4 +1197,73 @@ begin
 end $$;
 SQL
 
+echo "==> smoke test: source snapshots (KW4.5) + unique scope + in-place refresh + isolation"
+PSQL -d "${DB_NAME}" <<'SQL'
+set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-000000000001"}';
+do $$
+declare
+  v_project uuid;
+  v_id uuid;
+  v_scope_key text := repeat('a', 64);
+begin
+  select id into v_project from public.seo_projects where slug = 'demo' limit 1;
+  if v_project is null then raise exception 'smoke: source snapshot project missing'; end if;
+
+  insert into public.seo_source_snapshots (project_id, type, provider, scope, scope_key, data, fetched_at)
+  values (v_project, 'competitor_discovery', 'dataforseo',
+          '{"domain":"example.com","limit":20}'::jsonb, v_scope_key,
+          '{"competitors":[{"domain":"rival.example"}],"total":1}'::jsonb,
+          now() - interval '2 days')
+  returning id into v_id;
+  if v_id is null then raise exception 'smoke: source snapshot insert returned no row'; end if;
+
+  -- Upsert on the canonical key refreshes the existing row in place; this table
+  -- is current-best-known, not a history, so there must still be exactly one.
+  insert into public.seo_source_snapshots (project_id, type, provider, scope, scope_key, data, fetched_at)
+  values (v_project, 'competitor_discovery', 'dataforseo',
+          '{"domain":"example.com","limit":20}'::jsonb, v_scope_key,
+          '{"competitors":[{"domain":"rival.example"}],"total":2}'::jsonb, now())
+  on conflict (project_id, type, scope_key)
+  do update set data = excluded.data, fetched_at = excluded.fetched_at;
+  if (select count(*) from public.seo_source_snapshots
+      where project_id = v_project and type = 'competitor_discovery') <> 1
+  then raise exception 'smoke: source snapshot upsert created a duplicate row'; end if;
+  if not exists (select 1 from public.seo_source_snapshots
+                 where id = v_id and (data ->> 'total') = '2'
+                   and fetched_at > now() - interval '1 minute')
+  then raise exception 'smoke: source snapshot upsert did not refresh in place'; end if;
+
+  begin
+    insert into public.seo_source_snapshots (project_id, type, provider, scope, scope_key, data)
+    values (v_project, 'bogus_type', 'dataforseo', '{}'::jsonb, repeat('b', 64), '{}'::jsonb);
+    raise exception 'smoke: invalid source snapshot type unexpectedly allowed';
+  exception when check_violation then
+    null;
+  end;
+
+  begin
+    insert into public.seo_source_snapshots (project_id, type, provider, scope, scope_key, data)
+    values (v_project, 'competitor_gap', 'dataforseo', '{}'::jsonb, repeat('c', 63), '{}'::jsonb);
+    raise exception 'smoke: short source snapshot scope_key unexpectedly allowed';
+  exception when check_violation then
+    null;
+  end;
+
+  raise notice 'smoke: source snapshots OK';
+end $$;
+SQL
+
+SNAPSHOT_LEAK_COUNT="$(PSQL -d "${DB_NAME}" -t -A <<'SQL'
+grant select on public.seo_source_snapshots to authenticated;
+set role authenticated;
+set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-000000000002"}';
+select count(*) from public.seo_source_snapshots where scope_key = repeat('a', 64);
+SQL
+)"
+if [ -z "${SNAPSHOT_LEAK_COUNT}" ] || [ "${SNAPSHOT_LEAK_COUNT}" != "0" ]; then
+  echo "!! RLS leak: non-member read ${SNAPSHOT_LEAK_COUNT} rows from a foreign project source snapshot" >&2
+  exit 1
+fi
+echo "   smoke: non-member cannot read a foreign project source snapshot (RLS isolation OK)"
+
 echo "==> migration validation OK (${DB_NAME})"

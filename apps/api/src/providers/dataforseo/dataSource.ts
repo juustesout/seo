@@ -36,6 +36,10 @@ import {
   urlBelongsToDomain,
 } from './normalize.js';
 import { delay } from '../../util.js';
+import {
+  DATAFORSEO_LANGUAGE_CODE as LANGUAGE_CODE,
+  DATAFORSEO_LOCATION_CODE as LOCATION_CODE,
+} from './market.js';
 
 /** One normalized organic-SERP fetch outcome, regardless of live vs task source. */
 export interface SerpFetchOutcome {
@@ -52,8 +56,6 @@ export const DATAFORSEO_CRED_KEYS = {
   base64: 'dataforseo_base64',
 } as const;
 
-const LOCATION_CODE = 2840; // US
-const LANGUAGE_CODE = 'en';
 const TASK_BATCH_SIZE = 50;
 const POLL_INTERVAL_MS = 5000;
 const TASK_TIMEOUT_MS = 240_000;

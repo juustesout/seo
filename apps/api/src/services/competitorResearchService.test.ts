@@ -18,6 +18,7 @@ import {
   startCompetitorDiscovery,
   startCompetitorGap,
 } from './competitorResearchService.js';
+import { competitorDiscoveryScope, competitorGapScope, scopeKeyOf } from './sourceScope.js';
 import type { JobRecord } from '../jobs/types.js';
 
 const PROJECT = '11111111-1111-4111-8111-111111111111';
@@ -142,7 +143,14 @@ describe('startCompetitorDiscovery', () => {
     const { container, enqueue } = containerWith(baseStores());
     const started = await startCompetitorDiscovery(container, PROJECT, USER);
 
-    expect(started).toEqual({ jobId: 'job-1', status: 'queued', mode: 'discover', domain: 'example.com' });
+    expect(started).toEqual({
+      jobId: 'job-1',
+      status: 'queued',
+      mode: 'discover',
+      domain: 'example.com',
+      reused: false,
+      snapshotId: null,
+    });
     expect(enqueue).toHaveBeenCalledTimes(1);
     expect(enqueue).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -208,6 +216,8 @@ describe('startCompetitorGap', () => {
       mode: 'gap',
       domain: 'example.com',
       competitors: ['rival.com', 'other.com'],
+      reused: false,
+      snapshotId: null,
     });
     expect(enqueue.mock.calls[0][0].params).toEqual({
       mode: 'gap',
@@ -233,6 +243,79 @@ describe('startCompetitorGap', () => {
     const { container, enqueue } = containerWith(baseStores());
     const tooMany = Array.from({ length: COMPETITOR_RESEARCH_MAX_COMPETITORS + 1 }, (_, i) => `rival${i}.com`);
     await expect(startCompetitorGap(container, PROJECT, USER, undefined, tooMany)).rejects.toMatchObject({ status: 400 });
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+});
+
+describe('fresh source snapshot reuse', () => {
+  function snapshotRow(
+    type: string,
+    scope: Record<string, unknown>,
+    fetchedAt: string,
+    data: Record<string, unknown>,
+  ): Record<string, unknown> {
+    return {
+      id: 'snap-1',
+      project_id: PROJECT,
+      type,
+      provider: 'dataforseo',
+      scope,
+      scope_key: scopeKeyOf(scope),
+      data,
+      fetched_at: fetchedAt,
+      source_job_id: null,
+    };
+  }
+
+  it('reuses a fresh discovery snapshot instead of enqueuing a paid job', async () => {
+    const stores = baseStores();
+    const scope = competitorDiscoveryScope({ domain: 'example.com' });
+    stores.seo_source_snapshots = [
+      snapshotRow('competitor_discovery', scope, new Date().toISOString(), { competitors: [{ domain: 'rival.com' }], total: 1 }),
+    ];
+    const { container, enqueue } = containerWith(stores);
+    const started = await startCompetitorDiscovery(container, PROJECT, USER);
+    expect(started).toEqual({
+      jobId: null,
+      status: 'completed',
+      mode: 'discover',
+      domain: 'example.com',
+      reused: true,
+      snapshotId: 'snap-1',
+    });
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+
+  it('enqueues a paid job when the stored snapshot is stale', async () => {
+    const stores = baseStores();
+    const scope = competitorDiscoveryScope({ domain: 'example.com' });
+    const stale = new Date(Date.now() - 60 * 86_400_000).toISOString();
+    stores.seo_source_snapshots = [snapshotRow('competitor_discovery', scope, stale, { competitors: [], total: 0 })];
+    const { container, enqueue } = containerWith(stores);
+    const started = await startCompetitorDiscovery(container, PROJECT, USER);
+    expect(started.reused).toBe(false);
+    expect(enqueue).toHaveBeenCalledTimes(1);
+  });
+
+  it('bypasses a fresh snapshot when refresh is requested', async () => {
+    const stores = baseStores();
+    const scope = competitorDiscoveryScope({ domain: 'example.com' });
+    stores.seo_source_snapshots = [
+      snapshotRow('competitor_discovery', scope, new Date().toISOString(), { competitors: [], total: 0 }),
+    ];
+    const { container, enqueue } = containerWith(stores);
+    const started = await startCompetitorDiscovery(container, PROJECT, USER, undefined, { refresh: true });
+    expect(started.reused).toBe(false);
+    expect(enqueue).toHaveBeenCalledTimes(1);
+  });
+
+  it('reuses a fresh gap snapshot for the same competitor set', async () => {
+    const stores = baseStores();
+    const scope = competitorGapScope({ domain: 'example.com', competitors: ['rival.com'] });
+    stores.seo_source_snapshots = [snapshotRow('competitor_gap', scope, new Date().toISOString(), { gaps: [], total: 0 })];
+    const { container, enqueue } = containerWith(stores);
+    const started = await startCompetitorGap(container, PROJECT, USER, undefined, ['rival.com']);
+    expect(started).toMatchObject({ jobId: null, reused: true, snapshotId: 'snap-1' });
     expect(enqueue).not.toHaveBeenCalled();
   });
 });

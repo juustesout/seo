@@ -1,62 +1,47 @@
 /**
  * Competitor research service (KW3). Domain-based competitor discovery and a
  * competitor keyword gap both run on the one existing `competitor_research` job
- * type - one executor, two explicit modes (`discover` | `gap`). The run's
+ * type - one executor, two explicit modes (`discover` | `gap`). The run's own
  * bounded, normalized result lives on that job row (`seo_sync_jobs.result`), so
  * a run is identified by its job id and never by guessing from the shared
- * keyword store. This module owns domain normalization, the run caps and the
- * safe run projection; it never talks to a provider and never reads credentials.
+ * keyword store.
+ *
+ * Since KW4.5 the executor also writes a reusable, project-scoped source
+ * snapshot for each mode. Starting a run reuses a *fresh* snapshot for the same
+ * canonical scope and makes no provider call; a stale/missing snapshot (or an
+ * explicit `refresh`) enqueues the provider job. This module owns domain
+ * normalization, the run caps, snapshot reuse and the safe projections; it never
+ * talks to a provider and never reads credentials.
  */
 
 import {
-  COMPETITOR_RESEARCH_DOMAIN_MAX_CHARS,
-  COMPETITOR_RESEARCH_MAX_CANDIDATES,
   COMPETITOR_RESEARCH_MAX_COMPETITORS,
-  COMPETITOR_RESEARCH_RUN_MAX_GAPS,
   type CompetitorCandidateDto,
   type CompetitorDiscoveryStartDto,
   type CompetitorGapDto,
   type CompetitorGapStartDto,
   type CompetitorResearchMode,
   type CompetitorResearchRunDto,
+  type SourceSnapshotDto,
 } from '@seo/contracts';
 import { ApiError } from '../apiErrors.js';
 import type { ServiceContainer } from '../context.js';
 import { enqueueJob } from '../jobs/enqueue.js';
 import type { JobRecord } from '../jobs/types.js';
 import { siteHostOf } from './contentIntelligence.js';
+import { assertDomain, normalizeDomain } from './domain.js';
+import { competitorDiscoveryScope, competitorGapScope } from './sourceScope.js';
+import {
+  projectCandidateRows,
+  projectGapRows,
+  readSourceSnapshot,
+  toSourceSnapshotDto,
+} from './sourceSnapshotService.js';
+
+export { assertDomain, normalizeDomain } from './domain.js';
 
 /** The one job_type that backs both competitor-research modes. */
 export const COMPETITOR_RESEARCH_JOB_TYPE = 'competitor_research';
-
-/** A bare-hostname domain (labels of a-z0-9/-, at least one dot, real TLD). */
-const DOMAIN_PATTERN = /^(?=.{1,253}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$/;
-
-/**
- * Normalize a user/domain value to a bare hostname: strip scheme, userinfo,
- * path/query/fragment, port, a leading www and casing. Returns '' when nothing
- * usable remains so callers can reject rather than enqueue a meaningless target.
- */
-export function normalizeDomain(raw: string): string {
-  const trimmed = raw.trim().toLowerCase();
-  if (!trimmed) return '';
-  return trimmed
-    .replace(/^[a-z][a-z0-9+.-]*:\/\//, '')
-    .replace(/^[^/@]*@/, '')
-    .replace(/[/?#].*$/, '')
-    .replace(/:\d+$/, '')
-    .replace(/^www\./, '');
-}
-
-/** Normalize and validate a domain, throwing a 400 the edge can surface. */
-export function assertDomain(raw: string): string {
-  const domain = normalizeDomain(raw);
-  if (!domain) throw ApiError.badRequest('A domain is required');
-  if (domain.length > COMPETITOR_RESEARCH_DOMAIN_MAX_CHARS || !DOMAIN_PATTERN.test(domain)) {
-    throw ApiError.badRequest('Enter a valid domain, e.g. example.com');
-  }
-  return domain;
-}
 
 /**
  * The hostname of the project's linked Search Console property, if any. Since
@@ -118,32 +103,86 @@ export async function resolveProjectDomain(
   return assertDomain(domain);
 }
 
+/** Options shared by both start paths. `refresh` forces a paid provider run. */
+export interface CompetitorStartOptions {
+  refresh?: boolean;
+}
+
+/**
+ * Return the current snapshot for a scope only when it is `fresh` (no provider
+ * call needed). `due`/`stale` snapshots are deliberately not auto-reused: an
+ * explicit start is the moment the user chose to refresh stale data.
+ */
+async function freshSnapshot(
+  container: ServiceContainer,
+  projectId: string,
+  type: 'competitor_discovery' | 'competitor_gap',
+  scope: Record<string, unknown>,
+): Promise<SourceSnapshotDto | null> {
+  const record = await readSourceSnapshot(container, projectId, type, scope);
+  if (!record) return null;
+  const dto = toSourceSnapshotDto(record);
+  return dto.freshness.state === 'fresh' ? dto : null;
+}
+
+/**
+ * Normalize, validate and de-duplicate a competitor list against the target
+ * domain. Shared by the start path and the current-snapshot read so the two can
+ * never disagree about what a scope contains.
+ */
+function normalizeCompetitors(domain: string, competitors: unknown): string[] {
+  if (!Array.isArray(competitors) || competitors.length === 0) {
+    throw ApiError.badRequest('Select at least one competitor to analyze');
+  }
+  const normalized: string[] = [];
+  for (const raw of competitors) {
+    if (typeof raw !== 'string') continue;
+    const candidate = assertDomain(raw);
+    if (candidate === domain) throw ApiError.badRequest('A competitor cannot be your own domain');
+    if (!normalized.includes(candidate)) normalized.push(candidate);
+  }
+  if (normalized.length === 0) throw ApiError.badRequest('Select at least one competitor to analyze');
+  if (normalized.length > COMPETITOR_RESEARCH_MAX_COMPETITORS) {
+    throw ApiError.badRequest(`Select at most ${COMPETITOR_RESEARCH_MAX_COMPETITORS} competitors`);
+  }
+  return normalized;
+}
+
 /**
  * Start one competitor discovery run for the project domain (or an explicit
  * override). Discovery is capped to a single cheap Labs task; the user chooses
- * which candidates to compare afterwards.
+ * which candidates to compare afterwards. A fresh snapshot for the same scope
+ * is reused instead of paying for an identical provider call.
  */
 export async function startCompetitorDiscovery(
   container: ServiceContainer,
   projectId: string,
   userId: string,
   rawDomain?: string,
+  opts: CompetitorStartOptions = {},
 ): Promise<CompetitorDiscoveryStartDto> {
   const domain = await resolveProjectDomain(container, projectId, rawDomain);
+  const scope = competitorDiscoveryScope({ domain });
+  if (!opts.refresh) {
+    const reused = await freshSnapshot(container, projectId, 'competitor_discovery', scope);
+    if (reused) {
+      return { jobId: null, status: 'completed', mode: 'discover', domain, reused: true, snapshotId: reused.id };
+    }
+  }
   const job = await enqueueJob(container, {
     projectId,
     userId,
     jobType: COMPETITOR_RESEARCH_JOB_TYPE,
     params: { mode: 'discover', domain },
   });
-  return { jobId: job.id, status: job.status, mode: 'discover', domain };
+  return { jobId: job.id, status: job.status, mode: 'discover', domain, reused: false, snapshotId: null };
 }
 
 /**
  * Start one keyword-gap analysis for up to the platform maximum of competitors.
  * Domains are normalized, de-duplicated and never allowed to include the target
  * itself; the run cap is enforced here so an over-eager caller cannot multiply
- * provider cost.
+ * provider cost. A fresh snapshot for the same competitor set is reused.
  */
 export async function startCompetitorGap(
   container: ServiceContainer,
@@ -151,19 +190,16 @@ export async function startCompetitorGap(
   userId: string,
   rawDomain: string | undefined,
   competitors: string[],
+  opts: CompetitorStartOptions = {},
 ): Promise<CompetitorGapStartDto> {
   const domain = await resolveProjectDomain(container, projectId, rawDomain);
-  if (!Array.isArray(competitors) || competitors.length === 0) {
-    throw ApiError.badRequest('Select at least one competitor to analyze');
-  }
-  const normalized: string[] = [];
-  for (const raw of competitors) {
-    const candidate = assertDomain(raw);
-    if (candidate === domain) throw ApiError.badRequest('A competitor cannot be your own domain');
-    if (!normalized.includes(candidate)) normalized.push(candidate);
-  }
-  if (normalized.length > COMPETITOR_RESEARCH_MAX_COMPETITORS) {
-    throw ApiError.badRequest(`Select at most ${COMPETITOR_RESEARCH_MAX_COMPETITORS} competitors`);
+  const normalized = normalizeCompetitors(domain, competitors);
+  const scope = competitorGapScope({ domain, competitors: normalized });
+  if (!opts.refresh) {
+    const reused = await freshSnapshot(container, projectId, 'competitor_gap', scope);
+    if (reused) {
+      return { jobId: null, status: 'completed', mode: 'gap', domain, competitors: normalized, reused: true, snapshotId: reused.id };
+    }
   }
   const job = await enqueueJob(container, {
     projectId,
@@ -171,7 +207,40 @@ export async function startCompetitorGap(
     jobType: COMPETITOR_RESEARCH_JOB_TYPE,
     params: { mode: 'gap', domain, competitors: normalized },
   });
-  return { jobId: job.id, status: job.status, mode: 'gap', domain, competitors: normalized };
+  return { jobId: job.id, status: job.status, mode: 'gap', domain, competitors: normalized, reused: false, snapshotId: null };
+}
+
+/**
+ * Read the current discovery snapshot for the project (or an explicit domain
+ * override), or null when none has ever been written. Reads never call the
+ * provider, so opening the view can never incur cost.
+ */
+export async function readCurrentCompetitorDiscovery(
+  container: ServiceContainer,
+  projectId: string,
+  rawDomain?: string,
+): Promise<SourceSnapshotDto | null> {
+  const domain = await resolveProjectDomain(container, projectId, rawDomain);
+  const scope = competitorDiscoveryScope({ domain });
+  const record = await readSourceSnapshot(container, projectId, 'competitor_discovery', scope);
+  return record ? toSourceSnapshotDto(record) : null;
+}
+
+/**
+ * Read the current gap snapshot for the given competitor set, or null when none
+ * exists. Uses the same normalization/validation as the start path.
+ */
+export async function readCurrentCompetitorGap(
+  container: ServiceContainer,
+  projectId: string,
+  rawDomain: string | undefined,
+  competitors: string[],
+): Promise<SourceSnapshotDto | null> {
+  const domain = await resolveProjectDomain(container, projectId, rawDomain);
+  const normalized = normalizeCompetitors(domain, competitors);
+  const scope = competitorGapScope({ domain, competitors: normalized });
+  const record = await readSourceSnapshot(container, projectId, 'competitor_gap', scope);
+  return record ? toSourceSnapshotDto(record) : null;
 }
 
 /** The mode a run belongs to, preferring params then the stored result. */
@@ -189,53 +258,14 @@ function domainFromJob(job: JobRecord): string {
   return typeof fromResult === 'string' ? fromResult : '';
 }
 
-/** Normalize a min-volume filter to a finite non-negative integer or null. */
-function nullableNumber(value: unknown): number | null {
-  return typeof value === 'number' && Number.isFinite(value) ? value : null;
-}
-
 /** Project the bounded competitor candidates stored on a completed run. */
 function candidatesFromResult(job: JobRecord): CompetitorCandidateDto[] {
-  const raw = job.result?.competitors;
-  if (!Array.isArray(raw)) return [];
-  const out: CompetitorCandidateDto[] = [];
-  for (const item of raw) {
-    if (!item || typeof item !== 'object') continue;
-    const row = item as Record<string, unknown>;
-    if (typeof row.domain !== 'string' || !row.domain) continue;
-    out.push({
-      domain: row.domain,
-      sharedKeywords: nullableNumber(row.sharedKeywords),
-      keywordsCount: nullableNumber(row.keywordsCount),
-      avgPosition: nullableNumber(row.avgPosition),
-      etv: nullableNumber(row.etv),
-    });
-    if (out.length >= COMPETITOR_RESEARCH_MAX_CANDIDATES) break;
-  }
-  return out;
+  return projectCandidateRows(job.result?.competitors);
 }
 
 /** Project the bounded gap rows stored on a completed run. */
 function gapsFromResult(job: JobRecord): CompetitorGapDto[] {
-  const raw = job.result?.gaps;
-  if (!Array.isArray(raw)) return [];
-  const out: CompetitorGapDto[] = [];
-  for (const item of raw) {
-    if (!item || typeof item !== 'object') continue;
-    const row = item as Record<string, unknown>;
-    if (typeof row.keyword !== 'string' || !row.keyword) continue;
-    if (typeof row.competitorDomain !== 'string' || !row.competitorDomain) continue;
-    out.push({
-      keyword: row.keyword,
-      searchVolume: nullableNumber(row.searchVolume),
-      difficulty: nullableNumber(row.difficulty),
-      cpc: nullableNumber(row.cpc),
-      competitorDomain: row.competitorDomain,
-      position: nullableNumber(row.position),
-    });
-    if (out.length >= COMPETITOR_RESEARCH_RUN_MAX_GAPS) break;
-  }
-  return out;
+  return projectGapRows(job.result?.gaps);
 }
 
 /** The competitor domains a gap run was started for. */

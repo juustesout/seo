@@ -41,6 +41,7 @@ function build(adapter: {
   findCompetitorKeywordGaps?: ReturnType<typeof vi.fn>;
 }) {
   const persistCompetitorGapKeywords = vi.fn(async () => undefined);
+  const persistSourceSnapshot = vi.fn(async () => undefined);
   const container = {
     sb: {
       from: () => ({
@@ -54,13 +55,18 @@ function build(adapter: {
     registry: { getDataSource: () => adapter },
     credentials: { reader: () => ({}) },
   } as never;
-  return { container, writer: { persistCompetitorGapKeywords } as never, persistCompetitorGapKeywords };
+  return {
+    container,
+    writer: { persistCompetitorGapKeywords, persistSourceSnapshot } as never,
+    persistCompetitorGapKeywords,
+    persistSourceSnapshot,
+  };
 }
 
 describe('competitor_research executor (KW3)', () => {
   it('discover returns bounded normalized candidates without touching the gap store', async () => {
     const discoverCompetitors = vi.fn(async () => [candidate('rival.com')]);
-    const { container, writer, persistCompetitorGapKeywords } = build({ discoverCompetitors });
+    const { container, writer, persistCompetitorGapKeywords, persistSourceSnapshot } = build({ discoverCompetitors });
     const executor = getExecutor('competitor_research')!;
 
     const out = await executor({
@@ -72,6 +78,15 @@ describe('competitor_research executor (KW3)', () => {
 
     expect(discoverCompetitors).toHaveBeenCalledTimes(1);
     expect(persistCompetitorGapKeywords).not.toHaveBeenCalled();
+    expect(persistSourceSnapshot).toHaveBeenCalledWith(
+      PROJECT,
+      expect.objectContaining({
+        type: 'competitor_discovery',
+        provider: 'dataforseo',
+        scope: expect.objectContaining({ domain: 'example.com' }),
+        data: expect.objectContaining({ total: 1 }),
+      }),
+    );
     expect(out).toEqual({
       mode: 'discover',
       domain: 'example.com',
@@ -100,7 +115,7 @@ describe('competitor_research executor (KW3)', () => {
   it('gap pushes provider-side filters, persists the full set and returns bounded rows', async () => {
     const gaps = [gap('blue widgets'), gap('cheap widgets')];
     const findCompetitorKeywordGaps = vi.fn(async () => gaps);
-    const { container, writer, persistCompetitorGapKeywords } = build({ findCompetitorKeywordGaps });
+    const { container, writer, persistCompetitorGapKeywords, persistSourceSnapshot } = build({ findCompetitorKeywordGaps });
     const executor = getExecutor('competitor_research')!;
 
     const out = await executor({
@@ -122,6 +137,15 @@ describe('competitor_research executor (KW3)', () => {
       expect.objectContaining({ minSearchVolume: expect.any(Number), maxRank: expect.any(Number) }),
     );
     expect(persistCompetitorGapKeywords).toHaveBeenCalledWith(PROJECT, gaps);
+    expect(persistSourceSnapshot).toHaveBeenCalledWith(
+      PROJECT,
+      expect.objectContaining({
+        type: 'competitor_gap',
+        provider: 'dataforseo',
+        scope: expect.objectContaining({ domain: 'example.com', competitors: ['rival.com'] }),
+        data: expect.objectContaining({ total: 2 }),
+      }),
+    );
     expect(out).toMatchObject({ mode: 'gap', domain: 'example.com', competitors: ['rival.com'], count: 2 });
     expect((out.gaps as unknown[])[0]).toEqual({
       keyword: 'blue widgets',
