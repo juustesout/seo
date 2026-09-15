@@ -228,6 +228,9 @@ describe('isValidCanonicalDoc', () => {
     expect(isValidCanonicalDoc(withSource({ cms: 'WordPress' }))).toBe(false);
     expect(isValidCanonicalDoc(withSource({ cms: 'wp', attrs: [] }))).toBe(false);
     expect(isValidCanonicalDoc(withSource({ cms: 'wp', innerContent: ['a', 1] }))).toBe(false);
+    expect(isValidCanonicalDoc(withSource({ cms: 'wp', attrsRaw: '{bad json}' }))).toBe(true);
+    expect(isValidCanonicalDoc(withSource({ cms: 'wp', attrsRaw: '' }))).toBe(true);
+    expect(isValidCanonicalDoc(withSource({ cms: 'wp', attrsRaw: 1 }))).toBe(false);
   });
 
   it('validates optional meta', () => {

@@ -96,6 +96,10 @@ export interface SourceRef {
   type?: string;
   /** Original raw attributes, preserved verbatim when present. */
   attrs?: Record<string, unknown>;
+  /** The original attribute payload as text, kept when `attrs` cannot hold it
+   *  (malformed or non-object JSON). Serializers should prefer this over
+   *  re-encoding `attrs` so nothing is lost at the interchange boundary. */
+  attrsRaw?: string;
   /** WordPress `innerContent`: static HTML fragments interleaved with `null`
    *  placeholders at child-block positions. Enables byte-exact WP round trips. */
   innerContent?: Array<string | null>;
@@ -201,6 +205,7 @@ function isValidSourceRef(value: unknown): value is SourceRef {
   if (typeof cms !== 'string' || cms.length === 0 || cms.length > 40 || !CMS_RE.test(cms)) return false;
   if (value.type !== undefined && !isValidType(value.type)) return false;
   if (value.attrs !== undefined && !isPlainObject(value.attrs)) return false;
+  if (value.attrsRaw !== undefined && typeof value.attrsRaw !== 'string') return false;
   if (value.innerContent !== undefined) {
     if (!Array.isArray(value.innerContent)) return false;
     if (!value.innerContent.every((part) => part === null || typeof part === 'string')) return false;
