@@ -69,7 +69,10 @@ export {
 export * from './agent.js';
 export * from './approval.js';
 export * from './context.js';
+export * from './deepWrite.js';
+export * from './engine.js';
 export * from './evidence.js';
+export * from './formats.js';
 export {
   WRITER_INTELLIGENCE_SOURCES,
   WRITER_INTELLIGENCE_SOURCE_STATUSES,
@@ -119,6 +122,7 @@ export {
   type WriterIntelligenceSessionDecision,
 } from './intelligence.js';
 export * from './magic.js';
+export * from './passTrace.js';
 export * from './planner.js';
 export * from './review.js';
 export * from './revision.js';

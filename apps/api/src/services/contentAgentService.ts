@@ -39,6 +39,13 @@ export interface GenerateContentInput {
   /** When set, the article includes media placeholders for later resolution. */
   imageHint?: string | null;
   imageCount?: number;
+  /**
+   * Structured context from an opportunity/topic recommendation (KW6). Kept as
+   * an already-formatted, bounded block so the writer does not have to
+   * rediscover the opportunity. Empty/null when the article is not launched
+   * from a recommendation.
+   */
+  opportunityContext?: string | null;
 }
 
 interface OutlineItem {
@@ -183,6 +190,9 @@ export class ContentAgentService {
         : '';
 
     await onStage?.('outline', 30);
+    const opportunityBlock = input.opportunityContext?.trim()
+      ? `\nOpportunity context (briefing facts from the project's keyword gap analysis; use them, do not invent beyond them):\n${input.opportunityContext.trim()}`
+      : '';
     const brief = (await this.chatJson(
       provider,
       'outline',
@@ -198,6 +208,7 @@ export class ContentAgentService {
         input.audience ? `Audience: ${input.audience}` : '',
         input.tone ? `Tone: ${input.tone}` : '',
         `Language: ${language}`,
+        opportunityBlock,
         knowledgeBlock,
       ]
         .filter(Boolean)

@@ -14,3 +14,5 @@ export * from './models.js';
 export * from './providers.js';
 export * from './knowledge.js';
 export * from './api.js';
+export * from './opportunityTopics.js';
+export * from './writer.js';

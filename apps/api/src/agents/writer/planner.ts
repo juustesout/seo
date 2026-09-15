@@ -118,12 +118,15 @@ type PlanAiShape = z.infer<typeof writerPlanSchema>;
 // --- planner dependency seam ------------------------------------------------
 
 /** Everything a planOutline node hands its planner: identity + brief + the
- *  already-bounded, source-labelled context. projectId stays out of prompts. */
+ *  already-bounded, source-labelled context. projectId stays out of prompts.
+ *  `formatGuidance` is authoritative structure guidance from the selected
+ *  writer format (never derived from model output). */
 export interface WriterPlanInput {
   projectId: string;
   topic: string;
   targetKeyword: string | null;
   context: WriterContext;
+  formatGuidance?: string | null;
 }
 
 /** Why a plan could not be produced; each maps to an honest degraded state. */
@@ -249,6 +252,7 @@ export function buildPlannerPrompt(input: WriterPlanInput): { system: string; us
     '- do NOT write article body copy, full paragraphs, HTML or markdown;',
     '- do NOT invent facts, statistics, sources, metrics or existing articles;',
     '- plan an article that stays distinct from the project\'s existing content shown in the reference material.',
+    ...(input.formatGuidance?.trim() ? [input.formatGuidance.trim()] : []),
     `Topic: ${input.topic}`,
     `Primary keyword: ${keyword || '(none)'}`,
     '',

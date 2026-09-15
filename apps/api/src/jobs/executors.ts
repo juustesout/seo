@@ -21,6 +21,7 @@ import { ContentService } from '../services/contentService.js';
 import { KnowledgeService } from '../services/knowledgeService.js';
 import { ContentAgentService } from '../services/contentAgentService.js';
 import { ContentAnalysisService } from '../services/contentAnalysisService.js';
+import { createWriterEngine, parseWriterInput } from '../agents/writer/engine.js';
 import { isDataImage, storeImageDataUrl } from '../infra/mediaStorage.js';
 import {
   asContentBlocks,
@@ -808,10 +809,40 @@ async function contentGenerate(ctx: JobExecContext): Promise<Record<string, unkn
     includeKnowledge: input.include_knowledge !== false,
     imageHint: typeof input.image_hint === 'string' ? input.image_hint : null,
     imageCount: typeof input.image_count === 'number' ? input.image_count : undefined,
+    opportunityContext: typeof input.opportunity_context === 'string' ? input.opportunity_context : null,
   }, stage);
 
   await ctx.report(100, `Content draft "${result.title}" created`);
   return result;
+}
+
+/**
+ * Shared Writer Engine (W1 quick draft). Turns the canonical writer input
+ * carried in `params.writer_input` into a persisted Content Studio draft via
+ * the engine (planner -> sections -> deterministic review -> ContentService).
+ * The engine owns honesty: an unconfigured/failing AI fails the job instead of
+ * writing a fabricated draft.
+ */
+async function contentWrite(ctx: JobExecContext): Promise<Record<string, unknown>> {
+  const { container, job } = ctx;
+  const params = (job.params ?? {}) as Record<string, unknown>;
+  const input = parseWriterInput(params.writer_input);
+  const engine = createWriterEngine(container);
+  const result = await engine.run(input, {
+    userId: job.created_by,
+    onStage: (label, progress) => ctx.report(progress, label),
+  });
+  await ctx.report(100, `Draft "${result.title}" created`);
+  return {
+    content_id: result.contentId,
+    title: result.title,
+    slug: result.slug,
+    format: result.format,
+    mode: result.mode,
+    section_count: result.sectionCount,
+    word_count: result.wordCount,
+    seo_score: result.seoScore,
+  };
 }
 
 async function contentImages(ctx: JobExecContext): Promise<Record<string, unknown>> {
@@ -937,6 +968,7 @@ export const EXECUTORS: Record<string, JobExecutor> = {
   knowledge_source_delete: knowledgeSourceDelete,
   knowledge_discovery: knowledgeDiscovery,
   content_generate: contentGenerate,
+  content_write: contentWrite,
   content_images: contentImages,
   content_analyze: contentAnalyze,
   publish,

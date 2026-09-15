@@ -176,6 +176,7 @@ export type JobType =
   | 'knowledge_source_ingest'
   | 'knowledge_source_delete'
   | 'content_generate'
+  | 'content_write'
   | 'content_images'
   | 'content_analyze'
   | 'publish'
@@ -199,7 +200,7 @@ export const JOB_TYPE_GROUPS: Record<string, JobType[]> = {
     'knowledge_source_ingest',
     'knowledge_source_delete',
   ],
-  content: ['content_generate', 'content_images', 'content_analyze'],
+  content: ['content_generate', 'content_write', 'content_images', 'content_analyze'],
   publish: ['publish', 'publish_update', 'publish_delete'],
 };
 

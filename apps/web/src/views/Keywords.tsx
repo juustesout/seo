@@ -29,6 +29,8 @@ import type {
   CompetitorDiscoveryStartDto,
   CompetitorGapStartDto,
   CompetitorResearchRunDto,
+  CoreTopicDto,
+  CoreTopicsDto,
   KeywordDto,
   KeywordExpansionMethod,
   KeywordExpansionRunDto,
@@ -37,6 +39,7 @@ import type {
   KeywordQuery,
   KeywordResearchRunDto,
   KeywordResearchStartDto,
+  KnowledgeReadinessState,
   OpportunitiesDto,
   OpportunityIntent,
   OpportunityReason,
@@ -45,12 +48,16 @@ import type {
   ProjectKeywordsDto,
   SourceSnapshotDto,
   SourceSnapshotFreshnessState,
+  TopicRecommendationDto,
+  TopicRecommendationsDto,
+  TopicRelevanceState,
 } from '@seo/contracts';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { PageHeader } from '@/components/ui/page-header';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { Textarea } from '@/components/ui/textarea';
 
 /** CTR is a 0..1 fraction from GSC; render it as a percentage. */
 function fmtCtr(v: unknown): string {
@@ -1526,7 +1533,392 @@ function CompetitorCompare({
   );
 }
 
-type KeywordsTab = 'mine' | 'research' | 'expansion' | 'competitors' | 'compare' | 'opportunities';
+const TOPIC_RELEVANCE_LABELS: Record<TopicRelevanceState, string> = {
+  strong: 'Strong match',
+  moderate: 'Moderate match',
+  weak: 'Weak match',
+  no_match: 'No clear match',
+};
+
+const KNOWLEDGE_READINESS_LABELS: Record<KnowledgeReadinessState, string> = {
+  strong: 'Strong',
+  moderate: 'Moderate',
+  weak: 'Weak',
+  none: 'None',
+};
+
+/**
+ * KW6 core-topics editor. Core topics live in the project's settings (no new
+ * table); this is the only place they are managed. Saving replaces the list and
+ * immediately refreshes the recommendations above it.
+ */
+function CoreTopicsEditor({
+  projectId,
+  role,
+  onSaved,
+  onClose,
+}: {
+  projectId: string;
+  role: string;
+  onSaved: () => void;
+  onClose: () => void;
+}) {
+  const { data, loading, error } = useAsync<CoreTopicsDto>(
+    () => api(`/projects/${projectId}/keyword/core-topics`),
+    [projectId],
+  );
+  const [rows, setRows] = useState<Array<{ name: string; description: string }>>([]);
+  const [seeded, setSeeded] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const allowed = canStartResearch(role);
+
+  useEffect(() => {
+    if (data && !seeded) {
+      setRows(data.topics.map((t) => ({ name: t.name, description: t.description })));
+      setSeeded(true);
+    }
+  }, [data, seeded]);
+
+  const update = (index: number, patch: Partial<{ name: string; description: string }>) => {
+    setRows((current) => current.map((row, i) => (i === index ? { ...row, ...patch } : row)));
+  };
+
+  const save = async () => {
+    setSaveError(null);
+    setSaving(true);
+    try {
+      const topics: CoreTopicDto[] = rows
+        .map((row) => ({ name: row.name.trim(), description: row.description.trim() }))
+        .filter((row) => row.name.length > 0);
+      await api(`/projects/${projectId}/keyword/core-topics`, { method: 'PUT', body: { topics } });
+      onSaved();
+      onClose();
+    } catch (e) {
+      setSaveError(
+        e instanceof ApiRequestError && e.code === 'forbidden'
+          ? 'You do not have permission to edit core topics.'
+          : 'Could not save core topics. Please try again.',
+      );
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="grid gap-3 rounded-md border bg-muted/20 p-3">
+      <p className="text-xs text-muted-foreground">
+        Core topics describe what this project is about. Keyword opportunities are matched against them to suggest
+        topics worth writing or researching. Description carries the context a bare name lacks.
+      </p>
+
+      {loading && <div className="py-4 text-center text-sm text-muted-foreground">Loading core topics…</div>}
+      {!loading && error && (
+        <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+          Could not load core topics. Please try again.
+        </div>
+      )}
+
+      {!loading && !error && (
+        <>
+          {!allowed && (
+            <p className="text-sm text-muted-foreground">Only editors and above can change core topics.</p>
+          )}
+          {rows.length === 0 && <p className="text-sm text-muted-foreground">No core topics yet.</p>}
+          {rows.map((row, index) => (
+            <div key={index} className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,2fr)_auto] sm:items-start">
+              <Input
+                aria-label={`Topic ${index + 1} name`}
+                placeholder="Topic name"
+                className="h-8"
+                value={row.name}
+                disabled={!allowed}
+                onChange={(e) => update(index, { name: e.target.value })}
+              />
+              <Textarea
+                aria-label={`Topic ${index + 1} description`}
+                placeholder="What this topic covers"
+                className="min-h-[38px]"
+                value={row.description}
+                disabled={!allowed}
+                onChange={(e) => update(index, { description: e.target.value })}
+              />
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={!allowed}
+                onClick={() => setRows((current) => current.filter((_r, i) => i !== index))}
+              >
+                Remove
+              </Button>
+            </div>
+          ))}
+
+          {saveError && (
+            <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+              {saveError}
+            </div>
+          )}
+
+          <div className="flex gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={!allowed}
+              onClick={() => setRows((current) => [...current, { name: '', description: '' }])}
+            >
+              Add topic
+            </Button>
+            <Button size="sm" disabled={!allowed || saving} onClick={() => void save()}>
+              {saving ? 'Saving…' : 'Save topics'}
+            </Button>
+            <Button variant="ghost" size="sm" onClick={onClose}>
+              Close
+            </Button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+/**
+ * KW6: turn the KW5.1 competitor-gap opportunities into a few actionable topic
+ * recommendations. It reuses the same exact-set opportunity read, then scores
+ * each project core topic for relevance and knowledge readiness and recommends
+ * either writing or researching. It is a pure read - no provider call happens
+ * until the user explicitly starts a draft - and relevance is shown only as a
+ * coarse state, never as a fabricated percentage.
+ */
+function Topics({
+  projectId,
+  role,
+  selected,
+  onGoToCompetitors,
+}: {
+  projectId: string;
+  role: string;
+  selected: string[];
+  onGoToCompetitors: () => void;
+}) {
+  const [managingTopics, setManagingTopics] = useState(false);
+  const [reloadKey, setReloadKey] = useState(0);
+  const [creating, setCreating] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+
+  const competitorsParam = selected.join(',');
+  const { data, error, loading } = useAsync<TopicRecommendationsDto | null>(
+    () =>
+      selected.length === 0
+        ? Promise.resolve(null)
+        : api(
+            `/projects/${projectId}/keyword/opportunities/topics?competitors=${encodeURIComponent(competitorsParam)}`,
+          ),
+    [projectId, competitorsParam, reloadKey],
+  );
+
+  const recommendations = data?.recommendations ?? [];
+
+  const createArticle = async (rec: TopicRecommendationDto) => {
+    setNotice(null);
+    setActionError(null);
+    setCreating(rec.topic.name);
+    try {
+      await api(`/projects/${projectId}/keyword/opportunities/topics/article`, {
+        method: 'POST',
+        body: {
+          topic_name: rec.topic.name,
+          topic_description: rec.topic.description,
+          primary_keyword: rec.keywords[0]?.keyword ?? null,
+          keywords: rec.keywords.map((k) => ({ keyword: k.keyword, volume: k.volume })),
+          competitors: rec.competitorEvidence.map((c) => ({ domain: c.domain, rank: c.rank })),
+          opportunity_score: rec.bestOpportunityScore,
+        },
+      });
+      setNotice(`Draft generation started for "${rec.topic.name}". Follow it in Content.`);
+    } catch (e) {
+      setActionError(
+        e instanceof ApiRequestError && e.code === 'forbidden'
+          ? 'You do not have permission to create articles.'
+          : 'Could not start the draft. Please try again.',
+      );
+    } finally {
+      setCreating(null);
+    }
+  };
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Topics</CardTitle>
+        <CardDescription>
+          A few actionable topics built from your competitor gap, matched against your core topics and your knowledge
+          base. Read-only - a draft is only created when you ask for one.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="grid gap-4">
+        <div className="flex flex-wrap gap-2">
+          <Button variant="outline" size="sm" onClick={() => setManagingTopics((v) => !v)}>
+            {managingTopics ? 'Hide core topics' : 'Manage core topics'}
+          </Button>
+        </div>
+
+        {managingTopics && (
+          <CoreTopicsEditor
+            projectId={projectId}
+            role={role}
+            onSaved={() => setReloadKey((k) => k + 1)}
+            onClose={() => setManagingTopics(false)}
+          />
+        )}
+
+        {notice && (
+          <div className="rounded-md border border-emerald-500/30 bg-emerald-500/5 px-3 py-2 text-sm">{notice}</div>
+        )}
+        {actionError && (
+          <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+            {actionError}
+          </div>
+        )}
+
+        {selected.length === 0 && (
+          <div className="py-8 text-center text-sm text-muted-foreground">
+            Select competitors to see topic recommendations.{' '}
+            <button type="button" className="underline" onClick={onGoToCompetitors}>
+              Go to Competitors
+            </button>
+          </div>
+        )}
+
+        {selected.length > 0 && loading && (
+          <div className="py-8 text-center text-sm text-muted-foreground">Building topic recommendations…</div>
+        )}
+
+        {selected.length > 0 && !loading && error && (
+          <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+            Could not load topic recommendations. Please try again.
+          </div>
+        )}
+
+        {selected.length > 0 && !loading && !error && data && !data.topicsConfigured && (
+          <div className="py-8 text-center text-sm text-muted-foreground">
+            No core topics are configured for this project yet. Add a few to get topic recommendations.{' '}
+            <button type="button" className="underline" onClick={() => setManagingTopics(true)}>
+              Add core topics
+            </button>
+          </div>
+        )}
+
+        {selected.length > 0 && !loading && !error && data && data.topicsConfigured && !data.snapshot && (
+          <div className="py-8 text-center text-sm text-muted-foreground">
+            No competitor gap data available yet for this competitor set. Run a competitor gap analysis first.{' '}
+            <button type="button" className="underline" onClick={onGoToCompetitors}>
+              Go to Competitors
+            </button>
+          </div>
+        )}
+
+        {selected.length > 0 && !loading && !error && data && data.topicsConfigured && data.snapshot && (
+          <>
+            <div className="rounded-md border bg-muted/30 px-3 py-2 text-sm text-muted-foreground">
+              Based on {fmtNum(data.consideredCount)} gap keyword{data.consideredCount === 1 ? '' : 's'} across{' '}
+              {fmtNum(data.candidateCount)} topic candidate{data.candidateCount === 1 ? '' : 's'} from the gap snapshot
+              of {fmtDate(data.snapshot.fetchedAt)}.
+            </div>
+
+            {!data.knowledgeConfigured && (
+              <div className="rounded-md border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+                Knowledge retrieval is not configured, so knowledge readiness is reported as none.
+              </div>
+            )}
+
+            {recommendations.length === 0 ? (
+              <div className="py-8 text-center text-sm text-muted-foreground">
+                No topics are actionable from this gap yet. The gap keywords do not clearly match your core topics, or
+                the opportunities are too thin.
+              </div>
+            ) : (
+              recommendations.map((rec) => {
+                const canCreate = canStartResearch(role);
+                return (
+                  <div key={rec.topic.name} className="grid gap-3 rounded-md border p-4">
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div>
+                        <h3 className="font-medium">{rec.topic.name}</h3>
+                        {rec.topic.description && (
+                          <p className="text-sm text-muted-foreground">{rec.topic.description}</p>
+                        )}
+                      </div>
+                      <div className="flex flex-wrap gap-2 text-xs">
+                        <span className="rounded-full border px-2 py-0.5">
+                          {TOPIC_RELEVANCE_LABELS[rec.relevance.state]}
+                        </span>
+                        <span className="rounded-full border px-2 py-0.5">
+                          Knowledge: {KNOWLEDGE_READINESS_LABELS[rec.knowledge.state]}
+                        </span>
+                      </div>
+                    </div>
+
+                    <p className="text-sm text-muted-foreground">{rec.why}</p>
+
+                    <div className="grid gap-1 text-sm">
+                      <p className="text-xs font-medium text-muted-foreground">
+                        Matching keywords ({fmtNum(rec.candidateCount)})
+                      </p>
+                      <p>
+                        {rec.keywords
+                          .map((k) => `${k.keyword}${k.volume != null ? ` (${fmtNum(k.volume)}/mo)` : ''}`)
+                          .join(' · ')}
+                        {rec.candidateCount > rec.keywords.length && ` +${rec.candidateCount - rec.keywords.length} more`}
+                      </p>
+                    </div>
+
+                    {rec.competitorEvidence.length > 0 && (
+                      <div className="grid gap-1 text-sm">
+                        <p className="text-xs font-medium text-muted-foreground">Competitor evidence</p>
+                        <p>
+                          {rec.competitorEvidence
+                            .map((c) => `${c.domain}${c.rank != null ? ` #${num(c.rank)}` : ''}`)
+                            .join(' · ')}
+                        </p>
+                      </div>
+                    )}
+
+                    <div className="flex flex-wrap items-center gap-3">
+                      {rec.recommendation === 'create_article' ? (
+                        <Button
+                          size="sm"
+                          disabled={!canCreate || creating === rec.topic.name}
+                          onClick={() => void createArticle(rec)}
+                        >
+                          {creating === rec.topic.name ? 'Starting…' : 'Create article'}
+                        </Button>
+                      ) : (
+                        <Button size="sm" variant="outline" disabled title="Pre-write research is not available yet">
+                          Research recommended
+                        </Button>
+                      )}
+                      {!canCreate && <span className="text-xs text-muted-foreground">Editors and above can create drafts.</span>}
+                      {rec.recommendation === 'research' && (
+                        <span className="text-xs text-muted-foreground">
+                          Research is advisory only - no research run is started from here yet.
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+
+type KeywordsTab = 'mine' | 'research' | 'expansion' | 'competitors' | 'compare' | 'opportunities' | 'topics';
 
 const KEYWORDS_TABS: Array<{ id: KeywordsTab; label: string }> = [
   { id: 'mine', label: 'My keywords' },
@@ -1535,6 +1927,7 @@ const KEYWORDS_TABS: Array<{ id: KeywordsTab; label: string }> = [
   { id: 'competitors', label: 'Competitors' },
   { id: 'compare', label: 'Compare' },
   { id: 'opportunities', label: 'Opportunities' },
+  { id: 'topics', label: 'Topics' },
 ];
 
 export function Keywords({ projectId, role }: { projectId: string; role: string }) {
@@ -1580,6 +1973,14 @@ export function Keywords({ projectId, role }: { projectId: string; role: string 
       {tab === 'opportunities' && (
         <Opportunities
           projectId={projectId}
+          selected={selectedCompetitors}
+          onGoToCompetitors={() => setTab('competitors')}
+        />
+      )}
+      {tab === 'topics' && (
+        <Topics
+          projectId={projectId}
+          role={role}
           selected={selectedCompetitors}
           onGoToCompetitors={() => setTab('competitors')}
         />

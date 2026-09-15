@@ -17,6 +17,8 @@ import type {
   OpportunitiesDto,
   ProjectKeywordsDto,
   SourceSnapshotDto,
+  TopicRecommendationDto,
+  TopicRecommendationsDto,
 } from '@seo/contracts';
 import { Keywords } from './Keywords';
 
@@ -761,3 +763,181 @@ describe('Keywords view - Compare (KW5.1)', () => {
     expect(apiMock.api).toHaveBeenCalledWith(expect.stringContaining('competitors=rival.com%2Cother.com'));
   });
 });
+
+describe('Keywords view - Topics (KW6)', () => {
+  function discoverySnapshot(): SourceSnapshotDto {
+    return {
+      id: 'dsnap-1',
+      type: 'competitor_discovery',
+      scope: { domain: 'example.com' },
+      candidates: [{ domain: 'rival.com', sharedKeywords: 1842, keywordsCount: 5200, avgPosition: 12.4, etv: 900 }],
+      gaps: [],
+      count: 1,
+      fetchedAt: '2026-09-13T00:00:00.000Z',
+      sourceJobId: 'job-1',
+      freshness: { state: 'fresh', fetched_at: '2026-09-13T00:00:00.000Z', age_ms: 3_600_000 },
+    };
+  }
+
+  function recommendation(overrides: Partial<TopicRecommendationDto> = {}): TopicRecommendationDto {
+    return {
+      topic: { name: 'blue widgets', description: 'widgets for buyers' },
+      relevance: { state: 'strong', score: 0.82 },
+      knowledge: { state: 'strong', sources: 3, topScore: 0.9 },
+      keywords: [{ keyword: 'blue widgets', volume: 2400, opportunityScore: 78, competitors: [{ domain: 'rival.com', rank: 3 }] }],
+      candidateCount: 1,
+      totalVolume: 2400,
+      bestOpportunityScore: 78,
+      competitorEvidence: [{ domain: 'rival.com', rank: 3 }],
+      recommendation: 'create_article',
+      actionAvailable: true,
+      why: '1 matching gap keyword with about 2400 monthly searches combined. Topic relevance is strong.',
+      ...overrides,
+    };
+  }
+
+  function topicsData(overrides: Partial<TopicRecommendationsDto> = {}): TopicRecommendationsDto {
+    return {
+      snapshot: {
+        id: 'snap-1',
+        fetchedAt: '2026-09-13T00:00:00.000Z',
+        sourceJobId: 'job-1',
+        freshness: { state: 'fresh', fetched_at: '2026-09-13T00:00:00.000Z', age_ms: 3_600_000 },
+        domain: 'example.com',
+        competitors: ['rival.com'],
+      },
+      recommendations: [recommendation()],
+      consideredCount: 1,
+      candidateCount: 1,
+      knowledgeConfigured: true,
+      topicsConfigured: true,
+      ...overrides,
+    };
+  }
+
+  function mockApi(handlers: {
+    topics?: () => unknown;
+    article?: (opts?: { method?: string; body?: unknown }) => unknown;
+    coreTopics?: unknown;
+  }) {
+    apiMock.api.mockImplementation(async (path: string, opts?: { method?: string; body?: unknown }) => {
+      if (path.endsWith('/gsc/keywords')) return EMPTY_GSC;
+      if (path.endsWith('/keyword/competitors/snapshot')) return discoverySnapshot();
+      if (path.includes('/opportunities/topics/article') && opts?.method === 'POST') {
+        return handlers.article ? handlers.article(opts) : { job: { id: 'job-1' } };
+      }
+      if (path.includes('/opportunities/topics')) return handlers.topics ? handlers.topics() : topicsData();
+      if (path.endsWith('/keyword/core-topics')) return handlers.coreTopics ?? { topics: [] };
+      throw new Error(`unexpected ${path}`);
+    });
+  }
+
+  async function selectCompetitors(role = 'viewer') {
+    render(<Keywords projectId={PROJECT} role={role} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Competitors' }));
+    fireEvent.click(await screen.findByLabelText('Select rival.com'));
+    fireEvent.click(screen.getByRole('button', { name: 'Topics' }));
+  }
+
+  it('prompts to select competitors before reading any snapshot', async () => {
+    apiMock.api.mockImplementation(async (path: string) => {
+      if (path.endsWith('/gsc/keywords')) return EMPTY_GSC;
+      throw new Error(`unexpected ${path}`);
+    });
+
+    render(<Keywords projectId={PROJECT} role="viewer" />);
+    fireEvent.click(screen.getByRole('button', { name: 'Topics' }));
+
+    expect(await screen.findByText(/Select competitors to see topic recommendations/)).toBeTruthy();
+    expect(apiMock.api).not.toHaveBeenCalledWith(expect.stringContaining('/opportunities/topics'));
+  });
+
+  it('renders a topic card with relevance and knowledge states, never a percentage', async () => {
+    mockApi({});
+
+    await selectCompetitors();
+
+    expect(await screen.findByText('blue widgets')).toBeTruthy();
+    expect(screen.getByText('Strong match')).toBeTruthy();
+    expect(screen.getByText('Knowledge: Strong')).toBeTruthy();
+    expect(screen.getByText('rival.com #3')).toBeTruthy();
+    expect(screen.queryByText(/82%/)).toBeNull();
+    expect(apiMock.api).toHaveBeenCalledWith(expect.stringContaining('competitors=rival.com'));
+  });
+
+  it('creates a draft through the existing content path when an editor asks', async () => {
+    let posted: Record<string, unknown> | null = null;
+    mockApi({
+      article: (opts) => {
+        posted = opts?.body as Record<string, unknown>;
+        return { job: { id: 'job-1' } };
+      },
+    });
+
+    await selectCompetitors('editor');
+    fireEvent.click(await screen.findByRole('button', { name: 'Create article' }));
+
+    await waitFor(() => expect(posted).not.toBeNull());
+    expect(posted).toMatchObject({
+      topic_name: 'blue widgets',
+      primary_keyword: 'blue widgets',
+      opportunity_score: 78,
+    });
+    expect(await screen.findByText(/Draft generation started for "blue widgets"/)).toBeTruthy();
+  });
+
+  it('blocks a viewer from creating a draft', async () => {
+    mockApi({});
+
+    await selectCompetitors('viewer');
+
+    const button = (await screen.findByRole('button', { name: 'Create article' })) as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+    expect(screen.getByText('Editors and above can create drafts.')).toBeTruthy();
+  });
+
+  it('shows only an advisory note for a research recommendation', async () => {
+    mockApi({
+      topics: () =>
+        topicsData({
+          recommendations: [
+            recommendation({
+              knowledge: { state: 'weak', sources: 1 },
+              recommendation: 'research',
+              actionAvailable: false,
+            }),
+          ],
+        }),
+    });
+
+    await selectCompetitors('editor');
+
+    expect(await screen.findByRole('button', { name: 'Research recommended' })).toBeTruthy();
+    expect(screen.getByText(/no research run is started from here yet/)).toBeTruthy();
+  });
+
+  it('points at core topics when the project has none configured', async () => {
+    mockApi({ topics: () => topicsData({ topicsConfigured: false, recommendations: [], snapshot: null }) });
+
+    await selectCompetitors('editor');
+
+    expect(await screen.findByText(/No core topics are configured for this project yet/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Add core topics' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Add topic' }));
+    expect(await screen.findByLabelText('Topic 1 name')).toBeTruthy();
+  });
+
+  it('shows a generic load error without leaking internals', async () => {
+    mockApi({
+      topics: () => {
+        throw new Error('boom: raw database secret');
+      },
+    });
+
+    await selectCompetitors();
+
+    expect(await screen.findByText('Could not load topic recommendations. Please try again.')).toBeTruthy();
+    expect(screen.queryByText(/raw database secret/)).toBeNull();
+  });
+});
+
