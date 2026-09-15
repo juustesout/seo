@@ -23,12 +23,14 @@ const OTHER_PROPERTY = '33333333-3333-4333-8333-333333333333';
 
 const TOKEN_TO_USER: Record<string, { sub: string } | undefined> = {
   'viewer-token': { sub: 'viewer-user' },
+  'editor-token': { sub: 'editor-user' },
   'norole-token': { sub: 'no-role-user' },
 };
-const ROLE_BY_USER: Record<string, string | undefined> = { 'viewer-user': 'viewer' };
+const ROLE_BY_USER: Record<string, string | undefined> = { 'viewer-user': 'viewer', 'editor-user': 'editor' };
 const ROLE_ORDER: Record<string, number> = { viewer: 0, editor: 1, admin: 2, owner: 3 };
 
 let currentStores: Store = {};
+let enqueueCalls: Row[] = [];
 
 function fakeSb() {
   return {
@@ -59,6 +61,10 @@ function fakeSb() {
         select: () => builder,
         eq: (col: string, val: unknown) => {
           filters.push((r) => r[col] === val);
+          return builder;
+        },
+        in: (col: string, vals: unknown[]) => {
+          filters.push((r) => vals.includes(r[col]));
           return builder;
         },
         gte: (col: string, val: unknown) => {
@@ -108,22 +114,31 @@ function defaultStores(): Store {
   return {
     seo_project_properties: [{ project_id: PROJECT, property_id: PROPERTY, is_primary: true, created_at: '2026-01-01' }],
     seo_gsc_queries: [],
-    seo_data_sources: [{ project_id: PROJECT, provider_type: 'gsc', last_synced_at: '2026-09-12T08:00:00.000Z' }],
+    seo_data_sources: [{ id: 'ds-1', project_id: PROJECT, provider_type: 'gsc', created_at: '2026-01-01', last_synced_at: '2026-09-12T08:00:00.000Z' }],
+    seo_gsc_properties: [{ id: PROPERTY, integration_id: 'int-1' }],
+    seo_integrations: [{ id: 'int-1', project_id: null, account_id: 'acc-1', provider_type: 'gsc', status: 'connected' }],
+    seo_projects: [{ id: PROJECT, account_id: 'acc-1' }],
+    seo_sync_jobs: [],
   };
 }
 
 let server: Server;
 let base = '';
 
-async function request(path: string, token?: string) {
+async function request(path: string, token?: string, method = 'GET') {
   const res = await fetch(`${base}${path}`, {
-    headers: token ? { authorization: `Bearer ${token}` } : {},
+    method,
+    headers: {
+      ...(token ? { authorization: `Bearer ${token}` } : {}),
+      ...(method === 'POST' ? { 'content-type': 'application/json' } : {}),
+    },
   });
   return { status: res.status, json: (await res.json().catch(() => null)) as { data?: unknown; error?: { code: string; message: string } } };
 }
 
 beforeEach(() => {
   currentStores = defaultStores();
+  enqueueCalls = [];
 });
 
 describe('GET /api/projects/:projectId/gsc/keywords', () => {
@@ -143,8 +158,20 @@ describe('GET /api/projects/:projectId/gsc/keywords', () => {
         },
         config: { env: {} },
         sb: fakeSb(),
-        registry: {},
-        jobStore: {},
+        registry: { getDataSource: (id: string) => (id === 'gsc' ? { id: 'gsc' } : undefined) },
+        jobStore: {
+          enqueue: async (input: Row) => {
+            enqueueCalls.push(input);
+            return {
+              id: 'job-1',
+              project_id: PROJECT,
+              job_type: input.job_type,
+              status: 'queued',
+              progress: 0,
+              params: input.params,
+            };
+          },
+        },
       };
       (req as unknown as { user?: { sub: string } }).user = TOKEN_TO_USER[token];
       next();
@@ -205,5 +232,47 @@ describe('GET /api/projects/:projectId/gsc/keywords', () => {
     const reversed = await request('/keywords?startDate=2026-09-10&endDate=2026-09-01', 'viewer-token');
     expect(reversed.status).toBe(400);
     expect(reversed.json.error?.message).toBe('startDate must be on or before endDate');
+  });
+
+  it('rejects an anonymous sync', async () => {
+    const res = await request('/sync', undefined, 'POST');
+    expect(res.status).toBe(401);
+    expect(res.json.error?.code).toBe('unauthorized');
+  });
+
+  it('does not let a viewer start a sync', async () => {
+    const res = await request('/sync', 'viewer-token', 'POST');
+    expect(res.status).toBe(403);
+    expect(enqueueCalls).toHaveLength(0);
+  });
+
+  it('lets an editor start a sync and queues a gsc_sync', async () => {
+    const res = await request('/sync', 'editor-token', 'POST');
+    expect(res.status).toBe(202);
+    expect(res.json.data).toMatchObject({ reused: false });
+    expect(enqueueCalls).toHaveLength(1);
+    expect(enqueueCalls[0]).toMatchObject({
+      project_id: PROJECT,
+      provider: 'gsc',
+      job_type: 'gsc_sync',
+      created_by: 'editor-user',
+    });
+  });
+
+  it('reuses an already running sync instead of queueing another', async () => {
+    currentStores.seo_sync_jobs = [
+      { id: 'job-active', project_id: PROJECT, job_type: 'gsc_sync', status: 'running', created_at: '2026-09-15T08:00:00.000Z' },
+    ];
+    const res = await request('/sync', 'editor-token', 'POST');
+    expect(res.status).toBe(202);
+    expect((res.json.data as { reused: boolean }).reused).toBe(true);
+    expect(enqueueCalls).toHaveLength(0);
+  });
+
+  it('reports an honest error when no GSC integration backs the project', async () => {
+    currentStores.seo_integrations = [];
+    const res = await request('/sync', 'editor-token', 'POST');
+    expect(res.status).toBe(400);
+    expect(enqueueCalls).toHaveLength(0);
   });
 });

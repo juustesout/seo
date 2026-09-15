@@ -22,6 +22,7 @@ import { ApiError } from '../../apiErrors.js';
 import { parseProjectId } from './utils.js';
 import { googleConnectionState, registryProperties } from '../../services/accountService.js';
 import { KeywordService, resolveKeywordRange } from '../../services/keywordService.js';
+import { enqueueGscSyncIfIdle, tryEnqueueGscSync } from '../../services/gscSyncService.js';
 import type { GscRegistryPropertyDto } from '@seo/contracts';
 
 export const projectGscRouter: Router = Router({ mergeParams: true });
@@ -139,6 +140,27 @@ projectGscRouter.get(
 );
 
 // ---------------------------------------------------------------------------
+// POST /sync - run (or reuse) the project's Search Console sync
+// ---------------------------------------------------------------------------
+
+/**
+ * POST /sync - start a Search Console sync for this project's attached property.
+ * This is the same `gsc_sync` job the worker has always run; the endpoint is
+ * idempotent, so if a sync is already queued/running it is reused rather than
+ * duplicated. Editor+ only. Returns 202 with the job row the UI polls.
+ */
+projectGscRouter.post(
+  '/sync',
+  asyncHandler(async (req, res) => {
+    const projectId = parseProjectId(req);
+    const { container, user } = req;
+    await container.access.requireRole(user!.sub, projectId, 'editor');
+    const result = await enqueueGscSyncIfIdle(container, { projectId, userId: user!.sub });
+    res.status(202).json({ data: result });
+  }),
+);
+
+// ---------------------------------------------------------------------------
 // POST /attach - link an account registry property (or register a newly
 // discovered site) to this project.
 // ---------------------------------------------------------------------------
@@ -250,7 +272,11 @@ projectGscRouter.post(
       .neq('property_id', propertyId);
     await container.sb.from('seo_integrations').update({ status: 'connected', config: { site_url: siteUrl } }).eq('id', integration.id as string);
 
-    res.status(201).json({ data: { dataSource: ds, property } });
+    // Kick off the first sync so the Keywords page fills without a manual step.
+    // Best-effort: a queue failure must never roll back the attach itself.
+    const sync = await tryEnqueueGscSync(container, { projectId, userId: user!.sub });
+
+    res.status(201).json({ data: { dataSource: ds, property, sync } });
   }),
 );
 

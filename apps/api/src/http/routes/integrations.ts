@@ -21,6 +21,7 @@ import { parseId, parseProjectId, redirectBase } from './utils.js';
 import { signState, buildAuthorizationUrl } from '../../providers/gsc/oauth.js';
 import { GscDataSource } from '../../providers/gsc/gscDataSource.js';
 import { DATAFORSEO_CRED_KEYS } from '../../providers/dataforseo/dataSource.js';
+import { tryEnqueueGscSync } from '../../services/gscSyncService.js';
 
 export const integrationsRouter: Router = Router({ mergeParams: true });
 
@@ -382,7 +383,11 @@ integrationsRouter.post(
       .update({ status: 'connected', config: { site_url: body.siteUrl } })
       .eq('id', integrationId);
 
-    res.status(201).json({ data: { dataSource: ds, property } });
+    // Kick off the first sync so the Keywords page fills without a manual step.
+    // Best-effort: a queue failure must never roll back the attach itself.
+    const sync = await tryEnqueueGscSync(container, { projectId, userId: user!.sub });
+
+    res.status(201).json({ data: { dataSource: ds, property, sync } });
   }),
 );
 

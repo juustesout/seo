@@ -114,6 +114,8 @@ export interface EnqueueJobOptions {
   dataSourceId?: string | null;
   runAfter?: string;
   maxRetries?: number;
+  /** Deterministic key that collapses re-submitted logical work into one job. */
+  idempotencyKey?: string;
 }
 
 /** Validate, gate and enqueue one job through the single shared path. */
@@ -159,5 +161,6 @@ export async function enqueueJob(container: ServiceContainer, opts: EnqueueJobOp
     created_by: userId,
     run_after: opts.runAfter,
     max_retries: opts.maxRetries,
+    idempotency_key: opts.idempotencyKey,
   });
 }

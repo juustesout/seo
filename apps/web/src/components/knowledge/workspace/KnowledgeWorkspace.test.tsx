@@ -12,7 +12,11 @@ import type { KnowledgeSourceDto, KnowledgeSourcesResponse } from '@seo/contract
 import { KnowledgeWorkspace } from './KnowledgeWorkspace';
 
 const { apiMock } = vi.hoisted(() => ({ apiMock: { api: vi.fn(), apiRaw: vi.fn() } }));
-vi.mock('../../../lib/api', () => ({ api: apiMock.api, apiRaw: apiMock.apiRaw }));
+vi.mock('../../../lib/api', () => ({
+  api: (path: string, ...rest: unknown[]) =>
+    String(path).includes('/jobs') ? Promise.resolve([]) : (apiMock.api as (...a: unknown[]) => unknown)(path, ...rest),
+  apiRaw: apiMock.apiRaw,
+}));
 
 const PROJECT = 'p-1';
 
@@ -77,8 +81,6 @@ beforeEach(() => {
     }
     return {};
   });
-  // Overview composes useJobs, which polls /api/...; keep it off the network.
-  vi.stubGlobal('fetch', vi.fn(async () => ({ json: async () => ({ data: [] }) })));
 });
 
 afterEach(() => {

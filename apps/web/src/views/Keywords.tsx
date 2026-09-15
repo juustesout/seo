@@ -13,8 +13,8 @@
  * The two are deliberately not mixed: research metrics (volume/difficulty/cpc)
  * are not GSC performance, and vice versa.
  */
-import { useEffect, useState } from 'react';
-import { useAsync, num, fmtNum, fmtDate } from '../lib/ui';
+import { useEffect, useRef, useState } from 'react';
+import { useAsync, useJobs, num, fmtNum, fmtDate } from '../lib/ui';
 import { api, ApiRequestError } from '../lib/api';
 import {
   COMPETITOR_RESEARCH_MAX_COMPETITORS,
@@ -53,7 +53,7 @@ import type {
   TopicRelevanceState,
 } from '@seo/contracts';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { PageHeader } from '@/components/ui/page-header';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
@@ -72,6 +72,35 @@ function fmtPosition(v: unknown): string {
 /** Editors and above may start provider work; viewers never can. */
 function canStartResearch(role: string): boolean {
   return role === 'editor' || role === 'admin' || role === 'owner';
+}
+
+/**
+ * Live Search Console sync state. Progress is the job row's own value - the
+ * worker reports real phase percentages - so the bar is indeterminate only
+ * before the first report, never a fabricated number.
+ */
+function SyncProgress({ job }: { job: { status?: string; progress?: number; message?: string | null } }) {
+  const pct = typeof job.progress === 'number' ? Math.max(0, Math.min(100, job.progress)) : null;
+  const indeterminate = job.status === 'queued' || pct === null;
+  const label = job.message || (job.status === 'queued' ? 'Search Console sync queued…' : 'Synchronizing Google Search Console…');
+  return (
+    <div className="grid gap-2 py-1" role="status" aria-label="Search Console sync">
+      <div className="flex items-center justify-between text-sm">
+        <span className="text-muted-foreground">{label}</span>
+        {!indeterminate && <span className="tabular-nums text-muted-foreground">{pct}%</span>}
+      </div>
+      <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
+        <div
+          className={
+            indeterminate
+              ? 'h-full w-1/3 animate-pulse rounded-full bg-primary'
+              : 'h-full rounded-full bg-primary transition-all'
+          }
+          style={indeterminate ? undefined : { width: `${pct}%` }}
+        />
+      </div>
+    </div>
+  );
 }
 
 /** Format a nullable research metric (volume/difficulty/cpc). */
@@ -1933,10 +1962,52 @@ const KEYWORDS_TABS: Array<{ id: KeywordsTab; label: string }> = [
 export function Keywords({ projectId, role }: { projectId: string; role: string }) {
   const [tab, setTab] = useState<KeywordsTab>('mine');
   const [selectedCompetitors, setSelectedCompetitors] = useState<string[]>([]);
-  const { data, error, loading } = useAsync<ProjectKeywordsDto>(
+  const { data, error, loading, reload: reloadKeywords } = useAsync<ProjectKeywordsDto>(
     () => api(`/projects/${projectId}/gsc/keywords`),
     [projectId],
   );
+  const canSync = canStartResearch(role);
+  const { jobs, reload: reloadJobs } = useJobs(projectId, true);
+  const [syncing, setSyncing] = useState(false);
+  const [syncError, setSyncError] = useState<string | null>(null);
+
+  const gscJobs = jobs.filter((j) => j.job_type === 'gsc_sync');
+  const activeSync = gscJobs.find((j) => j.status === 'queued' || j.status === 'running') ?? null;
+  const lastSync = gscJobs[0] ?? null;
+  const lastSyncError =
+    !activeSync && lastSync && (lastSync.status === 'failed' || lastSync.status === 'canceled')
+      ? (lastSync.error?.message ??
+        (lastSync.status === 'canceled'
+          ? 'The last Search Console sync was canceled.'
+          : 'Search Console sync failed. Please try again.'))
+      : null;
+
+  const startSync = async () => {
+    setSyncError(null);
+    setSyncing(true);
+    try {
+      await api(`/projects/${projectId}/gsc/sync`, { method: 'POST' });
+      reloadJobs();
+    } catch (e) {
+      setSyncError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSyncing(false);
+    }
+  };
+
+  // Refresh the keyword read when a sync leaves the queued/running state, so new
+  // data appears without a manual reload. The first observation of an already
+  // running job must not refetch (the mount load already did).
+  const previousActiveSyncId = useRef<string | null>(null);
+  useEffect(() => {
+    const activeId = activeSync?.id ?? null;
+    if (previousActiveSyncId.current && !activeId) {
+      reloadKeywords();
+      reloadJobs();
+    }
+    previousActiveSyncId.current = activeId;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeSync?.id]);
 
   return (
     <div className="grid gap-5">
@@ -1993,6 +2064,13 @@ export function Keywords({ projectId, role }: { projectId: string; role: string 
             <CardDescription>
               Queries your site is seen for in Google Search Console, and how they perform over the last 28 days.
             </CardDescription>
+            {canSync && data?.propertyId && data.keywords.length > 0 && !activeSync && (
+              <CardAction>
+                <Button size="sm" variant="outline" disabled={syncing} onClick={() => void startSync()}>
+                  {syncing ? 'Starting…' : 'Sync again'}
+                </Button>
+              </CardAction>
+            )}
           </CardHeader>
           <CardContent>
             {loading && <div className="py-10 text-center text-sm text-muted-foreground">Loading keywords…</div>}
@@ -2005,15 +2083,30 @@ export function Keywords({ projectId, role }: { projectId: string; role: string 
 
             {!loading && !error && data && (
               <>
+                {activeSync && <SyncProgress job={activeSync} />}
+
+                {!activeSync && (syncError ?? lastSyncError) && (
+                  <div className="mb-3 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+                    {syncError ?? lastSyncError}
+                  </div>
+                )}
+
                 {!data.propertyId && (
                   <div className="py-10 text-center text-sm text-muted-foreground">
                     Google Search Console is not connected to this project.
                   </div>
                 )}
 
-                {data.propertyId && data.keywords.length === 0 && (
-                  <div className="py-10 text-center text-sm text-muted-foreground">
-                    No keyword data is available yet. Run a Google Search Console sync first.
+                {data.propertyId && data.keywords.length === 0 && !activeSync && (
+                  <div className="grid gap-3 py-8 text-center text-sm text-muted-foreground">
+                    <p>No keyword data is available yet. Run a Google Search Console sync first.</p>
+                    {canSync && (
+                      <div>
+                        <Button disabled={syncing} onClick={() => void startSync()}>
+                          {syncing ? 'Starting…' : 'Sync Google Search Console'}
+                        </Button>
+                      </div>
+                    )}
                   </div>
                 )}
 

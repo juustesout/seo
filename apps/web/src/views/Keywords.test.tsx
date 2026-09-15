@@ -22,7 +22,7 @@ import type {
 } from '@seo/contracts';
 import { Keywords } from './Keywords';
 
-const { apiMock, ApiRequestErrorMock } = vi.hoisted(() => {
+const { apiMock, ApiRequestErrorMock, jobsState } = vi.hoisted(() => {
   class ApiRequestErrorMock extends Error {
     constructor(
       public code: string,
@@ -33,9 +33,13 @@ const { apiMock, ApiRequestErrorMock } = vi.hoisted(() => {
       this.name = 'ApiRequestError';
     }
   }
-  return { apiMock: { api: vi.fn() }, ApiRequestErrorMock };
+  return { apiMock: { api: vi.fn() }, ApiRequestErrorMock, jobsState: { payload: [] as unknown[] } };
 });
-vi.mock('../lib/api', () => ({ api: apiMock.api, ApiRequestError: ApiRequestErrorMock }));
+vi.mock('../lib/api', () => ({
+  api: (path: string, ...rest: unknown[]) =>
+    String(path).includes('/jobs') ? Promise.resolve(jobsState.payload) : (apiMock.api as (...a: unknown[]) => unknown)(path, ...rest),
+  ApiRequestError: ApiRequestErrorMock,
+}));
 
 const PROJECT = 'p-1';
 
@@ -43,6 +47,7 @@ const EMPTY_GSC: ProjectKeywordsDto = { propertyId: null, lastSyncedAt: null, ke
 
 beforeEach(() => {
   apiMock.api.mockReset();
+  jobsState.payload = [];
 });
 
 afterEach(() => {
@@ -938,6 +943,101 @@ describe('Keywords view - Topics (KW6)', () => {
 
     expect(await screen.findByText('Could not load topic recommendations. Please try again.')).toBeTruthy();
     expect(screen.queryByText(/raw database secret/)).toBeNull();
+  });
+});
+
+describe('Keywords view - GSC sync', () => {
+  const LINKED_EMPTY: ProjectKeywordsDto = { propertyId: 'prop-1', lastSyncedAt: null, keywords: [] };
+
+  it('offers an editor a sync CTA when a property is linked but has no data', async () => {
+    apiMock.api.mockResolvedValue(LINKED_EMPTY);
+    render(<Keywords projectId={PROJECT} role="editor" />);
+    expect(await screen.findByRole('button', { name: 'Sync Google Search Console' })).toBeTruthy();
+  });
+
+  it('does not offer a viewer the sync CTA', async () => {
+    apiMock.api.mockResolvedValue(LINKED_EMPTY);
+    render(<Keywords projectId={PROJECT} role="viewer" />);
+    await screen.findByText('No keyword data is available yet. Run a Google Search Console sync first.');
+    expect(screen.queryByRole('button', { name: 'Sync Google Search Console' })).toBeNull();
+  });
+
+  it('starts a sync through the explicit endpoint when the CTA is clicked', async () => {
+    apiMock.api.mockImplementation(async (path: string, opts?: { method?: string }) => {
+      if (path.endsWith('/gsc/sync') && opts?.method === 'POST') return { job: { id: 'job-1' }, reused: false };
+      return LINKED_EMPTY;
+    });
+    render(<Keywords projectId={PROJECT} role="editor" />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Sync Google Search Console' }));
+    await waitFor(() =>
+      expect(apiMock.api).toHaveBeenCalledWith(`/projects/${PROJECT}/gsc/sync`, { method: 'POST' }),
+    );
+  });
+
+  it('shows the real job progress and message while a sync is running', async () => {
+    apiMock.api.mockResolvedValue(LINKED_EMPTY);
+    jobsState.payload = [
+      { id: 'job-1', job_type: 'gsc_sync', status: 'running', progress: 45, message: 'Fetching page performance' },
+    ];
+    render(<Keywords projectId={PROJECT} role="editor" />);
+    expect(await screen.findByText('Fetching page performance')).toBeTruthy();
+    expect(screen.getByText('45%')).toBeTruthy();
+    expect(screen.queryByText('No keyword data is available yet. Run a Google Search Console sync first.')).toBeNull();
+  });
+
+  it('surfaces a concise failure and keeps the sync action available', async () => {
+    apiMock.api.mockResolvedValue(LINKED_EMPTY);
+    jobsState.payload = [
+      { id: 'job-1', job_type: 'gsc_sync', status: 'failed', progress: 20, error: { message: 'quota exceeded' } },
+    ];
+    render(<Keywords projectId={PROJECT} role="editor" />);
+    expect(await screen.findByText('quota exceeded')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Sync Google Search Console' })).toBeTruthy();
+  });
+
+  it('offers an editor a "Sync again" action when data is already present', async () => {
+    apiMock.api.mockResolvedValue({
+      propertyId: 'prop-1',
+      lastSyncedAt: '2026-09-12T08:00:00.000Z',
+      keywords: [{ keyword: 'seo tools', clicks: 1, impressions: 10, ctr: 0.1, position: 2 }],
+    } satisfies ProjectKeywordsDto);
+    render(<Keywords projectId={PROJECT} role="editor" />);
+    expect(await screen.findByRole('button', { name: 'Sync again' })).toBeTruthy();
+  });
+
+  it('does not offer a viewer a "Sync again" action', async () => {
+    apiMock.api.mockResolvedValue({
+      propertyId: 'prop-1',
+      lastSyncedAt: '2026-09-12T08:00:00.000Z',
+      keywords: [{ keyword: 'seo tools', clicks: 1, impressions: 10, ctr: 0.1, position: 2 }],
+    } satisfies ProjectKeywordsDto);
+    render(<Keywords projectId={PROJECT} role="viewer" />);
+    await screen.findByText('seo tools');
+    expect(screen.queryByRole('button', { name: 'Sync again' })).toBeNull();
+  });
+
+  it('refreshes the keyword read once a running sync finishes', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      let keywordCalls = 0;
+      apiMock.api.mockImplementation(async (path: string) => {
+        if (String(path).endsWith('/gsc/keywords')) keywordCalls += 1;
+        return LINKED_EMPTY;
+      });
+      jobsState.payload = [
+        { id: 'job-1', job_type: 'gsc_sync', status: 'running', progress: 65, message: 'Persisting Search Console data' },
+      ];
+      render(<Keywords projectId={PROJECT} role="editor" />);
+      await screen.findByText('Persisting Search Console data');
+
+      const before = keywordCalls;
+      jobsState.payload = [{ id: 'job-1', job_type: 'gsc_sync', status: 'completed', progress: 100, message: null }];
+      await vi.advanceTimersByTimeAsync(4100);
+
+      await waitFor(() => expect(keywordCalls).toBeGreaterThan(before));
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

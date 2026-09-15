@@ -10,6 +10,7 @@
  * into a `busy` flag and polls only while work is actually running.
  */
 import { useEffect, useRef, useState } from 'react';
+import { api } from './api';
 import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 
@@ -117,10 +118,7 @@ export function Empty({ children }: { children?: React.ReactNode }) {
  */
 export function useJobs(projectId: string, enabled: boolean, ms = 4000) {
   const { data, error, reload } = useAsync<any[]>(
-    () =>
-      fetch(`/api/projects/${projectId}/jobs?limit=30`)
-        .then((r) => r.json())
-        .then((j) => j.data ?? []),
+    () => api<any[]>(`/projects/${projectId}/jobs?limit=30`),
     [projectId, enabled],
   );
   const busy = (data ?? []).some((j: any) => j.status === 'running' || j.status === 'queued');

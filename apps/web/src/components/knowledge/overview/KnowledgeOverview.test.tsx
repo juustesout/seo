@@ -14,7 +14,11 @@ import type { KnowledgeSourceDto, KnowledgeSourceSummaryDto, KnowledgeSourcesRes
 import { KnowledgeOverview } from './KnowledgeOverview';
 
 const { apiMock } = vi.hoisted(() => ({ apiMock: { api: vi.fn(), apiRaw: vi.fn() } }));
-vi.mock('../../../lib/api', () => ({ api: apiMock.api, apiRaw: apiMock.apiRaw }));
+vi.mock('../../../lib/api', () => ({
+  api: (path: string, ...rest: unknown[]) =>
+    String(path).includes('/jobs') ? Promise.resolve([]) : (apiMock.api as (...a: unknown[]) => unknown)(path, ...rest),
+  apiRaw: apiMock.apiRaw,
+}));
 
 const PROJECT = 'p-1';
 
@@ -68,7 +72,6 @@ function response(items: KnowledgeSourceDto[], summary: Partial<KnowledgeSourceS
 beforeEach(() => {
   apiMock.api.mockReset();
   apiMock.apiRaw.mockReset();
-  vi.stubGlobal('fetch', vi.fn(async () => ({ json: async () => ({ data: [] }) })));
 });
 
 afterEach(() => {
