@@ -253,8 +253,9 @@ export function mapContentAiError(err: unknown): ApiError {
 
 /** Bound one AI request so an HTTP handler can never hang on a provider. On
  *  expiry the promise rejects with the sentinel message 'AI_TIMEOUT', which
- *  mapContentAiError translates into a clean 504 for the client. */
-function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+ *  mapContentAiError translates into a clean 504 for the client. Exported so
+ *  other selection-scoped AI services reuse the same bound. */
+export function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('AI_TIMEOUT')), ms);
     promise.then(
@@ -285,6 +286,68 @@ async function chatJsonOnce(provider: AIProvider, system: string, user: string, 
   return parseContentAiOutput(result.content);
 }
 
+/**
+ * Deterministic, body-copy-relevant failing SEO checks for a stored content
+ * row. Shared by selection-scoped AI services so none re-derive the checks.
+ */
+export function textSeoChecksForRow(
+  row: Record<string, unknown>,
+): { keyword: string | null; lines: string[] } {
+  try {
+    const result = evaluateSeo({
+      doc: asTipDoc(row.content_json),
+      meta: {
+        title: typeof row.title === 'string' ? row.title : '',
+        targetKeyword: typeof row.target_keyword === 'string' ? row.target_keyword : null,
+        metaTitle: typeof row.meta_title === 'string' ? row.meta_title : null,
+        metaDescription: typeof row.meta_description === 'string' ? row.meta_description : null,
+      },
+    });
+    const lines = result.checks
+      .filter((c) => (c.status === 'fail' || c.status === 'warn') && TEXT_RELEVANT_CHECKS.has(c.code))
+      .slice(0, 5)
+      .map((c) => `${c.status === 'fail' ? 'Fail' : 'Warn'} — ${c.label}: ${c.detail}${c.suggestion ? ` (${c.suggestion})` : ''}`);
+    return { keyword: result.keyword, lines };
+  } catch {
+    return { keyword: null, lines: [] };
+  }
+}
+
+/**
+ * Best-effort project knowledge retrieval for an AI action. Returns [] when no
+ * provider exists, nothing is indexed, or the search fails - callers must keep
+ * working without knowledge.
+ */
+export async function retrieveProjectKnowledge(
+  container: ServiceContainer,
+  projectId: string,
+  query: string,
+  limit = 3,
+): Promise<ContentAiKnowledgeDto[]> {
+  const provider = container.registry?.getKnowledge?.('qdrant');
+  if (!provider) return [];
+  try {
+    const hits = await provider.search({ query, projectId, limit });
+    const entries: ContentAiKnowledgeDto[] = [];
+    for (const hit of hits) {
+      const payload = hit.payload as { title?: string; url?: string; source_type?: string; text?: string; source_id?: string };
+      const text = typeof payload.text === 'string' ? payload.text.trim() : '';
+      if (!text) continue;
+      const entry: ContentAiKnowledgeDto = {
+        name: payload.title || payload.source_id || 'Knowledge source',
+        excerpt: text.slice(0, 600),
+      };
+      if (payload.url) entry.url = payload.url;
+      entries.push(entry);
+      if (entries.length >= limit) break;
+    }
+    return entries;
+  } catch {
+    // Knowledge is optional context - never fail the AI action because of it.
+    return [];
+  }
+}
+
 export class ContentAiService {
   private readonly content: ContentService;
   private readonly ai: AIService;
@@ -298,24 +361,7 @@ export class ContentAiService {
   private static seoChecksFor(
     row: Record<string, unknown>,
   ): { keyword: string | null; lines: string[] } {
-    try {
-      const result = evaluateSeo({
-        doc: asTipDoc(row.content_json),
-        meta: {
-          title: typeof row.title === 'string' ? row.title : '',
-          targetKeyword: typeof row.target_keyword === 'string' ? row.target_keyword : null,
-          metaTitle: typeof row.meta_title === 'string' ? row.meta_title : null,
-          metaDescription: typeof row.meta_description === 'string' ? row.meta_description : null,
-        },
-      });
-      const lines = result.checks
-        .filter((c) => (c.status === 'fail' || c.status === 'warn') && TEXT_RELEVANT_CHECKS.has(c.code))
-        .slice(0, 5)
-        .map((c) => `${c.status === 'fail' ? 'Fail' : 'Warn'} — ${c.label}: ${c.detail}${c.suggestion ? ` (${c.suggestion})` : ''}`);
-      return { keyword: result.keyword, lines };
-    } catch {
-      return { keyword: null, lines: [] };
-    }
+    return textSeoChecksForRow(row);
   }
 
   /**
@@ -324,28 +370,7 @@ export class ContentAiService {
    * AI behavior must keep working without knowledge.
    */
   private async retrieveKnowledge(projectId: string, query: string): Promise<ContentAiKnowledgeDto[]> {
-    const provider = this.container.registry?.getKnowledge?.('qdrant');
-    if (!provider) return [];
-    try {
-      const hits = await provider.search({ query, projectId, limit: 3 });
-      const entries: ContentAiKnowledgeDto[] = [];
-      for (const hit of hits) {
-        const payload = hit.payload as { title?: string; url?: string; source_type?: string; text?: string; source_id?: string };
-        const text = typeof payload.text === 'string' ? payload.text.trim() : '';
-        if (!text) continue;
-        const entry: ContentAiKnowledgeDto = {
-          name: payload.title || payload.source_id || 'Knowledge source',
-          excerpt: text.slice(0, 600),
-        };
-        if (payload.url) entry.url = payload.url;
-        entries.push(entry);
-        if (entries.length >= 3) break;
-      }
-      return entries;
-    } catch {
-      // Knowledge is optional context - never fail the AI action because of it.
-      return [];
-    }
+    return retrieveProjectKnowledge(this.container, projectId, query);
   }
 
   /**

@@ -18,9 +18,19 @@ import { parseId, parseProjectId } from './utils.js';
 import { ContentService, contentJsonSchema, CONTENT_STATUSES } from '../../services/contentService.js';
 import { ContentAnalysisService } from '../../services/contentAnalysisService.js';
 import { ContentAiService } from '../../services/contentAiService.js';
+import {
+  ContentAiEditService,
+  MAX_INSTRUCTION_CHARS,
+  MAX_SELECTION_CHARS,
+} from '../../services/contentAiEditService.js';
 import { ContentIntelligenceService } from '../../services/contentIntelligenceService.js';
 import { startContentDraft } from '../../services/contentDraftService.js';
-import { CONTENT_AI_ACTIONS, WRITER_EXECUTION_PROFILE_IDS, WRITER_FORMAT_IDS } from '@seo/contracts';
+import {
+  CONTENT_AI_ACTIONS,
+  CONTENT_AI_EDIT_OPERATIONS,
+  WRITER_EXECUTION_PROFILE_IDS,
+  WRITER_FORMAT_IDS,
+} from '@seo/contracts';
 
 export const contentRouter: Router = Router({ mergeParams: true });
 
@@ -108,6 +118,50 @@ contentRouter.post(
 
 const analyzeSchema = z.object({ with_ai: z.boolean().optional() }).passthrough();
 
+/** Legacy selection-scoped AI action (plain-text suggestion, review-before-apply). */
+const contentAiActionSchema = z
+  .object({
+    action: z.enum(CONTENT_AI_ACTIONS),
+    selection: z.string().max(8000).nullable().optional(),
+    instruction: z.string().max(500).nullable().optional(),
+    tone: z.string().max(120).nullable().optional(),
+    context: z.string().max(4000).nullable().optional(),
+    keyword: z.string().max(200).nullable().optional(),
+    use_knowledge: z.boolean().optional(),
+  })
+  .passthrough();
+
+/**
+ * Cosmos AI editor: one request path for Rewrite/Improve/Shorten/Expand/Ask AI.
+ * The body carries the selection position/text plus an optional instruction; the
+ * server gathers all authoritative context (nearby document text, metadata,
+ * Cosmos, SEO, knowledge) itself.
+ */
+const contentAiEditSchema = z
+  .object({
+    operation: z.enum(CONTENT_AI_EDIT_OPERATIONS),
+    selection: z.object({ from: z.number().int().min(0), to: z.number().int().min(0) }).strict(),
+    text: z.string().trim().min(1).max(MAX_SELECTION_CHARS),
+    instruction: z.string().trim().min(1).max(MAX_INSTRUCTION_CHARS).nullable().optional(),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    if (value.selection.to <= value.selection.from) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'selection.to must be greater than selection.from',
+        path: ['selection', 'to'],
+      });
+    }
+    if (value.operation === 'ask' && !value.instruction) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Add an instruction for Ask AI.',
+        path: ['instruction'],
+      });
+    }
+  });
+
 /**
  * Agent Controls: generate a NEW draft from this article through the shared
  * Writer Engine (a normal content_write job). `contentId: null` is enforced
@@ -139,6 +193,63 @@ contentRouter.post(
       idempotencyToken: body.idempotency_key,
     });
     res.status(202).json({ data: { job, reused } });
+  }),
+);
+
+/**
+ * Run one in-editor AI action (legacy plain-text suggestion). Returns a
+ * structured suggestion only - the document is never modified server-side; the
+ * editor applies or rejects it.
+ */
+contentRouter.post(
+  '/:id/ai',
+  asyncHandler(async (req, res) => {
+    const projectId = parseProjectId(req);
+    const { container, user } = req;
+    await container.access.requireRole(user!.sub, projectId, 'editor');
+    const body = contentAiActionSchema.parse(req.body);
+    const svc = new ContentAiService(container);
+    const suggestion = await svc.run(projectId, parseId(req, 'id'), {
+      action: body.action,
+      selection: body.selection ?? null,
+      instruction: body.instruction ?? null,
+      tone: body.tone ?? null,
+      context: body.context ?? null,
+      keyword: body.keyword ?? null,
+      useKnowledge: body.use_knowledge ?? true,
+    });
+    res.json({ data: suggestion });
+  }),
+);
+
+/**
+ * Cosmos AI editor: one selection-scoped structured edit. The model returns a
+ * validated `replace_selection` operation; the editor previews it and applies
+ * it to the selected range only. The whole document is never replaced.
+ */
+contentRouter.post(
+  '/:id/ai/edit',
+  asyncHandler(async (req, res) => {
+    const projectId = parseProjectId(req);
+    const { container, user } = req;
+    await container.access.requireRole(user!.sub, projectId, 'editor');
+    const body = contentAiEditSchema.parse(req.body);
+    const svc = new ContentAiEditService(container);
+    const result = await svc.run(projectId, parseId(req, 'id'), body);
+    res.json({ data: result });
+  }),
+);
+
+/** Deterministic audit (no network) - returns the reusable report shape. */
+contentRouter.get(
+  '/:id/analysis',
+  asyncHandler(async (req, res) => {
+    const projectId = parseProjectId(req);
+    const { container, user } = req;
+    await container.access.requireRole(user!.sub, projectId, 'viewer');
+    const svc = new ContentAnalysisService(container);
+    const result = await svc.analyze(projectId, parseId(req, 'id'));
+    res.json({ data: result });
   }),
 );
 

@@ -41,6 +41,7 @@ import {
 } from '@seo/contracts';
 import { ApiError } from '../apiErrors.js';
 import type { ServiceContainer } from '../context.js';
+import { readProjectSettings } from './projectSettings.js';
 import { embedderFromConfig, type Embedder } from '../providers/knowledge/embedding.js';
 import { KnowledgeService } from './knowledgeService.js';
 import { canonicalKeywordKey } from './keywordCanonical.js';
@@ -125,20 +126,6 @@ export function parseCoreTopics(value: unknown): CoreTopicDto[] {
     out.push(topic);
   }
   return out;
-}
-
-async function readProjectSettings(
-  container: ServiceContainer,
-  projectId: string,
-): Promise<Record<string, unknown>> {
-  const { data, error } = await container.sb
-    .from('seo_projects')
-    .select('settings')
-    .eq('id', projectId)
-    .maybeSingle<{ settings: Record<string, unknown> | null }>();
-  if (error) throw new ApiError(500, 'storage_error', 'Could not read the project settings');
-  if (!data) throw ApiError.notFound('Project not found');
-  return data.settings ?? {};
 }
 
 /** Read the project's stored core topics (empty list when none are set). */

@@ -13,6 +13,7 @@ import { useEditor, EditorContent, type Editor } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import Link from '@tiptap/extension-link';
 import { ImageBlock } from './ImageBlock';
+import { EditorAiBubbleMenu, type EditorAiActions } from './EditorAiBubbleMenu';
 import type { TipDoc } from '@seo/contracts';
 
 export interface RichTextEditorHandle {
@@ -24,6 +25,8 @@ interface RichTextEditorProps {
   initialDoc: TipDoc;
   onDocChange?: (doc: TipDoc) => void;
   onEditor?: (editor: Editor | null) => void;
+  /** When present, a selection bubble menu offers the AI edit operations. */
+  aiActions?: EditorAiActions;
 }
 
 /**
@@ -33,7 +36,7 @@ interface RichTextEditorProps {
  * act on it. The imperative handle exposes `selectHeading` for outline clicks.
  */
 export const RichTextEditor = forwardRef<RichTextEditorHandle, RichTextEditorProps>(function RichTextEditor(
-  { initialDoc, onDocChange, onEditor },
+  { initialDoc, onDocChange, onEditor, aiActions },
   ref,
 ) {
   const editor = useEditor({
@@ -82,6 +85,7 @@ export const RichTextEditor = forwardRef<RichTextEditorHandle, RichTextEditorPro
   return (
     <div className="rt-editor">
       <EditorContent editor={editor} />
+      {aiActions && <EditorAiBubbleMenu editor={editor} actions={aiActions} />}
     </div>
   );
 });

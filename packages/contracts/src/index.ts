@@ -8,6 +8,7 @@
 export * from './common.js';
 export * from './content.js';
 export * from './contentDoc.js';
+export * from './cosmos.js';
 export * from './contentIntelligence.js';
 export * from './seo.js';
 export * from './models.js';

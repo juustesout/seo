@@ -7,7 +7,7 @@
  * that must be converted into safe, escapable block HTML before it can be
  * inserted into the structured Tiptap document.
  */
-import type { ContentAiAction, ContentAiSuggestionDto } from '@seo/contracts';
+import type { ContentAiAction, ContentAiEditOperation, ContentAiSuggestionDto } from '@seo/contracts';
 
 export const AI_ACTION_LABELS: Record<ContentAiAction, string> = {
   rewrite: 'Rewrite',
@@ -27,6 +27,15 @@ export const SELECTION_ACTIONS: ContentAiAction[] = [
   'tone',
   'improve_seo',
 ];
+
+/** Labels for the Cosmos AI editor operations (one shared request path). */
+export const AI_EDIT_OPERATION_LABELS: Record<ContentAiEditOperation, string> = {
+  rewrite: 'Rewrite',
+  improve: 'Improve',
+  shorten: 'Shorten',
+  expand: 'Expand',
+  ask: 'Ask AI',
+};
 
 /** HTML-escape text before it is embedded in generated markup (AI copy is untrusted). */
 export function escapeHtml(text: string): string {

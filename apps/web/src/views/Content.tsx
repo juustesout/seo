@@ -23,6 +23,8 @@ import {
   evaluateSeo,
   tiptapEmptyDoc,
   type ContentAiAction,
+  type ContentAiEditOperation,
+  type ContentAiEditResponseDto,
   type ContentAiSuggestionDto,
   type ContentOutlineItem,
   type ProjectAiStatusDto,
@@ -39,10 +41,16 @@ import { SeoPanel } from '../components/content/SeoPanel';
 import { AgentControls } from '../components/content/AgentControls';
 import { MediaPanel } from '../components/content/MediaPanel';
 import { ContentAiPanel } from '../components/content/ContentAiPanel';
+import { ContentAiEditPanel } from '../components/content/ContentAiEditPanel';
+import {
+  applyAiEditToEditor,
+  readEditorSelection,
+  type AiEditProposal,
+} from '../components/content/contentAiEditFlow';
 import { WriterPanel } from '../components/content/WriterPanel';
 import { KnowledgePanel } from '../components/content/KnowledgePanel';
 import { IntelligencePanel } from '../components/content/IntelligencePanel';
-import { textToBlocksHtml } from '../components/content/contentAi';
+import { AI_EDIT_OPERATION_LABELS, textToBlocksHtml } from '../components/content/contentAi';
 import { useAutosave } from '../components/content/useAutosave';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -129,6 +137,12 @@ export function Content({
   const [aiSelRange, setAiSelRange] = useState<{ from: number; to: number } | null>(null);
   const [hasSelection, setHasSelection] = useState(false);
   const [useKnowledge, setUseKnowledge] = useState(true);
+
+  // Cosmos AI editor: one structured, selection-scoped edit path (preview-only
+  // until the user applies it). Kept separate from the legacy plain-text action.
+  const [aiEditBusy, setAiEditBusy] = useState(false);
+  const [aiEditError, setAiEditError] = useState<string | null>(null);
+  const [aiEditProposal, setAiEditProposal] = useState<AiEditProposal | null>(null);
 
   // Writer panel (W6): a separate, explicit writer flow for the open article.
   // Kept as its own open/close flag so the panel survives parent re-renders
@@ -313,6 +327,9 @@ export function Content({
     setAiError(null);
     setAiSuggestion(null);
     setAiSelRange(null);
+    setAiEditBusy(false);
+    setAiEditError(null);
+    setAiEditProposal(null);
     setWriterOpen(false);
   };
 
@@ -405,6 +422,44 @@ export function Content({
   const rejectAi = () => {
     setAiSuggestion(null);
     setAiSelRange(null);
+  };
+
+  // --- Cosmos AI editor (structured replace_selection, preview-before-apply) ---
+
+  const runAiEdit = async (operation: ContentAiEditOperation, instruction?: string) => {
+    if (!editor || !editingId || aiEditBusy) return;
+    const selection = readEditorSelection(editor);
+    if (!selection) {
+      setAiEditError('Select the text you want to edit first.');
+      return;
+    }
+    const { from, to, text } = selection;
+    setAiEditBusy(true);
+    setAiEditError(null);
+    setAiEditProposal(null);
+    try {
+      const data = await api<ContentAiEditResponseDto>(`/projects/${projectId}/content/${editingId}/ai/edit`, {
+        method: 'POST',
+        body: { operation, selection: { from, to }, text, instruction: instruction ?? null },
+      });
+      setAiEditProposal({ ...data, range: { from, to }, requested: operation });
+    } catch (e) {
+      setAiEditError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setAiEditBusy(false);
+    }
+  };
+
+  // Applying is a normal editor transaction over the selected range only, so
+  // autosave picks it up and Undo stays available. The document is never
+  // replaced wholesale.
+  const applyAiEdit = () => {
+    if (!applyAiEditToEditor(editor, aiEditProposal)) return;
+    setAiEditProposal(null);
+  };
+
+  const rejectAiEdit = () => {
+    setAiEditProposal(null);
   };
 
   if (!creating && editingId === null) {
@@ -667,6 +722,15 @@ export function Content({
               initialDoc={initialDoc}
               onDocChange={(next) => setDoc(next)}
               onEditor={(e) => setEditor(e)}
+              aiActions={
+                editingId && canEdit
+                  ? {
+                      configured: aiConfigured,
+                      busy: aiEditBusy,
+                      onAction: (operation, instruction) => void runAiEdit(operation, instruction),
+                    }
+                  : undefined
+              }
             />
           </div>
           {aiBusy && (
@@ -677,6 +741,26 @@ export function Content({
           {aiSuggestion && (
             <div className="mt-3">
               <ContentAiPanel suggestion={aiSuggestion} onApply={applyAi} onReject={rejectAi} />
+            </div>
+          )}
+          {aiEditBusy && (
+            <p className="mt-2 text-sm text-muted-foreground">
+              Editing with AI… the change is previewed before it touches the document.
+            </p>
+          )}
+          {aiEditError && (
+            <div className="mt-2 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+              {aiEditError}
+            </div>
+          )}
+          {aiEditProposal && (
+            <div className="mt-3">
+              <ContentAiEditPanel
+                proposal={aiEditProposal}
+                operationLabel={AI_EDIT_OPERATION_LABELS[aiEditProposal.requested]}
+                onApply={applyAiEdit}
+                onReject={rejectAiEdit}
+              />
             </div>
           )}
         </div>

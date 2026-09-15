@@ -18,7 +18,7 @@ import type {
   SeoOpportunity,
   SyncJob,
 } from './models.js';
-import type { TipDoc } from './contentDoc.js';
+import type { TipDoc, TipNode } from './contentDoc.js';
 import type { SeoResult } from './seo.js';
 import type { KnowledgeDiscoveryScope } from './providers.js';
 
@@ -186,6 +186,49 @@ export interface ContentAiSuggestionDto {
    * Project-knowledge passages the AI was allowed to use, when knowledge was
    * requested and any existed. Absent/empty means no knowledge was supplied.
    */
+  knowledge?: ContentAiKnowledgeDto[];
+}
+
+// ---------------------------------------------------------------------------
+// Cosmos AI editor: selection-scoped structured edit protocol
+// ---------------------------------------------------------------------------
+
+/**
+ * Editable operations the selection-scoped editor AI supports. All of them use
+ * one request path and one validated response contract (`replace_selection`).
+ * `ask` carries a free-form instruction and is otherwise identical.
+ */
+export const CONTENT_AI_EDIT_OPERATIONS = ['rewrite', 'improve', 'shorten', 'expand', 'ask'] as const;
+
+export type ContentAiEditOperation = (typeof CONTENT_AI_EDIT_OPERATIONS)[number];
+
+/** A ProseMirror position range in the client's current document. `to` must be
+ *  strictly greater than `from`; the server validates the pair and ignores
+ *  positions it cannot reconcile with the stored document. */
+export interface ContentAiEditSelectionDto {
+  from: number;
+  to: number;
+}
+
+export interface ContentAiEditRequestDto {
+  operation: ContentAiEditOperation;
+  selection: ContentAiEditSelectionDto;
+  /** The exact selected copy (bounded). Treated as untrusted document data. */
+  text: string;
+  /** Required for `ask`; optional extra direction for the other operations. */
+  instruction?: string | null;
+}
+
+/**
+ * The only edit shape the model may return. `content` is a validated Tiptap
+ * block array that replaces exactly the selected range - never the document.
+ */
+export interface ContentAiEditResponseDto {
+  operation: 'replace_selection';
+  content: TipNode[];
+  reason: string | null;
+  model: string;
+  /** Project-knowledge passages offered as context, when any were used. */
   knowledge?: ContentAiKnowledgeDto[];
 }
 

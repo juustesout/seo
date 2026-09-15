@@ -1,17 +1,19 @@
 /**
  * Project settings (project nav "Settings").
  *
- * Owns the per-project Google Search Console property: which property this
- * project pulls data from. The GSC *connection* is account-level (see the
- * account Integrations/Overview views); this screen only attaches or unlinks a
- * property from the account registry, or discovers fresh Google properties to
- * register. Status is always the real server state - connecting/connected/
- * error are rendered from the API, not optimistically.
+ * Owns project-level configuration: the per-project Google Search Console
+ * property (which property this project pulls data from) and Cosmos, the
+ * editorial/brand guidance AI features use as context. The GSC *connection* is
+ * account-level (see the account Integrations/Overview views); this screen only
+ * attaches or unlinks a property from the account registry, or discovers fresh
+ * Google properties to register. Status is always the real server state -
+ * connecting/connected/error are rendered from the API, not optimistically.
  */
 import { useState } from 'react';
 import { useAsync, StatusPill } from '../lib/ui';
 import { api } from '../lib/api';
 import { connectGoogle } from '../lib/gsc';
+import { CosmosPanel } from '../components/content/CosmosPanel';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -50,19 +52,16 @@ interface Discovered {
  * reads/mutations; if the account is not connected yet it offers the
  * account-level OAuth connect instead.
  */
-export function ProjectSettings({ projectId }: { projectId: string }) {
+export function ProjectSettings({ projectId, role = 'viewer' }: { projectId: string; role?: string }) {
   const state = useAsync<StateDto>(() => api(`/projects/${projectId}/gsc/state`), [projectId]);
   const [discovered, setDiscovered] = useState<Discovered[] | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [ok, setOk] = useState<string | null>(null);
+  const canEdit = role === 'editor' || role === 'admin' || role === 'owner';
 
-  if (state.loading && !state.data) return <p className="text-sm text-muted-foreground">Loading…</p>;
-  if (state.error)
-    return <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">{state.error}</div>;
-  if (!state.data) return null;
-
-  const connected = state.data.google.connected;
+  const gsc = state.data;
+  const connected = gsc?.google.connected ?? false;
 
   const run = async (key: string, fn: () => Promise<unknown>, success?: string) => {
     setBusy(key);
@@ -92,7 +91,7 @@ export function ProjectSettings({ projectId }: { projectId: string }) {
     }
   };
 
-  const current = state.data.current;
+  const current = gsc?.current ?? null;
 
   return (
     <div className="grid gap-5">
@@ -109,6 +108,17 @@ export function ProjectSettings({ projectId }: { projectId: string }) {
         <div className="rounded-md border border-success/30 bg-success/5 px-3 py-2 text-sm text-success">{ok}</div>
       )}
 
+      <CosmosPanel projectId={projectId} canEdit={canEdit} />
+
+      {state.error && (
+        <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+          {state.error}
+        </div>
+      )}
+      {!gsc && state.loading && <p className="text-sm text-muted-foreground">Loading Search Console…</p>}
+
+      {gsc && (
+        <>
       <Card>
         <CardHeader>
           <CardTitle>Google Search Console</CardTitle>
@@ -117,13 +127,13 @@ export function ProjectSettings({ projectId }: { projectId: string }) {
           {!connected ? (
             <div className="grid gap-3">
               <p className="text-sm text-muted-foreground">
-                {state.data.google.status === 'connecting'
+                {gsc.google.status === 'connecting'
                   ? 'Waiting for Google authorization…'
                   : 'This project has no Search Console connection. Connecting authorizes your account (once) so any project can attach its properties.'}
               </p>
-              {state.data.google.error && (
+              {gsc.google.error && (
                 <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-                  {state.data.google.error}
+                  {gsc.google.error}
                 </div>
               )}
               <div>
@@ -172,7 +182,7 @@ export function ProjectSettings({ projectId }: { projectId: string }) {
 
       {connected && (
         <>
-          {state.data.candidates.length > 0 && (
+          {gsc.candidates.length > 0 && (
             <Card>
               <CardHeader>
                 <CardTitle>Attach a property</CardTitle>
@@ -188,7 +198,7 @@ export function ProjectSettings({ projectId }: { projectId: string }) {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {state.data.candidates.map((c) => (
+                    {gsc.candidates.map((c) => (
                       <TableRow key={c.id}>
                         <TableCell className="font-mono">{c.site_url}</TableCell>
                         <TableCell className="text-muted-foreground">{c.permission_level ?? '—'}</TableCell>
@@ -279,6 +289,8 @@ export function ProjectSettings({ projectId }: { projectId: string }) {
               )}
             </CardContent>
           </Card>
+        </>
+      )}
         </>
       )}
     </div>

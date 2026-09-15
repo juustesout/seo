@@ -39,6 +39,7 @@ import { publicationsRouter } from './http/routes/publications.js';
 import { schedulesRouter } from './http/routes/schedules.js';
 import { knowledgeRouter } from './http/routes/knowledge.js';
 import { aiSettingsRouter } from './http/routes/aiSettings.js';
+import { cosmosRouter } from './http/routes/cosmos.js';
 import { contentRouter } from './http/routes/content.js';
 import { writerRouter } from './http/routes/writer.js';
 import { mediaRouter } from './http/routes/media.js';
@@ -131,6 +132,7 @@ export function createApp(): Express {
   );
   app.use('/api/projects/:projectId/knowledge', knowledgeRouter);
   app.use('/api/projects/:projectId/ai', aiSettingsRouter);
+  app.use('/api/projects/:projectId/cosmos', cosmosRouter);
   app.use('/api/projects/:projectId/content', contentRouter);
   // Writer agent runs hang off one exact content item; mounted after the
   // content router so /:contentId/writer never collides with content routes.

@@ -317,7 +317,7 @@ export function App() {
             {view === 'calendar' && <ContentSchedule projectId={pid} role={project.role} onViewPublication={(scheduleId) => openProjectView(pid, 'publications', { schedule_id: scheduleId })} />}
             {view === 'publications' && <Publications projectId={pid} />}
             {view === 'publishing' && <Publishing projectId={pid} />}
-            {view === 'settings' && <ProjectSettings projectId={pid} />}
+            {view === 'settings' && <ProjectSettings projectId={pid} role={project.role} />}
           </main>
         </div>
       </div>
