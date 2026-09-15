@@ -543,10 +543,16 @@ describe('Keywords view - Opportunities (KW5/KW5.1)', () => {
     };
   }
 
-  function mockApi(opps: (path: string) => unknown) {
-    apiMock.api.mockImplementation(async (path: string) => {
+  function mockApi(
+    opps: (path: string) => unknown,
+    article?: (opts?: { method?: string; body?: unknown }) => unknown,
+  ) {
+    apiMock.api.mockImplementation(async (path: string, opts?: { method?: string; body?: unknown }) => {
       if (path.endsWith('/gsc/keywords')) return EMPTY_GSC;
       if (path.endsWith('/keyword/competitors/snapshot')) return discoverySnapshot();
+      if (path.includes('/opportunities/topics/article') && opts?.method === 'POST') {
+        return article ? article(opts) : { job: { id: 'job-1' } };
+      }
       if (path.includes('/keyword/opportunities')) return opps(path);
       throw new Error(`unexpected ${path}`);
     });
@@ -598,6 +604,56 @@ describe('Keywords view - Opportunities (KW5/KW5.1)', () => {
     expect(screen.getByText('78')).toBeTruthy();
     expect(screen.getByText('High volume · Low difficulty')).toBeTruthy();
     expect(screen.getByText(/Showing 1 of 1 opportunities/)).toBeTruthy();
+  });
+
+  it('starts a draft from an opportunity through the shared writer handoff', async () => {
+    let posted: Record<string, unknown> | null = null;
+    mockApi(
+      () => opportunities(),
+      (opts) => {
+        posted = opts?.body as Record<string, unknown>;
+        return { job: { id: 'job-1' } };
+      },
+    );
+
+    await selectCompetitors(['rival.com'], 'editor');
+    fireEvent.click(await screen.findByRole('button', { name: 'Create article' }));
+
+    await waitFor(() => expect(posted).not.toBeNull());
+    expect(posted).toMatchObject({
+      topic_name: 'seo tools',
+      primary_keyword: 'seo tools',
+      opportunity_score: 78,
+      reasons: ['high_volume', 'low_difficulty'],
+      difficulty: 30,
+      intent: 'commercial',
+    });
+    expect(await screen.findByText(/Draft generation started for "seo tools"/)).toBeTruthy();
+  });
+
+  it('blocks a viewer from creating a draft from an opportunity', async () => {
+    mockApi(() => opportunities());
+
+    await selectCompetitors(['rival.com'], 'viewer');
+
+    const button = (await screen.findByRole('button', { name: 'Create article' })) as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+    expect(screen.getByText('Editors and above can create drafts.')).toBeTruthy();
+  });
+
+  it('surfaces a failed draft handoff without leaking internals', async () => {
+    mockApi(
+      () => opportunities(),
+      () => {
+        throw new Error('boom: raw database secret');
+      },
+    );
+
+    await selectCompetitors(['rival.com'], 'editor');
+    fireEvent.click(await screen.findByRole('button', { name: 'Create article' }));
+
+    expect(await screen.findByText('Could not start the draft. Please try again.')).toBeTruthy();
+    expect(screen.queryByText(/raw database secret/)).toBeNull();
   });
 
   it('passes result filters through the request and renders an empty result', async () => {

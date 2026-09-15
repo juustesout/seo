@@ -32,6 +32,7 @@ import {
   CORE_TOPIC_NAME_MAX_CHARS,
   OPPORTUNITIES_MAX_LIMIT,
   OPPORTUNITY_INTENTS,
+  OPPORTUNITY_REASONS,
   OPPORTUNITY_SORTS,
   OPPORTUNITY_SORT_DIRS,
   TOPIC_ARTICLE_MAX_COMPETITORS,
@@ -106,6 +107,9 @@ const topicArticleSchema = z.object({
     .max(TOPIC_ARTICLE_MAX_COMPETITORS)
     .optional(),
   opportunity_score: z.number().min(0).max(100).nullable().optional(),
+  reasons: z.enum(OPPORTUNITY_REASONS).array().max(OPPORTUNITY_REASONS.length).optional(),
+  difficulty: z.number().min(0).max(100).nullable().optional(),
+  intent: z.enum(OPPORTUNITY_INTENTS).nullable().optional(),
 });
 
 /** Read the deterministic opportunity analysis over the active competitor set. */
@@ -157,6 +161,9 @@ opportunitiesRouter.post(
       keywords: relatedKeywords,
       competitors,
       opportunity_score: body.opportunity_score,
+      reasons: body.reasons ?? [],
+      difficulty: body.difficulty ?? null,
+      intent: body.intent ?? null,
     };
     const opportunityContextText = buildOpportunityContext(opportunityContext);
     const params = {
@@ -177,6 +184,9 @@ opportunitiesRouter.post(
           keywords: relatedKeywords,
           competitors,
           opportunityScore: body.opportunity_score ?? null,
+          reasons: body.reasons ?? [],
+          difficulty: body.difficulty ?? null,
+          intent: body.intent ?? null,
           knowledgeReadiness: null,
         },
         opportunityContextText,

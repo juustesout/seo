@@ -12,7 +12,8 @@
  * article is. No provider, credential or retrieval type leaks in here.
  */
 
-import type { OpportunityCompetitorDto } from './api.js';
+import { OPPORTUNITY_INTENTS, OPPORTUNITY_REASONS } from './api.js';
+import type { OpportunityCompetitorDto, OpportunityIntent, OpportunityReason } from './api.js';
 import type { KnowledgeReadinessState } from './opportunityTopics.js';
 
 // ---------------------------------------------------------------------------
@@ -112,6 +113,15 @@ export interface WriterOpportunityContext {
   keywords: WriterRelatedKeyword[];
   competitors: OpportunityCompetitorDto[];
   opportunityScore: number | null;
+  /**
+   * Deterministic reason tags behind the score, when the source reported them.
+   * Coarse, machine-owned evidence - never a model-produced explanation.
+   */
+  reasons?: OpportunityReason[];
+  /** Observed keyword difficulty (0..100), when the source measured it. */
+  difficulty?: number | null;
+  /** Deterministic lexical intent, when the source derived one. */
+  intent?: OpportunityIntent | null;
   /** Coarse readiness state from KW6, or null when never assessed. */
   knowledgeReadiness: KnowledgeReadinessState | null;
 }
@@ -202,6 +212,17 @@ export function boundWriterOpportunityContext(context: WriterOpportunityContext)
     opportunityScore:
       typeof context.opportunityScore === 'number' && Number.isFinite(context.opportunityScore)
         ? Math.min(100, Math.max(0, context.opportunityScore))
+        : null,
+    reasons: [...new Set(context.reasons ?? [])].filter((reason) =>
+      (OPPORTUNITY_REASONS as readonly string[]).includes(reason),
+    ),
+    difficulty:
+      typeof context.difficulty === 'number' && Number.isFinite(context.difficulty)
+        ? Math.min(100, Math.max(0, context.difficulty))
+        : null,
+    intent:
+      context.intent && (OPPORTUNITY_INTENTS as readonly string[]).includes(context.intent)
+        ? context.intent
         : null,
     knowledgeReadiness: context.knowledgeReadiness ?? null,
   };

@@ -225,6 +225,9 @@ describe('runWriterEngine quick draft', () => {
           keywords: [{ keyword: 'blue widgets', volume: 2400 }],
           competitors: [{ domain: 'rival.com', rank: 3 }],
           opportunityScore: 78,
+          reasons: ['high_volume', 'low_difficulty'],
+          difficulty: 53,
+          intent: 'commercial',
           knowledgeReadiness: 'moderate',
         },
       }),
@@ -236,6 +239,9 @@ describe('runWriterEngine quick draft', () => {
     expect(chunks[0]!.sourceId).toBe('opportunity');
     expect(chunks[0]!.trust).toBe('untrusted');
     expect(chunks[0]!.text).toContain('Opportunity score: 78/100');
+    expect(chunks[0]!.text).toContain('Keyword difficulty: 53/100');
+    expect(chunks[0]!.text).toContain('Search intent: commercial');
+    expect(chunks[0]!.text).toContain('Why this opportunity: high volume, low difficulty');
     expect(chunks[1]!.sourceId).toBe('kb1');
   });
 
@@ -396,6 +402,9 @@ describe('parseWriterInput', () => {
         keywords: [{ keyword: 'blue widgets', volume: 2400 }],
         competitors: [{ domain: 'rival.com', rank: 3 }],
         opportunityScore: 78,
+        reasons: ['high_volume'],
+        difficulty: 53,
+        intent: 'commercial',
       },
     });
 
@@ -404,6 +413,9 @@ describe('parseWriterInput', () => {
     expect(parsed.topic.name).toBe('Blue widgets');
     expect(parsed.relatedKeywords).toEqual([{ keyword: 'blue widgets', volume: 2400 }]);
     expect(parsed.opportunityContext?.opportunityScore).toBe(78);
+    expect(parsed.opportunityContext?.reasons).toEqual(['high_volume']);
+    expect(parsed.opportunityContext?.difficulty).toBe(53);
+    expect(parsed.opportunityContext?.intent).toBe('commercial');
   });
 
   it('fails closed on an unknown format or execution mode', () => {

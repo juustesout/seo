@@ -238,6 +238,9 @@ describe('opportunity topic routes', () => {
         keywords: [{ keyword: 'blue widgets', volume: 2400 }],
         competitors: [{ domain: 'rival.com', rank: 3 }],
         opportunity_score: 78,
+        reasons: ['high_volume', 'low_difficulty'],
+        difficulty: 53,
+        intent: 'commercial',
       },
     });
     expect(res.status).toBe(202);
@@ -255,6 +258,9 @@ describe('opportunity topic routes', () => {
     expect(context).toContain('Topic: blue widgets');
     expect(context).toContain('Competitor evidence: rival.com #3');
     expect(context).toContain('Opportunity score: 78/100');
+    expect(context).toContain('Keyword difficulty: 53/100');
+    expect(context).toContain('Search intent: commercial');
+    expect(context).toContain('Why this opportunity: high volume, low difficulty');
     const writerInput = params.writer_input as Record<string, unknown>;
     expect(writerInput.projectId).toBe(PROJECT);
     expect(writerInput.format).toBe('short_article');
@@ -264,7 +270,23 @@ describe('opportunity topic routes', () => {
     const opportunity = writerInput.opportunityContext as Record<string, unknown>;
     expect(opportunity.topic).toBe('blue widgets');
     expect(opportunity.opportunityScore).toBe(78);
+    expect(opportunity.reasons).toEqual(['high_volume', 'low_difficulty']);
+    expect(opportunity.difficulty).toBe(53);
+    expect(opportunity.intent).toBe('commercial');
     expect((opportunity.competitors as unknown[])[0]).toEqual({ domain: 'rival.com', rank: 3 });
+  });
+
+  it('rejects an unknown opportunity reason tag at the edge', async () => {
+    const res = await request('/opportunities/topics/article', {
+      token: 'editor-token',
+      method: 'POST',
+      body: {
+        topic_name: 'blue widgets',
+        reasons: ['definitely_not_a_reason'],
+      },
+    });
+    expect(res.status).toBe(400);
+    expect(enqueued).toHaveLength(0);
   });
 
   it('rejects an invalid article body at the edge', async () => {

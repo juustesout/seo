@@ -528,5 +528,9 @@ export function buildOpportunityContext(request: TopicArticleRequest): string {
     .map((row) => `${row.domain}${row.rank != null ? ` #${row.rank}` : ''}`);
   if (competitors.length > 0) lines.push(`Competitor evidence: ${competitors.join(', ')}`);
   if (request.opportunity_score != null) lines.push(`Opportunity score: ${request.opportunity_score}/100`);
+  if (request.difficulty != null) lines.push(`Keyword difficulty: ${request.difficulty}/100`);
+  if (request.intent) lines.push(`Search intent: ${request.intent}`);
+  const reasons = (request.reasons ?? []).map((reason) => reason.replace(/_/g, ' '));
+  if (reasons.length > 0) lines.push(`Why this opportunity: ${reasons.join(', ')}`);
   return lines.join('\n').slice(0, 4000);
 }

@@ -30,6 +30,8 @@ import {
   boundWriterOpportunityContext,
   contentWordCount,
   KNOWLEDGE_READINESS_STATES,
+  OPPORTUNITY_INTENTS,
+  OPPORTUNITY_REASONS,
   WRITER_EXECUTION_PROFILE_IDS,
   WRITER_FORMAT_IDS,
   WRITER_LANGUAGE_MAX_CHARS,
@@ -113,6 +115,9 @@ const opportunityContextSchema = z.object({
     .max(WRITER_OPPORTUNITY_COMPETITORS_MAX)
     .optional(),
   opportunityScore: z.number().min(0).max(100).nullable().optional(),
+  reasons: z.enum(OPPORTUNITY_REASONS).array().max(OPPORTUNITY_REASONS.length).optional(),
+  difficulty: z.number().min(0).max(100).nullable().optional(),
+  intent: z.enum(OPPORTUNITY_INTENTS).nullable().optional(),
   knowledgeReadiness: z.enum(KNOWLEDGE_READINESS_STATES).nullable().optional(),
 });
 
@@ -169,6 +174,9 @@ export function parseWriterInput(raw: unknown): WriterInput {
             rank: row.rank ?? null,
           })),
           opportunityScore: data.opportunityContext.opportunityScore ?? null,
+          reasons: data.opportunityContext.reasons ?? [],
+          difficulty: data.opportunityContext.difficulty ?? null,
+          intent: data.opportunityContext.intent ?? null,
           knowledgeReadiness: data.opportunityContext.knowledgeReadiness ?? null,
         })
       : null,
@@ -274,6 +282,10 @@ function opportunityBriefingText(input: WriterInput): string | null {
       );
     }
     if (ctx.opportunityScore != null) lines.push(`Opportunity score: ${ctx.opportunityScore}/100`);
+    if (ctx.difficulty != null) lines.push(`Keyword difficulty: ${ctx.difficulty}/100`);
+    if (ctx.intent) lines.push(`Search intent: ${ctx.intent}`);
+    const reasons = (ctx.reasons ?? []).map((reason) => reason.replace(/_/g, ' '));
+    if (reasons.length > 0) lines.push(`Why this opportunity: ${reasons.join(', ')}`);
     if (ctx.knowledgeReadiness) lines.push(`Knowledge readiness: ${ctx.knowledgeReadiness}`);
     return lines.join('\n').slice(0, WRITER_OPPORTUNITY_TEXT_MAX_CHARS);
   }

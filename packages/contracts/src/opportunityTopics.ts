@@ -9,7 +9,7 @@
  * as a calibrated percentage.
  */
 
-import type { OpportunityCompetitorDto, OpportunitySnapshotMetaDto } from './api.js';
+import type { OpportunityCompetitorDto, OpportunityIntent, OpportunityReason, OpportunitySnapshotMetaDto } from './api.js';
 
 // ---------------------------------------------------------------------------
 // Core topics (stored in seo_projects.settings.coreTopics, no new table)
@@ -147,6 +147,12 @@ export interface TopicArticleRequest {
   keywords?: Array<{ keyword: string; volume: number | null }>;
   competitors?: OpportunityCompetitorDto[];
   opportunity_score?: number | null;
+  /** Deterministic reason tags behind the score, when the UI has them. */
+  reasons?: OpportunityReason[];
+  /** Observed keyword difficulty (0..100), when the UI has it. */
+  difficulty?: number | null;
+  /** Deterministic lexical intent, when the UI has it. */
+  intent?: OpportunityIntent | null;
 }
 
 /** Bounds for the structured opportunity context handed to the writer. */

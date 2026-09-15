@@ -24,6 +24,7 @@ import {
   OPPORTUNITY_INTENTS,
   OPPORTUNITY_SORTS,
   OPPORTUNITY_SORT_DIRS,
+  TOPIC_ARTICLE_MAX_COMPETITORS,
 } from '@seo/contracts';
 import type {
   CompetitorDiscoveryStartDto,
@@ -36,6 +37,7 @@ import type {
   KeywordExpansionRunDto,
   KeywordExpansionSaveDto,
   KeywordExpansionStartDto,
+  KeywordOpportunityDto,
   KeywordQuery,
   KeywordResearchRunDto,
   KeywordResearchStartDto,
@@ -1190,10 +1192,12 @@ const OPPORTUNITY_REVEAL_STEP = 25;
  */
 function Opportunities({
   projectId,
+  role,
   selected,
   onGoToCompetitors,
 }: {
   projectId: string;
+  role: string;
   selected: string[];
   onGoToCompetitors: () => void;
 }) {
@@ -1203,6 +1207,11 @@ function Opportunities({
   const [sort, setSort] = useState<OpportunitySort>('score');
   const [dir, setDir] = useState<OpportunitySortDir>('desc');
   const [visible, setVisible] = useState(OPPORTUNITY_REVEAL_STEP);
+  const [creating, setCreating] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+
+  const canCreate = canStartResearch(role);
 
   const competitorsParam = selected.join(',');
   const params = new URLSearchParams();
@@ -1240,6 +1249,39 @@ function Opportunities({
 
   const shown = opportunities.slice(0, visible);
 
+  const createArticle = async (o: KeywordOpportunityDto) => {
+    setNotice(null);
+    setActionError(null);
+    setCreating(o.keyword);
+    try {
+      await api(`/projects/${projectId}/keyword/opportunities/topics/article`, {
+        method: 'POST',
+        body: {
+          topic_name: o.keyword,
+          topic_description: '',
+          primary_keyword: o.keyword,
+          keywords: [{ keyword: o.keyword, volume: o.searchVolume }],
+          competitors: o.competitors
+            .slice(0, TOPIC_ARTICLE_MAX_COMPETITORS)
+            .map((c) => ({ domain: c.domain, rank: c.rank })),
+          opportunity_score: o.score,
+          reasons: o.reasons,
+          difficulty: o.difficulty,
+          intent: o.intent,
+        },
+      });
+      setNotice(`Draft generation started for "${o.keyword}". Follow it in Content.`);
+    } catch (e) {
+      setActionError(
+        e instanceof ApiRequestError && e.code === 'forbidden'
+          ? 'You do not have permission to create articles.'
+          : 'Could not start the draft. Please try again.',
+      );
+    } finally {
+      setCreating(null);
+    }
+  };
+
   return (
     <Card>
       <CardHeader>
@@ -1250,6 +1292,15 @@ function Opportunities({
         </CardDescription>
       </CardHeader>
       <CardContent className="grid gap-4">
+        {notice && (
+          <div className="rounded-md border border-emerald-500/30 bg-emerald-500/5 px-3 py-2 text-sm">{notice}</div>
+        )}
+        {actionError && (
+          <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+            {actionError}
+          </div>
+        )}
+
         {loading && <div className="py-8 text-center text-sm text-muted-foreground">Analyzing opportunities…</div>}
 
         {!loading && error && (
@@ -1374,6 +1425,7 @@ function Opportunities({
                       <TableHead className="text-right">Competitors</TableHead>
                       <TableHead className="text-right">Score</TableHead>
                       <TableHead>Why</TableHead>
+                      <TableHead>Draft</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -1404,10 +1456,24 @@ function Opportunities({
                             ? '—'
                             : o.reasons.map((r) => OPPORTUNITY_REASON_LABELS[r]).join(' · ')}
                         </TableCell>
+                        <TableCell>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            disabled={!canCreate || creating === o.keyword}
+                            title={canCreate ? undefined : 'Editors and above can create drafts.'}
+                            onClick={() => void createArticle(o)}
+                          >
+                            {creating === o.keyword ? 'Starting…' : 'Create article'}
+                          </Button>
+                        </TableCell>
                       </TableRow>
                     ))}
                   </TableBody>
                 </Table>
+                {!canCreate && (
+                  <p className="text-xs text-muted-foreground">Editors and above can create drafts.</p>
+                )}
                 {shown.length < opportunities.length && (
                   <div>
                     <Button
@@ -2044,6 +2110,7 @@ export function Keywords({ projectId, role }: { projectId: string; role: string 
       {tab === 'opportunities' && (
         <Opportunities
           projectId={projectId}
+          role={role}
           selected={selectedCompetitors}
           onGoToCompetitors={() => setTab('competitors')}
         />
