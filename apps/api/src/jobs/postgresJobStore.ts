@@ -192,7 +192,7 @@ export class PostgresJobStore implements JobStore {
    * true number of retries that happened before the terminal failure, so the
    * counter is not inflated by the attempt that finally gave up.
    */
-  async fail(id: string, errorPayload: JobRecord['error'], retryable: boolean): Promise<void> {
+  async fail(id: string, errorPayload: JobRecord['error'], retryable: boolean, result?: Record<string, unknown>): Promise<void> {
     const row = await this.pool.query('select retry_count, max_retries from seo_sync_jobs where id=$1', [id]);
     const retryCount = ((row.rows[0]?.retry_count as number) ?? 0) + 1;
     const maxRetries = (row.rows[0]?.max_retries as number) ?? 3;
@@ -207,8 +207,11 @@ export class PostgresJobStore implements JobStore {
       );
     } else {
       await this.pool.query(
-        'update seo_sync_jobs set status=$2, completed_at=now(), retry_count=$3, error=$4 where id=$1',
-        [id, 'failed', retryCount - 1, JSON.stringify(errorPayload)],
+        `update seo_sync_jobs
+           set status=$2, completed_at=now(), retry_count=$3, error=$4,
+               result=coalesce($5::jsonb, result)
+         where id=$1`,
+        [id, 'failed', retryCount - 1, JSON.stringify(errorPayload), result ? JSON.stringify(result) : null],
       );
     }
   }

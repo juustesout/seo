@@ -326,6 +326,41 @@ describe('runWriterEngine quick draft', () => {
     expect(kinds).toContain('persist');
     expect(result.passes.every((pass) => pass.durationMs >= 0)).toBe(true);
   });
+
+  it('exposes a compact run summary derived from the executed passes', async () => {
+    const result = await runWriterEngine(makeInput(), makeDeps());
+
+    expect(result.summary.mode).toBe('quick_draft');
+    expect(result.summary.format).toBe('short_article');
+    expect(result.summary.pass_count).toBe(result.passes.length);
+    // Quick Draft: one architecture call plus one section call per section.
+    expect(result.summary.llm_calls).toBe(1 + 3);
+    expect(result.summary.by_kind.section_generation).toBe(3);
+    expect(result.summary.duration_ms).toBeGreaterThanOrEqual(0);
+    expect(result.summary.failed_pass).toBeUndefined();
+  });
+
+  it('attaches a compact failure summary to the thrown error', async () => {
+    const sectionWriter = makeSectionWriter({
+      at: 1,
+      outcome: { ok: false, code: 'ai_error', note: 'provider exploded' },
+    });
+    let caught: unknown;
+    try {
+      await runWriterEngine(makeInput(), makeDeps({ sectionWriter: sectionWriter.dependencies }));
+    } catch (err) {
+      caught = err;
+    }
+
+    expect(caught).toMatchObject({ code: 'provider_error' });
+    const summary = (caught as { writerSummary?: { failed_pass?: string; pass_count: number; llm_calls: number } })
+      .writerSummary;
+    expect(summary?.failed_pass).toBe('section_generation');
+    expect(summary?.pass_count).toBeGreaterThan(0);
+    // Architecture, the first section, and the failing second section each made
+    // a real call - the failed attempt is still counted.
+    expect(summary?.llm_calls).toBe(3);
+  });
 });
 
 describe('runWriterEngine deep write', () => {
@@ -366,6 +401,11 @@ describe('runWriterEngine deep write', () => {
     expect(kinds).toContain('editorial_validation');
     expect(kinds).toContain('persist');
     expect(stages).toContain('coherence');
+    // Deep Write uses its own bounded call accounting: architecture 1 +
+    // section planning 3 + paragraph writing 6 + refinement 3 + coherence 1.
+    expect(result.summary.mode).toBe('deep_write');
+    expect(result.summary.llm_calls).toBe(14);
+    expect(result.summary.failed_pass).toBeUndefined();
   });
 
   it('carries each pass identity/brief but never the projectId into the pass input', async () => {

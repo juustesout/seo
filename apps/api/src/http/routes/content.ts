@@ -19,7 +19,8 @@ import { ContentService, contentJsonSchema, CONTENT_STATUSES } from '../../servi
 import { ContentAnalysisService } from '../../services/contentAnalysisService.js';
 import { ContentAiService } from '../../services/contentAiService.js';
 import { ContentIntelligenceService } from '../../services/contentIntelligenceService.js';
-import { CONTENT_AI_ACTIONS } from '@seo/contracts';
+import { startContentDraft } from '../../services/contentDraftService.js';
+import { CONTENT_AI_ACTIONS, WRITER_EXECUTION_PROFILE_IDS, WRITER_FORMAT_IDS } from '@seo/contracts';
 
 export const contentRouter: Router = Router({ mergeParams: true });
 
@@ -107,54 +108,37 @@ contentRouter.post(
 
 const analyzeSchema = z.object({ with_ai: z.boolean().optional() }).passthrough();
 
-const contentAiActionSchema = z
+/**
+ * Agent Controls: generate a NEW draft from this article through the shared
+ * Writer Engine (a normal content_write job). `contentId: null` is enforced
+ * server-side, so the article being edited is never mutated.
+ */
+const contentDraftSchema = z
   .object({
-    action: z.enum(CONTENT_AI_ACTIONS),
-    selection: z.string().max(8000).nullable().optional(),
-    instruction: z.string().max(500).nullable().optional(),
-    tone: z.string().max(120).nullable().optional(),
-    context: z.string().max(4000).nullable().optional(),
-    keyword: z.string().max(200).nullable().optional(),
-    use_knowledge: z.boolean().optional(),
+    mode: z.enum(WRITER_EXECUTION_PROFILE_IDS).optional(),
+    format: z.enum(WRITER_FORMAT_IDS).optional(),
+    idempotency_key: z.string().trim().min(1).max(200).optional(),
   })
   .passthrough();
 
-/**
- * Run an in-editor AI action (rewrite/improve/expand/shorten/tone/improve_seo/
- * generate_section). Returns a structured suggestion only - the document is
- * never modified server-side; the editor applies or rejects it.
- */
+/** Start a new Writer Engine draft from this article (never overwrites it). */
 contentRouter.post(
-  '/:id/ai',
+  '/:id/draft',
   asyncHandler(async (req, res) => {
     const projectId = parseProjectId(req);
+    const contentId = parseId(req, 'id');
     const { container, user } = req;
     await container.access.requireRole(user!.sub, projectId, 'editor');
-    const body = contentAiActionSchema.parse(req.body);
-    const svc = new ContentAiService(container);
-    const suggestion = await svc.run(projectId, parseId(req, 'id'), {
-      action: body.action,
-      selection: body.selection ?? null,
-      instruction: body.instruction ?? null,
-      tone: body.tone ?? null,
-      context: body.context ?? null,
-      keyword: body.keyword ?? null,
-      useKnowledge: body.use_knowledge ?? true,
+    const body = contentDraftSchema.parse(req.body ?? {});
+    const { job, reused } = await startContentDraft(container, {
+      projectId,
+      contentId,
+      userId: user!.sub,
+      mode: body.mode,
+      format: body.format,
+      idempotencyToken: body.idempotency_key,
     });
-    res.json({ data: suggestion });
-  }),
-);
-
-/** Deterministic audit (no network) - returns the reusable report shape. */
-contentRouter.get(
-  '/:id/analysis',
-  asyncHandler(async (req, res) => {
-    const projectId = parseProjectId(req);
-    const { container, user } = req;
-    await container.access.requireRole(user!.sub, projectId, 'viewer');
-    const svc = new ContentAnalysisService(container);
-    const result = await svc.analyze(projectId, parseId(req, 'id'));
-    res.json({ data: result });
+    res.status(202).json({ data: { job, reused } });
   }),
 );
 

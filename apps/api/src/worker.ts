@@ -93,8 +93,12 @@ export async function runOnce(container: ReturnType<typeof getContainer>): Promi
       project_id: job.project_id,
       job_type: job.job_type,
     });
+    // An executor may attach a bounded, non-secret summary of what it managed to
+    // do before failing; persist it on terminal failure so the UI can explain.
+    const failureResult =
+      err && typeof err === 'object' ? (err as { jobResult?: Record<string, unknown> }).jobResult : undefined;
     log.error({ err, retryable }, 'job failed');
-    await container.jobStore.fail(job.id, error, retryable);
+    await container.jobStore.fail(job.id, error, retryable, failureResult);
     await flagFailedPublication(container, job, error.message, retryable);
     if (scheduleId && PUBLISH_JOB_TYPES.has(job.job_type)) {
       // Retryable means the job store requeued it with backoff -> the schedule

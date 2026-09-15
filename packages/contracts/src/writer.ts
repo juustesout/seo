@@ -155,6 +155,27 @@ export interface WriterInput {
 }
 
 // ---------------------------------------------------------------------------
+// Compact run summary (derived from the in-memory pass trace)
+// ---------------------------------------------------------------------------
+
+/**
+ * Small, UI-safe projection of one Writer Engine run. It is derived from the
+ * bounded in-memory pass trace - counts, timings and a failed-stage label only -
+ * so it can be persisted on a job result without ever storing prompts, bodies
+ * or the full trace. `llm_calls` counts only stages that make a model call.
+ */
+export interface WriterRunSummary {
+  mode: WriterExecutionProfileId;
+  format: WriterFormatId;
+  pass_count: number;
+  llm_calls: number;
+  duration_ms: number;
+  by_kind: Record<string, number>;
+  /** Kind of the last failed pass, when the run failed mid-execution. */
+  failed_pass?: string;
+}
+
+// ---------------------------------------------------------------------------
 // Article plan (intermediate representation)
 // ---------------------------------------------------------------------------
 

@@ -41,6 +41,7 @@ import {
   type KeywordExpansionMethodStatusDto,
   type KeywordResearchKeywordDto,
   type KeywordResearchResult,
+  type WriterRunSummary,
 } from '@seo/contracts';
 import { normalizeDomain } from '../services/competitorResearchService.js';
 import { competitorDiscoveryScope, competitorGapScope } from '../services/sourceScope.js';
@@ -828,10 +829,22 @@ async function contentWrite(ctx: JobExecContext): Promise<Record<string, unknown
   const params = (job.params ?? {}) as Record<string, unknown>;
   const input = parseWriterInput(params.writer_input);
   const engine = createWriterEngine(container);
-  const result = await engine.run(input, {
-    userId: job.created_by,
-    onStage: (label, progress) => ctx.report(progress, label),
-  });
+  let result: Awaited<ReturnType<typeof engine.run>>;
+  try {
+    result = await engine.run(input, {
+      userId: job.created_by,
+      onStage: (label, progress) => ctx.report(progress, label),
+    });
+  } catch (err) {
+    // The engine attaches a compact failure summary to its error. Carry it to
+    // the worker on a generic `jobResult` so the failed row still explains the
+    // run (pass counts + failed stage), without the engine knowing about jobs.
+    const summary = err && typeof err === 'object' ? (err as { writerSummary?: WriterRunSummary }).writerSummary : undefined;
+    if (summary) {
+      throw Object.assign(err as object, { jobResult: { writer_summary: summary } });
+    }
+    throw err;
+  }
   await ctx.report(100, `Draft "${result.title}" created`);
   return {
     content_id: result.contentId,
@@ -842,6 +855,7 @@ async function contentWrite(ctx: JobExecContext): Promise<Record<string, unknown
     section_count: result.sectionCount,
     word_count: result.wordCount,
     seo_score: result.seoScore,
+    writer_summary: result.summary,
   };
 }
 

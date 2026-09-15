@@ -180,7 +180,7 @@ export class SupabaseJobStore implements JobStore {
    * retry_count as one less than the attempts made (the real number of retries
    * before the terminal failure).
    */
-  async fail(id: string, errorPayload: JobRecord['error'], retryable: boolean): Promise<void> {
+  async fail(id: string, errorPayload: JobRecord['error'], retryable: boolean, result?: Record<string, unknown>): Promise<void> {
     const { data: row } = await this.sb
       .from('seo_sync_jobs')
       .select('retry_count, max_retries')
@@ -202,15 +202,14 @@ export class SupabaseJobStore implements JobStore {
         })
         .eq('id', id);
     } else {
-      await this.sb
-        .from('seo_sync_jobs')
-        .update({
-          status: 'failed',
-          completed_at: new Date().toISOString(),
-          retry_count: retryCount - 1,
-          error: errorPayload,
-        })
-        .eq('id', id);
+      const update: Record<string, unknown> = {
+        status: 'failed',
+        completed_at: new Date().toISOString(),
+        retry_count: retryCount - 1,
+        error: errorPayload,
+      };
+      if (result) update.result = result;
+      await this.sb.from('seo_sync_jobs').update(update).eq('id', id);
     }
   }
 

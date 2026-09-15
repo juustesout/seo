@@ -50,7 +50,12 @@ export interface JobStore {
   list(projectId: string, limit?: number): Promise<JobRecord[]>;
   updateProgress(id: string, progress: number, message?: string | null): Promise<void>;
   complete(id: string, result: Record<string, unknown>): Promise<void>;
-  fail(id: string, error: JobError, retryable: boolean): Promise<void>;
+  /**
+   * Record a failure. `result` is an optional bounded summary stored on the row
+   * when the attempt is terminal, so a failed run can still explain what it did
+   * (e.g. a writer pass summary) without fabricating a success result.
+   */
+  fail(id: string, error: JobError, retryable: boolean, result?: Record<string, unknown>): Promise<void>;
   cancel(id: string): Promise<void>;
   /**
    * Move a still-queued job to a new run time. Returns false when the job is no

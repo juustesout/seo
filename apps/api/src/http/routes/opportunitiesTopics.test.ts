@@ -289,6 +289,38 @@ describe('opportunity topic routes', () => {
     expect(enqueued).toHaveLength(0);
   });
 
+  it('lets an explicit mode and format reach the writer input', async () => {
+    const res = await request('/opportunities/topics/article', {
+      token: 'editor-token',
+      method: 'POST',
+      body: { topic_name: 'blue widgets', topic_description: '', mode: 'deep_write', format: 'explainer' },
+    });
+    expect(res.status).toBe(202);
+    const writerInput = (enqueued[0]!.params as Record<string, unknown>).writer_input as Record<string, unknown>;
+    expect(writerInput.mode).toBe('deep_write');
+    expect(writerInput.format).toBe('explainer');
+  });
+
+  it('rejects an unknown mode at the edge', async () => {
+    const res = await request('/opportunities/topics/article', {
+      token: 'editor-token',
+      method: 'POST',
+      body: { topic_name: 'blue widgets', mode: 'turbo' },
+    });
+    expect(res.status).toBe(400);
+    expect(enqueued).toHaveLength(0);
+  });
+
+  it('rejects an unknown format at the edge', async () => {
+    const res = await request('/opportunities/topics/article', {
+      token: 'editor-token',
+      method: 'POST',
+      body: { topic_name: 'blue widgets', format: 'novel' },
+    });
+    expect(res.status).toBe(400);
+    expect(enqueued).toHaveLength(0);
+  });
+
   it('rejects an invalid article body at the edge', async () => {
     const res = await request('/opportunities/topics/article', {
       token: 'editor-token',

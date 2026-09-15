@@ -37,6 +37,8 @@ import {
   OPPORTUNITY_SORT_DIRS,
   TOPIC_ARTICLE_MAX_COMPETITORS,
   TOPIC_ARTICLE_MAX_KEYWORDS,
+  WRITER_EXECUTION_PROFILE_IDS,
+  WRITER_FORMAT_IDS,
 } from '@seo/contracts';
 import { requireAuth } from '../middleware.js';
 import { asyncHandler } from '../asyncHandler.js';
@@ -110,6 +112,9 @@ const topicArticleSchema = z.object({
   reasons: z.enum(OPPORTUNITY_REASONS).array().max(OPPORTUNITY_REASONS.length).optional(),
   difficulty: z.number().min(0).max(100).nullable().optional(),
   intent: z.enum(OPPORTUNITY_INTENTS).nullable().optional(),
+  /** Execution depth + format; both optional, defaulting to Quick Draft. */
+  mode: z.enum(WRITER_EXECUTION_PROFILE_IDS).optional(),
+  format: z.enum(WRITER_FORMAT_IDS).optional(),
 });
 
 /** Read the deterministic opportunity analysis over the active competitor set. */
@@ -190,8 +195,8 @@ opportunitiesRouter.post(
           knowledgeReadiness: null,
         },
         opportunityContextText,
-        format: 'short_article',
-        mode: 'quick_draft',
+        format: body.format ?? 'short_article',
+        mode: body.mode ?? 'quick_draft',
       },
     };
     const job = await container.jobStore.enqueue({

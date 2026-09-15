@@ -595,6 +595,8 @@ export interface DeepWriteGenerationResult {
   articlePlan: ArticlePlan;
   writtenSections: WriterWrittenSection[];
   review: WriterReview;
+  /** Model calls actually spent, from the bounded call accounting. */
+  llmCalls: number;
 }
 
 export interface DeepWriteOptions {
@@ -605,11 +607,14 @@ export interface DeepWriteOptions {
  *  engine's own sizing, so it fails honestly instead of running away. */
 function makeCallBudget() {
   let spent = 0;
-  return () => {
-    spent += 1;
-    if (spent > WRITER_DEEP_MAX_TOTAL_LLM_CALLS) {
-      throw new ApiError(500, 'internal_error', 'Deep write exceeded its bounded LLM call budget.');
-    }
+  return {
+    spend: () => {
+      spent += 1;
+      if (spent > WRITER_DEEP_MAX_TOTAL_LLM_CALLS) {
+        throw new ApiError(500, 'internal_error', 'Deep write exceeded its bounded LLM call budget.');
+      }
+    },
+    spent: () => spent,
   };
 }
 
@@ -626,7 +631,7 @@ export async function runDeepWriteGeneration(
 ): Promise<DeepWriteGenerationResult> {
   const { input, context, format, trace } = args;
   const report = (label: string, progress: number) => Promise.resolve(options.onStage?.(label, progress));
-  const spend = makeCallBudget();
+  const budget = makeCallBudget();
   const base: WriterDeepPassInput = {
     projectId: input.projectId,
     topic: input.topic.name,
@@ -637,7 +642,7 @@ export async function runDeepWriteGeneration(
 
   await report('architecture', 12);
   const architecture = await tracePass(trace, 'architecture', null, async () => {
-    spend();
+    budget.spend();
     const outcome = await deps.planner.plan({
       projectId: input.projectId,
       topic: input.topic.description ? `${input.topic.name} - ${input.topic.description}` : input.topic.name,
@@ -667,7 +672,7 @@ export async function runDeepWriteGeneration(
     const sectionId = writerSectionIdFor(sectionIndex);
 
     const intents = await tracePass(trace, 'section_planning', sectionId, async () => {
-      spend();
+      budget.spend();
       const outcome = await deps.deep.sectionPlanner.planSection({
         ...base,
         sectionIndex,
@@ -694,7 +699,7 @@ export async function runDeepWriteGeneration(
     for (let paragraphIndex = 0; paragraphIndex < intents.length; paragraphIndex += 1) {
       const unitId = `${sectionId}:p${paragraphIndex}`;
       const content = await tracePass(trace, 'section_generation', unitId, async () => {
-        spend();
+        budget.spend();
         const outcome = await deps.deep.paragraphWriter.writeParagraph({
           ...base,
           sectionIndex,
@@ -722,7 +727,7 @@ export async function runDeepWriteGeneration(
   for (const unit of refinementUnits) {
     const unitId = `${writerSectionIdFor(unit.sectionIndex)}:p${unit.paragraphIndex}`;
     const refined = await tracePass(trace, 'paragraph_refinement', unitId, async () => {
-      spend();
+      budget.spend();
       const paragraphs = sectionBodies[unit.sectionIndex];
       const outcome = await deps.deep.paragraphRefiner.refineParagraph({
         ...base,
@@ -743,7 +748,7 @@ export async function runDeepWriteGeneration(
 
   await report('coherence', 84);
   const bridges = await tracePass(trace, 'coherence', null, async () => {
-    spend();
+    budget.spend();
     const outcome = await deps.deep.coherence.planBridges({
       ...base,
       sections: sectionBodies.map((paragraphs, sectionIndex) => ({
@@ -784,5 +789,5 @@ export async function runDeepWriteGeneration(
     return outcome.review;
   });
 
-  return { plan, articlePlan, writtenSections, review };
+  return { plan, articlePlan, writtenSections, review, llmCalls: budget.spent() };
 }

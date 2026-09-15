@@ -53,6 +53,7 @@ import {
   type WriterExecutionProfileId,
   type WriterFormatId,
   type WriterInput,
+  type WriterRunSummary,
 } from '@seo/contracts';
 import { ApiError } from '../../apiErrors.js';
 import type { ServiceContainer } from '../../context.js';
@@ -79,6 +80,7 @@ import {
 import { getWriterFormat, outlineGuidanceFor, type WriterFormatDefinition } from './formats.js';
 import { createWriterPassTrace, tracePass, type WriterPassTraceEntry } from './passTrace.js';
 import { throwPhaseFailure } from './phaseFailure.js';
+import { buildWriterRunSummary } from './summary.js';
 import { createAiWriterPlanner, type WriterAiResolver, type WriterPlannerDependencies } from './planner.js';
 import { planToArticlePlan } from './projection.js';
 import {
@@ -230,6 +232,8 @@ export interface WriterEngineResult {
   seoScore: number;
   plan: ArticlePlan;
   passes: WriterPassTraceEntry[];
+  /** Compact, UI-safe projection of the pass trace (persisted on the job). */
+  summary: WriterRunSummary;
 }
 
 // ---------------------------------------------------------------------------
@@ -364,6 +368,8 @@ interface QuickDraftResult {
   articlePlan: ArticlePlan;
   writtenSections: WriterWrittenSection[];
   review: WriterReview;
+  /** Deep Write's bounded call count; absent for Quick Draft. */
+  llmCalls?: number;
 }
 
 /**
@@ -452,6 +458,7 @@ export async function runWriterEngine(
 ): Promise<WriterEngineResult> {
   const format = requireFormat(input.format);
   const trace = createWriterPassTrace();
+  const startedAtMs = Date.now();
   const report = (label: string, progress: number) => Promise.resolve(options.onStage?.(label, progress));
   const userId = options.userId ?? null;
 
@@ -475,6 +482,16 @@ export async function runWriterEngine(
   } catch (err) {
     const passes = trace.snapshot();
     const failed = passes.filter((pass) => !pass.ok);
+    // Attach the compact summary to the thrown error so the job executor can
+    // persist a failure summary without the engine knowing about jobs.
+    if (err && typeof err === 'object') {
+      (err as { writerSummary?: WriterRunSummary }).writerSummary = buildWriterRunSummary({
+        mode: input.mode,
+        format: input.format,
+        passes,
+        durationMs: Date.now() - startedAtMs,
+      });
+    }
     logger.warn(
       { err, projectId: input.projectId, mode: input.mode, passCount: passes.length, failedPass: failed[failed.length - 1] ?? null },
       'writer engine run failed',
@@ -488,6 +505,7 @@ export async function runWriterEngine(
   );
 
   const contentJson = row.content_json ?? generated.review.contentJson;
+  const passes = trace.snapshot();
   return {
     contentId: String(row.id),
     title: String(row.title ?? generated.plan.title),
@@ -498,7 +516,14 @@ export async function runWriterEngine(
     wordCount: contentWordCount(asContentBlocks(contentJson)),
     seoScore: generated.review.seo.score,
     plan: generated.articlePlan,
-    passes: trace.snapshot(),
+    passes,
+    summary: buildWriterRunSummary({
+      mode: input.mode,
+      format: input.format,
+      passes,
+      durationMs: Date.now() - startedAtMs,
+      llmCalls: generated.llmCalls,
+    }),
   };
 }
 

@@ -36,6 +36,7 @@ import { ContentToolbar } from '../components/content/ContentToolbar';
 import { ContentOutline } from '../components/content/ContentOutline';
 import { ContentEditorHeader } from '../components/content/ContentEditorHeader';
 import { SeoPanel } from '../components/content/SeoPanel';
+import { AgentControls } from '../components/content/AgentControls';
 import { MediaPanel } from '../components/content/MediaPanel';
 import { ContentAiPanel } from '../components/content/ContentAiPanel';
 import { WriterPanel } from '../components/content/WriterPanel';
@@ -680,6 +681,18 @@ export function Content({
           )}
         </div>
         <aside className="flex min-w-0 flex-col gap-3.5">
+          {editingId && (
+            <AgentControls
+              projectId={projectId}
+              contentId={editingId}
+              canEdit={canEdit}
+              aiConfigured={aiConfigured}
+              onOpenDraft={(id) => {
+                setRefresh((x) => x + 1);
+                open(id);
+              }}
+            />
+          )}
           <SeoPanel
             result={seo}
             editable={canEdit}
