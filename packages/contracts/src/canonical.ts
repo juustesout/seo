@@ -314,20 +314,31 @@ export function canonicalVariantOf(block: CanonicalBlock): string | undefined {
   return allowed && allowed.includes(variant) ? variant : undefined;
 }
 
+/** True when `value` is a structurally valid, bounded layout intent. */
+export function isValidCanonicalLayoutIntent(value: unknown): value is CanonicalLayoutIntent {
+  return isValidLayoutIntent(value);
+}
+
 /**
  * Layout intent with a fixed key order (align, direction, columns, width,
  * density) so serialization is deterministic. Undefined when absent or invalid.
+ * Shared by documents and higher-level contracts (e.g. composition plans) so
+ * the bounds live in exactly one place.
  */
-export function canonicalLayoutIntentOf(block: CanonicalBlock): CanonicalLayoutIntent | undefined {
-  const layout = block.attrs?.layout;
-  if (!isValidLayoutIntent(layout)) return undefined;
+export function normalizeCanonicalLayoutIntent(value: unknown): CanonicalLayoutIntent | undefined {
+  if (!isValidLayoutIntent(value)) return undefined;
   const normalized: CanonicalLayoutIntent = {};
-  if (layout.align !== undefined) normalized.align = layout.align;
-  if (layout.direction !== undefined) normalized.direction = layout.direction;
-  if (layout.columns !== undefined) normalized.columns = layout.columns;
-  if (layout.width !== undefined) normalized.width = layout.width;
-  if (layout.density !== undefined) normalized.density = layout.density;
+  if (value.align !== undefined) normalized.align = value.align;
+  if (value.direction !== undefined) normalized.direction = value.direction;
+  if (value.columns !== undefined) normalized.columns = value.columns;
+  if (value.width !== undefined) normalized.width = value.width;
+  if (value.density !== undefined) normalized.density = value.density;
   return normalized;
+}
+
+/** Normalized layout intent of a block, or undefined when absent/invalid. */
+export function canonicalLayoutIntentOf(block: CanonicalBlock): CanonicalLayoutIntent | undefined {
+  return normalizeCanonicalLayoutIntent(block.attrs?.layout);
 }
 
 // ---------------------------------------------------------------------------

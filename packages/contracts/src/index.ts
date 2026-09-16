@@ -22,3 +22,5 @@ export * from './knowledge.js';
 export * from './api.js';
 export * from './opportunityTopics.js';
 export * from './writer.js';
+export * from './compositionPlan.js';
+export * from './compositionPlanFixtures.js';
