@@ -58,7 +58,7 @@ describe('parseCosmosConfig', () => {
     });
     expect(config.identity.name).toBe('Acme');
     expect(config.identity.description).toBe('');
-    expect(Object.keys(config)).toEqual(['identity', 'voice', 'editorial', 'seo', 'knowledge']);
+    expect(Object.keys(config)).toEqual(['identity', 'voice', 'editorial', 'seo', 'knowledge', 'design']);
     expect(JSON.stringify(config)).not.toContain('leak');
     expect(JSON.stringify(config)).not.toContain('nope');
   });
