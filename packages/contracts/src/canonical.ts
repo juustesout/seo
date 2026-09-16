@@ -26,6 +26,35 @@
 export const CANONICAL_DOCUMENT_VERSION = 1 as const;
 
 /**
+ * Stage 4: bounded semantic composition vocabulary.
+ *
+ * These types describe editorial/marketing *intent* (a hero, a callout, a CTA)
+ * without carrying presentation. Emphasis is a bounded `variant`, arrangement is
+ * a bounded `layout` intent (see `CanonicalLayoutIntent`), and theme/tokens are
+ * referenced once per document via `CanonicalMeta.designSystem`. Content stays
+ * structured and addressable through `content`/`children`; these blocks never
+ * hold CSS, and unknown composition types remain expressible as `custom`.
+ */
+export const CANONICAL_COMPOSITION_BLOCK_TYPES = [
+  'hero',
+  'section',
+  'featureGrid',
+  'featureCard',
+  'cta',
+  'callout',
+  'testimonial',
+  'stats',
+  'mediaText',
+  'footer',
+] as const;
+
+/** Leaf composition blocks carry an inline label (`content`) plus bounded attrs. */
+export const CANONICAL_COMPOSITION_LEAF_BLOCK_TYPES = ['badge', 'button', 'statItem'] as const;
+
+export type KnownCanonicalCompositionBlockType = (typeof CANONICAL_COMPOSITION_BLOCK_TYPES)[number];
+export type KnownCanonicalCompositionLeafBlockType = (typeof CANONICAL_COMPOSITION_LEAF_BLOCK_TYPES)[number];
+
+/**
  * Semantic block types known to v1. This is documentation + adapter hints, not
  * a closed set: a document may carry any non-empty, well-formed block type, and
  * unknown ones should use `custom` with a `source`. `canonicalBlockTypeOf`
@@ -49,6 +78,8 @@ export const CANONICAL_BLOCK_TYPES = [
   'embed',
   'html',
   'custom',
+  ...CANONICAL_COMPOSITION_BLOCK_TYPES,
+  ...CANONICAL_COMPOSITION_LEAF_BLOCK_TYPES,
 ] as const;
 
 export type KnownCanonicalBlockType = (typeof CANONICAL_BLOCK_TYPES)[number];
@@ -68,14 +99,108 @@ export const CANONICAL_MARK_TYPES = [
 
 export type KnownCanonicalMarkType = (typeof CANONICAL_MARK_TYPES)[number];
 
+/**
+ * Bounded semantic variants per composition/leaf type. A variant names emphasis
+ * or meaning (`callout: 'warning'`), never a colour, size, border or spacing. An
+ * absent variant means `'default'`; an unknown variant makes the block invalid.
+ */
+export const CANONICAL_BLOCK_VARIANTS = {
+  hero: ['default', 'centered', 'split', 'minimal', 'banner'],
+  section: ['default', 'muted', 'bordered', 'inverted'],
+  featureGrid: ['default', 'compact'],
+  featureCard: ['default', 'elevated', 'bordered', 'minimal'],
+  cta: ['default', 'primary', 'secondary', 'banner'],
+  callout: ['default', 'info', 'tip', 'warning', 'success', 'danger'],
+  testimonial: ['default', 'card', 'minimal'],
+  stats: ['default', 'compact'],
+  statItem: ['default'],
+  mediaText: ['default', 'image-left', 'image-right'],
+  badge: ['default', 'outline', 'solid', 'accent'],
+  footer: ['default', 'simple', 'expanded'],
+  button: ['default', 'primary', 'secondary', 'ghost'],
+} as const;
+
+export type CanonicalVariantHostType = keyof typeof CANONICAL_BLOCK_VARIANTS;
+
+/** Target-neutral layout intent. No grid templates, flex bases or pixel values. */
+export const CANONICAL_LAYOUT_ALIGNMENTS = ['left', 'center', 'right'] as const;
+export const CANONICAL_LAYOUT_DIRECTIONS = ['row', 'column'] as const;
+export const CANONICAL_LAYOUT_WIDTHS = ['narrow', 'standard', 'wide', 'full'] as const;
+export const CANONICAL_LAYOUT_DENSITIES = ['compact', 'comfortable', 'spacious'] as const;
+
+/** Hard ceiling on `layout.columns`; beyond this the intent is not expressible. */
+export const CANONICAL_MAX_LAYOUT_COLUMNS = 6;
+
+export type CanonicalLayoutAlignment = (typeof CANONICAL_LAYOUT_ALIGNMENTS)[number];
+export type CanonicalLayoutDirection = (typeof CANONICAL_LAYOUT_DIRECTIONS)[number];
+export type CanonicalLayoutWidth = (typeof CANONICAL_LAYOUT_WIDTHS)[number];
+export type CanonicalLayoutDensity = (typeof CANONICAL_LAYOUT_DENSITIES)[number];
+
+export interface CanonicalLayoutIntent {
+  align?: CanonicalLayoutAlignment;
+  direction?: CanonicalLayoutDirection;
+  /** Column count, integer 1..CANONICAL_MAX_LAYOUT_COLUMNS. */
+  columns?: number;
+  width?: CanonicalLayoutWidth;
+  density?: CanonicalLayoutDensity;
+}
+
+/**
+ * Allowed `attrs` keys per composition type - the CSS firewall. Any other key at
+ * all (e.g. `style`, `color`, `margin`, `fontSize`) makes the block invalid.
+ */
+export const CANONICAL_COMPOSITION_ATTR_KEYS = {
+  hero: ['variant', 'layout'],
+  section: ['variant', 'layout'],
+  featureGrid: ['variant', 'layout'],
+  featureCard: ['variant', 'layout', 'icon'],
+  cta: ['variant', 'layout'],
+  callout: ['variant', 'layout', 'icon'],
+  testimonial: ['variant', 'layout'],
+  stats: ['variant', 'layout'],
+  statItem: ['variant', 'layout', 'value'],
+  mediaText: ['variant', 'layout'],
+  badge: ['variant', 'layout', 'icon'],
+  footer: ['variant', 'layout'],
+  button: ['variant', 'layout', 'href'],
+} as const;
+
+export type CanonicalCompositionType = keyof typeof CANONICAL_COMPOSITION_ATTR_KEYS;
+
+/**
+ * A reference to the document's design system / token set. The tokens themselves
+ * live in project configuration (Cosmos), never in the document.
+ */
+export interface CanonicalDesignSystemRef {
+  id?: string;
+  variant?: string;
+  version?: string;
+}
+
 /** Upper bounds keep a hand-edited or hostile document from reaching adapters. */
 export const CANONICAL_MAX_BLOCKS = 5000;
 const MAX_DEPTH = 200;
 const MAX_ID_LENGTH = 128;
 const MAX_TYPE_LENGTH = 80;
+const MAX_ICON_LENGTH = 80;
+const MAX_VALUE_LENGTH = 200;
+const MAX_HREF_LENGTH = 4096;
+const MAX_DESIGN_SYSTEM_REF_LENGTH = 200;
 
 const KNOWN_BLOCK_TYPES: ReadonlySet<string> = new Set(CANONICAL_BLOCK_TYPES);
 const KNOWN_MARK_TYPES: ReadonlySet<string> = new Set(CANONICAL_MARK_TYPES);
+
+const COMPOSITION_ATTR_KEYS: ReadonlyMap<string, ReadonlySet<string>> = new Map<string, ReadonlySet<string>>(
+  Object.entries(CANONICAL_COMPOSITION_ATTR_KEYS).map(
+    ([type, keys]): [string, ReadonlySet<string>] => [type, new Set<string>(keys)],
+  ),
+);
+const FORBIDDEN_CSS_ATTR_KEYS: ReadonlySet<string> = new Set(['style', 'className', 'class', 'css', 'sx']);
+const LAYOUT_KEYS: ReadonlySet<string> = new Set(['align', 'direction', 'columns', 'width', 'density']);
+const LAYOUT_ALIGNMENT_SET: ReadonlySet<string> = new Set(CANONICAL_LAYOUT_ALIGNMENTS);
+const LAYOUT_DIRECTION_SET: ReadonlySet<string> = new Set(CANONICAL_LAYOUT_DIRECTIONS);
+const LAYOUT_WIDTH_SET: ReadonlySet<string> = new Set(CANONICAL_LAYOUT_WIDTHS);
+const LAYOUT_DENSITY_SET: ReadonlySet<string> = new Set(CANONICAL_LAYOUT_DENSITIES);
 
 // ---------------------------------------------------------------------------
 // Types
@@ -151,6 +276,8 @@ export interface CanonicalBlock {
 export interface CanonicalMeta {
   title?: string;
   language?: string | null;
+  /** Reference to the design system / token set this document renders against. */
+  designSystem?: CanonicalDesignSystemRef;
 }
 
 export interface CanonicalDocument {
@@ -179,6 +306,30 @@ export function canonicalMarkTypeOf(type: string): type is KnownCanonicalMarkTyp
   return KNOWN_MARK_TYPES.has(type);
 }
 
+/** Validated semantic variant of a block, or undefined when absent/unknown. */
+export function canonicalVariantOf(block: CanonicalBlock): string | undefined {
+  const variant = block.attrs?.variant;
+  if (typeof variant !== 'string') return undefined;
+  const allowed = (CANONICAL_BLOCK_VARIANTS as Record<string, readonly string[]>)[block.type];
+  return allowed && allowed.includes(variant) ? variant : undefined;
+}
+
+/**
+ * Layout intent with a fixed key order (align, direction, columns, width,
+ * density) so serialization is deterministic. Undefined when absent or invalid.
+ */
+export function canonicalLayoutIntentOf(block: CanonicalBlock): CanonicalLayoutIntent | undefined {
+  const layout = block.attrs?.layout;
+  if (!isValidLayoutIntent(layout)) return undefined;
+  const normalized: CanonicalLayoutIntent = {};
+  if (layout.align !== undefined) normalized.align = layout.align;
+  if (layout.direction !== undefined) normalized.direction = layout.direction;
+  if (layout.columns !== undefined) normalized.columns = layout.columns;
+  if (layout.width !== undefined) normalized.width = layout.width;
+  if (layout.density !== undefined) normalized.density = layout.density;
+  return normalized;
+}
+
 // ---------------------------------------------------------------------------
 // Validation
 // ---------------------------------------------------------------------------
@@ -195,8 +346,75 @@ function isValidId(value: unknown): boolean {
   return typeof value === 'string' && value.length <= MAX_ID_LENGTH && ID_RE.test(value);
 }
 
-function isValidType(value: unknown): boolean {
+function isValidType(value: unknown): value is string {
   return typeof value === 'string' && value.length <= MAX_TYPE_LENGTH && TYPE_RE.test(value);
+}
+
+function isBoundedString(value: unknown, max: number): value is string {
+  return typeof value === 'string' && value.length <= max;
+}
+
+function isValidLayoutIntent(value: unknown): value is CanonicalLayoutIntent {
+  if (!isPlainObject(value)) return false;
+  for (const key of Object.keys(value)) {
+    if (!LAYOUT_KEYS.has(key)) return false;
+  }
+  if (value.align !== undefined && !LAYOUT_ALIGNMENT_SET.has(value.align as string)) return false;
+  if (value.direction !== undefined && !LAYOUT_DIRECTION_SET.has(value.direction as string)) return false;
+  if (value.width !== undefined && !LAYOUT_WIDTH_SET.has(value.width as string)) return false;
+  if (value.density !== undefined && !LAYOUT_DENSITY_SET.has(value.density as string)) return false;
+  if (value.columns !== undefined) {
+    const columns = value.columns;
+    if (
+      typeof columns !== 'number' ||
+      !Number.isInteger(columns) ||
+      columns < 1 ||
+      columns > CANONICAL_MAX_LAYOUT_COLUMNS
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function isValidVariant(type: string, variant: unknown): boolean {
+  const allowed = (CANONICAL_BLOCK_VARIANTS as Record<string, readonly string[]>)[type];
+  if (!allowed) return true;
+  return typeof variant === 'string' && allowed.includes(variant);
+}
+
+/**
+ * Composition attrs must stay inside the per-type whitelist: this is what makes
+ * arbitrary CSS (`style`, `color`, `margin`, ...) structurally invalid rather
+ * than merely discouraged.
+ */
+function isValidCompositionAttrs(type: string, attrs: Record<string, unknown>): boolean {
+  const allowed = COMPOSITION_ATTR_KEYS.get(type);
+  if (!allowed) return false;
+  for (const key of Object.keys(attrs)) {
+    if (!allowed.has(key)) return false;
+  }
+  if (attrs.variant !== undefined && !isValidVariant(type, attrs.variant)) return false;
+  if (attrs.layout !== undefined && !isValidLayoutIntent(attrs.layout)) return false;
+  if (attrs.icon !== undefined && !isBoundedString(attrs.icon, MAX_ICON_LENGTH)) return false;
+  if (attrs.value !== undefined && !isBoundedString(attrs.value, MAX_VALUE_LENGTH)) return false;
+  if (attrs.href !== undefined) {
+    if (!isBoundedString(attrs.href, MAX_HREF_LENGTH) || attrs.href.trim().length === 0) return false;
+  }
+  return true;
+}
+
+function isValidDesignSystemRef(value: unknown): value is CanonicalDesignSystemRef {
+  if (!isPlainObject(value)) return false;
+  for (const key of Object.keys(value)) {
+    if (key !== 'id' && key !== 'variant' && key !== 'version') return false;
+  }
+  if (value.id !== undefined && (!isBoundedString(value.id, MAX_DESIGN_SYSTEM_REF_LENGTH) || value.id.trim().length === 0)) {
+    return false;
+  }
+  if (value.variant !== undefined && !isBoundedString(value.variant, MAX_DESIGN_SYSTEM_REF_LENGTH)) return false;
+  if (value.version !== undefined && !isBoundedString(value.version, MAX_DESIGN_SYSTEM_REF_LENGTH)) return false;
+  return true;
 }
 
 function isValidSourceRef(value: unknown): value is SourceRef {
@@ -259,8 +477,15 @@ function isValidCanonicalBlock(value: unknown, state: WalkState): value is Canon
   if (++state.blocks > CANONICAL_MAX_BLOCKS) return false;
 
   if (value.id !== undefined && !isValidId(value.id)) return false;
-  if (!isValidType(value.type)) return false;
-  if (value.attrs !== undefined && !isPlainObject(value.attrs)) return false;
+  const blockType = value.type;
+  if (!isValidType(blockType)) return false;
+  if (value.attrs !== undefined) {
+    if (!isPlainObject(value.attrs)) return false;
+    for (const key of Object.keys(value.attrs)) {
+      if (FORBIDDEN_CSS_ATTR_KEYS.has(key)) return false;
+    }
+    if (COMPOSITION_ATTR_KEYS.has(blockType) && !isValidCompositionAttrs(blockType, value.attrs)) return false;
+  }
   if (value.rawHtml !== undefined && typeof value.rawHtml !== 'string') return false;
   if (value.source !== undefined && !isValidSourceRef(value.source)) return false;
 
@@ -314,6 +539,7 @@ export function isValidCanonicalDoc(value: unknown): value is CanonicalDocument 
     if (value.meta.language !== undefined && value.meta.language !== null && typeof value.meta.language !== 'string') {
       return false;
     }
+    if (value.meta.designSystem !== undefined && !isValidDesignSystemRef(value.meta.designSystem)) return false;
   }
 
   const state: WalkState = { depth: 0, blocks: 0 };
