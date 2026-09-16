@@ -15,9 +15,14 @@ import {
   COMPOSITION_MAX_SECTIONS,
   COMPOSITION_MAX_STAT_ITEMS,
   COMPOSITION_PLAN_VERSION,
+  COMPOSITION_SLOT_MAX_CHARS,
   CompositionPlanError,
+  compileComposition,
   compileCompositionPlan,
+  compositionSlotId,
+  findCompiledSlotBlock,
   isValidCompositionPlan,
+  isValidCompositionSlot,
   type CompositionPlan,
   type CompositionPlanNode,
 } from './compositionPlan.js';
@@ -39,7 +44,7 @@ function ok(value: unknown): boolean {
 function minimalNode(type: string): CompositionPlanNode {
   if (type === 'featureGrid') return { type: 'featureGrid' as CompositionPlanNode['type'], children: [{ type: 'featureCard' }] };
   if (type === 'stats') {
-    return { type: 'stats' as CompositionPlanNode['type'], requiredContent: [{ type: 'statItem' }] };
+    return { type: 'stats' as CompositionPlanNode['type'], requiredContent: [{ slot: 'stat.sample', type: 'statItem' }] };
   }
   return { type: type as CompositionPlanNode['type'] };
 }
@@ -56,6 +61,145 @@ describe('composition plan vocabulary', () => {
 
   it('accepts the representative marketing storyboard', () => {
     expect(ok(MARKETING_STORYBOARD_PLAN)).toBe(true);
+  });
+});
+
+describe('semantic slots', () => {
+  it('accepts well-formed, scoped slot keys', () => {
+    expect(ok(plan([{ type: 'hero', requiredContent: [{ slot: 'hero.title', type: 'heading', level: 1 }] }]))).toBe(true);
+    expect(
+      ok(
+        plan([
+          {
+            type: 'featureGrid',
+            children: [
+              { type: 'featureCard', requiredContent: [{ slot: 'feature.card.1.title', type: 'heading', level: 3 }] },
+              { type: 'featureCard', requiredContent: [{ slot: 'feature.card.2.title', type: 'heading', level: 3 }] },
+            ],
+          },
+        ]),
+      ),
+    ).toBe(true);
+    expect(isValidCompositionSlot('conversion.primaryCta')).toBe(true);
+    expect(isValidCompositionSlot('a')).toBe(true);
+  });
+
+  it('rejects malformed slot keys', () => {
+    const invalid = [
+      '',
+      'Hero.title',
+      'hero title',
+      'hero..title',
+      'hero.',
+      '.title',
+      'hero/title',
+      'hero-title',
+      'hero_title',
+      '1hero',
+      'hero.title.',
+      'hero.1 title',
+      'a'.repeat(COMPOSITION_SLOT_MAX_CHARS + 1),
+      'héró.title',
+      'style:color',
+    ];
+    for (const slot of invalid) {
+      expect(isValidCompositionSlot(slot)).toBe(false);
+      expect(ok(plan([{ type: 'section', requiredContent: [{ slot, type: 'paragraph' }] }]))).toBe(false);
+    }
+  });
+
+  it('rejects requirements without a slot and duplicate slots', () => {
+    expect(ok(plan([{ type: 'section', requiredContent: [{ type: 'paragraph' }] }]))).toBe(false);
+    expect(
+      ok(
+        plan([
+          {
+            type: 'hero',
+            requiredContent: [
+              { slot: 'hero.title', type: 'heading', level: 1 },
+              { slot: 'hero.title', type: 'paragraph' },
+            ],
+          },
+        ]),
+      ),
+    ).toBe(false);
+    // Duplicates are rejected plan-wide, even across different sections.
+    expect(
+      ok(
+        plan([
+          { type: 'section', requiredContent: [{ slot: 'shared.body', type: 'paragraph' }] },
+          { type: 'cta', requiredContent: [{ slot: 'shared.body', type: 'paragraph' }] },
+        ]),
+      ),
+    ).toBe(false);
+  });
+
+  it('derives an injective canonical id from a slot', () => {
+    expect(compositionSlotId('hero.title')).toBe('hero__title');
+    expect(compositionSlotId('feature.card.1.title')).toBe('feature__card__1__title');
+    expect(compositionSlotId('title')).toBe('title');
+  });
+
+  it('is deterministic and emitted in document order', () => {
+    const a = compileComposition(MARKETING_STORYBOARD_PLAN);
+    const b = compileComposition(MARKETING_STORYBOARD_PLAN);
+    expect(a).toEqual(b);
+    expect(JSON.stringify(a)).toBe(JSON.stringify(b));
+    expect(a.slots.slots.map((entry) => entry.slot)).toEqual([
+      'hero.title',
+      'hero.intro',
+      'hero.media',
+      'hero.primaryCta',
+      'problem.title',
+      'problem.body',
+      'feature.card.1.title',
+      'feature.card.1.body',
+      'feature.card.2.title',
+      'feature.card.2.body',
+      'feature.card.3.title',
+      'feature.card.3.body',
+      'proof.quote',
+      'proof.author',
+      'conversion.title',
+      'conversion.body',
+      'conversion.primaryCta',
+      'footer.body',
+      'footer.secondaryCta',
+    ]);
+  });
+
+  it('keeps slot identity out of the canonical document model', () => {
+    const compiled = compileComposition(MARKETING_STORYBOARD_PLAN);
+    expect(JSON.stringify(compiled.document)).not.toContain('"slot"');
+    expect(compiled.document.blocks[0]).not.toHaveProperty('slot');
+  });
+
+  it('resolves a slot to its compiled canonical block without DOM selectors', () => {
+    const compiled = compileComposition(MARKETING_STORYBOARD_PLAN);
+    const cta = findCompiledSlotBlock(compiled, 'hero.primaryCta');
+    expect(cta).toEqual({ id: 'hero__primaryCta', type: 'button', attrs: { variant: 'primary' } });
+    expect(findCompiledSlotBlock(compiled, 'proof.quote')?.type).toBe('quote');
+    expect(findCompiledSlotBlock(compiled, 'feature.card.2.body')?.id).toBe('feature__card__2__body');
+    expect(findCompiledSlotBlock(compiled, 'does.not.exist')).toBeUndefined();
+  });
+
+  it('records the index path to every compiled slot', () => {
+    const compiled = compileComposition(MARKETING_STORYBOARD_PLAN);
+    const bySlot = new Map(compiled.slots.slots.map((entry) => [entry.slot, entry]));
+    expect(bySlot.get('hero.title')?.path).toEqual([0, 0]);
+    expect(bySlot.get('hero.primaryCta')?.path).toEqual([0, 3]);
+    expect(bySlot.get('feature.card.2.body')?.path).toEqual([2, 1, 1]);
+    for (const entry of compiled.slots.slots) {
+      const block = findCompiledSlotBlock(compiled, entry.slot);
+      expect(block?.id).toBe(entry.id);
+      expect(block?.type).toBe(entry.type);
+    }
+  });
+
+  it('does not mutate the plan while producing the slot map', () => {
+    const before = structuredClone(MARKETING_STORYBOARD_PLAN);
+    compileComposition(MARKETING_STORYBOARD_PLAN);
+    expect(MARKETING_STORYBOARD_PLAN).toEqual(before);
   });
 });
 
@@ -101,7 +245,7 @@ describe('deterministic compiler', () => {
 
   it('compiles every requirement type into a known canonical block', () => {
     for (const type of [...COMPOSITION_CONTENT_TYPES, ...COMPOSITION_LEAF_TYPES]) {
-      const requirement = type === 'heading' ? { type, level: 2 } : { type };
+      const requirement = type === 'heading' ? { slot: 'sample.slot', type, level: 2 } : { slot: 'sample.slot', type };
       const document = compileCompositionPlan(plan([{ type: 'section', requiredContent: [requirement] }]));
       const child = document.blocks[0]?.children?.[0];
       expect(child?.type).toBe(type);
@@ -126,8 +270,8 @@ describe('structure preservation', () => {
       plan([
         {
           type: 'hero',
-          requiredContent: [{ type: 'heading', level: 1 }],
-          children: [{ type: 'section', requiredContent: [{ type: 'paragraph' }] }],
+          requiredContent: [{ slot: 'hero.title', type: 'heading', level: 1 }],
+          children: [{ type: 'section', requiredContent: [{ slot: 'problem.body', type: 'paragraph' }] }],
         },
       ]),
     );
@@ -144,7 +288,13 @@ describe('structure preservation', () => {
             {
               type: 'section',
               children: [
-                { type: 'mediaText', requiredContent: [{ type: 'image' }, { type: 'paragraph' }] },
+                {
+                  type: 'mediaText',
+                  requiredContent: [
+                    { slot: 'media.image', type: 'image' },
+                    { slot: 'media.body', type: 'paragraph' },
+                  ],
+                },
               ],
             },
           ],
@@ -163,7 +313,13 @@ describe('structure preservation', () => {
           type: 'featureGrid',
           layout: { columns: 3 },
           children: [
-            { type: 'featureCard', requiredContent: [{ type: 'heading', level: 3 }, { type: 'paragraph' }] },
+            {
+              type: 'featureCard',
+              requiredContent: [
+                { slot: 'feature.card.1.title', type: 'heading', level: 3 },
+                { slot: 'feature.card.1.body', type: 'paragraph' },
+              ],
+            },
             { type: 'featureCard' },
           ],
         },
@@ -176,7 +332,15 @@ describe('structure preservation', () => {
 
   it('compiles stats into bounded stat item placeholders', () => {
     const document = compileCompositionPlan(
-      plan([{ type: 'stats', requiredContent: [{ type: 'statItem' }, { type: 'statItem' }] }]),
+      plan([
+        {
+          type: 'stats',
+          requiredContent: [
+            { slot: 'stats.one', type: 'statItem' },
+            { slot: 'stats.two', type: 'statItem' },
+          ],
+        },
+      ]),
     );
     expect(document.blocks[0]!.children?.map((child) => child.type)).toEqual(['statItem', 'statItem']);
   });
@@ -185,7 +349,8 @@ describe('structure preservation', () => {
     const document = compileCompositionPlan(MARKETING_STORYBOARD_PLAN);
     const json = JSON.stringify(document);
     expect(json).not.toContain('purpose');
-    expect(json).not.toContain('role');
+    expect(json).not.toContain('"role"');
+    expect(json).not.toContain('"slot"');
     expect(json).not.toContain('introduction');
   });
 });
@@ -208,33 +373,42 @@ describe('content placeholders', () => {
         {
           type: 'section',
           requiredContent: [
-            { type: 'heading', level: 1 },
-            { type: 'paragraph' },
-            { type: 'list' },
-            { type: 'image' },
-            { type: 'button' },
-            { type: 'badge' },
-            { type: 'statItem' },
+            { slot: 'a', type: 'heading', level: 1 },
+            { slot: 'b', type: 'paragraph' },
+            { slot: 'c', type: 'list' },
+            { slot: 'd', type: 'image' },
+            { slot: 'e', type: 'button' },
+            { slot: 'f', type: 'badge' },
+            { slot: 'g', type: 'statItem' },
           ],
         },
       ]),
     );
     const children: CanonicalBlock[] = document.blocks[0]!.children!;
     const [heading, paragraph, list, image, button, badge, statItem] = children;
-    expect(heading).toEqual({ type: 'heading', attrs: { level: 1 } });
-    expect(paragraph).toEqual({ type: 'paragraph' });
-    expect(list).toEqual({ type: 'list', attrs: { ordered: false }, children: [] });
-    expect(image).toEqual({ type: 'image' });
-    expect(button).toEqual({ type: 'button' });
-    expect(badge).toEqual({ type: 'badge' });
-    expect(statItem).toEqual({ type: 'statItem' });
+    expect(heading).toEqual({ id: 'a', type: 'heading', attrs: { level: 1 } });
+    expect(paragraph).toEqual({ id: 'b', type: 'paragraph' });
+    expect(list).toEqual({ id: 'c', type: 'list', attrs: { ordered: false }, children: [] });
+    expect(image).toEqual({ id: 'd', type: 'image' });
+    expect(button).toEqual({ id: 'e', type: 'button' });
+    expect(badge).toEqual({ id: 'f', type: 'badge' });
+    expect(statItem).toEqual({ id: 'g', type: 'statItem' });
   });
 
   it('keeps leaf variant intent without inventing a label', () => {
     const document = compileCompositionPlan(
-      plan([{ type: 'cta', requiredContent: [{ type: 'button', variant: 'primary', role: 'primaryCta' }] }]),
+      plan([
+        {
+          type: 'cta',
+          requiredContent: [{ slot: 'cta.button', type: 'button', variant: 'primary', role: 'primaryCta' }],
+        },
+      ]),
     );
-    expect(document.blocks[0]!.children![0]).toEqual({ type: 'button', attrs: { variant: 'primary' } });
+    expect(document.blocks[0]!.children![0]).toEqual({
+      id: 'cta__button',
+      type: 'button',
+      attrs: { variant: 'primary' },
+    });
   });
 });
 
@@ -261,14 +435,17 @@ describe('structural rejection', () => {
 
   it('rejects malformed stats blocks', () => {
     expect(ok(plan([{ type: 'stats' }]))).toBe(false);
-    expect(ok(plan([{ type: 'stats', requiredContent: [{ type: 'paragraph' }] }]))).toBe(false);
+    expect(ok(plan([{ type: 'stats', requiredContent: [{ slot: 's.label', type: 'paragraph' }] }]))).toBe(false);
     expect(ok(plan([{ type: 'stats', children: [{ type: 'statItem' }] }]))).toBe(false);
     expect(
       ok(
         plan([
           {
             type: 'stats',
-            requiredContent: Array.from({ length: COMPOSITION_MAX_STAT_ITEMS + 1 }, () => ({ type: 'statItem' })),
+            requiredContent: Array.from({ length: COMPOSITION_MAX_STAT_ITEMS + 1 }, (_, index) => ({
+              slot: `stat.${index}`,
+              type: 'statItem',
+            })),
           },
         ]),
       ),
@@ -282,17 +459,23 @@ describe('structural rejection', () => {
     expect(ok(plan([{ type: 'hero', layout: { columns: 99 } }]))).toBe(false);
     expect(ok(plan([{ type: 'hero', layout: { gridTemplateColumns: '1fr 1fr' } }]))).toBe(false);
     expect(ok(plan([{ type: 'hero', purpose: 'marketing' }]))).toBe(false);
-    expect(ok(plan([{ type: 'section', requiredContent: [{ type: 'iframe' }] }]))).toBe(false);
-    expect(ok(plan([{ type: 'section', requiredContent: [{ type: 'heading', level: 7 }] }]))).toBe(false);
-    expect(ok(plan([{ type: 'section', requiredContent: [{ type: 'paragraph', level: 2 }] }]))).toBe(false);
-    expect(ok(plan([{ type: 'section', requiredContent: [{ type: 'paragraph', variant: 'primary' }] }]))).toBe(false);
-    expect(ok(plan([{ type: 'section', requiredContent: [{ type: 'paragraph', role: 'nope' }] }]))).toBe(false);
+    expect(ok(plan([{ type: 'section', requiredContent: [{ slot: 'x.slot', type: 'iframe' }] }]))).toBe(false);
+    expect(
+      ok(plan([{ type: 'section', requiredContent: [{ slot: 'x.slot', type: 'heading', level: 7 }] }])),
+    ).toBe(false);
+    expect(ok(plan([{ type: 'section', requiredContent: [{ slot: 'x.slot', type: 'paragraph', level: 2 }] }]))).toBe(false);
+    expect(
+      ok(plan([{ type: 'section', requiredContent: [{ slot: 'x.slot', type: 'paragraph', variant: 'primary' }] }])),
+    ).toBe(false);
+    expect(ok(plan([{ type: 'section', requiredContent: [{ slot: 'x.slot', type: 'paragraph', role: 'nope' }] }]))).toBe(false);
   });
 
   it('rejects unknown keys at every level', () => {
     expect(ok({ ...plan([{ type: 'section' }]), extra: true })).toBe(false);
     expect(ok(plan([{ type: 'section', style: 'color:red' }]))).toBe(false);
-    expect(ok(plan([{ type: 'section', requiredContent: [{ type: 'paragraph', style: 'color:red' }] }]))).toBe(false);
+    expect(
+      ok(plan([{ type: 'section', requiredContent: [{ slot: 'x.slot', type: 'paragraph', style: 'color:red' }] }])),
+    ).toBe(false);
   });
 
   it('rejects malformed plan envelopes', () => {

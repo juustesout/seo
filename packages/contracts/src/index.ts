@@ -24,3 +24,4 @@ export * from './opportunityTopics.js';
 export * from './writer.js';
 export * from './compositionPlan.js';
 export * from './compositionPlanFixtures.js';
+export * from './compositionPlanner.js';
