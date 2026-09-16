@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "worker": "tsx src/worker.ts",
+    "diagnose:composition-plan": "tsx src/diagnostics/compositionPlannerSmoke.ts",
     "start": "node dist/index.js",
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
