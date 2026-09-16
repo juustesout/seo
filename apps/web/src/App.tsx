@@ -27,6 +27,7 @@ import {
   Search,
   Send,
   Settings,
+  Sparkles,
 } from 'lucide-react';
 import { supabase, configured as supabaseConfigured, currentUser, sessionToken } from './lib/supabase';
 import { api } from './lib/api';
@@ -42,6 +43,7 @@ import { Publishing } from './views/Publishing';
 import { Content } from './views/Content';
 import { ContentSchedule } from './views/ContentSchedule';
 import { Publications } from './views/Publications';
+import { Compose } from './views/Compose';
 import { openProjectView } from './lib/nav';
 import { Overview } from './views/Overview';
 import { AccountIntegrations } from './views/AccountIntegrations';
@@ -66,7 +68,7 @@ interface Me {
   projects: ProjectRow[];
 }
 
-type TopArea = 'overview' | 'projects' | 'integrations' | 'keys';
+type TopArea = 'overview' | 'projects' | 'compose' | 'integrations' | 'keys';
 type Route =
   | { area: TopArea }
   | { area: 'project'; projectId: string; view: string; sub: string | null; search: string };
@@ -84,7 +86,7 @@ function parseRoute(): Route {
   if (seg[0] === 'p' && seg[1]) {
     return { area: 'project', projectId: seg[1], view: seg[2] || 'dashboard', sub: seg[3] ?? null, search: window.location.search };
   }
-  const area = seg[0] === 'projects' || seg[0] === 'integrations' || seg[0] === 'keys' ? seg[0] : 'overview';
+  const area = seg[0] === 'projects' || seg[0] === 'compose' || seg[0] === 'integrations' || seg[0] === 'keys' ? seg[0] : 'overview';
   return { area };
 }
 
@@ -97,6 +99,7 @@ function routePath(r: Route): string {
 const TOP_NAV: Array<{ id: TopArea; label: string; icon: NavIcon }> = [
   { id: 'overview', label: 'Overview', icon: LayoutDashboard },
   { id: 'projects', label: 'Projects', icon: FolderKanban },
+  { id: 'compose', label: 'Compose', icon: Sparkles },
   { id: 'integrations', label: 'Integrations', icon: Plug },
   { id: 'keys', label: 'API keys', icon: KeyRound },
 ];
@@ -107,6 +110,7 @@ const PROJECT_NAV: Array<{ id: string; label: string; icon: NavIcon }> = [
   { id: 'integrations', label: 'Integrations', icon: Plug },
   { id: 'knowledge', label: 'Knowledge Base', icon: BookOpen },
   { id: 'content', label: 'Content Studio', icon: PenSquare },
+  { id: 'compose', label: 'Compose', icon: Sparkles },
   { id: 'calendar', label: 'Calendar', icon: CalendarDays },
   { id: 'publications', label: 'Publications', icon: Newspaper },
   { id: 'publishing', label: 'Publishing', icon: Send },
@@ -314,6 +318,7 @@ export function App() {
               />
             )}
             {view === 'content' && <Content projectId={pid} role={project.role} onOpenCalendar={() => goProject(pid, 'calendar')} onOpenPublications={(contentId) => openProjectView(pid, 'publications', { content_id: contentId })} />}
+            {view === 'compose' && <Compose projectId={pid} role={project.role} />}
             {view === 'calendar' && <ContentSchedule projectId={pid} role={project.role} onViewPublication={(scheduleId) => openProjectView(pid, 'publications', { schedule_id: scheduleId })} />}
             {view === 'publications' && <Publications projectId={pid} />}
             {view === 'publishing' && <Publishing projectId={pid} />}
@@ -323,6 +328,8 @@ export function App() {
       </div>
     );
   }
+
+  const composeProject = route.area === 'compose' ? me.projects[0] ?? null : null;
 
   return (
     <div className="flex min-h-screen flex-col">
@@ -338,6 +345,9 @@ export function App() {
       <main className="mx-auto w-full max-w-5xl flex-1 px-6 py-6">
         {route.area === 'overview' && <Overview onOpenProject={goProject} onGoProjects={() => goArea('projects')} />}
         {route.area === 'projects' && <ProjectsPage onOpenProject={goProject} />}
+        {route.area === 'compose' && composeProject && (
+          <Compose projectId={composeProject.id} role={composeProject.role} />
+        )}
         {route.area === 'integrations' && <AccountIntegrations onOpenProject={goProject} />}
         {route.area === 'keys' && <AccountApiKeys />}
       </main>
