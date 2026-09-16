@@ -11,6 +11,7 @@ export * from './contentDoc.js';
 export * from './canonical.js';
 export * from './tiptapAdapter.js';
 export * from './wordpressAdapter.js';
+export * from './documentAdapter.js';
 export * from './cosmos.js';
 export * from './contentIntelligence.js';
 export * from './seo.js';

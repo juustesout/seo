@@ -241,6 +241,58 @@ describe('parseWordPressBlocks / serializeWordPressBlocks', () => {
     expect(roundTrip(html)).toBe(html);
   });
 
+  it('retains the body of a childless custom block as rawHtml', () => {
+    const html = '<!-- wp:acme/widget {"foo":1} -->\n<div class="acme-widget">Custom body</div>\n<!-- /wp:acme/widget -->';
+    const doc = parseWordPressBlocks(html);
+    expect(doc.blocks[0]?.type).toBe('custom');
+    expect(doc.blocks[0]?.children).toBeUndefined();
+    expect(doc.blocks[0]?.rawHtml).toContain('Custom body');
+    expect(roundTrip(html)).toBe(html);
+  });
+
+  it('renders semantic attributes for code and list without a WordPress source', () => {
+    const doc: CanonicalDocument = {
+      version: CANONICAL_DOCUMENT_VERSION,
+      blocks: [
+        { type: 'code', attrs: { language: 'js' }, content: [{ type: 'text', text: 'x' }] },
+        {
+          type: 'list',
+          attrs: { ordered: true, start: 3 },
+          children: [{ type: 'listItem', content: [{ type: 'text', text: 'a' }] }],
+        },
+      ],
+    };
+    const html = serializeWordPressBlocks(doc);
+    expect(html).toContain('<!-- wp:code {"language":"js"} -->');
+    expect(html).toContain('"ordered":true');
+    expect(html).toContain('"start":3');
+    expect(semanticDoc(parseWordPressBlocks(html))).toEqual(semanticDoc(doc));
+  });
+
+  it('does not fabricate a WordPress attachment id from an opaque mediaId', () => {
+    const doc: CanonicalDocument = {
+      version: CANONICAL_DOCUMENT_VERSION,
+      blocks: [{ type: 'image', attrs: { mediaId: 'm1', src: 's.png', alt: 'a', width: 10, height: 20 } }],
+    };
+    const html = serializeWordPressBlocks(doc);
+    expect(html).not.toContain('"id"');
+    expect(html).not.toContain('mediaId');
+    expect(html).toContain('src="s.png"');
+    expect(html).toContain('width="10"');
+    const back = parseWordPressBlocks(html).blocks[0];
+    expect(back?.attrs).toEqual({ src: 's.png', alt: 'a', width: 10, height: 20 });
+    expect(back?.attrs?.mediaId).toBeUndefined();
+  });
+
+  it('preserves a WordPress-origin attachment id through the source envelope', () => {
+    const html =
+      '<!-- wp:image {"id":12345,"width":640,"height":480} -->\n<figure class="wp-block-image"><img src="https://cdn.ex.com/a.png" alt="A" width="640" height="480"/></figure>\n<!-- /wp:image -->';
+    const doc = parseWordPressBlocks(html);
+    expect(doc.blocks[0]?.attrs?.mediaId).toBe('12345');
+    expect(doc.blocks[0]?.source?.attrs).toEqual({ id: 12345, width: 640, height: 480 });
+    expect(serializeWordPressBlocks(doc)).toBe(html);
+  });
+
   it('preserves freeform HTML between blocks', () => {
     const html =
       '<!-- wp:paragraph -->\n<p>A</p>\n<!-- /wp:paragraph -->\n\n<p>Raw</p>\n\n<!-- wp:paragraph -->\n<p>B</p>\n<!-- /wp:paragraph -->';

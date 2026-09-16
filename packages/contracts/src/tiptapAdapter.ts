@@ -11,7 +11,10 @@
  *     `source.type`/`source.attrs` and their converted content, so a TipTap ->
  *     canonical -> TipTap round trip restores them exactly. Nothing is dropped.
  *   - Canonical blocks TipTap v2 cannot represent are flattened by an explicit
- *     fallback (see `blockToTiptap`) rather than silently lost.
+ *     fallback (see `blockToTiptap`): children and inline content are kept,
+ *     `rawHtml` becomes visible text, and a block with nothing representable
+ *     becomes an explicit `[unsupported:<type>]` marker rather than an empty
+ *     paragraph. Nothing disappears silently.
  *
  * IDs generated here are deterministic (derived from each block's path) but
  * ephemeral: they exist only in the in-memory canonical view, are not persisted,
@@ -307,9 +310,10 @@ function reconstructTiptapNode(blockValue: CanonicalBlock): TipNode {
 
 /**
  * Explicit fallback for canonical blocks TipTap v2 cannot represent yet
- * (tables, groups/columns, embeds, `html`, WordPress-only `custom`). Policy:
+ * (tables, groups/columns, embeds, `html`, non-TipTap `custom`). Policy:
  * keep children in order; wrap inline content in a paragraph; expose `rawHtml`
- * as paragraph text. Nothing is dropped, and the transform is declared lossy.
+ * as paragraph text; otherwise emit a visible `[unsupported:<type>]` marker.
+ * Nothing is dropped and the transform is declared lossy.
  */
 function fallbackToTiptap(blockValue: CanonicalBlock): TipNode[] {
   const children = (blockValue.children ?? []).flatMap(blockToTiptap);
@@ -317,8 +321,11 @@ function fallbackToTiptap(blockValue: CanonicalBlock): TipNode[] {
   if (blockValue.content && blockValue.content.length > 0) {
     return [withInline({ type: 'paragraph' }, blockValue.content)];
   }
-  if (typeof blockValue.rawHtml === 'string') return [paragraphOfText(blockValue.rawHtml)];
-  return [{ type: 'paragraph' }];
+  if (typeof blockValue.rawHtml === 'string' && blockValue.rawHtml.length > 0) {
+    return [paragraphOfText(blockValue.rawHtml)];
+  }
+  const label = blockValue.source?.type ?? blockValue.type;
+  return [paragraphOfText(`[unsupported:${label}]`)];
 }
 
 function blockToTiptap(blockValue: CanonicalBlock): TipNode[] {

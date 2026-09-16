@@ -226,6 +226,17 @@ describe('canonicalToTiptap', () => {
     });
   });
 
+  it('emits an explicit marker for a block with nothing TipTap can represent', () => {
+    const canonical: CanonicalDocument = {
+      version: CANONICAL_DOCUMENT_VERSION,
+      blocks: [{ type: 'custom', source: { cms: 'wordpress', type: 'acme/badge', attrs: { text: 'New' } } }],
+    };
+    expect(canonicalToTiptap(canonical)).toEqual({
+      type: 'doc',
+      content: [{ type: 'paragraph', content: [{ type: 'text', text: '[unsupported:acme/badge]' }] }],
+    });
+  });
+
   it('clamps out-of-range heading levels rather than dropping the block', () => {
     const canonical: CanonicalDocument = {
       version: CANONICAL_DOCUMENT_VERSION,

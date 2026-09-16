@@ -841,6 +841,7 @@ function projectBlock(block: WpBlock): CanonicalBlock {
     default: {
       if (block.attrs && Object.keys(block.attrs).length > 0) out.attrs = block.attrs;
       if (children) out.children = children;
+      else if (block.innerHTML.length > 0) out.rawHtml = block.innerHTML;
       break;
     }
   }
@@ -899,8 +900,25 @@ function figureHtml(attrs: Record<string, unknown> | undefined): string {
 }
 
 function semanticAttrsForWp(block: CanonicalBlock): Record<string, unknown> | undefined {
-  if (block.type === 'heading') return { level: headingLevel(block.attrs) };
-  return undefined;
+  const attrs: Record<string, unknown> = {};
+  if (block.type === 'heading') {
+    attrs.level = headingLevel(block.attrs);
+  } else if (block.type === 'code') {
+    if (typeof block.attrs?.language === 'string' && block.attrs.language.length > 0) attrs.language = block.attrs.language;
+  } else if (block.type === 'list') {
+    const ordered = block.attrs?.ordered === true;
+    attrs.ordered = ordered;
+    if (ordered && typeof block.attrs?.start === 'number') attrs.start = block.attrs.start;
+  } else if (block.type === 'image') {
+    // `mediaId` is an opaque canonical reference. Without a destination media
+    // registry this adapter cannot map it to a WordPress attachment id, so it
+    // must not fabricate one. WordPress-origin images stay lossless through
+    // `source.attrs`/`source.attrsRaw`; editor-origin media references are a
+    // provider-resolution concern.
+    if (typeof block.attrs?.width === 'number') attrs.width = block.attrs.width;
+    if (typeof block.attrs?.height === 'number') attrs.height = block.attrs.height;
+  }
+  return Object.keys(attrs).length > 0 ? attrs : undefined;
 }
 
 function renderSemanticBlock(block: CanonicalBlock, name: string, attrsJson: string): string {
@@ -954,10 +972,11 @@ function renderSemanticBlock(block: CanonicalBlock, name: string, attrsJson: str
 
 function renderBlockToWp(block: CanonicalBlock): string {
   const source = block.source && block.source.cms === 'wordpress' ? block.source : undefined;
+  const isCustom = block.type === 'custom' || CANONICAL_TO_WP[block.type] === undefined;
 
   if (block.type === 'html' && !source) return block.rawHtml ?? '';
 
-  const name = source?.type ?? CANONICAL_TO_WP[block.type];
+  const name = source?.type ?? CANONICAL_TO_WP[block.type] ?? (isCustom ? block.source?.type : undefined);
   if (!name) {
     if (block.rawHtml !== undefined) return block.rawHtml;
     if (block.children && block.children.length > 0) return renderChildren(block);
@@ -965,7 +984,11 @@ function renderBlockToWp(block: CanonicalBlock): string {
     return '';
   }
 
-  const attrs = source ? source.attrs : semanticAttrsForWp(block);
+  const attrs = source
+    ? source.attrs
+    : isCustom
+      ? block.source?.attrs
+      : semanticAttrsForWp(block);
   const attrsJson =
     source && source.attrsRaw !== undefined
       ? ` ${source.attrsRaw}`
