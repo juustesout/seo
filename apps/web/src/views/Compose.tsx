@@ -1,22 +1,20 @@
 /**
- * Compose (Stage 8A): an isolated surface for the Composition Planner.
+ * Compose (Stage 8A + 8B): an isolated surface for the full composition chain.
  *
- * One vertical slice, no new layers:
+ *   brief -> POST /composition/plan    -> CompositionPlan            (Composer)
+ *         -> POST /composition/compose -> filled CanonicalDocument   (Writer)
+ *         -> CanonicalRenderer                                      (Preview)
  *
- *   brief -> POST /composition/plan -> CompositionPlan
- *         -> compileCompositionPlan() -> CanonicalDocument
- *         -> CanonicalRenderer -> preview
- *
- * It reuses the existing planner API, the existing deterministic compiler and
- * the existing renderer, so the whole chain can be seen end to end on one
- * screen. The planner produces structure only (no copy), so the preview shows
- * empty placeholder blocks; the Structure tab plus the debug panels exist to
- * tell Composer/compiler/renderer/design problems apart. Nothing is persisted.
+ * The two server phases are two explicit requests so "Planning..." and
+ * "Writing..." are real, not decorative, and a failure is attributed to the
+ * phase that failed. The second request carries back the validated plan, so the
+ * writer never re-plans and the Structure tab shows exactly the skeleton the
+ * copy was written into. It reuses the existing planner/compose endpoints and
+ * the existing renderer; nothing is persisted.
  */
-import { useMemo, useState } from 'react';
+import { useState } from 'react';
 import {
   COMPOSITION_PLAN_FORMAT_IDS,
-  compileCompositionPlan,
   type CanonicalDocument,
   type CompositionPlan,
   type CompositionPlanFormat,
@@ -42,54 +40,75 @@ const FORMAT_LABEL: Record<CompositionPlanFormat, string> = {
 const ROLE_RANK: Record<string, number> = { viewer: 0, editor: 1, admin: 2, owner: 3 };
 
 type OutputTab = 'preview' | 'structure';
+type Phase = 'idle' | 'planning' | 'writing' | 'done';
+type PhaseName = 'planning' | 'writing';
+
+interface ComposeResponse {
+  compositionPlan: CompositionPlan;
+  canonicalDocument: CanonicalDocument;
+}
 
 interface ComposeError {
   message: string;
   code: string | null;
+  phase: PhaseName;
+}
+
+function toError(e: unknown, phase: PhaseName): ComposeError {
+  return {
+    message: e instanceof ApiRequestError ? e.message : e instanceof Error ? e.message : String(e),
+    code: e instanceof ApiRequestError ? e.code : null,
+    phase,
+  };
 }
 
 export function Compose({ projectId, role = 'viewer' }: { projectId: string; role?: string }) {
   const canEdit = (ROLE_RANK[role] ?? 0) >= 1;
   const [brief, setBrief] = useState(DEFAULT_BRIEF);
   const [format, setFormat] = useState<CompositionPlanFormat>('landing_page');
-  const [loading, setLoading] = useState(false);
+  const [phase, setPhase] = useState<Phase>('idle');
   const [error, setError] = useState<ComposeError | null>(null);
   const [plan, setPlan] = useState<CompositionPlan | null>(null);
+  const [document, setDocument] = useState<CanonicalDocument | null>(null);
   const [tab, setTab] = useState<OutputTab>('preview');
 
-  // Compilation is pure and local (the contract ships the compiler), so the
-  // browser renders exactly the document the server-side flow would produce.
-  const compiled = useMemo(() => {
-    if (!plan) return null;
-    try {
-      return { document: compileCompositionPlan(plan), error: null as string | null };
-    } catch (e) {
-      return {
-        document: null as CanonicalDocument | null,
-        error: e instanceof Error ? e.message : 'The composition could not be compiled.',
-      };
-    }
-  }, [plan]);
+  const busy = phase === 'planning' || phase === 'writing';
+  const buttonLabel = phase === 'planning' ? 'Planning…' : phase === 'writing' ? 'Writing…' : 'Generate composition';
 
   const generate = async () => {
-    if (!canEdit || loading) return;
-    setLoading(true);
+    if (!canEdit || busy) return;
     setError(null);
+    setPlan(null);
+    setDocument(null);
+    setTab('preview');
+
+    setPhase('planning');
+    let nextPlan: CompositionPlan;
     try {
-      const result = await api<CompositionPlan>(`/projects/${projectId}/composition/plan`, {
+      nextPlan = await api<CompositionPlan>(`/projects/${projectId}/composition/plan`, {
         method: 'POST',
         body: { brief: brief.trim(), format },
       });
-      setPlan(result);
+    } catch (e) {
+      setPhase('idle');
+      setError(toError(e, 'planning'));
+      return;
+    }
+    setPlan(nextPlan);
+
+    setPhase('writing');
+    try {
+      const result = await api<ComposeResponse>(`/projects/${projectId}/composition/compose`, {
+        method: 'POST',
+        body: { brief: brief.trim(), format, plan: nextPlan },
+      });
+      setPlan(result.compositionPlan);
+      setDocument(result.canonicalDocument);
+      setPhase('done');
       setTab('preview');
     } catch (e) {
-      setError(
-        e instanceof ApiRequestError
-          ? { message: e.message, code: e.code }
-          : { message: e instanceof Error ? e.message : String(e), code: null },
-      );
-    } finally {
-      setLoading(false);
+      setPhase('idle');
+      setError(toError(e, 'writing'));
     }
   };
 
@@ -97,7 +116,7 @@ export function Compose({ projectId, role = 'viewer' }: { projectId: string; rol
     <div className="flex flex-col gap-6">
       <PageHeader
         title="Compose"
-        description="Turn a brief into a composition plan and preview the compiled page. Uses the project's configured AI; nothing is saved."
+        description="Turn a brief into a composition plan, let the writer fill its slots and preview the compiled page. Uses the project's configured AI; nothing is saved."
       />
 
       <section className="rounded-[10px] border bg-card p-4">
@@ -110,7 +129,7 @@ export function Compose({ projectId, role = 'viewer' }: { projectId: string; rol
           value={brief}
           onChange={(e) => setBrief(e.target.value)}
           placeholder="Create a landing page for my SEO tool"
-          disabled={loading}
+          disabled={busy}
         />
 
         <fieldset className="mt-4">
@@ -123,7 +142,7 @@ export function Compose({ projectId, role = 'viewer' }: { projectId: string; rol
                   name="compose-format"
                   value={id}
                   checked={format === id}
-                  disabled={loading}
+                  disabled={busy}
                   onChange={() => setFormat(id)}
                 />
                 {FORMAT_LABEL[id]}
@@ -132,10 +151,11 @@ export function Compose({ projectId, role = 'viewer' }: { projectId: string; rol
           </div>
         </fieldset>
 
-        <div className="mt-4">
-          <Button type="button" onClick={() => void generate()} disabled={!canEdit || loading || brief.trim().length < 3}>
-            {loading ? 'Generating composition…' : 'Generate composition'}
+        <div className="mt-4 flex items-center gap-3">
+          <Button type="button" onClick={() => void generate()} disabled={!canEdit || busy || brief.trim().length < 3}>
+            {buttonLabel}
           </Button>
+          {busy && <span className="text-sm text-muted-foreground">Working through composer and writer…</span>}
         </div>
 
         {!canEdit && (
@@ -144,6 +164,7 @@ export function Compose({ projectId, role = 'viewer' }: { projectId: string; rol
 
         {error && (
           <div className="mt-4 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+            <p className="m-0 font-medium">{error.phase === 'planning' ? 'Planning failed' : 'Writing failed'}</p>
             <p className="m-0">{error.message}</p>
             {error.code && <p className="m-0 mt-1 text-xs opacity-80">Error code: {error.code}</p>}
           </div>
@@ -170,21 +191,21 @@ export function Compose({ projectId, role = 'viewer' }: { projectId: string; rol
           ))}
         </div>
 
-        {!plan && !loading && (
+        {!plan && !busy && !document && (
           <div className="rounded-[10px] border border-dashed p-10 text-center text-sm text-muted-foreground">
             Your composition preview will appear here.
           </div>
         )}
 
-        {plan && compiled?.error && (
-          <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-            The plan could not be compiled: {compiled.error}
+        {plan && tab === 'preview' && !document && (
+          <div className="rounded-[10px] border border-dashed p-10 text-center text-sm text-muted-foreground">
+            {phase === 'writing' ? 'Writing copy into the planned slots…' : 'Copy has not been written yet.'}
           </div>
         )}
 
-        {plan && compiled?.document && tab === 'preview' && (
+        {document && tab === 'preview' && (
           <div className="overflow-hidden rounded-[10px] border bg-white">
-            <CanonicalRenderer document={compiled.document} />
+            <CanonicalRenderer document={document} />
           </div>
         )}
 
@@ -193,7 +214,7 @@ export function Compose({ projectId, role = 'viewer' }: { projectId: string; rol
         {plan && (
           <div className="grid gap-2">
             <DebugPanel title="Composition Plan" value={plan} />
-            {compiled?.document && <DebugPanel title="Canonical Document" value={compiled.document} />}
+            {document && <DebugPanel title="Canonical Document" value={document} />}
           </div>
         )}
       </section>

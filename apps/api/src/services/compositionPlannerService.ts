@@ -41,9 +41,15 @@ export class CompositionPlannerService {
   constructor(private readonly container: ServiceContainer) {}
 
   /** Produces one validated composition plan for the project, or throws a
-   *  typed `ApiError`. No AI call happens without a configured provider. */
-  async plan(projectId: string, input: CompositionPlannerInput): Promise<CompositionPlan> {
-    const cosmos = await getCosmosContext(this.container, projectId);
+   *  typed `ApiError`. No AI call happens without a configured provider.
+   *  Callers that already gathered bounded Cosmos context (e.g. the compose
+   *  flow, which also feeds the Writer) may pass it to avoid a second fetch. */
+  async plan(
+    projectId: string,
+    input: CompositionPlannerInput,
+    options: { cosmosText?: string } = {},
+  ): Promise<CompositionPlan> {
+    const cosmosText = options.cosmosText ?? (await getCosmosContext(this.container, projectId)).text;
     const ai = new AIService(this.container);
     const planner = createAiCompositionPlanner((id) => ai.resolve(id));
 
@@ -51,7 +57,7 @@ export class CompositionPlannerService {
       projectId,
       brief: input.brief,
       format: input.format,
-      cosmosText: cosmos.text,
+      cosmosText,
     });
 
     if (outcome.ok) return outcome.plan;

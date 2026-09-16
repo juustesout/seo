@@ -343,6 +343,10 @@ export interface CompositionSlotRef {
   id: string;
   /** Index path from the document root: `[blockIndex, childIndex, ...]`. */
   path: number[];
+  /** Bounded semantic role the plan declared for this slot, when present. */
+  role?: CompositionRequirementRole;
+  /** Heading level, only for `heading` slots. */
+  level?: CompositionHeadingLevel;
 }
 
 /** Deterministic slot artifact emitted alongside the compiled document. */
@@ -361,7 +365,10 @@ function compileRequirement(
   slots: CompositionSlotRef[],
 ): CanonicalBlock {
   const id = compositionSlotId(requirement.slot);
-  slots.push({ slot: requirement.slot, type: requirement.type, id, path });
+  const ref: CompositionSlotRef = { slot: requirement.slot, type: requirement.type, id, path };
+  if (requirement.role !== undefined) ref.role = requirement.role;
+  if (requirement.level !== undefined) ref.level = requirement.level;
+  slots.push(ref);
   switch (requirement.type) {
     case 'heading':
       return { id, type: 'heading', attrs: { level: requirement.level ?? DEFAULT_HEADING_LEVEL } };

@@ -11,16 +11,25 @@ import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import express from 'express';
-import { MARKETING_STORYBOARD_PLAN } from '@seo/contracts';
+import { MARKETING_STORYBOARD_PLAN, compileCompositionPlan } from '@seo/contracts';
 import { ApiError, errorHandler } from '../../apiErrors.js';
 import { compositionRouter } from './composition.js';
 
 const mock = vi.hoisted(() => ({ plan: vi.fn() }));
+const composeMock = vi.hoisted(() => ({ compose: vi.fn() }));
 
 vi.mock('../../services/compositionPlannerService.js', () => ({
   CompositionPlannerService: class {
     plan(projectId: string, input: unknown) {
       return mock.plan(projectId, input);
+    }
+  },
+}));
+
+vi.mock('../../services/compositionService.js', () => ({
+  CompositionService: class {
+    compose(projectId: string, input: unknown) {
+      return composeMock.compose(projectId, input);
     }
   },
 }));
@@ -60,11 +69,15 @@ const brief = 'Launch a landing page for our analytics tool.';
 beforeEach(() => {
   mock.plan.mockReset();
   mock.plan.mockResolvedValue(MARKETING_STORYBOARD_PLAN);
+  composeMock.compose.mockReset();
+  composeMock.compose.mockResolvedValue({
+    compositionPlan: MARKETING_STORYBOARD_PLAN,
+    canonicalDocument: compileCompositionPlan(MARKETING_STORYBOARD_PLAN),
+  });
 });
 
-describe('/api/projects/:projectId/composition/plan', () => {
-  beforeAll(async () => {
-    const app = express();
+async function startServer() {
+  const app = express();
     app.use(express.json());
     app.use((req, _res, next) => {
       const token = (req.headers.authorization ?? '').replace(/^Bearer\s+/i, '');
@@ -88,12 +101,15 @@ describe('/api/projects/:projectId/composition/plan', () => {
       server = app.listen(0, () => resolve());
     });
     base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api/projects`;
-  });
+}
 
-  afterAll(async () => {
-    await new Promise<void>((resolve, reject) => server.close((err) => (err ? reject(err) : resolve())));
-  });
+beforeAll(startServer);
 
+afterAll(async () => {
+  await new Promise<void>((resolve, reject) => server.close((err) => (err ? reject(err) : resolve())));
+});
+
+describe('/api/projects/:projectId/composition/plan', () => {
   it('rejects anonymous requests', async () => {
     const res = await request(`/${PROJECT}/composition/plan`, undefined, { brief });
     expect(res.status).toBe(401);
@@ -165,5 +181,66 @@ describe('/api/projects/:projectId/composition/plan', () => {
     const res = await request(`/${PROJECT}/composition/plan`, 'editor-token', { brief });
     expect(res.status).toBe(422);
     expect(res.json.error?.code).toBe('invalid_output');
+  });
+});
+
+describe('/api/projects/:projectId/composition/compose', () => {
+  it('rejects a viewer (editor+ required)', async () => {
+    const res = await request(`/${PROJECT}/composition/compose`, 'viewer-token', { brief });
+    expect(res.status).toBe(403);
+    expect(composeMock.compose).not.toHaveBeenCalled();
+  });
+
+  it('rejects unknown body keys', async () => {
+    const res = await request(`/${PROJECT}/composition/compose`, 'editor-token', { brief, tone: 'bold' });
+    expect(res.status).toBe(400);
+    expect(res.json.error?.code).toBe('validation_error');
+  });
+
+  it('rejects an invalid plan payload', async () => {
+    const res = await request(`/${PROJECT}/composition/compose`, 'editor-token', {
+      brief,
+      plan: { version: 1, purpose: 'x', format: 'landing_page', sections: [] },
+    });
+    expect(res.status).toBe(400);
+    expect(res.json.error?.code).toBe('validation_error');
+  });
+
+  it('returns the plan and the filled document for an editor', async () => {
+    const res = await request(`/${PROJECT}/composition/compose`, 'editor-token', { brief });
+    expect(res.status).toBe(200);
+    const data = res.json.data as { compositionPlan: unknown; canonicalDocument: unknown };
+    expect(data.compositionPlan).toEqual(MARKETING_STORYBOARD_PLAN);
+    expect(data.canonicalDocument).toBeTruthy();
+    expect(composeMock.compose).toHaveBeenCalledWith(PROJECT, { brief });
+  });
+
+  it('passes an explicit plan through and returns it', async () => {
+    const res = await request(`/${PROJECT}/composition/compose`, 'editor-token', {
+      brief,
+      format: 'landing_page',
+      plan: MARKETING_STORYBOARD_PLAN,
+    });
+    expect(res.status).toBe(200);
+    expect(composeMock.compose).toHaveBeenCalledWith(PROJECT, {
+      brief,
+      format: 'landing_page',
+      plan: MARKETING_STORYBOARD_PLAN,
+    });
+  });
+
+  it('surfaces a planning-phase failure with its message', async () => {
+    composeMock.compose.mockRejectedValue(new ApiError(503, 'not_configured', 'Planning failed: no key', { phase: 'planning' }));
+    const res = await request(`/${PROJECT}/composition/compose`, 'editor-token', { brief });
+    expect(res.status).toBe(503);
+    expect(res.json.error?.code).toBe('not_configured');
+    expect(res.json.error?.message).toMatch(/^Planning failed:/);
+  });
+
+  it('surfaces a writing-phase failure distinctly', async () => {
+    composeMock.compose.mockRejectedValue(new ApiError(422, 'invalid_output', 'Writing failed: bad copy', { phase: 'writing' }));
+    const res = await request(`/${PROJECT}/composition/compose`, 'editor-token', { brief });
+    expect(res.status).toBe(422);
+    expect(res.json.error?.message).toMatch(/^Writing failed:/);
   });
 });
