@@ -59,7 +59,7 @@ export function CanonicalRenderer({ document, designSystem, className }: Canonic
       style={style}
       data-cosmos-document={document.version}
     >
-      {context.renderBlocks(document.blocks, 'b')}
+      <div className="cosmos-container">{context.renderBlocks(document.blocks, 'b')}</div>
     </div>
   );
 }

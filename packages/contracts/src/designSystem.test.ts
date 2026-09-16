@@ -21,6 +21,8 @@ describe('resolveDesignSystem', () => {
     expect(ds.spacing).toHaveProperty('2xl');
     expect(ds.shape).toHaveProperty('card');
     expect(ds.effects).toHaveProperty('elevated');
+    expect(ds.layout.containerWidth).toBe(DEFAULT_DESIGN_SYSTEM.layout.containerWidth);
+    expect(ds.layout.readingWidth).toBe(DEFAULT_DESIGN_SYSTEM.layout.readingWidth);
   });
 
   it('applies Cosmos overrides and keeps unspecified tokens at their default', () => {
@@ -86,6 +88,8 @@ describe('designSystemCssVariables', () => {
     expect(vars['--cosmos-radius-card']).toBe(DEFAULT_DESIGN_SYSTEM.shape.card);
     expect(vars['--cosmos-shadow-elevated']).toBe(DEFAULT_DESIGN_SYSTEM.effects.elevated);
     expect(vars['--cosmos-font-size-h1']).toBe(DEFAULT_DESIGN_SYSTEM.typography.headingScale.h1);
+    expect(vars['--cosmos-container-width']).toBe(DEFAULT_DESIGN_SYSTEM.layout.containerWidth);
+    expect(vars['--cosmos-reading-width']).toBe(DEFAULT_DESIGN_SYSTEM.layout.readingWidth);
     for (const key of COSMOS_DESIGN_COLOR_KEYS) {
       expect(vars).toHaveProperty(`--cosmos-color-${key}`);
     }

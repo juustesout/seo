@@ -1,10 +1,14 @@
 /*
- * Canonical renderer presentation (Stage 5).
+ * Canonical renderer presentation (Stage 5, extended in Stage 8C).
  *
  * This is the renderer's own presentation layer, not a second design system:
  * every value comes from a `--cosmos-*` custom property set by the renderer
  * container from resolved Cosmos tokens. Nothing resets or overrides the host
  * application's theme; all selectors are scoped under `.cosmos-doc`.
+ *
+ * Stage 8C adds a centred reading container, a real typographic hierarchy and
+ * finished composition sections (hero / section / feature grid / CTA / footer).
+ * It is presentation only: the CanonicalDocument is never changed here.
  */
 
 .cosmos-doc {
@@ -15,6 +19,9 @@
   line-height: var(--cosmos-line-height);
   -webkit-font-smoothing: antialiased;
   text-align: left;
+  width: 100%;
+  min-width: 0;
+  overflow-wrap: break-word;
 }
 
 .cosmos-doc *,
@@ -23,8 +30,77 @@
   box-sizing: border-box;
 }
 
+/* Centred document container --------------------------------------------- */
+
+.cosmos-container {
+  width: 100%;
+  max-width: var(--cosmos-container-width, 72rem);
+  margin-inline: auto;
+  padding-inline: var(--cosmos-space-md);
+}
+
+@media (min-width: 640px) {
+  .cosmos-container {
+    padding-inline: var(--cosmos-space-lg);
+  }
+}
+
+.cosmos-doc .cosmos-block {
+  max-width: 100%;
+}
+
+.cosmos-doc img,
+.cosmos-doc video {
+  max-width: 100%;
+  height: auto;
+}
+
+/* Typography -------------------------------------------------------------- */
+
 .cosmos-doc p {
+  margin: 0 0 var(--cosmos-space-md);
+  max-width: var(--cosmos-reading-width);
+}
+
+.cosmos-doc h1,
+.cosmos-doc h2,
+.cosmos-doc h3,
+.cosmos-doc h4,
+.cosmos-doc h5,
+.cosmos-doc h6 {
   margin: 0 0 var(--cosmos-space-sm);
+  font-family: var(--cosmos-font-heading);
+  font-weight: var(--cosmos-font-weight-heading);
+  line-height: 1.2;
+  letter-spacing: -0.01em;
+  max-width: var(--cosmos-reading-width);
+}
+
+.cosmos-doc h1 {
+  font-size: clamp(2rem, 1.5rem + 2.4vw, var(--cosmos-font-size-h1));
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+  margin-bottom: var(--cosmos-space-md);
+}
+.cosmos-doc h2 {
+  font-size: clamp(1.5rem, 1.2rem + 1.1vw, var(--cosmos-font-size-h2));
+  margin-top: var(--cosmos-space-xl);
+}
+.cosmos-doc h3 {
+  font-size: var(--cosmos-font-size-h3);
+}
+.cosmos-doc h4 {
+  font-size: var(--cosmos-font-size-h4);
+}
+.cosmos-doc h5 {
+  font-size: var(--cosmos-font-size-h5);
+}
+.cosmos-doc h6 {
+  font-size: var(--cosmos-font-size-h6);
+}
+
+.cosmos-doc :is(h1, h2, h3, h4, h5, h6, p):first-child {
+  margin-top: 0;
 }
 
 .cosmos-doc a {
@@ -35,8 +111,9 @@
 
 .cosmos-doc ul,
 .cosmos-doc ol {
-  margin: 0 0 var(--cosmos-space-sm);
+  margin: 0 0 var(--cosmos-space-md);
   padding-left: var(--cosmos-space-lg);
+  max-width: var(--cosmos-reading-width);
 }
 
 .cosmos-doc ul {
@@ -70,6 +147,7 @@
   padding: var(--cosmos-space-xs) 0 var(--cosmos-space-xs) var(--cosmos-space-md);
   border-left: 3px solid var(--cosmos-color-primary);
   color: var(--cosmos-color-muted);
+  max-width: var(--cosmos-reading-width);
 }
 
 .cosmos-doc hr {
@@ -81,39 +159,6 @@
 .cosmos-doc .cosmos-inline-unsupported {
   color: var(--cosmos-color-muted);
   font-size: 0.9em;
-}
-
-/* Headings ---------------------------------------------------------------- */
-
-.cosmos-doc h1,
-.cosmos-doc h2,
-.cosmos-doc h3,
-.cosmos-doc h4,
-.cosmos-doc h5,
-.cosmos-doc h6 {
-  margin: 0 0 var(--cosmos-space-sm);
-  font-family: var(--cosmos-font-heading);
-  font-weight: var(--cosmos-font-weight-heading);
-  line-height: 1.25;
-}
-
-.cosmos-doc h1 {
-  font-size: var(--cosmos-font-size-h1);
-}
-.cosmos-doc h2 {
-  font-size: var(--cosmos-font-size-h2);
-}
-.cosmos-doc h3 {
-  font-size: var(--cosmos-font-size-h3);
-}
-.cosmos-doc h4 {
-  font-size: var(--cosmos-font-size-h4);
-}
-.cosmos-doc h5 {
-  font-size: var(--cosmos-font-size-h5);
-}
-.cosmos-doc h6 {
-  font-size: var(--cosmos-font-size-h6);
 }
 
 /* Media ------------------------------------------------------------------ */
@@ -170,6 +215,11 @@
   text-align: right;
 }
 
+.cosmos-align-center :is(h1, h2, h3, h4, h5, h6, p, ul, ol, blockquote) {
+  margin-left: auto;
+  margin-right: auto;
+}
+
 .cosmos-width-narrow {
   max-width: 44rem;
   margin-left: auto;
@@ -194,6 +244,10 @@
   flex-direction: row;
   gap: var(--cosmos-space-lg);
   align-items: flex-start;
+  flex-wrap: wrap;
+}
+.cosmos-direction-row > * {
+  min-width: 0;
 }
 .cosmos-direction-column {
   display: flex;
@@ -257,8 +311,31 @@
   padding: var(--cosmos-space-2xl) 0;
 }
 
+.cosmos-hero:not(.cosmos-hero--banner) {
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--cosmos-color-primary) 6%, var(--cosmos-color-background)) 0%,
+    var(--cosmos-color-background) 100%
+  );
+}
+
+/* The renderer owns presentation: a hero always reads as a headline-first
+   stacked block, even when the plan expressed a neutral row direction. */
+.cosmos-hero.cosmos-direction-row {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--cosmos-space-md);
+}
+.cosmos-hero.cosmos-direction-row > * {
+  width: 100%;
+}
+
 .cosmos-hero--centered {
   text-align: center;
+}
+.cosmos-hero--centered.cosmos-direction-row {
+  align-items: center;
 }
 
 .cosmos-hero--centered h1,
@@ -290,6 +367,11 @@
 
 .cosmos-section {
   margin: 0 0 var(--cosmos-space-xl);
+  min-width: 0;
+}
+
+.cosmos-section > :first-child {
+  margin-top: 0;
 }
 
 .cosmos-section--muted {
@@ -313,53 +395,65 @@
 
 /* Composition: feature grid / cards -------------------------------------- */
 
-.cosmos-feature-grid {
+.cosmos-featureGrid {
   display: grid;
-  gap: var(--cosmos-space-md);
-  grid-template-columns: 1fr;
+  gap: var(--cosmos-space-lg);
   margin: 0 0 var(--cosmos-space-xl);
 }
 
-@media (min-width: 640px) {
-  .cosmos-feature-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
+/* Default to an intrinsic responsive grid, but let an explicit column intent
+   (as `cosmos-columns-N`) own the template when the plan supplied one. */
+.cosmos-featureGrid:not([class*='cosmos-columns-']) {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 16rem), 1fr));
 }
 
-@media (min-width: 1024px) {
-  .cosmos-feature-grid {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-}
-
-.cosmos-feature-grid.cosmos-density-compact {
+.cosmos-featureGrid.cosmos-density-compact {
   gap: var(--cosmos-space-sm);
 }
 
-.cosmos-feature-grid.cosmos-density-spacious {
+.cosmos-featureGrid.cosmos-density-spacious {
   gap: var(--cosmos-space-lg);
 }
 
-.cosmos-feature-card {
+.cosmos-featureCard {
   display: flex;
   flex-direction: column;
   gap: var(--cosmos-space-xs);
+  height: 100%;
   padding: var(--cosmos-space-lg);
   background: var(--cosmos-color-surface);
+  border: 1px solid var(--cosmos-color-border);
   border-radius: var(--cosmos-radius-card);
+  box-shadow: var(--cosmos-shadow-card);
+  min-width: 0;
 }
 
-.cosmos-feature-card--elevated {
+.cosmos-featureCard > :last-child {
+  margin-bottom: 0;
+}
+
+.cosmos-featureCard--elevated {
   box-shadow: var(--cosmos-shadow-elevated);
 }
 
-.cosmos-feature-card--bordered {
+.cosmos-featureCard--bordered {
   border: 1px solid var(--cosmos-color-border);
 }
 
-.cosmos-feature-card--minimal {
+.cosmos-featureCard--minimal {
   padding: 0;
   background: transparent;
+  border: 0;
+  box-shadow: none;
+}
+
+.cosmos-featureCard :is(h1, h2, h3, h4, h5, h6, p),
+.cosmos-cta :is(h1, h2, h3, p),
+.cosmos-callout p,
+.cosmos-mediaText p,
+.cosmos-footer p,
+.cosmos-statItem p {
+  max-width: none;
 }
 
 .cosmos-feature-card__icon,
@@ -372,10 +466,15 @@
 /* Composition: cta / callout / testimonial ------------------------------- */
 
 .cosmos-cta {
+  margin: 0 0 var(--cosmos-space-xl);
   padding: var(--cosmos-space-xl) var(--cosmos-space-lg);
   background: var(--cosmos-color-secondary);
   border-radius: var(--cosmos-radius-card);
-  margin: 0 0 var(--cosmos-space-xl);
+  min-width: 0;
+}
+
+.cosmos-cta > :first-child {
+  margin-top: 0;
 }
 
 .cosmos-cta--primary {
@@ -431,6 +530,11 @@
   margin: 0 0 var(--cosmos-space-xl);
 }
 
+.cosmos-testimonial blockquote {
+  margin: 0 0 var(--cosmos-space-sm);
+  font-size: 1.125em;
+}
+
 .cosmos-testimonial--card {
   padding: var(--cosmos-space-lg);
   background: var(--cosmos-color-surface);
@@ -458,6 +562,7 @@
   display: flex;
   flex-direction: column;
   gap: var(--cosmos-space-xs);
+  min-width: 0;
 }
 
 .cosmos-stat__value {
@@ -528,13 +633,32 @@
 }
 
 .cosmos-button {
-  display: inline-block;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--cosmos-space-xs);
+  max-width: 100%;
   padding: var(--cosmos-space-sm) var(--cosmos-space-lg);
+  font-family: inherit;
+  font-size: 0.95em;
   font-weight: 600;
+  line-height: 1.2;
+  text-align: center;
   border-radius: var(--cosmos-radius-button);
   background: var(--cosmos-color-primary);
   color: var(--cosmos-color-surface);
   text-decoration: none;
+  cursor: pointer;
+  transition: filter 0.15s ease;
+}
+
+a.cosmos-button:hover {
+  filter: brightness(0.94);
+}
+
+.cosmos-button:focus-visible {
+  outline: 2px solid var(--cosmos-color-primary);
+  outline-offset: 2px;
 }
 
 .cosmos-button--primary {
@@ -556,13 +680,23 @@
 /* Composition: footer ----------------------------------------------------- */
 
 .cosmos-footer {
-  margin-top: var(--cosmos-space-xl);
+  margin-top: var(--cosmos-space-2xl);
   padding-top: var(--cosmos-space-lg);
   border-top: 1px solid var(--cosmos-color-border);
   color: var(--cosmos-color-muted);
 }
 
+.cosmos-footer p {
+  margin-bottom: var(--cosmos-space-xs);
+}
+
 .cosmos-footer--simple .cosmos-footer__links {
+  display: none;
+}
+
+/* Empty placeholder nodes: hide only when there is genuinely nothing to show.
+   This never fabricates or substitutes copy. */
+.cosmos-doc :is(h1, h2, h3, h4, h5, h6, p):empty {
   display: none;
 }
 

@@ -63,12 +63,20 @@ export interface DesignSystemEffects {
   elevated: string;
 }
 
+export interface DesignSystemLayout {
+  /** Maximum width of the centered document content column. */
+  containerWidth: string;
+  /** Boundary for readable running text (headings/paragraphs/lists). */
+  readingWidth: string;
+}
+
 export interface DesignSystem {
   colors: DesignSystemColors;
   typography: DesignSystemTypography;
   spacing: DesignSystemSpacing;
   shape: DesignSystemShape;
   effects: DesignSystemEffects;
+  layout: DesignSystemLayout;
 }
 
 const SANS_FALLBACK =
@@ -135,6 +143,10 @@ export const DEFAULT_DESIGN_SYSTEM: DesignSystem = {
   spacing: SPACING_SCALES.comfortable,
   shape: RADIUS_SCALES.medium,
   effects: ELEVATIONS.subtle,
+  layout: {
+    containerWidth: '72rem',
+    readingWidth: '42rem',
+  },
 };
 
 /**
@@ -174,6 +186,7 @@ export function resolveDesignSystem(value?: unknown): DesignSystem {
     spacing: { ...SPACING_SCALES[design.spacingScale ?? 'comfortable'] },
     shape: { ...RADIUS_SCALES[design.radiusScale ?? 'medium'] },
     effects: { ...ELEVATIONS[design.elevation ?? 'subtle'] },
+    layout: { ...DEFAULT_DESIGN_SYSTEM.layout },
   };
 }
 
@@ -203,5 +216,7 @@ export function designSystemCssVariables(design: DesignSystem): Record<string, s
   vars['--cosmos-radius-button'] = design.shape.button;
   vars['--cosmos-shadow-card'] = design.effects.card;
   vars['--cosmos-shadow-elevated'] = design.effects.elevated;
+  vars['--cosmos-container-width'] = design.layout.containerWidth;
+  vars['--cosmos-reading-width'] = design.layout.readingWidth;
   return vars;
 }

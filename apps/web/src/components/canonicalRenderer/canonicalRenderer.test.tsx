@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { render } from '@testing-library/react';
 import {
   CANONICAL_DOCUMENT_VERSION,
+  DEFAULT_DESIGN_SYSTEM,
   resolveDesignSystem,
   type CanonicalBlock,
   type CanonicalDocument,
@@ -102,6 +103,13 @@ describe('renderer tokens and isolation', () => {
     expect(root.style.getPropertyValue('--cosmos-space-md')).toBeTruthy();
     expect(root.style.getPropertyValue('--cosmos-radius-card')).toBeTruthy();
     expect(root.style.getPropertyValue('--cosmos-shadow-elevated')).toBeTruthy();
+  });
+
+  it('emits the layout tokens that drive container and reading width', () => {
+    const { container } = render(<CanonicalRenderer document={doc([text('a')])} />);
+    const root = rootOf(container);
+    expect(root.style.getPropertyValue('--cosmos-container-width')).toBe(DEFAULT_DESIGN_SYSTEM.layout.containerWidth);
+    expect(root.style.getPropertyValue('--cosmos-reading-width')).toBe(DEFAULT_DESIGN_SYSTEM.layout.readingWidth);
   });
 });
 
@@ -272,6 +280,38 @@ describe('responsive intent', () => {
     const before = structuredClone(documentValue);
     render(<CanonicalRenderer document={documentValue} />);
     expect(documentValue).toEqual(before);
+  });
+});
+
+describe('document container', () => {
+  it('wraps every block in one centred container', () => {
+    const { container } = render(<CanonicalRenderer document={marketingDoc()} />);
+    const root = rootOf(container);
+    const wrapper = root.firstElementChild as HTMLElement | null;
+    expect(wrapper?.classList.contains('cosmos-container')).toBe(true);
+    expect(root.querySelectorAll('.cosmos-container')).toHaveLength(1);
+  });
+
+  it('keeps every rendered block inside the container', () => {
+    const { container } = render(<CanonicalRenderer document={marketingDoc()} />);
+    const wrapper = rootOf(container).querySelector('.cosmos-container');
+    const blocks = container.querySelectorAll('.cosmos-block');
+    expect(blocks.length).toBeGreaterThan(0);
+    for (const block of blocks) {
+      expect(wrapper?.contains(block)).toBe(true);
+    }
+  });
+
+  it('renders empty nodes without crashing, without inventing copy and without mutating', () => {
+    const value = doc([
+      { type: 'heading', attrs: { level: 1 }, content: [] },
+      { type: 'paragraph', content: [] },
+    ]);
+    const before = structuredClone(value);
+    const { container } = render(<CanonicalRenderer document={value} />);
+    expect(container.querySelector('h1')?.textContent).toBe('');
+    expect(container.querySelector('p')?.textContent).toBe('');
+    expect(value).toEqual(before);
   });
 });
 
