@@ -1,16 +1,19 @@
 /**
- * Compose (Stage 8A + 8B): an isolated surface for the full composition chain.
+ * Compose (Stage 8A + 8B + 8D): an isolated surface for the full composition chain.
  *
  *   brief -> POST /composition/plan    -> CompositionPlan            (Composer)
  *         -> POST /composition/compose -> filled CanonicalDocument   (Writer)
  *         -> CanonicalRenderer                                      (Preview)
+ *         -> POST /content (Open in Editor) -> Content Studio        (Editor)
  *
  * The two server phases are two explicit requests so "Planning..." and
  * "Writing..." are real, not decorative, and a failure is attributed to the
  * phase that failed. The second request carries back the validated plan, so the
  * writer never re-plans and the Structure tab shows exactly the skeleton the
  * copy was written into. It reuses the existing planner/compose endpoints and
- * the existing renderer; nothing is persisted.
+ * the existing renderer; generation itself is preview-only. Only "Open in
+ * Editor" creates a persistent Content Studio draft from the current
+ * CanonicalDocument (no second AI call, no new persistence layer).
  */
 import { useState } from 'react';
 import {
@@ -22,6 +25,7 @@ import {
 } from '@seo/contracts';
 import { ApiRequestError, api } from '../lib/api';
 import { CanonicalRenderer } from '../components/canonicalRenderer';
+import { editorDraftFromCanonical } from '../components/content/editorDraft';
 import { PageHeader } from '@/components/ui/page-header';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
@@ -48,6 +52,10 @@ interface ComposeResponse {
   canonicalDocument: CanonicalDocument;
 }
 
+interface CreatedContentRow {
+  id: string;
+}
+
 interface ComposeError {
   message: string;
   code: string | null;
@@ -62,7 +70,15 @@ function toError(e: unknown, phase: PhaseName): ComposeError {
   };
 }
 
-export function Compose({ projectId, role = 'viewer' }: { projectId: string; role?: string }) {
+export function Compose({
+  projectId,
+  role = 'viewer',
+  onOpenEditor,
+}: {
+  projectId: string;
+  role?: string;
+  onOpenEditor?: (contentId: string) => void;
+}) {
   const canEdit = (ROLE_RANK[role] ?? 0) >= 1;
   const [brief, setBrief] = useState(DEFAULT_BRIEF);
   const [format, setFormat] = useState<CompositionPlanFormat>('landing_page');
@@ -71,6 +87,8 @@ export function Compose({ projectId, role = 'viewer' }: { projectId: string; rol
   const [plan, setPlan] = useState<CompositionPlan | null>(null);
   const [document, setDocument] = useState<CanonicalDocument | null>(null);
   const [tab, setTab] = useState<OutputTab>('preview');
+  const [creating, setCreating] = useState(false);
+  const [createError, setCreateError] = useState<string | null>(null);
 
   const busy = phase === 'planning' || phase === 'writing';
   const buttonLabel = phase === 'planning' ? 'Planning…' : phase === 'writing' ? 'Writing…' : 'Generate composition';
@@ -78,6 +96,7 @@ export function Compose({ projectId, role = 'viewer' }: { projectId: string; rol
   const generate = async () => {
     if (!canEdit || busy) return;
     setError(null);
+    setCreateError(null);
     setPlan(null);
     setDocument(null);
     setTab('preview');
@@ -109,6 +128,28 @@ export function Compose({ projectId, role = 'viewer' }: { projectId: string; rol
     } catch (e) {
       setPhase('idle');
       setError(toError(e, 'writing'));
+    }
+  };
+
+  // Persist the current run as a Content Studio draft and open the editor. The
+  // document already exists in memory, so this is a single create call: no AI,
+  // no re-planning. Guarded against double submits while the create is in
+  // flight; the preview stays on screen if it fails.
+  const openInEditor = async () => {
+    if (!document || !canEdit || creating || !onOpenEditor) return;
+    setCreating(true);
+    setCreateError(null);
+    try {
+      const draft = editorDraftFromCanonical(document, brief.trim());
+      const row = await api<CreatedContentRow>(`/projects/${projectId}/content`, {
+        method: 'POST',
+        body: { title: draft.title, status: 'draft', content_json: draft.doc },
+      });
+      onOpenEditor(row.id);
+    } catch (e) {
+      setCreateError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setCreating(false);
     }
   };
 
@@ -206,6 +247,23 @@ export function Compose({ projectId, role = 'viewer' }: { projectId: string; rol
         {document && tab === 'preview' && (
           <div className="overflow-hidden rounded-[10px] border bg-white">
             <CanonicalRenderer document={document} />
+          </div>
+        )}
+
+        {document && tab === 'preview' && canEdit && onOpenEditor && (
+          <div className="flex flex-wrap items-center gap-3">
+            <Button type="button" onClick={() => void openInEditor()} disabled={creating}>
+              {creating ? 'Opening…' : 'Open in Editor'}
+            </Button>
+            <span className="text-xs text-muted-foreground">
+              Creates a draft in Content Studio from this run. Generating stays preview-only until you do this.
+            </span>
+          </div>
+        )}
+
+        {createError && (
+          <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+            Could not open in editor: {createError}
           </div>
         )}
 

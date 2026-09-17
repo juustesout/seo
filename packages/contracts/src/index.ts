@@ -12,6 +12,7 @@ export * from './canonical.js';
 export * from './tiptapAdapter.js';
 export * from './wordpressAdapter.js';
 export * from './documentAdapter.js';
+export * from './editorHandoff.js';
 export * from './cosmos.js';
 export * from './designSystem.js';
 export * from './contentIntelligence.js';

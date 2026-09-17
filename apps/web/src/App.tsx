@@ -317,8 +317,8 @@ export function App() {
                 }
               />
             )}
-            {view === 'content' && <Content projectId={pid} role={project.role} onOpenCalendar={() => goProject(pid, 'calendar')} onOpenPublications={(contentId) => openProjectView(pid, 'publications', { content_id: contentId })} />}
-            {view === 'compose' && <Compose projectId={pid} role={project.role} />}
+            {view === 'content' && <Content projectId={pid} role={project.role} initialContentId={route.sub} onOpenCalendar={() => goProject(pid, 'calendar')} onOpenPublications={(contentId) => openProjectView(pid, 'publications', { content_id: contentId })} />}
+            {view === 'compose' && <Compose projectId={pid} role={project.role} onOpenEditor={(contentId) => goProject(pid, 'content', contentId)} />}
             {view === 'calendar' && <ContentSchedule projectId={pid} role={project.role} onViewPublication={(scheduleId) => openProjectView(pid, 'publications', { schedule_id: scheduleId })} />}
             {view === 'publications' && <Publications projectId={pid} />}
             {view === 'publishing' && <Publishing projectId={pid} />}
@@ -346,7 +346,11 @@ export function App() {
         {route.area === 'overview' && <Overview onOpenProject={goProject} onGoProjects={() => goArea('projects')} />}
         {route.area === 'projects' && <ProjectsPage onOpenProject={goProject} />}
         {route.area === 'compose' && composeProject && (
-          <Compose projectId={composeProject.id} role={composeProject.role} />
+          <Compose
+            projectId={composeProject.id}
+            role={composeProject.role}
+            onOpenEditor={(contentId) => goProject(composeProject.id, 'content', contentId)}
+          />
         )}
         {route.area === 'integrations' && <AccountIntegrations onOpenProject={goProject} />}
         {route.area === 'keys' && <AccountApiKeys />}

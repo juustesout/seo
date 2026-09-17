@@ -60,6 +60,24 @@ function mockComposeFlow(): {
   return { plan, compose };
 }
 
+/** Plan + compose + content-create, so the editor handoff can be exercised. */
+function mockHandoffFlow(): {
+  plan: ReturnType<typeof deferred<unknown>>;
+  compose: ReturnType<typeof deferred<unknown>>;
+  create: ReturnType<typeof deferred<unknown>>;
+} {
+  const plan = deferred<unknown>();
+  const compose = deferred<unknown>();
+  const create = deferred<unknown>();
+  apiMock.api.mockImplementation((path: string) => {
+    if (path.endsWith('/plan')) return plan.promise;
+    if (path.endsWith('/composition/compose')) return compose.promise;
+    if (path.endsWith('/content')) return create.promise;
+    return Promise.reject(new Error(`unexpected ${path}`));
+  });
+  return { plan, compose, create };
+}
+
 beforeEach(() => {
   apiMock.api.mockReset();
 });
@@ -171,5 +189,79 @@ describe('Compose', () => {
     render(<Compose projectId={PROJECT} role="viewer" />);
     expect((screen.getByRole('button', { name: 'Generate composition' }) as HTMLButtonElement).disabled).toBe(true);
     expect(screen.getByText('Editors and above can generate a composition.')).toBeTruthy();
+  });
+});
+
+describe('Compose -> Content Studio handoff', () => {
+  async function generateFilled(flow: ReturnType<typeof mockHandoffFlow>) {
+    flow.plan.resolve(MARKETING_STORYBOARD_PLAN);
+    flow.compose.resolve({
+      compositionPlan: MARKETING_STORYBOARD_PLAN,
+      canonicalDocument: filledDocument(),
+    });
+  }
+
+  it('creates a Content Studio draft from the current run and opens the editor', async () => {
+    const flow = mockHandoffFlow();
+    generateFilled(flow);
+    const onOpenEditor = vi.fn();
+    render(<Compose projectId={PROJECT} role="editor" onOpenEditor={onOpenEditor} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Generate composition' }));
+    await screen.findByText('copy for hero.title');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open in Editor' }));
+    const createCall = await waitFor(() => {
+      const call = apiMock.api.mock.calls.find(([path]) => path === `/projects/${PROJECT}/content`);
+      expect(call).toBeTruthy();
+      return call as [string, { method: string; body: Record<string, unknown> }];
+    });
+
+    expect(createCall[1].method).toBe('POST');
+    expect(createCall[1].body.title).toBe('copy for hero.title');
+    expect(createCall[1].body.status).toBe('draft');
+    const json = JSON.stringify(createCall[1].body.content_json);
+    expect(json).toContain('copy for hero.title');
+    expect(json).toContain('copy for conversion.primaryCta');
+    expect(json).not.toContain('[unsupported');
+
+    flow.create.resolve({ id: 'content-9' });
+    await waitFor(() => expect(onOpenEditor).toHaveBeenCalledWith('content-9'));
+  });
+
+  it('shows a loading state and never posts twice', async () => {
+    const flow = mockHandoffFlow();
+    generateFilled(flow);
+    const onOpenEditor = vi.fn();
+    render(<Compose projectId={PROJECT} role="editor" onOpenEditor={onOpenEditor} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Generate composition' }));
+    await screen.findByText('copy for hero.title');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open in Editor' }));
+    const busy = (await screen.findByRole('button', { name: 'Opening…' })) as HTMLButtonElement;
+    expect(busy.disabled).toBe(true);
+    fireEvent.click(busy);
+
+    const createCalls = apiMock.api.mock.calls.filter(([path]) => path === `/projects/${PROJECT}/content`);
+    expect(createCalls).toHaveLength(1);
+
+    flow.create.resolve({ id: 'content-1' });
+    await waitFor(() => expect(onOpenEditor).toHaveBeenCalledTimes(1));
+  });
+
+  it('reports a create failure and keeps the preview', async () => {
+    const flow = mockHandoffFlow();
+    generateFilled(flow);
+    render(<Compose projectId={PROJECT} role="editor" onOpenEditor={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Generate composition' }));
+    await screen.findByText('copy for hero.title');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open in Editor' }));
+    flow.create.reject(new ApiRequestError('bad_request', 'Could not create content', 400));
+
+    expect(await screen.findByText('Could not open in editor: Could not create content')).toBeTruthy();
+    expect(screen.getByText('copy for hero.title')).toBeTruthy();
   });
 });

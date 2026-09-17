@@ -92,11 +92,14 @@ const ROLE_RANK: Record<string, number> = { viewer: 0, editor: 1, admin: 2, owne
 export function Content({
   projectId,
   role = 'viewer',
+  initialContentId = null,
   onOpenCalendar,
   onOpenPublications,
 }: {
   projectId: string;
   role?: string;
+  /** Deep link (e.g. from Compose) to open one draft on mount. */
+  initialContentId?: string | null;
   onOpenCalendar?: () => void;
   onOpenPublications?: (contentId: string) => void;
 }) {
@@ -299,6 +302,15 @@ export function Content({
     resetAi();
     setLoadSeq((n) => n + 1);
   };
+
+  // Deep link from Compose: open the freshly created draft exactly once. The
+  // regular list flow keeps `initialContentId` null and is untouched.
+  const initialOpenRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!initialContentId || initialOpenRef.current === initialContentId) return;
+    initialOpenRef.current = initialContentId;
+    open(initialContentId);
+  }, [initialContentId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const startNew = () => {
     setCreating(true);
