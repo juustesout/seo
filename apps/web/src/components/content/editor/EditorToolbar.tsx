@@ -1,13 +1,17 @@
 import { useEffect, useReducer } from 'react';
 import type { Editor } from '@tiptap/react';
+import { NodeSelection } from '@tiptap/pm/state';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import type { AutosaveStatus } from '../useAutosave';
 import { SAVE_LABEL } from '../ContentEditorHeader';
+import { COMPOSITION_NODE_TYPES } from './CompositionNodes';
+import { deleteSelectedComposition } from './insertComposition';
 
 export type EditorToolbarActions = {
   undo: () => void;
   redo: () => void;
+  deleteSelected?: () => void;
 };
 
 export function toolbarActionsFromEditor(editor: Editor | null): EditorToolbarActions | null {
@@ -19,7 +23,17 @@ export function toolbarActionsFromEditor(editor: Editor | null): EditorToolbarAc
     redo: () => {
       editor.chain().focus().redo().run();
     },
+    deleteSelected: () => {
+      deleteSelectedComposition(editor);
+    },
   };
+}
+
+function canDeleteComposition(editor: Editor | null | undefined): boolean {
+  if (!editor || editor.isDestroyed) return false;
+  const { selection } = editor.state;
+  if (!(selection instanceof NodeSelection)) return false;
+  return (COMPOSITION_NODE_TYPES as readonly string[]).includes(selection.node.type.name);
 }
 
 export function EditorToolbar({
@@ -48,6 +62,7 @@ export function EditorToolbar({
   const bound = actions ?? toolbarActionsFromEditor(editor ?? null);
   const undoEnabled = canUndo ?? editor?.can().undo() ?? false;
   const redoEnabled = canRedo ?? editor?.can().redo() ?? false;
+  const deleteEnabled = canDeleteComposition(editor ?? null);
 
   return (
     <div
@@ -73,6 +88,16 @@ export function EditorToolbar({
         onClick={() => bound?.redo()}
       >
         Redo
+      </Button>
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        title="Delete"
+        disabled={!bound?.deleteSelected || !deleteEnabled}
+        onClick={() => bound?.deleteSelected?.()}
+      >
+        Delete
       </Button>
       {saveState && (
         <span

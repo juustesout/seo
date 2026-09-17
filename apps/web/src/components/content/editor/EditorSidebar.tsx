@@ -10,11 +10,13 @@ export function EditorSidebar({
   onModeChange,
   selectedElement,
   onSelectElement,
+  insertHint,
 }: {
   mode: SidebarMode;
   onModeChange: (mode: SidebarMode) => void;
   selectedElement: EditorSelection;
   onSelectElement: (element: EditorElementDefinition) => void;
+  insertHint?: string | null;
 }) {
   return (
     <aside
@@ -45,17 +47,36 @@ export function EditorSidebar({
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto p-3">
         {mode === 'elements' ? (
-          <ElementBrowser
-            selectedType={selectedElement?.type ?? null}
-            onSelect={(element) => onSelectElement(element)}
-          />
+          <>
+            <ElementBrowser
+              selectedType={selectedElement?.type ?? null}
+              onSelect={(element) => onSelectElement(element)}
+            />
+            {selectedElement && (
+              <p className="mt-3 text-xs text-muted-foreground">
+                Selected: {getEditorElement(selectedElement.type)?.label ?? selectedElement.type}
+              </p>
+            )}
+            {insertHint && (
+              <p className="mt-3 text-xs text-destructive" data-testid="insert-hint">
+                {insertHint}
+              </p>
+            )}
+          </>
         ) : (
-          <ElementSettings selection={selectedElement} />
-        )}
-        {mode === 'elements' && selectedElement && (
-          <p className="mt-3 text-xs text-muted-foreground">
-            Selected: {getEditorElement(selectedElement.type)?.label ?? selectedElement.type}
-          </p>
+          <div className="grid gap-3">
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="w-fit justify-start px-0 text-muted-foreground"
+              data-testid="back-to-elements"
+              onClick={() => onModeChange('elements')}
+            >
+              {'\u2190'} Elements
+            </Button>
+            <ElementSettings selection={selectedElement} />
+          </div>
         )}
       </div>
     </aside>

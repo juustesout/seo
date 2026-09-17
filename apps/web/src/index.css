@@ -239,12 +239,39 @@
     padding: 8px 12px;
     background: var(--card);
   }
+  .ProseMirror .seo-compositionHero {
+    background: var(--accent);
+    border-style: solid;
+  }
+  .ProseMirror .seo-compositionSection {
+    background: var(--muted);
+    padding: 12px;
+  }
+  .ProseMirror .seo-compositionFeatureGrid {
+    background: transparent;
+    border-style: dashed;
+  }
+  .ProseMirror .seo-compositionFeatureCard {
+    background: var(--card);
+    border-style: solid;
+    margin: 0;
+  }
+  .ProseMirror .seo-compositionCta {
+    background: var(--secondary);
+    border-style: solid;
+    text-align: center;
+  }
   .ProseMirror .seo-composition-selected,
   .ProseMirror .seo-composition[data-selected='true'] {
     border-color: var(--primary);
     outline: 2px solid var(--primary);
+    outline-offset: 1px;
   }
   .ProseMirror .seo-composition__chrome {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
     cursor: pointer;
     margin-bottom: 6px;
     font-size: 11px;
@@ -252,6 +279,12 @@
     letter-spacing: 0.04em;
     text-transform: uppercase;
     color: var(--muted-foreground);
+  }
+  .ProseMirror .seo-composition__mark {
+    color: var(--primary);
+    letter-spacing: 0;
+    text-transform: none;
+    font-weight: 500;
   }
   .ProseMirror [data-composition='compositionFeatureGrid'] > .seo-composition__content {
     display: grid;

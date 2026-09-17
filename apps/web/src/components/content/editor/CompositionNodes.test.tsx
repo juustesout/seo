@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { Editor } from '@tiptap/core';
 import type { TipDoc, TipNode } from '@seo/contracts';
 import { RichTextEditor } from '../RichTextEditor';
@@ -205,5 +205,33 @@ describe('composition insertion commands', () => {
       ?? section?.content?.find((node) => node.type === 'compositionFeatureGrid');
     expect(grid?.type).toBe('compositionFeatureGrid');
     expect(grid?.content?.every((node) => node.type === 'compositionFeatureCard')).toBe(true);
+  });
+});
+
+describe('composition editor UX', () => {
+  it('opens settings for a nested FeatureCard and can return to elements', async () => {
+    const onSelectionChange = vi.fn();
+    let live: TiptapEditor | null = null;
+    render(
+      <ShellHarness
+        initialDoc={nestedDoc()}
+        onSelectionChange={onSelectionChange}
+        onEditor={(e) => {
+          live = e;
+        }}
+      />,
+    );
+    await waitFor(() => expect(live).toBeTruthy());
+    live!.commands.setNodeSelection(posOfType(live!, 'compositionFeatureCard'));
+    await waitFor(() =>
+      expect(onSelectionChange).toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'compositionFeatureCard', path: [1, 0, 0] }),
+      ),
+    );
+    expect(screen.getByTestId('editor-shell').getAttribute('data-selected-path')).toBe('1.0.0');
+    fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
+    expect(screen.getByTestId('element-settings').textContent).toContain('Type: Feature Card');
+    fireEvent.click(screen.getByTestId('back-to-elements'));
+    expect(screen.getByTestId('element-browser')).toBeTruthy();
   });
 });

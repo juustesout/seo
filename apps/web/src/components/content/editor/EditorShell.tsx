@@ -4,7 +4,7 @@ import { EditorSidebar } from './EditorSidebar';
 import { EditorMain } from './EditorMain';
 import { toolbarActionsFromEditor, type EditorToolbarActions } from './EditorToolbar';
 import { getEditorElement } from './elementRegistry';
-import { insertComposition } from './insertComposition';
+import { insertComposition, selectInsertedComposition } from './insertComposition';
 import { readCanvasSelection } from './selection';
 import type { AutosaveStatus } from '../useAutosave';
 import type { EditorElementDefinition, EditorSelection, EditorShellState, SidebarMode } from './types';
@@ -24,6 +24,7 @@ export function EditorShell({
 }) {
   const [sidebarMode, setSidebarMode] = useState<SidebarMode>('elements');
   const [selectedElement, setSelectedElement] = useState<EditorSelection>(null);
+  const [insertHint, setInsertHint] = useState<string | null>(null);
 
   const applySelection = useCallback(
     (selection: EditorSelection, switchToSettings: boolean) => {
@@ -36,11 +37,18 @@ export function EditorShell({
 
   const handleBrowserSelect = useCallback(
     (element: EditorElementDefinition) => {
-      if (editor && !editor.isDestroyed && insertComposition(editor, element.type)) {
+      if (!editor || editor.isDestroyed) {
+        applySelection({ type: element.type }, true);
+        return;
+      }
+      if (insertComposition(editor, element.type)) {
+        selectInsertedComposition(editor, element.type);
+        setInsertHint(null);
         applySelection(readCanvasSelection(editor) ?? { type: element.type }, true);
         return;
       }
-      applySelection({ type: element.type }, true);
+      const label = getEditorElement(element.type)?.label ?? element.type;
+      setInsertHint(`Cannot insert ${label} here`);
     },
     [applySelection, editor],
   );
@@ -96,6 +104,7 @@ export function EditorShell({
         onModeChange={setSidebarMode}
         selectedElement={selectedElement}
         onSelectElement={handleBrowserSelect}
+        insertHint={insertHint}
       />
       <EditorMain editor={editor} toolbarActions={boundToolbar} saveState={saveState} onSelect={handleCanvasSelect}>
         {children}

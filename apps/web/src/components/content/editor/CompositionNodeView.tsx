@@ -22,7 +22,8 @@ export function CompositionNodeView({ node, editor, getPos, selected }: ReactNod
       className={cn('seo-composition', `seo-${type}`, selected && 'seo-composition-selected')}
     >
       <div className="seo-composition__chrome" contentEditable={false} onMouseDown={selectSelf}>
-        {label}
+        <span>{label}</span>
+        {selected && <span className="seo-composition__mark">selected</span>}
       </div>
       <NodeViewContent className="seo-composition__content" />
     </NodeViewWrapper>

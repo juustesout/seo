@@ -41,14 +41,22 @@ function compositionDoc(): TipDoc {
 function ShellHarness({
   initialDoc,
   onSelectionChange,
+  onEditor,
 }: {
   initialDoc: TipDoc;
-  onSelectionChange?: (selection: { type: string } | null) => void;
+  onSelectionChange?: (selection: { type: string; path?: number[] } | null) => void;
+  onEditor?: (editor: TiptapEditor | null) => void;
 }) {
   const [editor, setEditor] = useState<TiptapEditor | null>(null);
   return (
     <EditorShell editor={editor} onSelectionChange={onSelectionChange}>
-      <RichTextEditor initialDoc={initialDoc} onEditor={setEditor} />
+      <RichTextEditor
+        initialDoc={initialDoc}
+        onEditor={(next) => {
+          setEditor(next);
+          onEditor?.(next);
+        }}
+      />
     </EditorShell>
   );
 }
@@ -99,13 +107,44 @@ describe('EditorShell', () => {
     expect(onSelectionChange).toHaveBeenCalledWith({ type: 'compositionHero' });
     expect(screen.getByTestId('editor-shell').getAttribute('data-selected-type')).toBe('compositionHero');
     expect(screen.getByTestId('editor-shell').getAttribute('data-sidebar-mode')).toBe('settings');
-    expect(screen.getByTestId('element-settings').textContent).toContain('Hero content is edited on the canvas.');
+    expect(screen.getByTestId('element-settings').textContent).toContain('Type: Hero');
+    expect(screen.getByTestId('element-settings').textContent).toContain('No editable settings yet');
+  });
+
+  it('returns from settings to the element browser', () => {
+    render(
+      <EditorShell>
+        <p>Canvas body</p>
+      </EditorShell>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Hero' }));
+    expect(screen.getByTestId('element-settings')).toBeTruthy();
+    fireEvent.click(screen.getByTestId('back-to-elements'));
+    expect(screen.getByTestId('editor-shell').getAttribute('data-sidebar-mode')).toBe('elements');
+    expect(screen.getByTestId('element-browser')).toBeTruthy();
+  });
+
+  it('lists composition elements in the browser', () => {
+    render(
+      <EditorShell>
+        <p>Canvas body</p>
+      </EditorShell>,
+    );
+    expect(screen.getByText('Composition')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Hero' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Section' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Feature Grid' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Feature Card' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'CTA' })).toBeTruthy();
   });
 
   it('updates settings from the current selection', () => {
     const { rerender } = render(<ElementSettings selection={{ type: 'image', id: 'img-1', path: [2] }} />);
     expect(screen.getByTestId('element-settings').textContent).toContain('Media is chosen from the project library.');
-    rerender(<ElementSettings selection={{ type: 'featureGrid' }} />);
+    rerender(<ElementSettings selection={{ type: 'compositionFeatureCard', path: [1, 0, 0] }} />);
+    expect(screen.getByTestId('element-settings').textContent).toContain('Type: Feature Card');
+    expect(screen.getByTestId('element-settings-path').textContent).toContain('1.0.0');
+    rerender(<ElementSettings selection={{ type: 'notARealType' }} />);
     expect(screen.getByTestId('element-settings').textContent).toContain('No settings available for this element.');
   });
 });
@@ -176,5 +215,23 @@ describe('RichTextEditor inside the shell', () => {
       expect(onSelectionChange).toHaveBeenCalledWith(expect.objectContaining({ type: 'paragraph' }));
     });
     expect(screen.getByTestId('editor-shell').getAttribute('data-selected-type')).toBe('paragraph');
+  });
+
+  it('inserts Hero from the element browser into the canvas', async () => {
+    const { container } = render(<ShellHarness initialDoc={paragraphDoc('Existing copy')} />);
+    await waitFor(() => expect(container.querySelector('.ProseMirror')).toBeTruthy());
+    fireEvent.click(screen.getByRole('button', { name: 'Hero' }));
+    await waitFor(() => expect(container.querySelector('[data-composition="compositionHero"]')).toBeTruthy());
+    expect(screen.getByTestId('editor-shell').getAttribute('data-sidebar-mode')).toBe('settings');
+    expect(screen.getByTestId('editor-shell').getAttribute('data-selected-type')).toBe('compositionHero');
+    expect(screen.getByTestId('element-settings').textContent).toContain('Type: Hero');
+  });
+
+  it('inserts Section from the element browser', async () => {
+    const { container } = render(<ShellHarness initialDoc={paragraphDoc('Existing copy')} />);
+    await waitFor(() => expect(container.querySelector('.ProseMirror')).toBeTruthy());
+    fireEvent.click(screen.getByRole('button', { name: 'Section' }));
+    await waitFor(() => expect(container.querySelector('[data-composition="compositionSection"]')).toBeTruthy());
+    expect(screen.getByTestId('editor-shell').getAttribute('data-selected-type')).toBe('compositionSection');
   });
 });
