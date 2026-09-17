@@ -17,6 +17,20 @@ describe('sanitizeEditorDoc', () => {
           type: 'compositionCta',
           content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Go' }] }],
         },
+        {
+          type: 'compositionSection',
+          content: [
+            {
+              type: 'compositionFeatureGrid',
+              content: [
+                {
+                  type: 'compositionFeatureCard',
+                  content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Card' }] }],
+                },
+              ],
+            },
+          ],
+        },
       ],
     });
     expect(doc.content?.map((node) => node.type)).toEqual([
@@ -25,6 +39,7 @@ describe('sanitizeEditorDoc', () => {
       'image',
       'compositionHero',
       'compositionCta',
+      'compositionSection',
     ]);
   });
 

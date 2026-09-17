@@ -231,11 +231,32 @@
     text-align: center;
   }
 
+  .ProseMirror .seo-composition,
   .ProseMirror section.seo-composition {
     border: 1px dashed var(--border);
     border-radius: 8px;
     margin: 12px 0;
     padding: 8px 12px;
+    background: var(--card);
+  }
+  .ProseMirror .seo-composition-selected,
+  .ProseMirror .seo-composition[data-selected='true'] {
+    border-color: var(--primary);
+    outline: 2px solid var(--primary);
+  }
+  .ProseMirror .seo-composition__chrome {
+    cursor: pointer;
+    margin-bottom: 6px;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--muted-foreground);
+  }
+  .ProseMirror [data-composition='compositionFeatureGrid'] > .seo-composition__content {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 8px;
   }
 }
 

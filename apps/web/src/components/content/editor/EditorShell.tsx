@@ -4,6 +4,7 @@ import { EditorSidebar } from './EditorSidebar';
 import { EditorMain } from './EditorMain';
 import { toolbarActionsFromEditor, type EditorToolbarActions } from './EditorToolbar';
 import { getEditorElement } from './elementRegistry';
+import { insertComposition } from './insertComposition';
 import { readCanvasSelection } from './selection';
 import type { AutosaveStatus } from '../useAutosave';
 import type { EditorElementDefinition, EditorSelection, EditorShellState, SidebarMode } from './types';
@@ -35,9 +36,13 @@ export function EditorShell({
 
   const handleBrowserSelect = useCallback(
     (element: EditorElementDefinition) => {
+      if (editor && !editor.isDestroyed && insertComposition(editor, element.type)) {
+        applySelection(readCanvasSelection(editor) ?? { type: element.type }, true);
+        return;
+      }
       applySelection({ type: element.type }, true);
     },
-    [applySelection],
+    [applySelection, editor],
   );
 
   const handleCanvasSelect = useCallback(
@@ -84,6 +89,7 @@ export function EditorShell({
       data-testid="editor-shell"
       data-sidebar-mode={state.sidebarMode}
       data-selected-type={state.selectedElement?.type ?? ''}
+      data-selected-path={(state.selectedElement?.path ?? []).join('.')}
     >
       <EditorSidebar
         mode={sidebarMode}

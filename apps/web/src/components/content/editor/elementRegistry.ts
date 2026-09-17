@@ -6,14 +6,17 @@ export type EditorElementCategory = (typeof EDITOR_ELEMENT_CATEGORIES)[number];
 
 /**
  * Catalog of insertable/selectable editor elements. New composition types
- * (Section, FeatureGrid, FeatureCard, Proof, Footer, ...) are added here;
- * the browser renders from this list instead of per-type UI branches.
+ * are added here; the browser renders from this list instead of per-type UI
+ * branches.
  */
 export const EDITOR_ELEMENTS: readonly EditorElementDefinition[] = [
   { type: 'paragraph', label: 'Text', category: 'Content' },
   { type: 'heading', label: 'Heading', category: 'Content' },
   { type: 'image', label: 'Image', category: 'Media' },
   { type: 'compositionHero', label: 'Hero', category: 'Composition' },
+  { type: 'compositionSection', label: 'Section', category: 'Composition' },
+  { type: 'compositionFeatureGrid', label: 'Feature Grid', category: 'Composition' },
+  { type: 'compositionFeatureCard', label: 'Feature Card', category: 'Composition' },
   { type: 'compositionCta', label: 'CTA', category: 'Composition' },
 ];
 
@@ -23,6 +26,9 @@ const BY_TYPE = new Map(EDITOR_ELEMENTS.map((el) => [el.type, el]));
 const TYPE_ALIASES: Record<string, string> = {
   text: 'paragraph',
   hero: 'compositionHero',
+  section: 'compositionSection',
+  featureGrid: 'compositionFeatureGrid',
+  featureCard: 'compositionFeatureCard',
   cta: 'compositionCta',
 };
 

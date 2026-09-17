@@ -13,7 +13,7 @@ import type { Editor as TiptapEditor } from '@tiptap/react';
 const editors: Editor[] = [];
 
 function makeEditor(content: string | TipDoc = '<p>Hello world</p>'): Editor {
-  const editor = new Editor({ extensions: createEditorExtensions(), content });
+  const editor = new Editor({ extensions: createEditorExtensions({ nodeViews: false }), content });
   editors.push(editor);
   return editor;
 }

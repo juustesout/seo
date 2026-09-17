@@ -7,7 +7,7 @@ import { readCanvasSelection } from './selection';
 const editors: Editor[] = [];
 
 function makeEditor(content: TipDoc): Editor {
-  const editor = new Editor({ extensions: createEditorExtensions(), content });
+  const editor = new Editor({ extensions: createEditorExtensions({ nodeViews: false }), content });
   editors.push(editor);
   return editor;
 }

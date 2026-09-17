@@ -16,7 +16,15 @@ export { getElementSettingsRenderer, renderElementSettings } from './settingsReg
 export { readCanvasSelection } from './selection';
 export { createEditorExtensions } from './extensions';
 export { sanitizeEditorDoc } from './sanitizeDoc';
-export { CompositionHero, CompositionCta, COMPOSITION_NODE_TYPES } from './CompositionNodes';
+export { insertComposition, defaultCompositionNode } from './insertComposition';
+export {
+  CompositionHero,
+  CompositionSection,
+  CompositionFeatureGrid,
+  CompositionFeatureCard,
+  CompositionCta,
+  COMPOSITION_NODE_TYPES,
+} from './CompositionNodes';
 export type {
   EditorElementDefinition,
   EditorSelection,

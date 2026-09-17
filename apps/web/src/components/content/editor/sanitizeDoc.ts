@@ -28,6 +28,26 @@ function unsupportedParagraph(type: string): TipNode {
   };
 }
 
+function emptyParagraph(): TipNode {
+  return { type: 'paragraph' };
+}
+
+function emptyCard(): TipNode {
+  return { type: 'compositionFeatureCard', content: [emptyParagraph()] };
+}
+
+function repairComposition(type: string, children: TipNode[]): TipNode[] {
+  if (type === 'compositionFeatureGrid') {
+    const cards = children.filter((child) => child.type === 'compositionFeatureCard');
+    return [{ type, content: cards.length > 0 ? cards : [emptyCard()] }];
+  }
+  if (type === 'compositionFeatureCard' || type === 'compositionSection') {
+    return [{ type, content: children.length > 0 ? children : [emptyParagraph()] }];
+  }
+  if (children.length > 0) return [{ type, content: children }];
+  return [{ type }];
+}
+
 function sanitizeNode(node: TipNode): TipNode[] {
   if (!node || typeof node.type !== 'string' || node.type.length === 0) return [];
   if (node.type === 'text') {
@@ -41,6 +61,9 @@ function sanitizeNode(node: TipNode): TipNode[] {
     const out = [...blocks];
     if (inlines.length > 0) out.push({ type: 'paragraph', content: inlines });
     return out;
+  }
+  if ((COMPOSITION_NODE_TYPES as readonly string[]).includes(node.type)) {
+    return repairComposition(node.type, children);
   }
   if (children.length > 0) return [{ ...node, content: children }];
   const next = { ...node };

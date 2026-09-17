@@ -16,6 +16,9 @@ const SETTINGS: Record<string, EditorSettingsDefinition['render']> = {
   heading: () => <Placeholder title="Heading" body="Heading level and copy are edited on the canvas." />,
   image: () => <Placeholder title="Image" body="Media is chosen from the project library." />,
   compositionHero: () => <Placeholder title="Hero" body="Hero content is edited on the canvas." />,
+  compositionSection: () => <Placeholder title="Section" body="Section content is edited on the canvas." />,
+  compositionFeatureGrid: () => <Placeholder title="Feature Grid" body="Feature cards are nested inside this grid." />,
+  compositionFeatureCard: () => <Placeholder title="Feature Card" body="Card copy is edited on the canvas." />,
   compositionCta: () => <Placeholder title="CTA" body="Call-to-action copy is edited on the canvas." />,
 };
 
