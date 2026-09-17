@@ -35,6 +35,7 @@ import { api } from '../lib/api';
 import { useAsync, fmtDate, Empty } from '../lib/ui';
 import { RichTextEditor, type RichTextEditorHandle } from '../components/content/RichTextEditor';
 import { ContentToolbar } from '../components/content/ContentToolbar';
+import { EditorShell } from '../components/content/editor';
 import { ContentOutline } from '../components/content/ContentOutline';
 import { ContentEditorHeader } from '../components/content/ContentEditorHeader';
 import { SeoPanel } from '../components/content/SeoPanel';
@@ -714,7 +715,7 @@ export function Content({
 
       <div className="mt-1 grid grid-cols-1 items-start gap-3.5 lg:grid-cols-[minmax(0,1fr)_250px]">
         <div className="min-w-0">
-          <div className="overflow-hidden rounded-[10px] border bg-card">
+          <EditorShell editor={editor} saveState={auto.status}>
             <ContentToolbar
               editor={editor}
               ai={
@@ -744,7 +745,7 @@ export function Content({
                   : undefined
               }
             />
-          </div>
+          </EditorShell>
           {aiBusy && (
             <p className="mt-2 text-sm text-muted-foreground">
               Generating with AI… suggestions are previewed before they touch the document.
