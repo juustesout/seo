@@ -8,12 +8,11 @@
  * re-initializes the editor instead of reusing stale state; the imperative
  * handle exists so sibling panels (the outline) can drive selection.
  */
-import { forwardRef, useImperativeHandle } from 'react';
+import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react';
 import { useEditor, EditorContent, type Editor } from '@tiptap/react';
-import StarterKit from '@tiptap/starter-kit';
-import Link from '@tiptap/extension-link';
-import { ImageBlock } from './ImageBlock';
 import { EditorAiBubbleMenu, type EditorAiActions } from './EditorAiBubbleMenu';
+import { createEditorExtensions } from './editor/extensions';
+import { sanitizeEditorDoc } from './editor/sanitizeDoc';
 import type { TipDoc } from '@seo/contracts';
 
 export interface RichTextEditorHandle {
@@ -40,25 +39,18 @@ export const RichTextEditor = forwardRef<RichTextEditorHandle, RichTextEditorPro
   ref,
 ) {
   const editor = useEditor({
-    extensions: [
-      StarterKit.configure({
-        heading: { levels: [1, 2, 3, 4] },
-      }),
-      Link.configure({
-        openOnClick: false,
-        autolink: true,
-        defaultProtocol: 'https',
-        HTMLAttributes: { rel: 'noopener noreferrer', target: '_blank' },
-      }),
-      ImageBlock,
-    ],
-    content: initialDoc,
+    extensions: createEditorExtensions(),
+    content: sanitizeEditorDoc(initialDoc),
     onUpdate: ({ editor: e }) => {
       onDocChange?.(e.getJSON() as unknown as TipDoc);
     },
   });
 
-  onEditor?.(editor);
+  const onEditorRef = useRef(onEditor);
+  onEditorRef.current = onEditor;
+  useEffect(() => {
+    onEditorRef.current?.(editor);
+  }, [editor]);
 
   useImperativeHandle(
     ref,

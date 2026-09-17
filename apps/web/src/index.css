@@ -230,6 +230,13 @@
     font-size: 13px;
     text-align: center;
   }
+
+  .ProseMirror section.seo-composition {
+    border: 1px dashed var(--border);
+    border-radius: 8px;
+    margin: 12px 0;
+    padding: 8px 12px;
+  }
 }
 
 @layer base {
