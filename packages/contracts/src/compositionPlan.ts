@@ -95,6 +95,7 @@ export const COMPOSITION_MAX_STAT_ITEMS = 6;
 export const COMPOSITION_PURPOSE_MAX_CHARS = 300;
 const MAX_ROLE_LENGTH = 40;
 const MAX_FORMAT_LENGTH = 40;
+const MAX_SLOT_REF_TYPE_LENGTH = 40;
 
 /**
  * Slot identity (Stage 7). Every content requirement carries a stable,
@@ -302,6 +303,41 @@ export function isValidCompositionPlan(value: unknown): value is CompositionPlan
   const state: WalkState = { depth: 0, nodes: 0, slots: new Set<string>() };
   for (const section of value.sections) {
     if (!isValidNode(section, state)) return false;
+  }
+  return true;
+}
+
+const SLOT_REF_KEYS: ReadonlySet<string> = new Set(['slot', 'type', 'id', 'path', 'role', 'level']);
+
+function isNonNegativeInteger(value: unknown): value is number {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0;
+}
+
+/**
+ * Structural validation of a slot map. Every ref carries a unique, well-formed
+ * slot address, a bounded block type/id and an index path of non-negative
+ * integers; optional `role`/`level` must stay inside the plan vocabularies.
+ * Used by higher-level contracts (Designer AgentResult) so a slot map coming
+ * back from an agent is proven before it is trusted.
+ */
+export function isValidCompositionSlotMap(value: unknown): value is CompositionSlotMap {
+  if (!isPlainObject(value)) return false;
+  if (!hasOnlyKeys(value, new Set(['slots']))) return false;
+  if (!Array.isArray(value.slots)) return false;
+  if (value.slots.length > COMPOSITION_MAX_NODES) return false;
+
+  const seen = new Set<string>();
+  for (const ref of value.slots) {
+    if (!isPlainObject(ref)) return false;
+    if (!hasOnlyKeys(ref, SLOT_REF_KEYS)) return false;
+    if (!isValidCompositionSlot(ref.slot)) return false;
+    if (seen.has(ref.slot)) return false;
+    seen.add(ref.slot);
+    if (typeof ref.type !== 'string' || ref.type.length === 0 || ref.type.length > MAX_SLOT_REF_TYPE_LENGTH) return false;
+    if (typeof ref.id !== 'string' || ref.id.length === 0 || ref.id.length > COMPOSITION_SLOT_MAX_CHARS) return false;
+    if (!Array.isArray(ref.path) || !ref.path.every(isNonNegativeInteger)) return false;
+    if (ref.role !== undefined && (typeof ref.role !== 'string' || !ROLE_SET.has(ref.role))) return false;
+    if (ref.level !== undefined && (typeof ref.level !== 'number' || !HEADING_LEVEL_SET.has(ref.level))) return false;
   }
   return true;
 }

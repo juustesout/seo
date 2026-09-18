@@ -13,6 +13,8 @@
 import {
   canonicalDocumentToEditorDocument,
   docHeadings,
+  editorDocumentToCanonical,
+  isValidCanonicalDoc,
   type CanonicalDocument,
   type TipDoc,
 } from '@seo/contracts';
@@ -41,4 +43,21 @@ export function editorDraftFromCanonical(document: CanonicalDocument, fallbackTi
   const doc = canonicalDocumentToEditorDocument(document);
   const title = (primaryHeadingText(doc) ?? fallbackTitle).trim().slice(0, CONTENT_TITLE_MAX_CHARS).trim();
   return { title: title.length > 0 ? title : 'Untitled', doc };
+}
+
+/**
+ * Reverse bridge used by the editor save path (Stage 8E.6 Phase 1). Converts the
+ * edited Tiptap document back through the shared `editorDocumentToCanonical`
+ * bridge and proves the result is a valid `CanonicalDocument` before the row is
+ * persisted. `seo_content.content_json` still stores the Tiptap document; the
+ * canonical value is the agent-facing boundary, so the editor can always be read
+ * back as canonical without a second conversion. Throws on a document the
+ * canonical model cannot represent rather than saving it silently.
+ */
+export function canonicalFromEditorDocument(doc: TipDoc): CanonicalDocument {
+  const canonical = editorDocumentToCanonical(doc);
+  if (!isValidCanonicalDoc(canonical)) {
+    throw new Error('The editor document cannot be represented as a valid CanonicalDocument.');
+  }
+  return canonical;
 }

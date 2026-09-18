@@ -119,6 +119,8 @@ Two hard consequences of this picture:
   an article".
 - **Done when:** the north-star sentence works from the editor for one
   project, and every provider call is a real one.
+- Agent layering (Designer / Writer / Composer) is specified in
+  `docs/8e6-agent-architecture.md`.
 
 ### ⑥ REST API v1
 - Versioned `/api/v1/...`, project-scoped, auth via JWT and external API keys.

@@ -52,6 +52,7 @@ import { WriterPanel } from '../components/content/WriterPanel';
 import { KnowledgePanel } from '../components/content/KnowledgePanel';
 import { IntelligencePanel } from '../components/content/IntelligencePanel';
 import { AI_EDIT_OPERATION_LABELS, textToBlocksHtml } from '../components/content/contentAi';
+import { canonicalFromEditorDocument } from '../components/content/editorDraft';
 import { useAutosave } from '../components/content/useAutosave';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -203,6 +204,9 @@ export function Content({
   // then adopt the server id (first save of a new document) and nudge the list.
   const commit = async (snapshot: string) => {
     const parsed = JSON.parse(snapshot) as { t: string; s: string; d: TipDoc; k: string; mt: string; md: string };
+    // Stage 8E.6 Phase 1 reverse bridge: the edited document must convert back to
+    // a valid CanonicalDocument before it is persisted. content_json stays Tiptap.
+    canonicalFromEditorDocument(parsed.d);
     const body = {
       title: parsed.t,
       status: parsed.s,

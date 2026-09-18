@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { CanonicalBlock, CanonicalDocument } from './canonical.js';
-import { CANONICAL_DOCUMENT_VERSION } from './canonical.js';
+import { CANONICAL_DOCUMENT_VERSION, isValidCanonicalDoc } from './canonical.js';
 import { canonicalDocumentToEditorDocument, editorDocumentToCanonical } from './editorHandoff.js';
 import { isValidDocStructure, type TipNode } from './contentDoc.js';
 import { MARKETING_STORYBOARD_PLAN } from './compositionPlanFixtures.js';
@@ -237,5 +237,96 @@ describe('canonicalDocumentToEditorDocument safety', () => {
     expect(nodeTypes(tip.content)).not.toContain('image');
     expect(hasType(tip.content, 'compositionHero')).toBe(true);
     expect(hasType(tip.content, 'heading')).toBe(true);
+  });
+});
+
+function comprehensiveCanonical(): CanonicalDocument {
+  return doc([
+    {
+      type: 'hero',
+      attrs: { variant: 'centered', layout: { align: 'center', width: 'wide' } },
+      children: [heading(1, 'Ship SEO faster'), text('Intro copy')],
+    },
+    { type: 'section', attrs: { variant: 'muted' }, children: [heading(2, 'Why it matters'), text('Body copy')] },
+    {
+      type: 'featureGrid',
+      attrs: { layout: { columns: 3 } },
+      children: [
+        {
+          type: 'featureCard',
+          attrs: { variant: 'elevated', icon: 'rocket' },
+          children: [heading(3, 'Fast'), text('Ship quickly.')],
+        },
+        { type: 'featureCard', attrs: { variant: 'bordered' }, children: [heading(3, 'Honest'), text('Real metrics only.')] },
+      ],
+    },
+    {
+      type: 'cta',
+      attrs: { variant: 'primary' },
+      children: [heading(2, 'Ready?'), button('Get started', { variant: 'primary', href: '/signup' })],
+    },
+  ]);
+}
+
+describe('editor reverse bridge round trip (Stage 8E.6)', () => {
+  it('preserves composition structure, nesting, attrs and editable text in both directions', () => {
+    const canonical = comprehensiveCanonical();
+    const editor = canonicalDocumentToEditorDocument(canonical);
+
+    // Forward: real composition nodes with nesting, never flattened text.
+    expect(nodeTypes(editor.content)).toEqual([
+      'compositionHero',
+      'compositionSection',
+      'compositionFeatureGrid',
+      'compositionCta',
+    ]);
+    expect(editor.content?.[2]?.content?.map((child) => child.type)).toEqual([
+      'compositionFeatureCard',
+      'compositionFeatureCard',
+    ]);
+
+    const back = editorDocumentToCanonical(editor);
+    expect(isValidCanonicalDoc(back)).toBe(true);
+    expect(back.blocks.map((block) => block.type)).toEqual(['hero', 'section', 'featureGrid', 'cta']);
+
+    const hero = back.blocks[0];
+    expect(hero?.attrs).toEqual({ variant: 'centered', layout: { align: 'center', width: 'wide' } });
+    expect(hero?.children?.[0]).toMatchObject({ type: 'heading', attrs: { level: 1 } });
+    expect(hero?.children?.[0]?.content?.[0]).toEqual({ type: 'text', text: 'Ship SEO faster' });
+    expect(hero?.children?.[1]?.content?.[0]).toEqual({ type: 'text', text: 'Intro copy' });
+
+    const section = back.blocks[1];
+    expect(section?.attrs).toEqual({ variant: 'muted' });
+    expect(section?.children?.[0]).toMatchObject({ type: 'heading', attrs: { level: 2 } });
+    expect(section?.children?.[0]?.content?.[0]).toEqual({ type: 'text', text: 'Why it matters' });
+
+    const backGrid = back.blocks[2];
+    expect(backGrid?.attrs).toEqual({ layout: { columns: 3 } });
+    expect(backGrid?.children?.map((child) => child.type)).toEqual(['featureCard', 'featureCard']);
+    expect(backGrid?.children?.[0]?.attrs).toEqual({ variant: 'elevated', icon: 'rocket' });
+    expect(backGrid?.children?.[0]?.children?.[1]?.content?.[0]).toEqual({ type: 'text', text: 'Ship quickly.' });
+
+    const cta = back.blocks[3];
+    expect(cta?.children?.map((child) => child.type)).toEqual(['heading', 'button']);
+    const backButton = cta?.children?.[1];
+    expect(backButton?.attrs).toEqual({ variant: 'primary', href: '/signup' });
+    expect(backButton?.content?.[0]).toEqual({ type: 'text', text: 'Get started' });
+  });
+
+  it('produces a valid canonical document from a compiled and filled storyboard', () => {
+    const compiled = compileComposition(MARKETING_STORYBOARD_PLAN);
+    const fills = compiled.slots.slots.filter(isWritableCompositionSlot).map((ref) =>
+      compositionSlotKindOf(ref) === 'items'
+        ? { slot: ref.slot, items: ['one', 'two'] }
+        : { slot: ref.slot, text: `copy for ${ref.slot}` },
+    );
+    const filled = applyCompositionSlotFills(compiled, fills).document;
+    const back = editorDocumentToCanonical(canonicalDocumentToEditorDocument(filled));
+    expect(isValidCanonicalDoc(back)).toBe(true);
+    // The editor keeps composition containers; only nodes without an editor
+    // equivalent are flattened, and no unsupported markers are fabricated.
+    expect(back.blocks.map((block) => block.type)).toContain('hero');
+    expect(back.blocks.map((block) => block.type)).toContain('featureGrid');
+    expect(JSON.stringify(back)).not.toContain('[unsupported');
   });
 });

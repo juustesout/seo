@@ -1,0 +1,510 @@
+# 8E.6 — Agent architecture: Designer, Writer & Composer
+
+Status: agreed architecture decision record. Recon complete, decisions locked.
+No implementation until a separate implementation brief is issued.
+
+This document combines the 8E.6 recon with the decisions taken on top of it. It
+is the reference for the later orchestration brief.
+
+## 1. Context
+
+The Content Studio already separates free-text editing from composition-based
+pages. The 8E.6 goal is to add a Designer role above the existing specialists
+without duplicating them.
+
+The central finding of the recon: the repository already contains two things
+called "writer". This collision is the problem to resolve first.
+
+1. `apps/api/src/agents/writer/*` — the Writer Engine for free text and
+   articles. This is the "Writer Agent".
+2. `apps/api/src/agents/composition/writer.ts` plus
+   `packages/contracts/src/compositionWriter.ts` — a slot-fill writer inside the
+   composition chain. Semantically this is a writer capability, not the
+   Composer.
+
+The Composition Planner (`apps/api/src/agents/composition/planner.ts`) plus the
+deterministic compiler (`packages/contracts/src/compositionPlan.ts`) together
+form today's "Composer".
+
+So 8E.6 is: add a Designer orchestration layer on top of what exists, and make
+the writer/composer overlap explicit. It is not a greenfield rebuild.
+
+## 2. Existing architecture
+
+### 2.1 Generation chain 1: Writer Engine (free text, human-gated, durable)
+
+```
+REST POST /api/projects/:projectId/content/:contentId/writer
+  -> WriterRunService
+      -> durable LangGraph run + Postgres checkpoints
+      -> createWriterGraph
+           context -> planOutline -> [awaitApproval] -> writeSections -> review
+                    -> [awaitReviewSession] -> reviseSections / magic
+                    -> evidence / intelligence / agent
+      -> persist via ContentService
+```
+
+- Input: `WriterInput` (`packages/contracts/src/writer.ts:133`) or the lighter
+  `WriterRunRequest` (`apps/api/src/agents/writer/index.ts:178`).
+- Output: TipDoc in `seo_content.content_json`, plus derived `content_html`,
+  `outline`, `seo_score`.
+- AI boundaries are separate, Zod-validated, bounded modules with
+  `WriterAiResolver` (`apps/api/src/agents/writer/planner.ts:154`). There is no
+  open tool loop.
+- Dependencies are injectable via `WriterRunDependencies`
+  (`apps/api/src/agents/writer/index.ts:197`); optional ones degrade honestly.
+- The persistence seam `WriterPersistence` (`apps/api/src/agents/writer/engine.ts:201`)
+  already exists.
+- Two human interrupts: plan approval and review session.
+
+### 2.2 Generation chain 2: Composition (layout, proposal-only)
+
+```
+REST POST /api/projects/:projectId/composition/plan
+REST POST /api/projects/:projectId/composition/compose
+  -> CompositionService.compose
+       getCosmosContext
+       -> [CompositionPlannerService.plan -> AI planner]
+       -> compileComposition(plan)
+       -> createAiCompositionWriter
+       -> applyCompositionSlotFills
+       => { compositionPlan, canonicalDocument }
+```
+
+- `CompositionService.compose` (`apps/api/src/services/compositionService.ts:76`),
+  `ComposeResult` (`:45`).
+- `compileComposition` (`packages/contracts/src/compositionPlan.ts:420`),
+  `CompiledComposition` (`:357`), `CompositionSlotMap` (`:353`).
+- `CompositionSlotFill` (`packages/contracts/src/compositionWriter.ts:39`),
+  `validateCompositionSlotFills` (`:115`), `applyCompositionSlotFills` (`:242`).
+- `createAiCompositionWriter` (`apps/api/src/agents/composition/writer.ts:167`).
+- Nothing is persisted (`apps/api/src/services/compositionService.ts:15`).
+- Web `Compose.tsx` previews with `CanonicalRenderer` and no design-system prop
+  (`apps/web/src/views/Compose.tsx:249`), so it resolves to the default.
+- "Open in Editor" (`Compose.tsx:138`) calls `editorDraftFromCanonical`
+  (`apps/web/src/components/content/editorDraft.ts:40`), which calls
+  `canonicalDocumentToEditorDocument`
+  (`packages/contracts/src/editorHandoff.ts:182`), then POSTs a draft.
+
+### 2.3 Canonical document model
+
+- `CanonicalDocument { version: 1; blocks: CanonicalBlock[]; meta? }`
+  (`packages/contracts/src/canonical.ts:283`).
+- `CanonicalBlock { id?, type, attrs?, content?, children?, source?, rawHtml? }`
+  (`canonical.ts:258`).
+- Strict whitelists: `CANONICAL_COMPOSITION_ATTR_KEYS` (`canonical.ts:152`),
+  `CANONICAL_BLOCK_VARIANTS` (`:107`), layout intent (`:139`), CSS firewall
+  against `style/class/css` (`:198`), max 5000 blocks, max depth 200.
+- Conversions that already exist:
+  - `tiptapToCanonical` / `canonicalToTiptap`
+    (`packages/contracts/src/tiptapAdapter.ts:227`, `:378`).
+  - `canonicalDocumentToEditorDocument` (`editorHandoff.ts:182`) — in use.
+  - `editorDocumentToCanonical` (`editorHandoff.ts:222`) — no production caller
+    today; only tests.
+
+### 2.4 Design system and Cosmos
+
+- `CosmosConfig { ...; design?: CosmosDesign }`
+  (`packages/contracts/src/cosmos.ts:135`); `CosmosDesign` carries bounded
+  colors/typography/spacing/radius/elevation.
+- Stored in `seo_projects.settings.cosmos`
+  (`supabase/migrations/20260101000002_projects_members.sql:17`), served by
+  `cosmosService.ts` and the `/cosmos` route.
+- `resolveDesignSystem` (`packages/contracts/src/designSystem.ts:157`) and
+  `designSystemCssVariables` (`:197`) exist but have no production callers.
+  `CanonicalRenderer` always falls back to `DEFAULT_DESIGN_SYSTEM`
+  (`apps/web/src/components/canonicalRenderer/CanonicalRenderer.tsx:53`).
+- `CanonicalMeta.designSystem?: CanonicalDesignSystemRef`
+  (`canonical.ts:174`) validates but is never set or read.
+- The Cosmos panel has no design-token UI.
+
+### 2.5 Persistence, jobs, HITL, auth
+
+- Content: `seo_content.content_json` (TipDoc) is the source of truth.
+  `ContentService.write` (`apps/api/src/services/contentService.ts:173`) is the
+  only normalization/persistence choke point.
+- Jobs: `JobStore` interface (`apps/api/src/jobs/types.ts:45`), executor
+  registry (`apps/api/src/jobs/executors.ts:971`), worker with claim/retry and
+  backoff. Deliberately thin and transport-swappable.
+- HITL already exists in three forms: Writer plan approval, Content AI edit
+  review-before-apply, and Knowledge discovery review-then-apply.
+- RBAC: `container.access.requireRole(user.sub, projectId, role)` on every
+  route; service-role plus RLS as defense in depth.
+
+## 3. Target architecture
+
+```
+                    USER
+                      |
+                      v
+               DESIGNER AGENT
+              intent -> plan
+                      |
+          +-----------+-----------+
+          v                       v
+      WRITER AGENT          COMPOSER AGENT
+      ------------          --------------
+      copy                  structure
+      slot fills            layout
+      text                  variants
+                            design ref
+          |                       |
+          +-----------+-----------+
+                      v
+               CANONICAL DOCUMENT
+                      |
+                 validation
+                      |
+                   proposal
+                      |
+                 USER APPROVAL
+                      |
+                      v
+                   EDITOR
+                      |
+                      v
+               seo_content / TipDoc
+                      |
+                      v
+              CANONICAL RENDERER
+```
+
+Boundaries in one line: Composer decides where and how, Writer decides what it
+says, Designer decides what to ask for and whether the result holds together,
+the Editor is the only human mutator, the Renderer only renders.
+
+## 4. Decisions
+
+| ID | Topic | Decision |
+|----|-------|----------|
+| H1 | Writer output | CanonicalDocument at the agent boundary. Writer may use TipDoc internally as its existing motor, but returns Canonical. No `ContentService.write` during a Designer run. |
+| H2 | Slot fill | Slot fill belongs to Writer. `compositionWriter` becomes a Writer capability. Composer declares slots; Writer fills them. |
+| H3 | Designer run model | Start synchronous; keep the architecture job-ready. Own `seo_agent_runs` later; not now. |
+| H4 | Designer intelligence | AI only for intent to DesignerPlan. Orchestration is deterministic. No recursive Designer calls, no agent-to-agent calls, bounded steps. |
+| H5 | Design direction | Designer chooses existing Cosmos design-system options. No new color-picker UI. Wire the existing `resolveDesignSystem` in the same phase. |
+| H6 | Concurrency | `baseRevision` guard (hash of `content_json`, or a reliable revision). Apply only when the current revision matches; otherwise `STALE_PROPOSAL`. |
+| H7 | Approval | One complete design proposal per run, one approval. Not per step. |
+| H8 | Design Package | Project-owned, portable `DesignPackage v1`, versioned, exportable cross-project. No project-scoped IDs. |
+| H9 | Naming | Rename `agents/composition/writer.ts` to a Writer capability (for example `agents/writer/compositionSlotFiller.ts`). Conceptually one Writer capability. |
+| H10 | MCP | Later. REST/service contracts first. MCP becomes a second mouth on the same DesignerService. No separate MCP agent logic. |
+
+### H1 flow in detail
+
+```
+Writer (internal)
+   v
+TipDoc
+   v
+CanonicalDocument
+   v
+Designer
+
+after human acceptance:
+
+Final Canonical
+   v
+Editor
+   v
+ContentService.write
+```
+
+Agents stay proposal-based. They never mutate content outside the Editor.
+
+### H4 budget (from day one)
+
+- maximum number of Designer steps.
+- at most one Writer free-text task and one Writer slot-fill task per slot
+  group.
+- at most one Composer structure task.
+- no recursive Designer calls.
+- no direct agent-to-agent communication.
+
+## 5. Responsibility matrix
+
+| Layer | May | May not | Module |
+|-------|-----|---------|--------|
+| Designer Agent | Interpret intent; choose format; split work into typed steps; choose design direction from existing Cosmos options; delegate to Writer and Composer; validate; request revision; propose `designSystemRef` | Write copy; compile structure; write `seo_content`; call providers directly; leave the bounded whitelists | New `DesignerService` plus contracts |
+| Writer Agent | Produce free text; fill Composer-declared copy slots with `CompositionSlotFill[]` | Change structure, types, heading levels, order, nesting; set layout or variants; invent media, metrics or attribution; change design tokens | `agents/writer/*`, plus the reclassified slot filler |
+| Composer Agent | Choose structure; produce `CompositionPlan`; compile to a skeleton `CanonicalDocument`; produce `CompositionSlotMap`; bounded variants and layout intent; design-system reference | Invent copy beyond minimal structural placeholders; fill media, metrics or attribution; raw CSS/HTML/classes; write `seo_content` | `agents/composition/planner.ts`, `compositionPlan.ts`, `compositionService.ts` |
+| Editor | Human mutation of the TipDoc; insert/select/edit; accept or reject proposals; autosave; title/status/meta | Render canonical; contain agent logic; see credentials | `RichTextEditor.tsx`, `EditorShell.tsx`, `views/Content.tsx` |
+| Canonical Renderer | Purely render `CanonicalDocument` plus resolved `DesignSystem`; `--cosmos-*` scope; never mutate | Mutate documents; call providers or AI; persist; make decisions | `CanonicalRenderer.tsx`, `blocks.tsx`, `canonicalRenderer.css` |
+
+Hard data boundaries:
+
+- Only the Editor/autosave writes `seo_content.content_json`, through
+  `ContentService.write`.
+- Only Composer owns `CompositionPlan`, `CompiledComposition` and the skeleton.
+- Only Writer owns free copy and slot-fill text.
+- Only Designer owns the `DesignerPlan` and `DesignerReview`.
+- No one except the Editor mutates an existing document in place.
+
+## 6. Agent contracts
+
+Recommendation: typed, validated JSON contracts in `@seo/contracts`, using the
+existing document types as the shared interchange. No free patches, no free tool
+calling, no free text between agents.
+
+Motivation:
+
+- The codebase already uses this exact pattern: AI boundaries return strict JSON,
+  code validates (`isValidCompositionPlan`, `validateCompositionSlotFills`,
+  `isValidCanonicalDoc`) and applies deterministically.
+- The W10 policy explicitly forbids autonomous tool loops and agent-to-agent
+  delegation (`docs/w10-magic-roadmap.md`).
+- One shared artifact (`CanonicalDocument`) prevents each role from inventing its
+  own document shape.
+
+Proposed contract sketch (not implemented yet):
+
+```ts
+// packages/contracts/src/designer.ts (new)
+export interface DesignBrief {
+  projectId: string;
+  intent: string;
+  format: 'article' | 'landing_page' | 'email' | 'fragment';
+  baseRevision?: string;
+  constraints?: { tone?: string; language?: string; targetLength?: number };
+}
+
+export interface DesignerPlan {
+  version: 1;
+  format: DesignBrief['format'];
+  designSystemRef?: CanonicalDesignSystemRef;
+  steps: DesignerStep[];
+}
+
+export type DesignerStep =
+  | { kind: 'writer.freeText'; task: FreeTextTask }
+  | { kind: 'writer.fillSlots'; task: SlotFillTask }
+  | { kind: 'composer.structure'; task: StructureTask }
+  | { kind: 'designer.review'; criteria: ReviewCriterion[] };
+
+export interface AgentResult {
+  role: 'writer' | 'composer';
+  document: CanonicalDocument;
+  slots?: CompositionSlotMap;
+  filled?: string[];
+  unfilled?: string[];
+  runSummary?: WriterRunSummary;
+}
+
+export interface DesignerReview {
+  ok: boolean;
+  issues: string[];
+  finalDocument?: CanonicalDocument;
+}
+```
+
+`FreeTextTask`, `StructureTask` and `SlotFillTask` are bounded wrappers that map
+onto the existing `WriterInput`, `CompositionPlannerInput` and
+`CompositionSlotFill[]`.
+
+Why not events or patches: a single Designer run has a bounded, sequential step
+list that is deterministically validatable. Events and patches only become
+useful for true multi-run async agent collaboration, which is a later phase.
+
+## 7. Orchestration model
+
+A bounded Designer service with deterministic dispatch and one explicit AI
+boundary, modelled on the existing Writer graph. Not a free tool loop.
+
+1. `DesignerService.interpret(brief)` calls the AI boundary (Zod-validated) and
+   returns a `DesignerPlan`. Honest failure codes mirror the existing writer
+   planner: `not_configured | ai_error | invalid_output`.
+2. `DesignerService.execute(plan, brief)` runs the `DesignerStep[]` sequentially
+   and calls existing services via dependency injection:
+   - `writer.freeText` -> Writer Engine in proposal mode (no-op
+     `WriterPersistence`).
+   - `composer.structure` -> `CompositionService` skeleton (no copy).
+   - `writer.fillSlots` -> the reclassified slot filler plus
+     `applyCompositionSlotFills`.
+3. `DesignerService.review(results)` validates deterministically
+   (`isValidCanonicalDoc`, `validateCompositionSlotFills`, structure guard,
+   `evaluateSeo`), optionally with a later AI critique as a separate capability.
+4. Result: a `FinalDocument: CanonicalDocument` as a proposal. Never persisted
+   directly.
+
+Tool boundaries:
+
+- The Designer's "tools" are typed service calls, not a dynamic registry.
+  Enforced through `DesignerDependencies`, mirroring `WriterRunDependencies`.
+- No agent-to-agent free communication. Designer is the only caller of the
+  specialists.
+
+Jobs, retries, state, validation, approval, partial failure:
+
+- Sync first. One HTTP route returning a proposal.
+- Job-ready later: `container.jobStore.enqueue({ job_type: 'agent_design' })`.
+  Reuse existing per-specialist retries and add a Designer step budget.
+- Run state later in `seo_agent_runs` (mirrors `seo_writer_runs`,
+  `supabase/migrations/20260101000019_writer_runs.sql`) because a Designer run is
+  not the same object as a Writer run.
+- Partial failure: per-step tagging and honest errors, like the phase tagging in
+  `compositionService.ts`.
+
+## 8. Ownership and concurrency
+
+Single-writer principle: one artifact, one writer.
+
+- Writer produces content blocks in Canonical.
+- Composer produces structure blocks in Canonical.
+- Designer only coordinates and reviews; it never edits directly.
+- Any cross-boundary change goes through an explicit contract (a DesignerStep),
+  never concurrent mutation.
+
+Concurrency guard (H6):
+
+```
+baseRevision = hash(content_json)   (or a reliable revision)
+on apply:
+  current revision === proposal.baseRevision  ->  apply
+  otherwise                                   ->  STALE_PROPOSAL, re-generate
+```
+
+A `baseRevision` is needed because the Designer may work on a document while the
+human is editing it. This matters as soon as apply is exposed.
+
+## 9. Human-in-the-loop
+
+The Editor remains the only human control layer:
+
+```
+Designer / agents
+       v
+ proposed changes
+       v
+     Editor
+       v
+  accept / edit / reject
+       v
+ ContentService.write
+```
+
+- No agent silently overwrites a user's manual design. There is always an
+  explicit approval or persistence flow.
+- One proposal per run, one approval (H7). The user sees a preview and chooses
+  Accept / Edit / Reject. Per-step approval is internal state, not user UX.
+- Reuse the existing patterns: Writer plan approval (`approval.ts`,
+  `WriterPanel.tsx`) and Content AI edit review-before-apply
+  (`ContentAiEditPanel.tsx`).
+- Applying goes through `canonicalDocumentToEditorDocument` into the Editor and
+  then the normal autosave/`ContentService.write` path.
+
+## 10. Design Package
+
+Project-owned, portable, versioned. Existing material:
+
+- Design tokens: `CosmosDesign` in `seo_projects.settings.cosmos.design`.
+- Structure: `CompositionPlan`, `CompiledComposition`, `CanonicalDocument`.
+- Variants: `CANONICAL_BLOCK_VARIANTS`.
+- Validators: `parseCosmosDesign`, `isValidCompositionPlan`,
+  `isValidCanonicalDoc`.
+
+Proposed schema:
+
+```ts
+export interface DesignPackage {
+  version: 1;
+  metadata: { id: string; name: string; description?: string; tags?: string[]; createdAt: string };
+  designSystem: CosmosDesign;
+  structure: CompositionPlan | null;
+  componentVariants: Partial<Record<CanonicalCompositionType, string[]>>;
+  assets?: DesignAssetRef[];
+}
+```
+
+Classification:
+
+- Canonical and safely exportable: block types, variants, layout intent,
+  `CompositionPlan` structure, heading levels, whitelisted attrs.
+- Project-specific (values, not structure): token values, language and tone, and
+  assets.
+- Problematic references:
+  - `mediaId`/`src` are project-scoped and must never cross projects. Export as a
+    `DesignAssetRef` without an ID; re-resolve on import.
+  - Block `id` and `CanonicalDesignSystemRef.id` are regenerated or namespaced on
+    import.
+  - `SourceRef` is stripped.
+- Versioning from the start: `version: 1` plus `isValidDesignPackage`. The
+  package format does not need to know about a future marketplace.
+- Safety: import only through the existing validators; never raw CSS or HTML;
+  assets always checked against the target project.
+
+## 11. Reuse map
+
+| Component | Decision | Motivation |
+|-----------|----------|------------|
+| Writer Engine/graph/durable | reuse | Complete, tested, human-gated; add a proposal-mode seam via the existing `WriterPersistence` |
+| Composition planner | reuse | Bounded AI boundary with retry and validation |
+| `compositionPlan.ts` compiler | reuse | Pure and deterministic; owns structure |
+| `compositionWriter.ts` and `agents/composition/writer.ts` | refactor | Reclassify as the Writer capability `writer.fillSlots` so Composer owns no copy |
+| `compositionService.ts` | extend | Add a copy-free skeleton mode and pass the design-system reference |
+| Canonical model and validators | reuse | Already the shared interchange and firewall |
+| `tiptapAdapter.ts` | reuse | Existing round-trip conversion |
+| `editorHandoff.ts` | extend | `editorDocumentToCanonical` is unused; wire it for agent/editor round-trips |
+| `AIService` plus OpenAI provider and BYOK | reuse | Resolution order account -> project -> env is done |
+| `CosmosService.getCosmosContext` | reuse | Existing prompt context |
+| `resolveDesignSystem` / `designSystemCssVariables` | extend | Exist but have no production caller; connect renderer, editor and Designer |
+| `CanonicalRenderer` | reuse | Pure; will receive the resolved DesignSystem |
+| `ContentService.write` | reuse | Only persistence choke point; never bypass |
+| `JobStore` plus worker | reuse/extend | New `agent_design` job plus run state |
+| HITL patterns | reuse | Proven accept/reject flows |
+| `evaluateSeo`, canonical validators | reuse | Deterministic review |
+| `seo_writer_runs` run model | reuse/extend | Template for a generic `seo_agent_runs` |
+| Designer contracts, `DesignerService`, Design Package | new | Do not exist yet |
+| MCP | reuse later | Second mouth on the same services |
+
+## 12. Open items
+
+No blocking decisions remain for the architecture. These are implementation
+details for the later brief:
+
+- Exact `baseRevision` source: `content_json` hash versus a revision column.
+- Whether `seo_agent_runs` is a new table or an evolution of the writer run
+  model.
+- Designer step budget numbers and max LLM calls.
+- The exact new filename for the reclassified slot filler (H9).
+- Whether the design-system wiring lands in the same phase as Designer or one
+  phase earlier.
+
+## 13. Recommended implementation phases
+
+Phase 1 — Contracts, proposal envelope, reverse bridge.
+
+- `packages/contracts/src/designer.ts`: `DesignBrief`, `DesignerPlan`,
+  `DesignerStep`, `AgentResult`, `DesignerReview` plus validators.
+- Wire `editorDocumentToCanonical` on a real production path with tests.
+- Add the `baseRevision` proposal envelope. Tests only, no behavior change.
+
+Phase 2 — Designer orchestration (synchronous).
+
+- `DesignerService` that builds a `DesignerPlan` and dispatches steps to the
+  existing Writer Engine (proposal mode) and `CompositionService`.
+- Reclassify the composition slot filler as `writer.fillSlots`.
+- Wire `resolveDesignSystem` into `CanonicalRenderer`, the editor canvas and the
+  Designer.
+- One REST route returning a proposal, one approval. Nothing persisted.
+
+Phase 3 — Design Package v1.
+
+- `DesignPackage` schema, `isValidDesignPackage`, export/import with media and ID
+  hygiene. Project-owned but portable.
+
+Phase 4 — Durable agent runs.
+
+- `agent_design` job type plus `seo_agent_runs`, step budgets, retries,
+  approval interrupt, honest partial failure with `details.phase`.
+
+Phase 5 — Designer UI, MCP, docs.
+
+- Intent brief in the Content Studio, plan review, preview via
+  `CanonicalRenderer`, explicit accept to the Editor.
+- MCP as a second mouth on `DesignerService`.
+- Update `roadmap.md` and `content-studio-roadmap.md` (currently silent on
+  canonical/composition/Cosmos).
+
+## 14. Documents to update when implementation starts
+
+- `roadmap.md`.
+- `docs/content-studio-roadmap.md`.
+- `docs/w10-magic-roadmap.md` (cross-reference the Designer boundary).

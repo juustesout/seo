@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { CANONICAL_DOCUMENT_VERSION, type CanonicalBlock } from '@seo/contracts';
-import { CONTENT_TITLE_MAX_CHARS, editorDraftFromCanonical } from './editorDraft';
+import {
+  CANONICAL_DOCUMENT_VERSION,
+  canonicalDocumentToEditorDocument,
+  isValidCanonicalDoc,
+  tiptapEmptyDoc,
+  type CanonicalBlock,
+  type TipDoc,
+} from '@seo/contracts';
+import { CONTENT_TITLE_MAX_CHARS, canonicalFromEditorDocument, editorDraftFromCanonical } from './editorDraft';
 
 function doc(blocks: CanonicalBlock[]) {
   return { version: CANONICAL_DOCUMENT_VERSION, blocks };
@@ -55,5 +62,43 @@ describe('editorDraftFromCanonical', () => {
     const before = structuredClone(value);
     editorDraftFromCanonical(value, 'brief');
     expect(value).toEqual(before);
+  });
+});
+
+describe('canonicalFromEditorDocument (editor save reverse bridge)', () => {
+  it('returns a valid canonical document that keeps composition structure', () => {
+    const canonical = doc([
+      {
+        type: 'hero',
+        attrs: { variant: 'centered' },
+        children: [heading(1, 'Title'), { type: 'paragraph', content: [{ type: 'text', text: 'Intro' }] }],
+      },
+      {
+        type: 'featureGrid',
+        attrs: { layout: { columns: 2 } },
+        children: [{ type: 'featureCard', attrs: { variant: 'elevated' }, children: [heading(3, 'Fast')] }],
+      },
+    ]);
+
+    const back = canonicalFromEditorDocument(canonicalDocumentToEditorDocument(canonical));
+
+    expect(isValidCanonicalDoc(back)).toBe(true);
+    expect(back.blocks.map((block) => block.type)).toEqual(['hero', 'featureGrid']);
+    expect(back.blocks[0]?.attrs).toEqual({ variant: 'centered' });
+    expect(back.blocks[1]?.children?.[0]?.attrs).toEqual({ variant: 'elevated' });
+  });
+
+  it('returns a valid canonical document for plain and empty editor documents', () => {
+    expect(isValidCanonicalDoc(canonicalFromEditorDocument(tiptapEmptyDoc()))).toBe(true);
+    expect(
+      isValidCanonicalDoc(
+        canonicalFromEditorDocument({ type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Hello' }] }] }),
+      ),
+    ).toBe(true);
+  });
+
+  it('refuses a document the canonical model cannot represent', () => {
+    const invalid = { type: 'doc', content: [{ type: '1bad' }] } as unknown as TipDoc;
+    expect(() => canonicalFromEditorDocument(invalid)).toThrow(/CanonicalDocument/);
   });
 });
