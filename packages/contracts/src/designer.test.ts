@@ -2,10 +2,12 @@ import { describe, expect, it } from 'vitest';
 import {
   CONTENT_REVISION_PREFIX,
   DESIGN_BRIEF_GOAL_MAX_CHARS,
+  DESIGNER_INTENT_MAX_METADATA_KEYS,
   DESIGNER_MAX_STEPS,
   contentRevisionOf,
   isValidAgentResult,
   isValidDesignBrief,
+  isValidDesignerIntent,
   isValidDesignerPlan,
   isValidDesignerProposal,
   isValidDesignerReview,
@@ -193,5 +195,50 @@ describe('contentRevisionOf', () => {
 
   it('carries the revision scheme prefix', () => {
     expect(contentRevisionOf({})).toMatch(new RegExp(`^${CONTENT_REVISION_PREFIX}:[0-9a-f]{16}$`));
+  });
+});
+
+describe('isValidDesignerIntent', () => {
+  const projectId = '11111111-1111-4111-8111-111111111111';
+  const contentId = '22222222-2222-4222-8222-222222222222';
+
+  it('accepts a minimal intent', () => {
+    expect(isValidDesignerIntent({ instruction: 'Write a landing page', projectId })).toBe(true);
+  });
+
+  it('accepts a full intent with brief and context', () => {
+    expect(
+      isValidDesignerIntent({
+        instruction: 'Write a landing page',
+        projectId,
+        contentId,
+        brief: validBrief,
+        context: { selection: { from: 1, to: 4 }, metadata: { tone: 'confident' } },
+      }),
+    ).toBe(true);
+  });
+
+  it('rejects missing or empty required fields', () => {
+    expect(isValidDesignerIntent({ projectId })).toBe(false);
+    expect(isValidDesignerIntent({ instruction: 'Write', projectId: '' })).toBe(false);
+    expect(isValidDesignerIntent({ instruction: '   ', projectId })).toBe(false);
+    expect(isValidDesignerIntent({ instruction: 42, projectId })).toBe(false);
+  });
+
+  it('rejects non-uuid identity fields', () => {
+    expect(isValidDesignerIntent({ instruction: 'Write', projectId: 'p1' })).toBe(false);
+    expect(isValidDesignerIntent({ instruction: 'Write', projectId, contentId: 'nope' })).toBe(false);
+  });
+
+  it('rejects unknown keys and malformed context', () => {
+    expect(isValidDesignerIntent({ instruction: 'Write', projectId, plan: {} })).toBe(false);
+    expect(isValidDesignerIntent({ instruction: 'Write', projectId, context: { tool: 'search' } })).toBe(false);
+    expect(
+      isValidDesignerIntent({
+        instruction: 'Write',
+        projectId,
+        context: { metadata: Object.fromEntries(Array.from({ length: DESIGNER_INTENT_MAX_METADATA_KEYS + 1 }, (_, i) => [`k${i}`, i])) },
+      }),
+    ).toBe(false);
   });
 });

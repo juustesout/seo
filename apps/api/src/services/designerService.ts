@@ -20,12 +20,14 @@
  * `ContentService` (the single persist choke point). A revision mismatch is a
  * `stale_proposal` conflict with zero mutation.
  *
- * Phase 2 has no AI intent interpreter; callers supply an already-validated
- * `DesignerPlan`. The interpreter is a separate future phase so plan validation
- * and plan generation stay independently testable.
+ * Phase 3.1 adds a second, opt-in entry point (`executeIntent`) that runs the
+ * same `execute` path behind a replaceable `DesignerPlanner`: intent -> plan ->
+ * execute. The planner is injected (defaulting to the deterministic Phase 3.1
+ * planner), so the service never couples to a concrete planner implementation.
+ * The existing explicit-plan path is unchanged.
  */
 
-import type { AgentResult, DesignBrief, DesignerPlan, DesignerProposal } from '@seo/contracts';
+import type { AgentResult, DesignBrief, DesignerIntent, DesignerPlan, DesignerPlanner, DesignerProposal } from '@seo/contracts';
 import {
   DESIGNER_PROPOSAL_VERSION,
   applyCompositionSlotFills,
@@ -45,6 +47,7 @@ import {
   executeDesignerPlan,
   type DesignerExecutorDependencies,
 } from '../agents/designer/executor.js';
+import { DeterministicDesignerPlanner, runDesignerPlanner } from '../agents/designer/planner.js';
 import { AIService } from './aiService.js';
 import { compositionWriterError } from './compositionService.js';
 import { CompositionPlannerService } from './compositionPlannerService.js';
@@ -61,6 +64,18 @@ export interface DesignerExecuteInput {
   baseRevision?: string;
 }
 
+/** Service options: the planner is an injected, replaceable boundary. */
+export interface DesignerServiceOptions {
+  /** Planning boundary; defaults to the deterministic Phase 3.1 planner. */
+  planner?: DesignerPlanner;
+}
+
+/** Optional invocation state for intent execution that is not part of the intent. */
+export interface DesignerIntentOptions {
+  /** Explicit base revision when the intent does not name a contentId. */
+  baseRevision?: string;
+}
+
 /** Builds a bounded, single-string brief for the existing Composer/Writer. */
 function briefToText(brief: DesignBrief | undefined): string {
   if (!brief) return 'Design this document from the supplied plan.';
@@ -72,7 +87,14 @@ function briefToText(brief: DesignBrief | undefined): string {
 }
 
 export class DesignerService {
-  constructor(private readonly container: ServiceContainer) {}
+  private readonly planner: DesignerPlanner;
+
+  constructor(
+    private readonly container: ServiceContainer,
+    options: DesignerServiceOptions = {},
+  ) {
+    this.planner = options.planner ?? new DeterministicDesignerPlanner();
+  }
 
   /** Production capability wiring, one method per specialist step kind. */
   private dependencies(projectId: string, cosmosText: string): DesignerExecutorDependencies {
@@ -156,6 +178,31 @@ export class DesignerService {
       throw new ApiError(500, 'designer_proposal_invalid', 'The Designer produced an invalid proposal.');
     }
     return proposal;
+  }
+
+  /**
+   * Runs the planner then the Phase 2 executor: INTENT -> PLAN -> EXECUTE. The
+   * intent is validated and the planner output re-validated on the boundary
+   * (`runDesignerPlanner`), the plan is then executed through the exact same
+   * `execute` path as an explicit plan, and the result is still only a proposal
+   * (never an apply). The planner is the injected `DesignerPlanner`, so this
+   * never couples to the deterministic implementation.
+   */
+  async executeIntent(
+    projectId: string,
+    intent: DesignerIntent,
+    options: DesignerIntentOptions = {},
+  ): Promise<DesignerProposal> {
+    if (intent.projectId !== projectId) {
+      throw new ApiError(400, 'invalid_designer_intent', 'The Designer intent does not belong to this project.');
+    }
+    const plan = await runDesignerPlanner(this.planner, intent);
+    return this.execute(projectId, {
+      plan,
+      ...(intent.brief !== undefined ? { brief: intent.brief } : {}),
+      ...(intent.contentId !== undefined ? { contentId: intent.contentId } : {}),
+      ...(options.baseRevision !== undefined ? { baseRevision: options.baseRevision } : {}),
+    });
   }
 
   /** Resolves the revision guard: bound content wins, then an explicit token. */

@@ -446,3 +446,84 @@ export function isValidDesignerProposal(value: unknown): value is DesignerPropos
   if (value.review !== undefined && !isValidDesignerReview(value.review)) return false;
   return true;
 }
+
+// ---------------------------------------------------------------------------
+// Intent + planner boundary (Stage 8E.6, Phase 3.1)
+// ---------------------------------------------------------------------------
+
+/** Bounds for a Designer intent (planner input edge). */
+export const DESIGNER_INTENT_INSTRUCTION_MAX_CHARS = 2000;
+export const DESIGNER_INTENT_MAX_METADATA_KEYS = 20;
+const DESIGNER_INTENT_METADATA_KEY_MAX_CHARS = 80;
+const DESIGNER_INTENT_UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Optional, opt-in context for a Designer intent. `selection` is opaque
+ * caller-supplied data (e.g. an editor selection); `metadata` is a shallow,
+ * bounded bag of additional facts. Neither is executable.
+ */
+export interface DesignerIntentContext {
+  selection?: unknown;
+  metadata?: Record<string, unknown>;
+}
+
+/**
+ * What the user wants the Designer to accomplish. It is intent, never an
+ * executable plan: it carries no step kinds, no tool calls and no document
+ * mutations. A `DesignerPlanner` turns it into a validated `DesignerPlan`, and
+ * the executor is the only component that acts on that plan.
+ */
+export interface DesignerIntent {
+  /** Bounded natural-language request. */
+  instruction: string;
+  /** Project the request is scoped to (uuid). */
+  projectId: string;
+  /** Existing content the request targets, when any (uuid). */
+  contentId?: string;
+  /** Optional structured intent the planner may fold into the plan. */
+  brief?: DesignBrief;
+  /** Optional caller context (opaque selection / shallow metadata). */
+  context?: DesignerIntentContext;
+}
+
+/**
+ * The replaceable planning boundary: exactly one responsibility, turn a
+ * `DesignerIntent` into a valid `DesignerPlan`. Implementations must not mutate
+ * content, call the executor, apply proposals, publish or bypass revision
+ * checks. A deterministic implementation ships in Phase 3.1; an LLM
+ * implementation can replace it without touching the executor or the service.
+ */
+export interface DesignerPlanner {
+  plan(intent: DesignerIntent): Promise<DesignerPlan>;
+}
+
+const INTENT_KEYS: ReadonlySet<string> = new Set(['instruction', 'projectId', 'contentId', 'brief', 'context']);
+const INTENT_CONTEXT_KEYS: ReadonlySet<string> = new Set(['selection', 'metadata']);
+
+function isValidIntentMetadata(value: unknown): value is Record<string, unknown> {
+  if (!isPlainObject(value)) return false;
+  const keys = Object.keys(value);
+  if (keys.length > DESIGNER_INTENT_MAX_METADATA_KEYS) return false;
+  return keys.every((key) => key.length > 0 && key.length <= DESIGNER_INTENT_METADATA_KEY_MAX_CHARS);
+}
+
+/** True when `value` is a bounded, well-formed Designer intent. */
+export function isValidDesignerIntent(value: unknown): value is DesignerIntent {
+  if (!isPlainObject(value)) return false;
+  if (!hasOnlyKeys(value, INTENT_KEYS)) return false;
+  if (!isBoundedText(value.instruction, DESIGNER_INTENT_INSTRUCTION_MAX_CHARS)) return false;
+  if (typeof value.projectId !== 'string' || !DESIGNER_INTENT_UUID_RE.test(value.projectId)) return false;
+  if (
+    value.contentId !== undefined &&
+    (typeof value.contentId !== 'string' || !DESIGNER_INTENT_UUID_RE.test(value.contentId))
+  ) {
+    return false;
+  }
+  if (value.brief !== undefined && !isValidDesignBrief(value.brief)) return false;
+  if (value.context !== undefined) {
+    if (!isPlainObject(value.context) || !hasOnlyKeys(value.context, INTENT_CONTEXT_KEYS)) return false;
+    if (value.context.metadata !== undefined && !isValidIntentMetadata(value.context.metadata)) return false;
+  }
+  return true;
+}

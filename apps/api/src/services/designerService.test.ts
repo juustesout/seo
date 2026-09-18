@@ -15,6 +15,7 @@ import {
   contentRevisionOf,
   isWritableCompositionSlot,
 } from '@seo/contracts';
+import type { DesignerIntent, DesignerPlan, DesignerPlanner } from '@seo/contracts';
 import { DesignerService } from './designerService.js';
 
 const mock = vi.hoisted(() => ({
@@ -165,6 +166,86 @@ describe('DesignerService.execute', () => {
     expect(err.status).toBe(503);
     expect(err.code).toBe('writer_free_text_unavailable');
     expect(mock.chats).toHaveLength(0);
+  });
+});
+
+const PID = '11111111-1111-4111-8111-111111111111';
+
+function intent(overrides: Partial<DesignerIntent> = {}): DesignerIntent {
+  return { instruction: 'Create a landing page', projectId: PID, ...overrides };
+}
+
+function spyPlanner(plan: DesignerPlan | (() => Promise<DesignerPlan>)): DesignerPlanner & { calls: DesignerIntent[] } {
+  const calls: DesignerIntent[] = [];
+  return {
+    calls,
+    async plan(intentValue: DesignerIntent) {
+      calls.push(intentValue);
+      return typeof plan === 'function' ? plan() : plan;
+    },
+  };
+}
+
+describe('DesignerService.executeIntent', () => {
+  it('plans with the deterministic planner then produces a proposal', async () => {
+    mock.responses = [PLAN_JSON, fullFills()];
+    const proposal = await service.executeIntent(PID, intent(), { baseRevision: 'rev1:abc' });
+    expect(proposal.baseRevision).toBe('rev1:abc');
+    expect(proposal.plan?.steps[0]).toEqual({ kind: 'composer.structure', task: { format: 'landing_page' } });
+    expect(proposal.review?.ok).toBe(true);
+    expect(proposal.document.blocks.length).toBeGreaterThan(0);
+  });
+
+  it('uses an injected planner behind the same seam', async () => {
+    mock.responses = [PLAN_JSON, fullFills()];
+    const planner = spyPlanner(PLAN);
+    const scoped = new DesignerService(container, { planner });
+    const proposal = await scoped.executeIntent(PID, intent(), { baseRevision: 'rev1:abc' });
+    expect(planner.calls).toHaveLength(1);
+    expect(proposal.review?.ok).toBe(true);
+  });
+
+  it('rejects an intent that is not scoped to the target project before planning', async () => {
+    const planner = spyPlanner(PLAN);
+    const scoped = new DesignerService(container, { planner });
+    const err = await expectApiError(scoped.executeIntent(PID, intent({ projectId: '22222222-2222-4222-8222-222222222222' })));
+    expect(err.status).toBe(400);
+    expect(err.code).toBe('invalid_designer_intent');
+    expect(planner.calls).toHaveLength(0);
+    expect(mock.chats).toHaveLength(0);
+  });
+
+  it('fails closed on invalid planner output without executing', async () => {
+    const scoped = new DesignerService(container, { planner: spyPlanner({ version: 1 } as never) });
+    const err = await expectApiError(scoped.executeIntent(PID, intent(), { baseRevision: 'rev1:abc' }));
+    expect(err.status).toBe(422);
+    expect(err.code).toBe('designer_planner_invalid_output');
+    expect(mock.chats).toHaveLength(0);
+  });
+
+  it('reports a planner failure without executing', async () => {
+    const scoped = new DesignerService(container, {
+      planner: spyPlanner(() => Promise.reject(new Error('upstream exploded'))),
+    });
+    const err = await expectApiError(scoped.executeIntent(PID, intent(), { baseRevision: 'rev1:abc' }));
+    expect(err.status).toBe(502);
+    expect(err.code).toBe('designer_planner_failed');
+    expect(mock.chats).toHaveLength(0);
+  });
+
+  it('fails explicitly when the deterministic planner cannot recognize the instruction', async () => {
+    const err = await expectApiError(service.executeIntent(PID, intent({ instruction: 'Make it pop' }), { baseRevision: 'rev1:abc' }));
+    expect(err.status).toBe(422);
+    expect(err.code).toBe('designer_planner_unrecognized_intent');
+    expect(mock.chats).toHaveLength(0);
+  });
+
+  it('never persists: a proposal is not an apply', async () => {
+    mock.contentJson = { type: 'doc', content: [{ type: 'paragraph' }] };
+    mock.responses = [PLAN_JSON, fullFills()];
+    await service.executeIntent(PID, intent({ contentId: '33333333-3333-4333-8333-333333333333' }));
+    expect(mock.getCalls).toBe(1);
+    expect(mock.updates).toHaveLength(0);
   });
 });
 
