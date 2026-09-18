@@ -2,6 +2,7 @@ import StarterKit from '@tiptap/starter-kit';
 import Link from '@tiptap/extension-link';
 import { ImageBlock } from '../ImageBlock';
 import {
+  CompositionButton,
   CompositionCta,
   CompositionFeatureCard,
   CompositionFeatureGrid,
@@ -27,5 +28,6 @@ export function createEditorExtensions(options: { nodeViews?: boolean } = {}) {
     CompositionFeatureGrid.configure({ nodeView }),
     CompositionFeatureCard.configure({ nodeView }),
     CompositionCta.configure({ nodeView }),
+    CompositionButton.configure({ nodeView }),
   ];
 }

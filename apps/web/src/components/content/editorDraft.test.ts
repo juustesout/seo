@@ -22,7 +22,9 @@ describe('editorDraftFromCanonical', () => {
       'a fallback brief',
     );
     expect(draft.title).toBe('Ship SEO faster');
-    expect(draft.doc.content?.some((node) => node.type === 'paragraph')).toBe(true);
+    const hero = draft.doc.content?.find((node) => node.type === 'compositionHero');
+    expect(hero).toBeTruthy();
+    expect(hero?.content?.some((node) => node.type === 'paragraph')).toBe(true);
   });
 
   it('falls back to the first heading of any level', () => {

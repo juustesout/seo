@@ -30,6 +30,7 @@ const TYPE_ALIASES: Record<string, string> = {
   featureGrid: 'compositionFeatureGrid',
   featureCard: 'compositionFeatureCard',
   cta: 'compositionCta',
+  button: 'compositionButton',
 };
 
 export function resolveElementType(type: string): string {

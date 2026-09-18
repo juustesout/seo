@@ -33,6 +33,8 @@ export function defaultCompositionNode(type: CompositionNodeType): TipNode {
       };
     case 'compositionCta':
       return { type, content: [paragraph('Call to action')] };
+    case 'compositionButton':
+      return { type, attrs: { href: null, variant: 'default', layout: null }, content: [{ type: 'text', text: 'Button' }] };
   }
 }
 

@@ -43,6 +43,7 @@ const SETTINGS: Record<string, EditorSettingsDefinition['render']> = {
   compositionFeatureGrid: (props) => <CompositionSettings {...props} />,
   compositionFeatureCard: (props) => <CompositionSettings {...props} />,
   compositionCta: (props) => <CompositionSettings {...props} />,
+  compositionButton: (props) => <CompositionSettings {...props} />,
 };
 
 export function getElementSettingsRenderer(type: string): EditorSettingsDefinition['render'] | undefined {

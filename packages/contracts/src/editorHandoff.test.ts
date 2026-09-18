@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { CanonicalBlock, CanonicalDocument } from './canonical.js';
 import { CANONICAL_DOCUMENT_VERSION } from './canonical.js';
-import { canonicalDocumentToEditorDocument } from './editorHandoff.js';
+import { canonicalDocumentToEditorDocument, editorDocumentToCanonical } from './editorHandoff.js';
 import { isValidDocStructure, type TipNode } from './contentDoc.js';
 import { MARKETING_STORYBOARD_PLAN } from './compositionPlanFixtures.js';
 import { compileComposition } from './compositionPlan.js';
@@ -19,11 +19,22 @@ function text(value: string): CanonicalBlock {
   return { type: 'paragraph', content: [{ type: 'text', text: value }] };
 }
 
+function heading(level: number, value: string): CanonicalBlock {
+  return { type: 'heading', attrs: { level }, content: [{ type: 'text', text: value }] };
+}
+
+function button(label: string, attrs?: Record<string, unknown>): CanonicalBlock {
+  return { type: 'button', ...(attrs ? { attrs } : {}), content: [{ type: 'text', text: label }] };
+}
+
 function nodeTypes(nodes: TipNode[] | undefined): string[] {
   return (nodes ?? []).map((node) => node.type);
 }
 
-function firstOfType(docValue: ReturnType<typeof canonicalDocumentToEditorDocument>, type: string): TipNode | undefined {
+function firstOfType(
+  docValue: ReturnType<typeof canonicalDocumentToEditorDocument>,
+  type: string,
+): TipNode | undefined {
   return (docValue.content ?? []).find((node) => node.type === type);
 }
 
@@ -31,32 +42,38 @@ function textOf(node: TipNode | undefined): string {
   return (node?.content ?? []).map((child) => child.text ?? '').join('');
 }
 
-describe('canonicalDocumentToEditorDocument content mapping', () => {
+function hasType(nodes: TipNode[] | undefined, type: string): boolean {
+  for (const node of nodes ?? []) {
+    if (node.type === type) return true;
+    if (hasType(node.content, type)) return true;
+  }
+  return false;
+}
+
+describe('canonicalDocumentToEditorDocument composition mapping', () => {
   it('maps headings with their level and paragraphs with their text', () => {
     const tip = canonicalDocumentToEditorDocument(
-      doc([
-        { type: 'heading', attrs: { level: 1 }, content: [{ type: 'text', text: 'Title' }] },
-        text('Body copy'),
-      ]),
+      doc([heading(1, 'Title'), text('Body copy')]),
     );
-    const heading = firstOfType(tip, 'heading');
-    expect((heading?.attrs as { level?: number } | undefined)?.level).toBe(1);
-    expect(textOf(heading)).toBe('Title');
+    const topHeading = firstOfType(tip, 'heading');
+    expect((topHeading?.attrs as { level?: number } | undefined)?.level).toBe(1);
+    expect(textOf(topHeading)).toBe('Title');
     expect(textOf(firstOfType(tip, 'paragraph'))).toBe('Body copy');
   });
 
-  it('keeps multiple sections in document order', () => {
+  it('keeps sections as composition containers in document order', () => {
     const tip = canonicalDocumentToEditorDocument(
       doc([
-        { type: 'section', children: [{ type: 'heading', attrs: { level: 2 }, content: [{ type: 'text', text: 'One' }] }] },
-        { type: 'section', children: [{ type: 'heading', attrs: { level: 2 }, content: [{ type: 'text', text: 'Two' }] }] },
+        { type: 'section', children: [heading(2, 'One')] },
+        { type: 'section', children: [heading(2, 'Two')] },
       ]),
     );
-    const headings = (tip.content ?? []).filter((node) => node.type === 'heading');
-    expect(headings.map(textOf)).toEqual(['One', 'Two']);
+    expect(nodeTypes(tip.content)).toEqual(['compositionSection', 'compositionSection']);
+    expect((tip.content?.[0]?.content ?? []).map(textOf)).toEqual(['One']);
+    expect((tip.content?.[1]?.content ?? []).map(textOf)).toEqual(['Two']);
   });
 
-  it('flattens feature grids and cards into their heading and body content', () => {
+  it('keeps feature grid and card nesting with their attrs', () => {
     const tip = canonicalDocumentToEditorDocument(
       doc([
         {
@@ -66,33 +83,83 @@ describe('canonicalDocumentToEditorDocument content mapping', () => {
             {
               type: 'featureCard',
               attrs: { variant: 'elevated' },
-              children: [
-                { type: 'heading', attrs: { level: 3 }, content: [{ type: 'text', text: 'Fast' }] },
-                text('Ship quickly.'),
-              ],
+              children: [heading(3, 'Fast'), text('Ship quickly.')],
             },
           ],
         },
       ]),
     );
-    expect(nodeTypes(tip.content)).toEqual(['heading', 'paragraph']);
-    expect(textOf(tip.content?.[0])).toBe('Fast');
-    expect(textOf(tip.content?.[1])).toBe('Ship quickly.');
+    const grid = firstOfType(tip, 'compositionFeatureGrid');
+    expect(grid?.attrs).toEqual({ layout: { columns: 3 } });
+    const card = grid?.content?.[0];
+    expect(card?.type).toBe('compositionFeatureCard');
+    expect(card?.attrs).toEqual({ variant: 'elevated' });
+    expect(card?.content?.[0]?.type).toBe('heading');
+    expect(textOf(card?.content?.[1])).toBe('Ship quickly.');
   });
 
-  it('turns CTA button copy into a paragraph instead of an unsupported marker', () => {
+  it('maps CTA buttons to structural compositionButton nodes instead of paragraphs', () => {
     const tip = canonicalDocumentToEditorDocument(
       doc([
         {
           type: 'cta',
           attrs: { variant: 'primary' },
-          children: [{ type: 'button', attrs: { variant: 'primary' }, content: [{ type: 'text', text: 'Get started' }] }],
+          children: [button('Get started', { variant: 'primary', href: '/signup' })],
         },
       ]),
     );
-    expect(nodeTypes(tip.content)).toEqual(['paragraph']);
-    expect(textOf(tip.content?.[0])).toBe('Get started');
+    const cta = firstOfType(tip, 'compositionCta');
+    expect(cta?.attrs).toEqual({ variant: 'primary' });
+    const ctaButton = cta?.content?.[0];
+    expect(ctaButton?.type).toBe('compositionButton');
+    expect(ctaButton?.attrs).toEqual({ variant: 'primary', href: '/signup' });
+    expect(textOf(ctaButton)).toBe('Get started');
     expect(JSON.stringify(tip)).not.toContain('[unsupported');
+  });
+
+  it('maps a hero into a compositionHero container', () => {
+    const tip = canonicalDocumentToEditorDocument(
+      doc([
+        {
+          type: 'hero',
+          attrs: { variant: 'centered', layout: { align: 'center' } },
+          children: [heading(1, 'Ship SEO faster'), text('Intro copy')],
+        },
+      ]),
+    );
+    const hero = firstOfType(tip, 'compositionHero');
+    expect(hero?.attrs).toEqual({ variant: 'centered', layout: { align: 'center' } });
+    expect(hero?.content?.map(textOf)).toEqual(['Ship SEO faster', 'Intro copy']);
+  });
+
+  it('round-trips composition nesting and attrs back to canonical', () => {
+    const canonical = doc([
+      {
+        type: 'hero',
+        attrs: { variant: 'centered', layout: { align: 'center' } },
+        children: [heading(1, 'Title')],
+      },
+      { type: 'section', children: [heading(2, 'Body')] },
+      {
+        type: 'featureGrid',
+        attrs: { layout: { columns: 3 } },
+        children: [
+          { type: 'featureCard', attrs: { variant: 'elevated' }, children: [heading(3, 'Fast'), text('Ship')] },
+        ],
+      },
+      { type: 'cta', children: [button('Go', { variant: 'primary', href: '/go' })] },
+    ]);
+
+    const back = editorDocumentToCanonical(canonicalDocumentToEditorDocument(canonical));
+
+    expect(back.blocks.map((block) => block.type)).toEqual(['hero', 'section', 'featureGrid', 'cta']);
+    expect(back.blocks[0]?.attrs).toEqual({ variant: 'centered', layout: { align: 'center' } });
+    expect(back.blocks[2]?.attrs).toEqual({ layout: { columns: 3 } });
+    expect(back.blocks[2]?.children?.[0]?.type).toBe('featureCard');
+    expect(back.blocks[2]?.children?.[0]?.attrs).toEqual({ variant: 'elevated' });
+    expect(back.blocks[3]?.children?.[0]?.type).toBe('button');
+    expect(back.blocks[3]?.children?.[0]?.attrs).toEqual({ variant: 'primary', href: '/go' });
+    expect(back.blocks[3]?.children?.[0]?.content?.[0]).toEqual({ type: 'text', text: 'Go' });
   });
 
   it('drops an unfilled media slot instead of fabricating an image', () => {
@@ -122,6 +189,19 @@ describe('canonicalDocumentToEditorDocument content mapping', () => {
     expect(tip.content ?? []).toEqual([{ type: 'paragraph' }]);
   });
 
+  it('flattens only containers without an editor node, keeping their children', () => {
+    const tip = canonicalDocumentToEditorDocument(
+      doc([
+        {
+          type: 'testimonial',
+          children: [text('Great product'), text('Jane')],
+        },
+      ]),
+    );
+    expect(nodeTypes(tip.content)).toEqual(['paragraph', 'paragraph']);
+    expect((tip.content ?? []).map(textOf)).toEqual(['Great product', 'Jane']);
+  });
+
   it('preserves a real statItem value and label', () => {
     const tip = canonicalDocumentToEditorDocument(
       doc([{ type: 'statItem', attrs: { value: '42' }, content: [{ type: 'text', text: 'users' }] }]),
@@ -135,11 +215,7 @@ describe('canonicalDocumentToEditorDocument safety', () => {
     const value = doc([
       {
         type: 'hero',
-        children: [
-          { type: 'heading', attrs: { level: 1 }, content: [{ type: 'text', text: 'Title' }] },
-          { type: 'image' },
-          { type: 'button', content: [{ type: 'text', text: 'Go' }] },
-        ],
+        children: [heading(1, 'Title'), { type: 'image' }, button('Go')],
       },
     ]);
     const before = structuredClone(value);
@@ -159,6 +235,7 @@ describe('canonicalDocumentToEditorDocument safety', () => {
     expect(isValidDocStructure(tip)).toBe(true);
     expect(JSON.stringify(tip)).not.toContain('[unsupported');
     expect(nodeTypes(tip.content)).not.toContain('image');
-    expect(tip.content?.some((node) => node.type === 'heading')).toBe(true);
+    expect(hasType(tip.content, 'compositionHero')).toBe(true);
+    expect(hasType(tip.content, 'heading')).toBe(true);
   });
 });

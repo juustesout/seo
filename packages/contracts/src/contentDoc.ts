@@ -56,7 +56,23 @@ export interface DocImageRef {
   height?: number;
 }
 
-/** Node types the Phase B editor emits (StarterKit + link) + Phase F image. */
+/**
+ * Stage 8 composition node types the Content Studio emits. These are editor
+ * containers that preserve Compose structure instead of flattening it into
+ * article text (see `editorHandoff`). They stay separate from the Phase B set
+ * so generic WordPress/Tiptap conversion is unaffected.
+ */
+export const TIPTAP_COMPOSITION_NODE_TYPES = new Set([
+  'compositionHero',
+  'compositionSection',
+  'compositionFeatureGrid',
+  'compositionFeatureCard',
+  'compositionCta',
+  'compositionButton',
+]);
+
+/** Node types the Phase B editor emits (StarterKit + link) + Phase F image +
+ *  Stage 8 composition containers/leaves. */
 export const TIPTAP_BLOCK_TYPES = new Set([
   'paragraph',
   'heading',
@@ -68,6 +84,7 @@ export const TIPTAP_BLOCK_TYPES = new Set([
   'image',
   'hardBreak',
   'horizontalRule',
+  ...TIPTAP_COMPOSITION_NODE_TYPES,
 ]);
 
 /** Mark types the Phase B editor emits (StarterKit + link); used for validation. */
@@ -115,6 +132,26 @@ export function isValidDocStructure(value: unknown): boolean {
         if (!attrs || typeof attrs.mediaId !== 'string' || !attrs.mediaId) return false;
         if (attrs.src !== undefined && typeof attrs.src !== 'string') return false;
         if (node.content) return false;
+      }
+      if (node.type === 'compositionFeatureGrid') {
+        // A grid is a bounded container of cards and nothing else.
+        const inner = (node.content ?? []) as TipNode[];
+        if (inner.length === 0) return false;
+        if (!inner.every((c) => c?.type === 'compositionFeatureCard')) return false;
+      }
+      if (node.type === 'compositionFeatureCard') {
+        // Cards hold block content (headings, copy, lists, media), never bare text.
+        const inner = (node.content ?? []) as TipNode[];
+        if (inner.length === 0) return false;
+        if (!inner.every((c) => c && c.type !== 'text' && c.type !== 'hardBreak')) return false;
+      }
+      if (node.type === 'compositionButton') {
+        // A structural button is an inline-label leaf with optional bounded attrs.
+        const inner = (node.content ?? []) as TipNode[];
+        if (!inner.every((c) => c && (c.type === 'text' || c.type === 'hardBreak'))) return false;
+        const attrs = node.attrs as { href?: unknown; variant?: unknown; layout?: unknown } | undefined;
+        if (attrs?.href !== undefined && attrs.href !== null && typeof attrs.href !== 'string') return false;
+        if (attrs?.variant !== undefined && attrs.variant !== null && typeof attrs.variant !== 'string') return false;
       }
       if (!TIPTAP_BLOCK_TYPES.has(node.type)) return false;
       if (node.type === 'bulletList' || node.type === 'orderedList' || node.type === 'listItem') {
@@ -239,6 +276,17 @@ export function renderDocHtml(doc: TipDoc): string {
           }
           break;
         }
+        case 'compositionButton': {
+          const label = renderInlineChildren(node);
+          if (!label) break;
+          const href = (node.attrs as { href?: unknown } | undefined)?.href;
+          out.push(
+            typeof href === 'string' && href
+              ? `<p><a href="${escapeHtml(href)}">${label}</a></p>`
+              : `<p>${label}</p>`,
+          );
+          break;
+        }
         default:
           out.push(walk(node.content ?? []));
       }
@@ -278,6 +326,12 @@ export function docPlainText(doc: TipDoc): string {
           parts.push((node.content ?? []).map((c) => c.text ?? '').join(''));
           break;
         default:
+          if (node.type === 'compositionButton') {
+            const text = inlineText(node).trim();
+            if (text) parts.push(text);
+          } else if (TIPTAP_COMPOSITION_NODE_TYPES.has(node.type)) {
+            walkBlock(node.content ?? [], depth + 1);
+          }
           break;
       }
     }
@@ -337,13 +391,19 @@ export function docWordCount(doc: TipDoc): number {
 
 /** First non-empty paragraph/heading text — candidate introduction signal. */
 export function docIntroduction(doc: TipDoc): string {
-  for (const node of doc.content ?? []) {
-    if (node.type === 'paragraph' || node.type === 'heading') {
-      const text = inlineText(node).trim();
-      if (text) return text;
+  const find = (nodes: TipNode[]): string => {
+    for (const node of nodes) {
+      if (node.type === 'paragraph' || node.type === 'heading') {
+        const text = inlineText(node).trim();
+        if (text) return text;
+      } else if (node.content && TIPTAP_COMPOSITION_NODE_TYPES.has(node.type)) {
+        const nested = find(node.content as TipNode[]);
+        if (nested) return nested;
+      }
     }
-  }
-  return '';
+    return '';
+  };
+  return find(doc.content ?? []);
 }
 
 // ---------------------------------------------------------------------------
@@ -400,6 +460,12 @@ export function asContentBlocks(value: unknown): ContentBlock[] {
         break;
       }
       default:
+        if (node.type === 'compositionButton') {
+          const text = inlineText(node);
+          if (text.trim()) out.push({ type: 'paragraph', attrs: { text } });
+        } else if (TIPTAP_COMPOSITION_NODE_TYPES.has(node.type) && node.content) {
+          out.push(...asContentBlocks({ type: 'doc', content: node.content }));
+        }
         break;
     }
   }

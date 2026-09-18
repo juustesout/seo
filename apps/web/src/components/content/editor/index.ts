@@ -28,6 +28,7 @@ export {
   CompositionFeatureGrid,
   CompositionFeatureCard,
   CompositionCta,
+  CompositionButton,
   COMPOSITION_NODE_TYPES,
 } from './CompositionNodes';
 export type {

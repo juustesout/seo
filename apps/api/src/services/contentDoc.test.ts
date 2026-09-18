@@ -169,3 +169,66 @@ describe('media image nodes (phase F contracts)', () => {
     });
   });
 });
+
+describe('composition editor nodes (stage 8E.4)', () => {
+  const compositionDoc: TipDoc = {
+    type: 'doc',
+    content: [
+      {
+        type: 'compositionHero',
+        attrs: { variant: 'centered' },
+        content: [
+          { type: 'heading', attrs: { level: 1 }, content: [{ type: 'text', text: 'Hero title' }] },
+          { type: 'compositionButton', attrs: { href: '/signup', variant: 'primary' }, content: [{ type: 'text', text: 'Sign up' }] },
+        ],
+      },
+      {
+        type: 'compositionSection',
+        content: [
+          {
+            type: 'compositionFeatureGrid',
+            content: [
+              {
+                type: 'compositionFeatureCard',
+                content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Card copy' }] }],
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  };
+
+  it('accepts hero, section, grid, card and button nodes', () => {
+    expect(isValidDocStructure(compositionDoc)).toBe(true);
+  });
+
+  it('rejects a grid that does not contain cards', () => {
+    expect(
+      isValidDocStructure({
+        type: 'doc',
+        content: [
+          {
+            type: 'compositionFeatureGrid',
+            content: [{ type: 'paragraph', content: [{ type: 'text', text: 'not a card' }] }],
+          },
+        ],
+      }),
+    ).toBe(false);
+  });
+
+  it('renders nested composition content and button labels to HTML', () => {
+    const html = renderDocHtml(compositionDoc);
+    expect(html).toContain('Hero title');
+    expect(html).toContain('<a href="/signup">Sign up</a>');
+    expect(html).toContain('Card copy');
+  });
+
+  it('includes composition content in plain text and legacy blocks', () => {
+    expect(docPlainText(compositionDoc)).toContain('Hero title');
+    expect(docPlainText(compositionDoc)).toContain('Sign up');
+    const blocks = asContentBlocks(compositionDoc);
+    expect(blocks.some((b) => b.type === 'heading' && b.attrs.text === 'Hero title')).toBe(true);
+    expect(blocks.some((b) => b.type === 'paragraph' && b.attrs.text === 'Sign up')).toBe(true);
+  });
+});
