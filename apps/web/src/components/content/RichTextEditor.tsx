@@ -8,12 +8,14 @@
  * re-initializes the editor instead of reusing stale state; the imperative
  * handle exists so sibling panels (the outline) can drive selection.
  */
-import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react';
+import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { useEditor, EditorContent, type Editor } from '@tiptap/react';
+import { DEFAULT_DESIGN_SYSTEM, designSystemCssVariables, type TipDoc } from '@seo/contracts';
 import { EditorAiBubbleMenu, type EditorAiActions } from './EditorAiBubbleMenu';
 import { createEditorExtensions } from './editor/extensions';
 import { sanitizeEditorDoc } from './editor/sanitizeDoc';
-import type { TipDoc } from '@seo/contracts';
+import { canvasModeForDocument } from './editor/compositionPresentation';
+import './editor/compositionEditor.css';
 
 export interface RichTextEditorHandle {
   /** Scroll the editor to and select the n-th heading in the document. */
@@ -38,11 +40,17 @@ export const RichTextEditor = forwardRef<RichTextEditorHandle, RichTextEditorPro
   { initialDoc, onDocChange, onEditor, aiActions },
   ref,
 ) {
+  const sanitizedDoc = useMemo(() => sanitizeEditorDoc(initialDoc), [initialDoc]);
+  const [canvasMode, setCanvasMode] = useState<'page' | 'article'>(() => canvasModeForDocument(sanitizedDoc));
+
   const editor = useEditor({
     extensions: createEditorExtensions(),
-    content: sanitizeEditorDoc(initialDoc),
+    content: sanitizedDoc,
     onUpdate: ({ editor: e }) => {
-      onDocChange?.(e.getJSON() as unknown as TipDoc);
+      const next = e.getJSON() as unknown as TipDoc;
+      const mode = canvasModeForDocument(next);
+      setCanvasMode((current) => (mode === current ? current : mode));
+      onDocChange?.(next);
     },
   });
 
@@ -74,9 +82,19 @@ export const RichTextEditor = forwardRef<RichTextEditorHandle, RichTextEditorPro
     [editor],
   );
 
+  const pageMode = canvasMode === 'page';
+
   return (
-    <div className="rt-editor">
-      <EditorContent editor={editor} />
+    <div className="rt-editor" data-canvas-mode={canvasMode}>
+      <div
+        className={pageMode ? 'cosmos-doc rt-page-canvas' : undefined}
+        style={pageMode ? (designSystemCssVariables(DEFAULT_DESIGN_SYSTEM) as CSSProperties) : undefined}
+        data-editor-canvas={pageMode ? 'composition' : undefined}
+      >
+        <div className={pageMode ? 'cosmos-container' : undefined}>
+          <EditorContent editor={editor} />
+        </div>
+      </div>
       {aiActions && <EditorAiBubbleMenu editor={editor} actions={aiActions} />}
     </div>
   );

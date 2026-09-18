@@ -36,16 +36,20 @@ function emptyCard(): TipNode {
   return { type: 'compositionFeatureCard', content: [emptyParagraph()] };
 }
 
-function repairComposition(type: string, children: TipNode[]): TipNode[] {
-  if (type === 'compositionFeatureGrid') {
+function repairComposition(node: TipNode, children: TipNode[]): TipNode[] {
+  const base: TipNode =
+    node.attrs && Object.keys(node.attrs).length > 0
+      ? { type: node.type, attrs: node.attrs }
+      : { type: node.type };
+  if (node.type === 'compositionFeatureGrid') {
     const cards = children.filter((child) => child.type === 'compositionFeatureCard');
-    return [{ type, content: cards.length > 0 ? cards : [emptyCard()] }];
+    return [{ ...base, content: cards.length > 0 ? cards : [emptyCard()] }];
   }
-  if (type === 'compositionFeatureCard' || type === 'compositionSection') {
-    return [{ type, content: children.length > 0 ? children : [emptyParagraph()] }];
+  if (node.type === 'compositionFeatureCard' || node.type === 'compositionSection') {
+    return [{ ...base, content: children.length > 0 ? children : [emptyParagraph()] }];
   }
-  if (children.length > 0) return [{ type, content: children }];
-  return [{ type }];
+  if (children.length > 0) return [{ ...base, content: children }];
+  return [base];
 }
 
 function sanitizeNode(node: TipNode): TipNode[] {
@@ -63,7 +67,7 @@ function sanitizeNode(node: TipNode): TipNode[] {
     return out;
   }
   if ((COMPOSITION_NODE_TYPES as readonly string[]).includes(node.type)) {
-    return repairComposition(node.type, children);
+    return repairComposition(node, children);
   }
   if (children.length > 0) return [{ ...node, content: children }];
   const next = { ...node };

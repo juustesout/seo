@@ -43,8 +43,27 @@ describe('sanitizeEditorDoc', () => {
     ]);
   });
 
-  it('flattens unknown nodes instead of dropping their children', () => {
+  it('preserves bounded composition attrs through sanitizing', () => {
     const doc = sanitizeEditorDoc({
+      type: 'doc',
+      content: [
+        {
+          type: 'compositionHero',
+          attrs: { variant: 'centered', layout: { align: 'center' } },
+          content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Hero' }] }],
+        },
+        {
+          type: 'compositionButton',
+          attrs: { variant: 'primary', href: 'https://example.com' },
+          content: [{ type: 'text', text: 'Go' }],
+        },
+      ],
+    });
+    expect(doc.content?.[0]?.attrs).toEqual({ variant: 'centered', layout: { align: 'center' } });
+    expect(doc.content?.[1]?.attrs).toEqual({ variant: 'primary', href: 'https://example.com' });
+  });
+
+  it('flattens unknown nodes instead of dropping their children', () => {    const doc = sanitizeEditorDoc({
       type: 'doc',
       content: [
         {

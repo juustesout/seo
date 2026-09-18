@@ -1,0 +1,88 @@
+/*
+ * Page-mode composition canvas (Stage 8E.5).
+ *
+ * A document whose structure is composition renders on the CanonicalRenderer's
+ * own surface: the tokens and `.cosmos-*` block classes come from
+ * `canonicalRenderer.css` / the canonical presentation helpers, never from a
+ * second design system. This file only adds the editor-specific chrome around
+ * that surface.
+ *
+ * Layout rule: all editor chrome is drawn with an absolutely positioned
+ * overlay or an outline, so hovering or selecting a block never shifts the
+ * composition.
+ */
+
+.rt-editor[data-canvas-mode='page'] .rt-page-canvas {
+  width: 100%;
+}
+
+.rt-editor[data-canvas-mode='page'] .ProseMirror {
+  min-height: 460px;
+  padding: 0;
+  outline: none;
+  font-size: var(--cosmos-font-size-body);
+  line-height: var(--cosmos-line-height);
+}
+
+.rt-editor[data-canvas-mode='page'] .ProseMirror:focus {
+  outline: none;
+}
+
+/* The wrapper is a positioning host; the block classes live on the editable
+   content element (or on the wrapper for a FeatureCard, which owns its icon). */
+.seo-composition {
+  position: relative;
+}
+
+.seo-composition-selected {
+  outline: 2px solid var(--cosmos-color-primary, var(--primary));
+  outline-offset: 2px;
+  border-radius: var(--cosmos-radius-sm, 2px);
+}
+
+.rt-editor[data-canvas-mode='page'] .ProseMirror .ProseMirror-selectednode {
+  outline: none;
+}
+
+/* FeatureCard: the wrapper is the card, so the editable body keeps the same
+   last-child rhythm the CanonicalRenderer gets from its direct children. */
+.rt-editor[data-canvas-mode='page'] .cosmos-featureCard .seo-composition__content > :last-child {
+  margin-bottom: 0;
+}
+
+/* Type label + selected marker: hidden until hover/selection so an untouched
+   canvas reads like the published document. */
+.seo-composition__chrome {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--cosmos-color-primary, var(--primary)) 12%, transparent);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--cosmos-color-muted, var(--muted-foreground));
+  cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s ease;
+}
+
+.seo-composition:hover > .seo-composition__chrome,
+.seo-composition-selected > .seo-composition__chrome {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.seo-composition__mark {
+  color: var(--cosmos-color-primary, var(--primary));
+  letter-spacing: 0;
+  text-transform: none;
+  font-weight: 500;
+}
