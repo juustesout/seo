@@ -39,14 +39,10 @@ export function useAutosave({ enabled, delayMs = 1600, makeSnapshot, persist }: 
   const doSave = async () => {
     clearTimer();
     const payload = makeRef.current();
-    // Unchanged since the last successful save: mark clean and skip a redundant request.
     if (baselineRef.current === payload) {
       setStatus('saved');
       return;
     }
-    // A save is in flight: remember newer edits exist and re-run immediately
-    // after it completes, so an older save never overwrites newer edits and two
-    // requests never overlap.
     if (busyRef.current) {
       rerunRef.current = true;
       return;
@@ -70,7 +66,11 @@ export function useAutosave({ enabled, delayMs = 1600, makeSnapshot, persist }: 
     }
   };
 
-  // Debounce: any change schedules a save; leaving the workspace cancels it.
+  // Debounce: only lifecycle/config changes restart the timer. The callback
+  // props are stored in refs above because they are intentionally recreated by
+  // the Content workspace on every render. Including makeSnapshot here causes
+  // status updates (unsaved -> saving -> saved) to schedule another save, which
+  // can create a self-sustaining save loop.
   useEffect(() => {
     if (!enabled) {
       clearTimer();
@@ -81,11 +81,10 @@ export function useAutosave({ enabled, delayMs = 1600, makeSnapshot, persist }: 
     clearTimer();
     timerRef.current = window.setTimeout(() => void doSave(), delayMs);
     return clearTimer;
+    // makeSnapshot/persist are deliberately read from refs.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [enabled, makeSnapshot, delayMs]);
+  }, [enabled, delayMs]);
 
-  // The workspace may set a baseline (freshly loaded row or a brand-new
-  // document) so that an untouched editor is never saved.
   const setBaseline = (snapshot: string) => {
     baselineRef.current = snapshot;
     if (!busyRef.current) setStatus('saved');
