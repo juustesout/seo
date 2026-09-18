@@ -43,6 +43,7 @@ import { cosmosRouter } from './http/routes/cosmos.js';
 import { compositionRouter } from './http/routes/composition.js';
 import { contentRouter } from './http/routes/content.js';
 import { writerRouter } from './http/routes/writer.js';
+import { designerRouter, contentDesignerRouter } from './http/routes/designer.js';
 import { mediaRouter } from './http/routes/media.js';
 import { jobsRouter } from './http/routes/jobs.js';
 import { keywordResearchRouter } from './http/routes/keywordResearch.js';
@@ -139,6 +140,9 @@ export function createApp(): Express {
   // Writer agent runs hang off one exact content item; mounted after the
   // content router so /:contentId/writer never collides with content routes.
   app.use('/api/projects/:projectId/content/:contentId/writer', writerRouter);
+  // Designer: project-scoped plan execution plus a content-bound explicit apply.
+  app.use('/api/projects/:projectId/designer', designerRouter);
+  app.use('/api/projects/:projectId/content/:contentId/designer', contentDesignerRouter);
   // Media uploads are raw image bodies (never JSON), parsed only for media
   // routes so the global JSON limit does not constrain file uploads.
   app.use(
