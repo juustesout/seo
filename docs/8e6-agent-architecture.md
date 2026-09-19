@@ -520,15 +520,24 @@ add a second progress document (no `progress.md`); update this section instead.
 | ADR phase (§13) | Status | Evidence |
 | --- | --- | --- |
 | Phase 1 — Contracts, proposal envelope, reverse bridge | Done | `0531639` |
-| Phase 2 — Designer orchestration (synchronous) | Done | `68ad5d9`, `d442d92`, `791c763`, `f88d4e6` |
+| Phase 2 — Designer orchestration (synchronous) | Done | `68ad5d9`, `d442d92`, `791c763`, `f88d4e6`, `172dd7b` |
 | Phase 3 — Design Package v1 | Not started — next ADR phase | — |
 | Phase 4 — Durable agent runs | Not started | — |
 | Phase 5 — Designer UI, MCP, docs | Not started | — |
 
-Phase 2 is functionally complete. One bullet in §13 Phase 2 — wiring
-`resolveDesignSystem` into `CanonicalRenderer`, the editor canvas and the
-Designer — is still open and is tracked below as chat step 3.4. Chat steps are
-a working breakdown of ADR Phase 2; they are **not** ADR phases.
+ADR Phase 2: DONE
+  ├─ 3.1 done
+  ├─ 3.2 done
+  ├─ 3.3 done
+  └─ 3.4 done
+
+ADR Phase 3: NOT STARTED
+  └─ Design Package v1 ← NEXT
+
+Phase 2 is complete: the last §13 Phase 2 bullet — wiring `resolveDesignSystem`
+into `CanonicalRenderer`, the editor canvas and the Designer — landed as chat
+step 3.4. Chat steps are a working breakdown of ADR Phase 2; they are **not**
+ADR phases.
 
 ### 15.2 Chat sub-phase log (working breakdown of ADR Phase 2)
 
@@ -540,21 +549,36 @@ ADR Phase 3 is Design Package v1 and has not started. Do not equate them.
 | 3.1 | `DesignerIntent` contract + deterministic planner seam | Done | `d442d92` |
 | 3.2 | `writer.revise` capability + LLM Designer planner + bounded planner context | Done | `791c763` |
 | 3.3 | Public `POST /api/projects/:projectId/designer/intent` (proposal-only) | Done | `f88d4e6` |
-| 3.4 | §13 Phase 2 residual: design-system wiring | Next | — |
+| 3.4 | §13 Phase 2 residual: design-system wiring | Done | `172dd7b` |
 
-What 3.4 covers: `resolveDesignSystem` and `designSystemCssVariables` currently
-have no production callers; `CanonicalRenderer` and the editor canvas fall back
-to `DEFAULT_DESIGN_SYSTEM`, and `CanonicalMeta.designSystem` is validated but
-never set or read (§2.4). 3.4 wires the project's Cosmos design tokens through
-to the renderer, the editor canvas and the Designer, and sets/reads
-`CanonicalMeta.designSystem`.
+What 3.4 did:
+
+- One resolution path. `effectiveDesignSystem(value?)` in `@seo/contracts` is the
+  single entry point: it accepts a resolved system, a full Cosmos config, raw
+  Cosmos design input or nothing, and delegates all expansion to
+  `resolveDesignSystem`. `canonical.ts` adds `withDesignSystemRef`, and
+  `editorDocumentToCanonical(doc, meta?)` now carries metadata through.
+- API records the identity. `getCosmosContext` exposes `designSystemRef`, and
+  `CompositionService` / `DesignerService` stamp it onto the produced document
+  as `meta.designSystem` — an identity ref (`{ id: 'cosmos' }`) only, never
+  token values.
+- Web renders through one path. A new `DesignSystemProvider` / `useDesignSystem`
+  reads `GET /projects/:id/cosmos` and resolves it once; `CanonicalRenderer` and
+  the `RichTextEditor` page canvas consume that context and emit
+  `data-cosmos-design-system`, so preview and editing cannot disagree for the
+  same canonical input.
+- Fallback preserved. With no Cosmos config (or on a load error) every consumer
+  falls back to `DEFAULT_DESIGN_SYSTEM`, and documents without the field stay
+  compatible.
+
+Verification: contracts 255, API 1460, web 278 tests green; `@seo/contracts`
+build and all three package typechecks green.
 
 ### 15.3 Order after Phase 2 closes
 
-1. 3.4 — close the last §13 Phase 2 bullet (design-system wiring).
-2. ADR Phase 3 — Design Package v1.
-3. ADR Phase 4 — durable agent runs.
-4. ADR Phase 5 — Designer UI, MCP, docs.
+1. ADR Phase 3 — Design Package v1 (next).
+2. ADR Phase 4 — durable agent runs.
+3. ADR Phase 5 — Designer UI, MCP, docs.
 
 Deferred hardening is not part of Phase 2 closure and does not block Phase 3:
 the H9 slot-filler rename, bounding `DesignerIntentContext.selection`, and a
