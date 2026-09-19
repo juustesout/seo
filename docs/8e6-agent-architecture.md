@@ -508,3 +508,54 @@ Phase 5 — Designer UI, MCP, docs.
 - `roadmap.md`.
 - `docs/content-studio-roadmap.md`.
 - `docs/w10-magic-roadmap.md` (cross-reference the Designer boundary).
+
+## 15. Status / progress
+
+Living status. Section 13 is the single source of truth for **what the phases
+are**; this section is the single source of truth for **where we are**. Do not
+add a second progress document (no `progress.md`); update this section instead.
+
+### 15.1 ADR phase status
+
+| ADR phase (§13) | Status | Evidence |
+| --- | --- | --- |
+| Phase 1 — Contracts, proposal envelope, reverse bridge | Done | `0531639` |
+| Phase 2 — Designer orchestration (synchronous) | Done | `68ad5d9`, `d442d92`, `791c763`, `f88d4e6` |
+| Phase 3 — Design Package v1 | Not started — next ADR phase | — |
+| Phase 4 — Durable agent runs | Not started | — |
+| Phase 5 — Designer UI, MCP, docs | Not started | — |
+
+Phase 2 is functionally complete. One bullet in §13 Phase 2 — wiring
+`resolveDesignSystem` into `CanonicalRenderer`, the editor canvas and the
+Designer — is still open and is tracked below as chat step 3.4. Chat steps are
+a working breakdown of ADR Phase 2; they are **not** ADR phases.
+
+### 15.2 Chat sub-phase log (working breakdown of ADR Phase 2)
+
+The `3.x` labels were used during implementation. `3.x` is **not** ADR Phase 3.
+ADR Phase 3 is Design Package v1 and has not started. Do not equate them.
+
+| Chat step | Scope | Status | Commit(s) |
+| --- | --- | --- | --- |
+| 3.1 | `DesignerIntent` contract + deterministic planner seam | Done | `d442d92` |
+| 3.2 | `writer.revise` capability + LLM Designer planner + bounded planner context | Done | `791c763` |
+| 3.3 | Public `POST /api/projects/:projectId/designer/intent` (proposal-only) | Done | `f88d4e6` |
+| 3.4 | §13 Phase 2 residual: design-system wiring | Next | — |
+
+What 3.4 covers: `resolveDesignSystem` and `designSystemCssVariables` currently
+have no production callers; `CanonicalRenderer` and the editor canvas fall back
+to `DEFAULT_DESIGN_SYSTEM`, and `CanonicalMeta.designSystem` is validated but
+never set or read (§2.4). 3.4 wires the project's Cosmos design tokens through
+to the renderer, the editor canvas and the Designer, and sets/reads
+`CanonicalMeta.designSystem`.
+
+### 15.3 Order after Phase 2 closes
+
+1. 3.4 — close the last §13 Phase 2 bullet (design-system wiring).
+2. ADR Phase 3 — Design Package v1.
+3. ADR Phase 4 — durable agent runs.
+4. ADR Phase 5 — Designer UI, MCP, docs.
+
+Deferred hardening is not part of Phase 2 closure and does not block Phase 3:
+the H9 slot-filler rename, bounding `DesignerIntentContext.selection`, and a
+planner timeout/cost budget (currently `maxTokens` only).
