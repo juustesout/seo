@@ -167,6 +167,57 @@ describe('DesignerService.execute', () => {
     expect(err.code).toBe('writer_free_text_unavailable');
     expect(mock.chats).toHaveLength(0);
   });
+
+  it('revises stored content through the AI revision Writer and never persists', async () => {
+    mock.contentJson = { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Old intro' }] }] };
+    mock.responses = [JSON.stringify({ revisions: [{ ref: 'b0', text: 'New intro' }] })];
+    const plan = {
+      version: 1 as const,
+      steps: [
+        { kind: 'writer.revise' as const, task: { instruction: 'Tighten it.', target: { kind: 'document' as const } } },
+        { kind: 'designer.review' as const, criteria: ['document_valid' as const, 'structure_preserved' as const] },
+      ],
+    };
+    const proposal = await service.execute('p1', { plan, contentId: 'c1' });
+    expect(proposal.baseRevision).toBe(contentRevisionOf(mock.contentJson));
+    expect(proposal.document.blocks[0]?.content).toEqual([{ type: 'text', text: 'New intro' }]);
+    expect(proposal.review?.ok).toBe(true);
+    expect(mock.chats).toHaveLength(1);
+    expect(mock.cosmosCalls).toBe(1);
+    expect(mock.updates).toHaveLength(0);
+  });
+
+  it('fails a revision target that resolves to no writable block without calling any model', async () => {
+    mock.contentJson = { type: 'doc', content: [{ type: 'paragraph' }] };
+    const plan = {
+      version: 1 as const,
+      steps: [
+        {
+          kind: 'writer.revise' as const,
+          task: { instruction: 'Tighten it.', target: { kind: 'block' as const, ref: 'does_not_exist' } },
+        },
+      ],
+    };
+    const err = await expectApiError(service.execute('p1', { plan, contentId: 'c1' }));
+    expect(err.status).toBe(422);
+    expect(err.code).toBe('designer_revision_invalid_target');
+    expect(mock.chats).toHaveLength(0);
+  });
+
+  it('reports an unconfigured revision Writer honestly', async () => {
+    mock.contentJson = { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Old' }] }] };
+    mock.configured = false;
+    const plan = {
+      version: 1 as const,
+      steps: [
+        { kind: 'writer.revise' as const, task: { instruction: 'Tighten it.', target: { kind: 'document' as const } } },
+      ],
+    };
+    const err = await expectApiError(service.execute('p1', { plan, contentId: 'c1' }));
+    expect(err.status).toBe(503);
+    expect(err.code).toBe('not_configured');
+    expect(mock.chats).toHaveLength(0);
+  });
 });
 
 const PID = '11111111-1111-4111-8111-111111111111';
@@ -203,6 +254,15 @@ describe('DesignerService.executeIntent', () => {
     const proposal = await scoped.executeIntent(PID, intent(), { baseRevision: 'rev1:abc' });
     expect(planner.calls).toHaveLength(1);
     expect(proposal.review?.ok).toBe(true);
+  });
+
+  it('wires the LLM planner when llmPlanner is enabled', async () => {
+    mock.responses = [JSON.stringify(PLAN), PLAN_JSON, fullFills()];
+    const scoped = new DesignerService(container, { llmPlanner: true });
+    const proposal = await scoped.executeIntent(PID, intent(), { baseRevision: 'rev1:abc' });
+    expect(proposal.review?.ok).toBe(true);
+    expect(mock.chats).toHaveLength(3);
+    expect(mock.chats[0]!.messages[0]!.content).toContain('JSON');
   });
 
   it('rejects an intent that is not scoped to the target project before planning', async () => {

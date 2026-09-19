@@ -27,4 +27,5 @@ export * from './compositionPlan.js';
 export * from './compositionPlanFixtures.js';
 export * from './compositionPlanner.js';
 export * from './compositionWriter.js';
+export * from './designerRevision.js';
 export * from './designer.js';

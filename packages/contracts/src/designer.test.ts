@@ -90,6 +90,39 @@ describe('isValidDesignerStep', () => {
     expect(isValidDesignerStep({ kind: 'designer.review', criteria: [] })).toBe(false);
     expect(isValidDesignerStep({ kind: 'designer.review', criteria: ['document_valid', 'document_valid'] })).toBe(false);
   });
+
+  it('validates a writer.revise step and its bounded target', () => {
+    expect(
+      isValidDesignerStep({
+        kind: 'writer.revise',
+        task: { instruction: 'Tighten the introduction.', target: { kind: 'introduction' } },
+      }),
+    ).toBe(true);
+    expect(
+      isValidDesignerStep({
+        kind: 'writer.revise',
+        task: { instruction: 'Rewrite the section.', target: { kind: 'section', ref: 'section1' } },
+      }),
+    ).toBe(true);
+    expect(
+      isValidDesignerStep({
+        kind: 'writer.revise',
+        task: { instruction: 'Rewrite.', target: { kind: 'section' } },
+      }),
+    ).toBe(false);
+    expect(
+      isValidDesignerStep({
+        kind: 'writer.revise',
+        task: { instruction: '', target: { kind: 'document' } },
+      }),
+    ).toBe(false);
+    expect(
+      isValidDesignerStep({
+        kind: 'writer.revise',
+        task: { instruction: 'Rewrite.', target: { kind: 'document' }, tool: 'search' },
+      }),
+    ).toBe(false);
+  });
 });
 
 describe('isValidDesignerPlan', () => {

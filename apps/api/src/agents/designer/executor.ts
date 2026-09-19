@@ -35,6 +35,7 @@ import type {
   DesignerReview,
   DesignerReviewCriterion,
   DesignerReviewIssue,
+  DesignerRevisionTarget,
   DesignBriefFormat,
 } from '@seo/contracts';
 import {
@@ -86,10 +87,25 @@ export interface DesignerFreeTextInput {
   instruction: string;
 }
 
+/**
+ * Input for a `writer.revise` step: the current document plus a bounded,
+ * server-side target scope. The capability must resolve the target itself and
+ * may never introduce or reorder structure.
+ */
+export interface DesignerReviseInput {
+  projectId: string;
+  brief?: DesignBrief;
+  instruction: string;
+  target: DesignerRevisionTarget;
+  document: CanonicalDocument;
+}
+
 /** Typed service calls the Designer may make, one per specialist capability. */
 export interface DesignerExecutorDependencies {
   structure(input: DesignerStructureInput): Promise<DesignerStructureOutput>;
   fillSlots(input: DesignerFillSlotsInput): Promise<AgentResult>;
+  /** Bounded, structure-preserving revision of the current document. */
+  revise?(input: DesignerReviseInput): Promise<AgentResult>;
   /** Optional Writer free-text seam; absent means the step is unavailable. */
   freeText?(input: DesignerFreeTextInput): Promise<AgentResult>;
 }
@@ -101,6 +117,12 @@ export interface DesignerExecutionInput {
   plan: DesignerPlan;
   /** Brief override; defaults to the brief echoed on the plan. */
   brief?: DesignBrief;
+  /**
+   * Existing document the plan starts from, when the run targets stored content.
+   * Seeded as both the working document and the structure reference so a
+   * `writer.revise` step can edit it without a `composer.structure` step.
+   */
+  baseDocument?: CanonicalDocument;
 }
 
 /** The executor's complete output: the final document plus what happened. */
@@ -273,11 +295,14 @@ export async function executeDesignerPlan(
   if (input.brief !== undefined && !isValidDesignBrief(input.brief)) {
     throw ApiError.badRequest('Invalid design brief');
   }
+  if (input.baseDocument !== undefined && !isValidCanonicalDoc(input.baseDocument)) {
+    throw ApiError.badRequest('Invalid base document');
+  }
   const brief = input.brief ?? input.plan.brief;
 
   const state: ExecutionState = {
-    document: null,
-    skeleton: null,
+    document: input.baseDocument ?? null,
+    skeleton: input.baseDocument ?? null,
     plan: null,
     slots: null,
     results: [],
@@ -314,6 +339,27 @@ export async function executeDesignerPlan(
         state.document = result.document;
         state.filled = result.filled ?? [];
         state.unfilled = result.unfilled ?? [];
+        state.results.push(result);
+        break;
+      }
+      case 'writer.revise': {
+        if (!state.document) throw stepOrderError(step.kind, index);
+        if (!deps.revise) {
+          throw new ApiError(
+            503,
+            'writer_revise_unavailable',
+            'The writer.revise capability is not available; no revision Writer is wired for this step.',
+          );
+        }
+        const result = await deps.revise({
+          projectId: input.projectId,
+          brief,
+          instruction: step.task.instruction,
+          target: step.task.target,
+          document: state.document,
+        });
+        if (!isValidAgentResult(result) || result.role !== 'writer') throw stepResultInvalid(step.kind, index);
+        state.document = result.document;
         state.results.push(result);
         break;
       }

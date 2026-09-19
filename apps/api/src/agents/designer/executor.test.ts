@@ -148,6 +148,76 @@ describe('executeDesignerPlan', () => {
     expect(freeText).toHaveBeenCalledTimes(1);
   });
 
+  it('reports writer.revise as unavailable when no capability is wired', async () => {
+    const plan = {
+      version: 1 as const,
+      steps: [{ kind: 'writer.revise' as const, task: { instruction: 'Tighten the intro.', target: { kind: 'document' as const } } }],
+    };
+    const err = await expectApiError(executeDesignerPlan({ projectId: 'p1', plan, baseDocument: compiled.document }, deps()));
+    expect(err.status).toBe(503);
+    expect(err.code).toBe('writer_revise_unavailable');
+  });
+
+  it('runs writer.revise against the seeded base document', async () => {
+    const revise = vi.fn(async () => ({ role: 'writer' as const, document: filled.document }));
+    const plan = {
+      version: 1 as const,
+      steps: [
+        {
+          kind: 'writer.revise' as const,
+          task: { instruction: 'Tighten the intro.', target: { kind: 'introduction' as const } },
+        },
+      ],
+    };
+    const result = await executeDesignerPlan(
+      { projectId: 'p1', plan, baseDocument: compiled.document },
+      deps({ revise }),
+    );
+    expect(result.document).toEqual(filled.document);
+    expect(revise).toHaveBeenCalledWith(
+      expect.objectContaining({
+        instruction: 'Tighten the intro.',
+        target: { kind: 'introduction' },
+        document: compiled.document,
+      }),
+    );
+  });
+
+  it('fails writer.revise without a base document or earlier structure', async () => {
+    const plan = {
+      version: 1 as const,
+      steps: [{ kind: 'writer.revise' as const, task: { instruction: 'Tighten.', target: { kind: 'document' as const } } }],
+    };
+    const err = await expectApiError(executeDesignerPlan({ projectId: 'p1', plan }, deps({ revise: vi.fn() })));
+    expect(err.status).toBe(422);
+    expect(err.code).toBe('designer_step_order_invalid');
+  });
+
+  it('rejects an invalid base document before any specialist call', async () => {
+    const plan = { version: 1 as const, steps: [{ kind: 'designer.review' as const, criteria: ['document_valid' as const] }] };
+    const err = await expectApiError(
+      executeDesignerPlan({ projectId: 'p1', plan, baseDocument: { version: 1, blocks: 'nope' } as never }, deps()),
+    );
+    expect(err.status).toBe(400);
+    expect(err.code).toBe('bad_request');
+  });
+
+  it('uses the seeded base document as the structure reference for review', async () => {
+    const revise = vi.fn(async () => ({ role: 'writer' as const, document: compiled.document }));
+    const plan = {
+      version: 1 as const,
+      steps: [
+        { kind: 'writer.revise' as const, task: { instruction: 'No-op.', target: { kind: 'document' as const } } },
+        { kind: 'designer.review' as const, criteria: ['structure_preserved' as const] },
+      ],
+    };
+    const result = await executeDesignerPlan(
+      { projectId: 'p1', plan, baseDocument: compiled.document },
+      deps({ revise }),
+    );
+    expect(result.review?.ok).toBe(true);
+  });
+
   it('rejects an agent result that violates the contract', async () => {
     const fillSlots = vi.fn(async () => ({ role: 'composer' as const, document: compiled.document }));
     const plan = {

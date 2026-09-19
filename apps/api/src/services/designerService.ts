@@ -27,31 +27,45 @@
  * The existing explicit-plan path is unchanged.
  */
 
-import type { AgentResult, DesignBrief, DesignerIntent, DesignerPlan, DesignerPlanner, DesignerProposal } from '@seo/contracts';
+import type {
+  AgentResult,
+  CanonicalDocument,
+  DesignBrief,
+  DesignerIntent,
+  DesignerPlan,
+  DesignerPlanner,
+  DesignerProposal,
+} from '@seo/contracts';
 import {
   DESIGNER_PROPOSAL_VERSION,
+  DesignerRevisionError,
   applyCompositionSlotFills,
+  applyDesignerRevision,
   boundCompositionPlannerBrief,
   canonicalDocumentToEditorDocument,
   compileComposition,
   contentRevisionOf,
+  editorDocumentToCanonical,
   isWritableCompositionSlot,
   isValidDesignBrief,
   isValidDesignerPlan,
   isValidDesignerProposal,
+  resolveDesignerRevisionTargets,
 } from '@seo/contracts';
 import { ApiError } from '../apiErrors.js';
 import type { ServiceContainer } from '../context.js';
 import { createAiCompositionWriter } from '../agents/composition/writer.js';
+import { createAiDesignerRevisionWriter, type DesignerRevisionWriterOutcome } from '../agents/designer/revisionWriter.js';
 import {
   executeDesignerPlan,
   type DesignerExecutorDependencies,
 } from '../agents/designer/executor.js';
-import { DeterministicDesignerPlanner, runDesignerPlanner } from '../agents/designer/planner.js';
+import { DeterministicDesignerPlanner, LlmDesignerPlanner, runDesignerPlanner } from '../agents/designer/planner.js';
 import { AIService } from './aiService.js';
 import { compositionWriterError } from './compositionService.js';
 import { CompositionPlannerService } from './compositionPlannerService.js';
 import { ContentService } from './contentService.js';
+import { DesignerPlannerContextService } from './designerPlannerContextService.js';
 import { getCosmosContext } from './cosmosService.js';
 
 /** Request for one Designer execution. Never persists. */
@@ -62,12 +76,20 @@ export interface DesignerExecuteInput {
   contentId?: string;
   /** Explicit base revision when no contentId is given. */
   baseRevision?: string;
+  /**
+   * Explicit existing document to start the plan from. Defaults to the canonical
+   * form of the content named by `contentId`, which is how a `writer.revise`
+   * step edits stored content.
+   */
+  baseDocument?: CanonicalDocument;
 }
 
 /** Service options: the planner is an injected, replaceable boundary. */
 export interface DesignerServiceOptions {
   /** Planning boundary; defaults to the deterministic Phase 3.1 planner. */
   planner?: DesignerPlanner;
+  /** When true and no `planner` is injected, use the LLM planner (Phase 3.2). */
+  llmPlanner?: boolean;
 }
 
 /** Optional invocation state for intent execution that is not part of the intent. */
@@ -86,6 +108,46 @@ function briefToText(brief: DesignBrief | undefined): string {
   return boundCompositionPlannerBrief(parts.join('\n'));
 }
 
+/** Maps a revision Writer failure onto the shared wire error vocabulary. */
+function designerRevisionWriterError(outcome: Extract<DesignerRevisionWriterOutcome, { ok: false }>): ApiError {
+  switch (outcome.code) {
+    case 'not_configured':
+      return ApiError.notConfigured(outcome.note);
+    case 'ai_error':
+      return new ApiError(502, 'designer_revision_ai_error', outcome.note);
+    case 'invalid_output':
+      return new ApiError(422, 'designer_revision_invalid_output', outcome.note);
+    case 'invalid_target':
+      return new ApiError(422, 'designer_revision_invalid_target', outcome.note);
+  }
+}
+
+/** Wraps a pure revision contract failure as a typed 422 (never a 500). */
+function mapDesignerRevisionError(err: unknown): never {
+  if (err instanceof DesignerRevisionError) {
+    throw new ApiError(422, 'designer_revision_invalid_target', err.message);
+  }
+  throw err;
+}
+
+/**
+ * Builds the production LLM planner from the container: the bounded context
+ * loader reads through the existing content/Cosmos services and the AI resolver
+ * reuses `AIService`. Kept in the service layer so the planner itself stays
+ * container-free and unit-testable.
+ */
+export function createLlmDesignerPlanner(container: ServiceContainer): LlmDesignerPlanner {
+  const ai = new AIService(container);
+  const context = new DesignerPlannerContextService(container);
+  return new LlmDesignerPlanner({
+    loadContext: (intent) => context.load(intent),
+    resolveAi: async (projectId) => {
+      const resolved = await ai.resolve(projectId);
+      return { provider: resolved.provider, configured: resolved.configured && resolved.provider.isConfigured() };
+    },
+  });
+}
+
 export class DesignerService {
   private readonly planner: DesignerPlanner;
 
@@ -93,7 +155,8 @@ export class DesignerService {
     private readonly container: ServiceContainer,
     options: DesignerServiceOptions = {},
   ) {
-    this.planner = options.planner ?? new DeterministicDesignerPlanner();
+    this.planner =
+      options.planner ?? (options.llmPlanner ? createLlmDesignerPlanner(container) : new DeterministicDesignerPlanner());
   }
 
   /** Production capability wiring, one method per specialist step kind. */
@@ -144,6 +207,31 @@ export class DesignerService {
         };
         return result;
       },
+      revise: async ({ brief, instruction, target, document }) => {
+        let targets;
+        try {
+          targets = resolveDesignerRevisionTargets(document, target);
+        } catch (err) {
+          return mapDesignerRevisionError(err);
+        }
+
+        const writer = createAiDesignerRevisionWriter((id) => ai.resolve(id));
+        const outcome = await writer.revise({
+          projectId,
+          brief: briefToText(brief),
+          instruction,
+          targets,
+          cosmosText,
+        });
+        if (!outcome.ok) throw designerRevisionWriterError(outcome);
+
+        try {
+          const applied = applyDesignerRevision(document, targets, outcome.fills);
+          return { role: 'writer', document: applied.document } satisfies AgentResult;
+        } catch (err) {
+          return mapDesignerRevisionError(err);
+        }
+      },
     };
   }
 
@@ -159,10 +247,23 @@ export class DesignerService {
       throw ApiError.badRequest('Invalid design brief');
     }
 
-    const baseRevision = await this.resolveBaseRevision(projectId, input);
+    const content = input.contentId
+      ? await new ContentService(this.container.sb).get(projectId, input.contentId)
+      : null;
+    const baseRevision = content ? contentRevisionOf(content.content_json) : input.baseRevision;
+    if (!baseRevision) {
+      throw ApiError.badRequest('A contentId or baseRevision is required to build a Designer proposal');
+    }
+    const baseDocument = input.baseDocument ?? (content ? editorDocumentToCanonical(content.content_json) : undefined);
+
     const cosmosText = (await getCosmosContext(this.container, projectId)).text;
     const execution = await executeDesignerPlan(
-      { projectId, plan: input.plan, ...(input.brief !== undefined ? { brief: input.brief } : {}) },
+      {
+        projectId,
+        plan: input.plan,
+        ...(input.brief !== undefined ? { brief: input.brief } : {}),
+        ...(baseDocument !== undefined ? { baseDocument } : {}),
+      },
       this.dependencies(projectId, cosmosText),
     );
 
@@ -203,16 +304,6 @@ export class DesignerService {
       ...(intent.contentId !== undefined ? { contentId: intent.contentId } : {}),
       ...(options.baseRevision !== undefined ? { baseRevision: options.baseRevision } : {}),
     });
-  }
-
-  /** Resolves the revision guard: bound content wins, then an explicit token. */
-  private async resolveBaseRevision(projectId: string, input: DesignerExecuteInput): Promise<string> {
-    if (input.contentId) {
-      const row = await new ContentService(this.container.sb).get(projectId, input.contentId);
-      return contentRevisionOf(row.content_json);
-    }
-    if (input.baseRevision) return input.baseRevision;
-    throw ApiError.badRequest('A contentId or baseRevision is required to build a Designer proposal');
   }
 
   /**

@@ -26,6 +26,11 @@ import {
   isValidCompositionSlot,
   type CompositionSlotMap,
 } from './compositionPlan.js';
+import {
+  DESIGNER_REVISION_INSTRUCTION_MAX_CHARS,
+  isValidDesignerRevisionTarget,
+  type DesignerRevisionTarget,
+} from './designerRevision.js';
 
 export const DESIGNER_PLAN_VERSION = 1 as const;
 export const DESIGNER_PROPOSAL_VERSION = 1 as const;
@@ -57,10 +62,11 @@ const MAX_STEP_INDEX = 10000;
 export const DESIGNER_FORMAT_IDS = ['article', 'landing_page'] as const;
 export type DesignBriefFormat = (typeof DESIGNER_FORMAT_IDS)[number];
 
-/** The four typed orchestration steps a Designer plan may contain. */
+/** The five typed orchestration steps a Designer plan may contain. */
 export const DESIGNER_STEP_KINDS = [
   'writer.freeText',
   'writer.fillSlots',
+  'writer.revise',
   'composer.structure',
   'designer.review',
 ] as const;
@@ -114,6 +120,12 @@ export interface ComposerStructureTask {
   format: DesignBriefFormat;
 }
 
+/** Writer task: rewrite the copy of the bounded target blocks in place. */
+export interface WriterReviseTask {
+  instruction: string;
+  target: DesignerRevisionTarget;
+}
+
 export interface WriterFreeTextStep {
   kind: 'writer.freeText';
   task: WriterFreeTextTask;
@@ -122,6 +134,12 @@ export interface WriterFreeTextStep {
 export interface WriterFillSlotsStep {
   kind: 'writer.fillSlots';
   task: WriterFillSlotsTask;
+}
+
+/** Structure-preserving edit of an existing document; never a new structure. */
+export interface WriterReviseStep {
+  kind: 'writer.revise';
+  task: WriterReviseTask;
 }
 
 export interface ComposerStructureStep {
@@ -137,6 +155,7 @@ export interface DesignerReviewStep {
 export type DesignerStep =
   | WriterFreeTextStep
   | WriterFillSlotsStep
+  | WriterReviseStep
   | ComposerStructureStep
   | DesignerReviewStep;
 
@@ -281,6 +300,7 @@ const REVIEW_ISSUE_KEYS: ReadonlySet<string> = new Set(['code', 'message', 'step
 const STEP_TASK_KEYS: ReadonlySet<string> = new Set(['kind', 'task']);
 const FREE_TEXT_TASK_KEYS: ReadonlySet<string> = new Set(['instruction']);
 const FILL_SLOTS_TASK_KEYS: ReadonlySet<string> = new Set(['slots']);
+const REVISE_TASK_KEYS: ReadonlySet<string> = new Set(['instruction', 'target']);
 const STRUCTURE_TASK_KEYS: ReadonlySet<string> = new Set(['format']);
 const REVIEW_STEP_KEYS: ReadonlySet<string> = new Set(['kind', 'criteria']);
 const AGENT_RESULT_KEYS: ReadonlySet<string> = new Set(['role', 'document', 'slots', 'filled', 'unfilled']);
@@ -370,6 +390,13 @@ export function isValidDesignerStep(value: unknown): value is DesignerStep {
       const task = value.task;
       if (!isPlainObject(task) || !hasOnlyKeys(task, FILL_SLOTS_TASK_KEYS)) return false;
       return isValidSlotList(task.slots);
+    }
+    case 'writer.revise': {
+      if (!hasOnlyKeys(value, STEP_TASK_KEYS)) return false;
+      const task = value.task;
+      if (!isPlainObject(task) || !hasOnlyKeys(task, REVISE_TASK_KEYS)) return false;
+      if (!isBoundedText(task.instruction, DESIGNER_REVISION_INSTRUCTION_MAX_CHARS)) return false;
+      return isValidDesignerRevisionTarget(task.target);
     }
     case 'composer.structure': {
       if (!hasOnlyKeys(value, STEP_TASK_KEYS)) return false;
