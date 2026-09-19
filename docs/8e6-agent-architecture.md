@@ -430,6 +430,23 @@ Classification:
 - Safety: import only through the existing validators; never raw CSS or HTML;
   assets always checked against the target project.
 
+Resolver decisions implemented in Phase 3 (`packages/contracts/src/designPackage.ts`):
+
+- The package is a **complete design state**, not a proposal: no `baseRevision`,
+  no review, never mutates `seo_content`. `DesignerProposal` stays the guarded,
+  reviewable change envelope for one run.
+- Shape: `{ kind: 'design_package', version: 1, metadata, document:
+  CanonicalDocument, designSystem: CosmosDesign, plan?: DesignerPlan, assets?:
+  DesignAssetRef[] }`.
+- Structure is not duplicated: the canonical document is the authoritative state,
+  so the sketched `structure: CompositionPlan` and `componentVariants` fields are
+  omitted. The variant vocabulary is global contract data
+  (`CANONICAL_BLOCK_VARIANTS`), not package data. `plan` is optional provenance
+  and reuses the existing `DesignerPlan`.
+- Export strips project-scoped `mediaId`/`src` and CMS `source`, recording a
+  portable `DesignAssetRef` (`target` + alt/caption); `importDesignPackage`
+  returns only a value that passes `isValidDesignPackage`.
+
 ## 11. Reuse map
 
 | Component | Decision | Motivation |
@@ -521,8 +538,8 @@ add a second progress document (no `progress.md`); update this section instead.
 | --- | --- | --- |
 | Phase 1 — Contracts, proposal envelope, reverse bridge | Done | `0531639` |
 | Phase 2 — Designer orchestration (synchronous) | Done | `68ad5d9`, `d442d92`, `791c763`, `f88d4e6`, `172dd7b` |
-| Phase 3 — Design Package v1 | Not started — next ADR phase | — |
-| Phase 4 — Durable agent runs | Not started | — |
+| Phase 3 — Design Package v1 | Done | `ff652a6` |
+| Phase 4 — Durable agent runs | Not started — next ADR phase | — |
 | Phase 5 — Designer UI, MCP, docs | Not started | — |
 
 ADR Phase 2: DONE
@@ -531,18 +548,27 @@ ADR Phase 2: DONE
   ├─ 3.3 done
   └─ 3.4 done
 
-ADR Phase 3: NOT STARTED
-  └─ Design Package v1 ← NEXT
+ADR Phase 3: DONE
+  └─ Design Package v1 (portable state + export/import)
+
+ADR Phase 4: NOT STARTED
+  └─ Durable agent runs ← NEXT
 
 Phase 2 is complete: the last §13 Phase 2 bullet — wiring `resolveDesignSystem`
 into `CanonicalRenderer`, the editor canvas and the Designer — landed as chat
 step 3.4. Chat steps are a working breakdown of ADR Phase 2; they are **not**
 ADR phases.
 
+Phase 3 is complete: `DesignPackage` v1 exists in
+`packages/contracts/src/designPackage.ts` with strict validation, deterministic
+serialization, export/import with media/ID hygiene, and a pure
+proposal-to-package adapter. It is a portable design *state*, not a proposal;
+see §10 for the resolved interpretation.
+
 ### 15.2 Chat sub-phase log (working breakdown of ADR Phase 2)
 
 The `3.x` labels were used during implementation. `3.x` is **not** ADR Phase 3.
-ADR Phase 3 is Design Package v1 and has not started. Do not equate them.
+ADR Phase 3 is Design Package v1 (now complete; see §15.1). Do not equate them.
 
 | Chat step | Scope | Status | Commit(s) |
 | --- | --- | --- | --- |
@@ -574,12 +600,32 @@ What 3.4 did:
 Verification: contracts 255, API 1460, web 278 tests green; `@seo/contracts`
 build and all three package typechecks green.
 
-### 15.3 Order after Phase 2 closes
+ADR Phase 3 — Design Package v1 (summary):
 
-1. ADR Phase 3 — Design Package v1 (next).
-2. ADR Phase 4 — durable agent runs.
-3. ADR Phase 5 — Designer UI, MCP, docs.
+- Shape: `{ kind: 'design_package', version: 1, metadata, document,
+  designSystem, plan?, assets? }` in `packages/contracts/src/designPackage.ts`.
+  It is a portable design *state*, not a proposal.
+- Relationship: embeds a validated `CanonicalDocument` (authoritative state) and
+  `CosmosDesign` token values; `document.meta.designSystem` stays an identity
+  ref; `DesignerPlan` is reused as optional provenance. The `DesignerProposal`
+  envelope is unchanged.
+- API: `isValidDesignPackage`; `exportDesignPackage` (deterministic JSON);
+  `importDesignPackage` (typed rejection, unsupported versions never
+  reinterpreted); `portableDesignDocument` / `toPortableDesignPackage`
+  (media/ID and `source` hygiene); `designPackageFromProposal` (pure Designer
+  adapter at the proposal boundary).
+- Safety: export strips project-scoped `mediaId`/`src` and CMS `source`,
+  recording portable `DesignAssetRef`s; import returns only a value that passes
+  canonical plus package validation.
 
-Deferred hardening is not part of Phase 2 closure and does not block Phase 3:
+Verification: contracts 275, API 1460, web 278 tests green; `@seo/contracts`
+build and all three package typechecks green.
+
+### 15.3 Order after Phase 2/3
+
+1. ADR Phase 4 — durable agent runs (next).
+2. ADR Phase 5 — Designer UI, MCP, docs.
+
+Deferred hardening is not part of Phase 2 closure and does not block Phase 4:
 the H9 slot-filler rename, bounding `DesignerIntentContext.selection`, and a
 planner timeout/cost budget (currently `maxTokens` only).
