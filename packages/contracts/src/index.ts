@@ -30,3 +30,4 @@ export * from './compositionWriter.js';
 export * from './designerRevision.js';
 export * from './designer.js';
 export * from './designPackage.js';
+export * from './agentRun.js';

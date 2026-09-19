@@ -1266,4 +1266,135 @@ if [ -z "${SNAPSHOT_LEAK_COUNT}" ] || [ "${SNAPSHOT_LEAK_COUNT}" != "0" ]; then
 fi
 echo "   smoke: non-member cannot read a foreign project source snapshot (RLS isolation OK)"
 
+echo "==> smoke test: durable agent runs (Phase 4.1) + idempotency scope + isolation"
+PSQL -d "${DB_NAME}" <<'SQL'
+set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-000000000001"}';
+do $$
+declare
+  v_project uuid;
+  v_project2 uuid;
+  v_run_id text;
+  v_run2_id text;
+  v_job uuid;
+begin
+  select id into v_project from public.seo_projects where slug = 'demo' limit 1;
+  select id into v_project2 from public.seo_projects where slug = 'second-user-project' limit 1;
+  if v_project is null or v_project2 is null then raise exception 'smoke: agent run projects missing'; end if;
+
+  v_run_id := 'ar_' || gen_random_uuid()::text;
+
+  insert into public.seo_agent_runs
+    (run_id, project_id, status, input_json, idempotency_key, created_by)
+  values
+    (v_run_id, v_project, 'queued',
+     '{"mode":"plan","plan":{"version":1,"steps":[{"kind":"designer.review","criteria":["document_valid"]}]},"baseRevision":"rev1:abc"}'::jsonb,
+     'smoke-agent-run', '00000000-0000-0000-0000-000000000001');
+
+  if not exists (
+    select 1 from public.seo_agent_runs where run_id = v_run_id and project_id = v_project and status = 'queued'
+  ) then raise exception 'smoke: agent run row was not created'; end if;
+
+  -- Account mirrors the project, exactly like writer runs.
+  if exists (
+    select 1 from public.seo_agent_runs r
+    join public.seo_projects p on p.id = r.project_id
+    where r.run_id = v_run_id and p.account_id is distinct from r.account_id
+  ) then raise exception 'smoke: agent run account_id does not mirror the project'; end if;
+
+  -- Duplicate run id is rejected.
+  begin
+    insert into public.seo_agent_runs (run_id, project_id, status, input_json)
+    values (v_run_id, v_project, 'queued', '{}'::jsonb);
+    raise exception 'smoke: duplicate agent run_id unexpectedly allowed';
+  exception when unique_violation then null;
+  end;
+
+  -- Duplicate idempotency key within one project is rejected.
+  begin
+    insert into public.seo_agent_runs (run_id, project_id, status, input_json, idempotency_key)
+    values ('ar_' || gen_random_uuid()::text, v_project, 'queued', '{}'::jsonb, 'smoke-agent-run');
+    raise exception 'smoke: duplicate project idempotency key unexpectedly allowed';
+  exception when unique_violation then null;
+  end;
+
+  -- The same key in another project is a different logical submission.
+  v_run2_id := 'ar_' || gen_random_uuid()::text;
+  insert into public.seo_agent_runs (run_id, project_id, status, input_json, idempotency_key)
+  values (v_run2_id, v_project2, 'queued', '{}'::jsonb, 'smoke-agent-run');
+  if not exists (
+    select 1 from public.seo_agent_runs where run_id = v_run2_id and project_id = v_project2
+  ) then raise exception 'smoke: project-scoped idempotency key was not accepted'; end if;
+
+  -- Status vocabulary, kind vocabulary and run-id format are enforced.
+  begin
+    insert into public.seo_agent_runs (run_id, project_id, status, input_json)
+    values ('ar_' || gen_random_uuid()::text, v_project, 'completed', '{}'::jsonb);
+    raise exception 'smoke: invalid agent run status unexpectedly allowed';
+  exception when check_violation then null;
+  end;
+
+  begin
+    insert into public.seo_agent_runs (run_id, project_id, kind, status, input_json)
+    values ('ar_' || gen_random_uuid()::text, v_project, 'audio', 'queued', '{}'::jsonb);
+    raise exception 'smoke: invalid agent run kind unexpectedly allowed';
+  exception when check_violation then null;
+  end;
+
+  begin
+    insert into public.seo_agent_runs (run_id, project_id, status, input_json)
+    values ('not-a-run-id', v_project, 'queued', '{}'::jsonb);
+    raise exception 'smoke: malformed agent run_id unexpectedly allowed';
+  exception when check_violation then null;
+  end;
+
+  -- The job association is explicit and one-way (run.job_id -> seo_sync_jobs).
+  insert into public.seo_sync_jobs (project_id, provider, job_type, params, idempotency_key, created_by)
+  values (v_project, 'designer', 'agent_design', '{}'::jsonb, 'smoke-agent-run-job',
+          '00000000-0000-0000-0000-000000000001')
+  returning id into v_job;
+  update public.seo_agent_runs set job_id = v_job where run_id = v_run_id;
+  if not exists (
+    select 1 from public.seo_agent_runs where run_id = v_run_id and job_id = v_job
+  ) then raise exception 'smoke: agent run job association failed'; end if;
+
+  -- A terminal transition stores the failure facts.
+  update public.seo_agent_runs
+  set status = 'failed', error_json = '{"code":"planner_failed","message":"boom"}'::jsonb, completed_at = now()
+  where run_id = v_run_id;
+  if not exists (
+    select 1 from public.seo_agent_runs
+    where run_id = v_run_id and status = 'failed'
+      and (error_json ->> 'code') = 'planner_failed' and completed_at is not null
+  ) then raise exception 'smoke: agent run terminal failure facts were not stored'; end if;
+
+  -- Deleting the backing job keeps the run (ON DELETE SET NULL).
+  delete from public.seo_sync_jobs where id = v_job;
+  if not exists (
+    select 1 from public.seo_agent_runs where run_id = v_run_id and job_id is null
+  ) then raise exception 'smoke: agent run did not survive job deletion'; end if;
+
+  if not exists (
+    select 1 from pg_indexes
+    where schemaname = 'public' and indexname = 'seo_agent_runs_idempotency_idx'
+  ) then raise exception 'smoke: agent run idempotency index missing'; end if;
+
+  raise notice 'smoke: durable agent runs OK';
+end $$;
+SQL
+
+# RLS can only be exercised as a non-superuser role (superusers bypass RLS).
+AGENT_RUN_LEAK_COUNT="$(PSQL -d "${DB_NAME}" -t -A <<'SQL'
+grant usage on schema public to authenticated;
+grant select on public.seo_agent_runs to authenticated;
+set role authenticated;
+set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-000000000002"}';
+select count(*) from public.seo_agent_runs where created_by = '00000000-0000-0000-0000-000000000001';
+SQL
+)"
+if [ -z "${AGENT_RUN_LEAK_COUNT}" ] || [ "${AGENT_RUN_LEAK_COUNT}" != "0" ]; then
+  echo "!! RLS leak: non-member read ${AGENT_RUN_LEAK_COUNT} rows from a foreign project agent run" >&2
+  exit 1
+fi
+echo "   smoke: non-member cannot read a foreign project agent run (RLS isolation OK)"
+
 echo "==> migration validation OK (${DB_NAME})"

@@ -1,7 +1,7 @@
 /**
- * Designer API (Stage 8E.6, Phase 2/3.3), project-scoped.
+ * Designer API (Stage 8E.6, Phase 2/3.3/Phase 4.1), project-scoped.
  *
- * Three thin, project-authorized endpoints around the DesignerService:
+ * Four thin, project-authorized endpoints around the DesignerService:
  *   - POST /api/projects/:projectId/designer/execute
  *       run an already-validated `DesignerPlan` and return a reviewable
  *       `DesignerProposal` (never persists; editor+).
@@ -9,12 +9,16 @@
  *       turn a natural-language intent into a proposal through the LLM planner
  *       (never persists; editor+). Creation (client `base_revision`) and edit
  *       (`content_id`, revision derived server-side) are both supported.
+ *   - POST /api/projects/:projectId/designer/runs
+ *       durably accept a plan or intent as an `seo_agent_runs` row and enqueue
+ *       its `agent_design` job (202; never executes synchronously; editor+).
  *   - POST /api/projects/:projectId/content/:contentId/designer/apply
  *       apply an explicitly approved proposal through the existing
  *       ContentService save path (editor+). A proposal generated against an
  *       older revision is rejected with `stale_proposal` (409) and no mutation.
  *
- * The Designer never writes seo_content on execute/intent and never publishes.
+ * The Designer never writes seo_content on execute/intent/run submission and
+ * never publishes.
  *
  * Mounted at:
  *   /api/projects/:projectId/designer
@@ -24,17 +28,19 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import {
+  AGENT_RUN_IDEMPOTENCY_KEY_MAX_CHARS,
   DESIGNER_BASE_REVISION_MAX_CHARS,
   DESIGNER_INTENT_INSTRUCTION_MAX_CHARS,
   isValidDesignBrief,
   isValidDesignerPlan,
   isValidDesignerProposal,
 } from '@seo/contracts';
-import type { DesignerIntent } from '@seo/contracts';
+import type { DesignerIntent, DesignerPlan } from '@seo/contracts';
 import { requireAuth } from '../middleware.js';
 import { asyncHandler } from '../asyncHandler.js';
 import { parseId, parseProjectId } from './utils.js';
 import { ContentService } from '../../services/contentService.js';
+import { AgentRunService, type AgentRunSubmission } from '../../services/agentRunService.js';
 import { DesignerService } from '../../services/designerService.js';
 
 export const designerRouter: Router = Router({ mergeParams: true });
@@ -78,6 +84,67 @@ const intentSchema = z
   })
   .strict()
   .superRefine((value, ctx) => {
+    if (value.content_id !== undefined && value.base_revision !== undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'base_revision must not be provided with content_id; the revision is derived from stored content.',
+        path: ['base_revision'],
+      });
+    }
+    if (value.content_id === undefined && value.base_revision === undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Provide content_id (existing-content edit) or base_revision (creation).',
+        path: ['base_revision'],
+      });
+    }
+  });
+
+/**
+ * Durable run submission (Phase 4.1). `plan` mode accepts a validated plan;
+ * `intent` mode accepts natural language. `_id` is always resolved server-side
+ * and `base_revision` may not accompany `content_id`, mirroring the intent
+ * route's honest revision semantics.
+ */
+const runSchema = z
+  .object({
+    mode: z.enum(['plan', 'intent']),
+    plan: z.unknown().optional(),
+    instruction: z.string().trim().min(1).max(DESIGNER_INTENT_INSTRUCTION_MAX_CHARS).optional(),
+    content_id: z.string().uuid().optional(),
+    base_revision: z.string().min(1).max(DESIGNER_BASE_REVISION_MAX_CHARS).optional(),
+    brief: briefSchema.optional(),
+    idempotency_key: z.string().trim().min(1).max(AGENT_RUN_IDEMPOTENCY_KEY_MAX_CHARS).optional(),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    if (value.mode === 'plan') {
+      if (value.plan === undefined || !isValidDesignerPlan(value.plan)) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'A valid plan is required.', path: ['plan'] });
+      }
+      if (value.instruction !== undefined) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'instruction is only valid for intent mode.',
+          path: ['instruction'],
+        });
+      }
+    } else {
+      if (value.instruction === undefined) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'instruction is required for intent mode.',
+          path: ['instruction'],
+        });
+      }
+      if (value.plan !== undefined) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'plan is only valid for plan mode.',
+          path: ['plan'],
+        });
+      }
+    }
     if (value.content_id !== undefined && value.base_revision !== undefined) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
@@ -149,6 +216,41 @@ designerRouter.post(
       ...(body.base_revision !== undefined ? { baseRevision: body.base_revision } : {}),
     });
     res.json({ data: { proposal } });
+  }),
+);
+
+/**
+ * Durably accept a Designer run (editor+). Persists an `seo_agent_runs` row and
+ * enqueues its `agent_design` job, returning the stable run identity and its
+ * initial status (202). It never runs the Designer or blocks on provider work;
+ * execution and the status API are Phase 4 Part 2. An optional
+ * `idempotency_key` collapses re-submissions onto the existing run.
+ */
+designerRouter.post(
+  '/runs',
+  asyncHandler(async (req, res) => {
+    const projectId = parseProjectId(req);
+    const { container, user } = req;
+    await container.access.requireRole(user!.sub, projectId, 'editor');
+    const body = runSchema.parse(req.body ?? {});
+
+    if (body.content_id !== undefined) {
+      await new ContentService(container.sb).get(projectId, body.content_id);
+    }
+
+    const common = {
+      ...(body.content_id !== undefined ? { contentId: body.content_id } : {}),
+      ...(body.base_revision !== undefined ? { baseRevision: body.base_revision } : {}),
+      ...(body.brief !== undefined ? { brief: body.brief } : {}),
+      ...(body.idempotency_key !== undefined ? { idempotencyKey: body.idempotency_key } : {}),
+    };
+    const submission: AgentRunSubmission =
+      body.mode === 'plan'
+        ? { mode: 'plan', plan: body.plan as DesignerPlan, ...common }
+        : { mode: 'intent', instruction: body.instruction!, ...common };
+
+    const result = await new AgentRunService(container).submitDesignRun(projectId, user!.sub, submission);
+    res.status(202).json({ data: { run: result.run, reused: result.reused } });
   }),
 );
 

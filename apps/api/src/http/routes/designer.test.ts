@@ -61,6 +61,22 @@ vi.mock('../../services/contentService.js', () => ({
   },
 }));
 
+const runs = vi.hoisted(() => ({
+  submits: [] as Array<{ projectId: string; userId: string; submission: unknown }>,
+  result: null as unknown,
+  error: null as unknown,
+}));
+
+vi.mock('../../services/agentRunService.js', () => ({
+  AgentRunService: class {
+    async submitDesignRun(projectId: string, userId: string, submission: unknown) {
+      runs.submits.push({ projectId, userId, submission });
+      if (runs.error) throw runs.error;
+      return runs.result;
+    }
+  },
+}));
+
 const PROJECT = '11111111-1111-4111-8111-111111111111';
 const CONTENT = '33333333-3333-4333-8333-333333333333';
 const TOKEN_TO_USER: Record<string, { sub: string } | undefined> = {
@@ -100,6 +116,23 @@ beforeEach(() => {
   svc.error = null;
   content.gets = [];
   content.error = null;
+  runs.submits = [];
+  runs.error = null;
+  runs.result = {
+    run: {
+      runId: 'ar_22222222-2222-4222-8222-222222222222',
+      kind: 'design',
+      projectId: PROJECT,
+      status: 'queued',
+      input: { mode: 'plan', plan: VALID_PLAN, baseRevision: 'client-rev-1' },
+      result: null,
+      error: null,
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      completedAt: null,
+    },
+    reused: false,
+  };
 });
 
 beforeAll(async () => {
@@ -136,6 +169,10 @@ afterAll(async () => {
 
 const EDIT = { instruction: 'Maak de introductie korter.', content_id: CONTENT };
 const CREATE = { instruction: 'Maak een artikel over SEO.', base_revision: 'client-rev-1' };
+const VALID_PLAN = {
+  version: 1,
+  steps: [{ kind: 'designer.review', criteria: ['document_valid'] }],
+};
 
 describe('/api/projects/:projectId/designer/intent authorization', () => {
   it('rejects anonymous requests', async () => {
@@ -360,5 +397,204 @@ describe('/api/projects/:projectId/designer/intent is proposal-only', () => {
     expect(svc.executeCalls).toHaveLength(0);
     expect(svc.applyCalls).toHaveLength(0);
     expect(content.gets).toEqual([{ projectId: PROJECT, id: CONTENT }]);
+  });
+});
+
+const PLAN_RUN = { mode: 'plan', plan: VALID_PLAN, base_revision: 'client-rev-1' };
+const INTENT_RUN = { mode: 'intent', instruction: 'Maak de intro korter.', content_id: CONTENT };
+
+describe('/api/projects/:projectId/designer/runs authorization', () => {
+  it('rejects anonymous requests', async () => {
+    const res = await post(`/${PROJECT}/designer/runs`, undefined, PLAN_RUN);
+    expect(res.status).toBe(401);
+    expect(res.json.error?.code).toBe('unauthorized');
+    expect(runs.submits).toHaveLength(0);
+  });
+
+  it('rejects a non-member', async () => {
+    const res = await post(`/${PROJECT}/designer/runs`, 'norole-token', PLAN_RUN);
+    expect(res.status).toBe(403);
+    expect(res.json.error?.code).toBe('forbidden');
+    expect(runs.submits).toHaveLength(0);
+  });
+
+  it('rejects a viewer (editor+ required)', async () => {
+    const res = await post(`/${PROJECT}/designer/runs`, 'viewer-token', PLAN_RUN);
+    expect(res.status).toBe(403);
+    expect(runs.submits).toHaveLength(0);
+  });
+
+  it('accepts an editor and answers 202', async () => {
+    const res = await post(`/${PROJECT}/designer/runs`, 'editor-token', PLAN_RUN);
+    expect(res.status).toBe(202);
+    expect(runs.submits).toHaveLength(1);
+  });
+});
+
+describe('/api/projects/:projectId/designer/runs validation', () => {
+  it('rejects a malformed project id before any service call', async () => {
+    const res = await post('/not-a-uuid/designer/runs', 'editor-token', PLAN_RUN);
+    expect(res.status).toBe(400);
+    expect(res.json.error?.code).toBe('bad_request');
+    expect(runs.submits).toHaveLength(0);
+  });
+
+  it('rejects a missing mode', async () => {
+    const res = await post(`/${PROJECT}/designer/runs`, 'editor-token', { plan: VALID_PLAN });
+    expect(res.status).toBe(400);
+    expect(res.json.error?.code).toBe('validation_error');
+  });
+
+  it('rejects plan mode without a valid plan', async () => {
+    const res = await post(`/${PROJECT}/designer/runs`, 'editor-token', {
+      mode: 'plan',
+      plan: { version: 1, steps: [] },
+      base_revision: 'client-rev-1',
+    });
+    expect(res.status).toBe(400);
+    expect(res.json.error?.code).toBe('validation_error');
+  });
+
+  it('rejects plan mode carrying an instruction', async () => {
+    const res = await post(`/${PROJECT}/designer/runs`, 'editor-token', { ...PLAN_RUN, instruction: 'x' });
+    expect(res.status).toBe(400);
+    expect(res.json.error?.code).toBe('validation_error');
+  });
+
+  it('rejects intent mode without an instruction', async () => {
+    const res = await post(`/${PROJECT}/designer/runs`, 'editor-token', { mode: 'intent', content_id: CONTENT });
+    expect(res.status).toBe(400);
+    expect(res.json.error?.code).toBe('validation_error');
+  });
+
+  it('rejects intent mode carrying a plan', async () => {
+    const res = await post(`/${PROJECT}/designer/runs`, 'editor-token', {
+      ...INTENT_RUN,
+      plan: VALID_PLAN,
+    });
+    expect(res.status).toBe(400);
+    expect(res.json.error?.code).toBe('validation_error');
+  });
+
+  it('rejects content_id and base_revision together', async () => {
+    const res = await post(`/${PROJECT}/designer/runs`, 'editor-token', {
+      mode: 'intent',
+      instruction: 'Edit it',
+      content_id: CONTENT,
+      base_revision: 'client-rev-1',
+    });
+    expect(res.status).toBe(400);
+    expect(res.json.error?.code).toBe('validation_error');
+    expect(content.gets).toHaveLength(0);
+  });
+
+  it('rejects neither content_id nor base_revision', async () => {
+    const res = await post(`/${PROJECT}/designer/runs`, 'editor-token', {
+      mode: 'intent',
+      instruction: 'Do something',
+    });
+    expect(res.status).toBe(400);
+    expect(res.json.error?.code).toBe('validation_error');
+  });
+
+  it('rejects an unknown body field', async () => {
+    const res = await post(`/${PROJECT}/designer/runs`, 'editor-token', { ...PLAN_RUN, color: 'red' });
+    expect(res.status).toBe(400);
+    expect(res.json.error?.code).toBe('validation_error');
+  });
+
+  it('rejects an over-long idempotency key', async () => {
+    const res = await post(`/${PROJECT}/designer/runs`, 'editor-token', {
+      ...PLAN_RUN,
+      idempotency_key: 'k'.repeat(201),
+    });
+    expect(res.status).toBe(400);
+    expect(res.json.error?.code).toBe('validation_error');
+  });
+});
+
+describe('/api/projects/:projectId/designer/runs content scoping', () => {
+  it('preflights content_id through the project-scoped ContentService', async () => {
+    await post(`/${PROJECT}/designer/runs`, 'editor-token', INTENT_RUN);
+    expect(content.gets).toEqual([{ projectId: PROJECT, id: CONTENT }]);
+  });
+
+  it('rejects foreign/unknown content with 404 and never submits', async () => {
+    content.error = ApiError.notFound('Content not found in this project');
+    const res = await post(`/${PROJECT}/designer/runs`, 'editor-token', INTENT_RUN);
+    expect(res.status).toBe(404);
+    expect(res.json.error?.code).toBe('not_found');
+    expect(runs.submits).toHaveLength(0);
+  });
+
+  it('does not preflight a creation run', async () => {
+    const res = await post(`/${PROJECT}/designer/runs`, 'editor-token', PLAN_RUN);
+    expect(res.status).toBe(202);
+    expect(content.gets).toHaveLength(0);
+  });
+});
+
+describe('/api/projects/:projectId/designer/runs delegation', () => {
+  it('forwards a plan submission losslessly', async () => {
+    await post(`/${PROJECT}/designer/runs`, 'editor-token', PLAN_RUN);
+    expect(runs.submits).toEqual([
+      {
+        projectId: PROJECT,
+        userId: 'editor-user',
+        submission: { mode: 'plan', plan: VALID_PLAN, baseRevision: 'client-rev-1' },
+      },
+    ]);
+  });
+
+  it('forwards an intent submission with the URL projectId and idempotency key', async () => {
+    await post(`/${PROJECT}/designer/runs`, 'editor-token', { ...INTENT_RUN, idempotency_key: 'key-1' });
+    expect(runs.submits).toEqual([
+      {
+        projectId: PROJECT,
+        userId: 'editor-user',
+        submission: {
+          mode: 'intent',
+          instruction: INTENT_RUN.instruction,
+          contentId: CONTENT,
+          idempotencyKey: 'key-1',
+        },
+      },
+    ]);
+  });
+
+  it('never runs the Designer synchronously', async () => {
+    await post(`/${PROJECT}/designer/runs`, 'editor-token', PLAN_RUN);
+    expect(svc.executeCalls).toHaveLength(0);
+    expect(svc.applyCalls).toHaveLength(0);
+  });
+});
+
+describe('/api/projects/:projectId/designer/runs success and errors', () => {
+  it('returns exactly { data: { run, reused } }', async () => {
+    const res = await post(`/${PROJECT}/designer/runs`, 'editor-token', PLAN_RUN);
+    expect(res.status).toBe(202);
+    expect(res.json).toEqual({ data: { run: (runs.result as { run: unknown }).run, reused: false } });
+  });
+
+  it('passes a reused submission through', async () => {
+    (runs.result as { reused: boolean }).reused = true;
+    const res = await post(`/${PROJECT}/designer/runs`, 'editor-token', PLAN_RUN);
+    expect(res.status).toBe(202);
+    expect(res.json).toEqual({ data: { run: (runs.result as { run: unknown }).run, reused: true } });
+  });
+
+  it('maps a service failure to its typed status', async () => {
+    runs.error = new ApiError(503, 'not_configured', 'no database');
+    const res = await post(`/${PROJECT}/designer/runs`, 'editor-token', PLAN_RUN);
+    expect(res.status).toBe(503);
+    expect(res.json.error?.code).toBe('not_configured');
+  });
+
+  it('maps an unexpected failure to the safe 500 internal_error', async () => {
+    runs.error = new Error('boom with internals');
+    const res = await post(`/${PROJECT}/designer/runs`, 'editor-token', PLAN_RUN);
+    expect(res.status).toBe(500);
+    expect(res.json.error?.code).toBe('internal_error');
+    expect(res.json.error?.message).not.toContain('internals');
   });
 });

@@ -539,7 +539,7 @@ add a second progress document (no `progress.md`); update this section instead.
 | Phase 1 — Contracts, proposal envelope, reverse bridge | Done | `0531639` |
 | Phase 2 — Designer orchestration (synchronous) | Done | `68ad5d9`, `d442d92`, `791c763`, `f88d4e6`, `172dd7b` |
 | Phase 3 — Design Package v1 | Done | `ff652a6` |
-| Phase 4 — Durable agent runs | Not started — next ADR phase | — |
+| Phase 4 — Durable agent runs | In progress — Part 1 done, Part 2 next | — |
 | Phase 5 — Designer UI, MCP, docs | Not started | — |
 
 ADR Phase 2: DONE
@@ -551,8 +551,9 @@ ADR Phase 2: DONE
 ADR Phase 3: DONE
   └─ Design Package v1 (portable state + export/import)
 
-ADR Phase 4: NOT STARTED
-  └─ Durable agent runs ← NEXT
+ADR Phase 4: IN PROGRESS
+  ├─ Part 1 (durable agent runs) done
+  └─ Part 2 (worker execution, status API) ← NEXT
 
 Phase 2 is complete: the last §13 Phase 2 bullet — wiring `resolveDesignSystem`
 into `CanonicalRenderer`, the editor canvas and the Designer — landed as chat
@@ -621,9 +622,43 @@ ADR Phase 3 — Design Package v1 (summary):
 Verification: contracts 275, API 1460, web 278 tests green; `@seo/contracts`
 build and all three package typechecks green.
 
+ADR Phase 4 — Durable agent runs (Part 1 done, summary):
+
+- Scope: the durable submission boundary only. Execution (the `agent_design`
+  worker executor), retries and the run status API are Part 2.
+- Contract: `packages/contracts/src/agentRun.ts` (dependency-free, hand-rolled
+  guards) defines `AgentRun`, the `queued | running | succeeded | failed`
+  lifecycle, the discriminated `AgentRunInput` (plan or intent, reusing the
+  existing `DesignerPlan`/`DesignerIntent`/`DesignerProposal` guards), and a
+  bounded `AgentRunError`. A `succeeded` run without a persisted result and a
+  `failed` run without failure info are both rejected by the envelope validator.
+- Persistence: `supabase/migrations/20260101000029_agent_runs.sql` adds
+  `seo_agent_runs` mirroring the `seo_writer_runs` conventions (external
+  `ar_<uuid>` run id, derived `account_id`, safe status CHECK, project-scoped
+  RLS, updated-at trigger, never hard-deleted). The relationship to the
+  execution queue is explicit and one-way: `job_id -> seo_sync_jobs` plus the
+  run id in the job params. There is no second queue, worker or retry model.
+- Submission: `AgentRunService.submitDesignRun` validates the input, enforces
+  idempotency, persists a `queued` run and enqueues its `agent_design` job
+  (provider `designer`, key `agent_design:<runId>`). `POST
+  /api/projects/:projectId/designer/runs` (editor+) returns 202 with the stable
+  run identity and initial status; it never runs the Designer synchronously.
+- Idempotency: an optional client key, scoped per project by a partial unique
+  index. A duplicate returns the existing run and never enqueues a second job;
+  a job-enqueue failure marks the run `failed` with honest failure facts.
+- Known Part 2 obligations: the worker executor for `agent_design`, the run
+  status API, and reconciliation of a `queued` run whose process died between
+  the run insert and the job enqueue (the run row is created first because it is
+  the stable identity).
+
+Verification: contracts 287, API 1495 tests green; `@seo/contracts` build and
+all three package typechecks green. Migration smoke checks were added to
+`scripts/db-migrate-local.sh`; they have not been executed in this environment
+(no local PostgreSQL).
+
 ### 15.3 Order after Phase 2/3
 
-1. ADR Phase 4 — durable agent runs (next).
+1. ADR Phase 4 Part 2 — `agent_design` worker execution + run status API (next).
 2. ADR Phase 5 — Designer UI, MCP, docs.
 
 Deferred hardening is not part of Phase 2 closure and does not block Phase 4:
