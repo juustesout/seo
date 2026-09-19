@@ -1,17 +1,20 @@
 /**
- * Designer API (Stage 8E.6, Phase 2), project-scoped.
+ * Designer API (Stage 8E.6, Phase 2/3.3), project-scoped.
  *
- * Two thin, project-authorized endpoints around the DesignerService:
+ * Three thin, project-authorized endpoints around the DesignerService:
  *   - POST /api/projects/:projectId/designer/execute
  *       run an already-validated `DesignerPlan` and return a reviewable
  *       `DesignerProposal` (never persists; editor+).
+ *   - POST /api/projects/:projectId/designer/intent
+ *       turn a natural-language intent into a proposal through the LLM planner
+ *       (never persists; editor+). Creation (client `base_revision`) and edit
+ *       (`content_id`, revision derived server-side) are both supported.
  *   - POST /api/projects/:projectId/content/:contentId/designer/apply
  *       apply an explicitly approved proposal through the existing
  *       ContentService save path (editor+). A proposal generated against an
  *       older revision is rejected with `stale_proposal` (409) and no mutation.
  *
- * Phase 2 has no AI intent interpreter: callers supply a plan. The Designer
- * never writes seo_content on execute and never publishes.
+ * The Designer never writes seo_content on execute/intent and never publishes.
  *
  * Mounted at:
  *   /api/projects/:projectId/designer
@@ -22,13 +25,16 @@ import { Router } from 'express';
 import { z } from 'zod';
 import {
   DESIGNER_BASE_REVISION_MAX_CHARS,
+  DESIGNER_INTENT_INSTRUCTION_MAX_CHARS,
   isValidDesignBrief,
   isValidDesignerPlan,
   isValidDesignerProposal,
 } from '@seo/contracts';
+import type { DesignerIntent } from '@seo/contracts';
 import { requireAuth } from '../middleware.js';
 import { asyncHandler } from '../asyncHandler.js';
 import { parseId, parseProjectId } from './utils.js';
+import { ContentService } from '../../services/contentService.js';
 import { DesignerService } from '../../services/designerService.js';
 
 export const designerRouter: Router = Router({ mergeParams: true });
@@ -56,6 +62,38 @@ const applySchema = z
   })
   .strict();
 
+/**
+ * Natural-language intent. `context` is deliberately not accepted: the contract
+ * leaves `selection` unbounded/opaque and the planner prompt ignores it, so
+ * exposing it would only add transport and payload risk. `base_revision` is
+ * accepted only without `content_id` (the server derives it from stored content),
+ * mirroring the service's honest revision semantics.
+ */
+const intentSchema = z
+  .object({
+    instruction: z.string().trim().min(1).max(DESIGNER_INTENT_INSTRUCTION_MAX_CHARS),
+    content_id: z.string().uuid().optional(),
+    base_revision: z.string().min(1).max(DESIGNER_BASE_REVISION_MAX_CHARS).optional(),
+    brief: briefSchema.optional(),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    if (value.content_id !== undefined && value.base_revision !== undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'base_revision must not be provided with content_id; the revision is derived from stored content.',
+        path: ['base_revision'],
+      });
+    }
+    if (value.content_id === undefined && value.base_revision === undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Provide content_id (existing-content edit) or base_revision (creation).',
+        path: ['base_revision'],
+      });
+    }
+  });
+
 /** Run a Designer plan into a proposal (editor+). Never persists. */
 designerRouter.post(
   '/execute',
@@ -69,6 +107,46 @@ designerRouter.post(
       brief: body.brief,
       contentId: body.content_id,
       baseRevision: body.base_revision,
+    });
+    res.json({ data: { proposal } });
+  }),
+);
+
+/**
+ * Natural-language Designer intent (editor+). This is the public language entry
+ * point: it always uses the LLM planner (the deterministic planner would reject
+ * free-form instructions) and returns a proposal only - it never applies,
+ * publishes or persists.
+ *
+ * Creation and edit are both supported: with `content_id` the proposal anchors
+ * to the stored content's revision (preflighted, project-scoped, so foreign or
+ * unknown content 404s before any model call); without `content_id` the client
+ * supplies `base_revision` and the resulting creation proposal is carried into
+ * the normal content-creation workflow. `DesignerService.apply` requires an
+ * existing content record and is intentionally not used for creation proposals.
+ */
+designerRouter.post(
+  '/intent',
+  asyncHandler(async (req, res) => {
+    const projectId = parseProjectId(req);
+    const { container, user } = req;
+    await container.access.requireRole(user!.sub, projectId, 'editor');
+    const body = intentSchema.parse(req.body ?? {});
+
+    if (body.content_id !== undefined) {
+      await new ContentService(container.sb).get(projectId, body.content_id);
+    }
+
+    const intent: DesignerIntent = {
+      instruction: body.instruction,
+      projectId,
+      ...(body.content_id !== undefined ? { contentId: body.content_id } : {}),
+      ...(body.brief !== undefined ? { brief: body.brief } : {}),
+    };
+
+    const service = new DesignerService(container, { llmPlanner: true });
+    const proposal = await service.executeIntent(projectId, intent, {
+      ...(body.base_revision !== undefined ? { baseRevision: body.base_revision } : {}),
     });
     res.json({ data: { proposal } });
   }),
