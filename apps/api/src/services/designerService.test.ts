@@ -25,6 +25,7 @@ const mock = vi.hoisted(() => ({
   providerConfigured: true,
   cosmosCalls: 0,
   cosmosText: '',
+  designSystemRef: undefined as { id: string } | undefined,
   contentJson: null as unknown,
   updates: [] as unknown[],
   getCalls: 0,
@@ -55,7 +56,12 @@ vi.mock('./aiService.js', () => ({
 vi.mock('./cosmosService.js', () => ({
   getCosmosContext: async () => {
     mock.cosmosCalls += 1;
-    return { text: mock.cosmosText, hasContent: mock.cosmosText.length > 0, useProjectKnowledge: false };
+    return {
+      text: mock.cosmosText,
+      hasContent: mock.cosmosText.length > 0,
+      useProjectKnowledge: false,
+      ...(mock.designSystemRef ? { designSystemRef: mock.designSystemRef } : {}),
+    };
   },
 }));
 
@@ -113,6 +119,7 @@ beforeEach(() => {
   mock.providerConfigured = true;
   mock.cosmosCalls = 0;
   mock.cosmosText = '';
+  mock.designSystemRef = undefined;
   mock.contentJson = null;
   mock.updates = [];
   mock.getCalls = 0;
@@ -127,6 +134,19 @@ describe('DesignerService.execute', () => {
     expect(mock.chats).toHaveLength(2);
     expect(mock.cosmosCalls).toBe(1);
     expect(proposal.document.blocks.length).toBeGreaterThan(0);
+  });
+
+  it('records the project design-system reference on the proposal document', async () => {
+    mock.responses = [PLAN_JSON, fullFills()];
+    mock.designSystemRef = { id: 'cosmos' };
+    const proposal = await service.execute('p1', { plan: PLAN, baseRevision: 'rev1:abc' });
+    expect(proposal.document.meta?.designSystem).toEqual({ id: 'cosmos' });
+  });
+
+  it('leaves the proposal without a reference when the project has no design tokens', async () => {
+    mock.responses = [PLAN_JSON, fullFills()];
+    const proposal = await service.execute('p1', { plan: PLAN, baseRevision: 'rev1:abc' });
+    expect(proposal.document.meta?.designSystem).toBeUndefined();
   });
 
   it('resolves the baseRevision from the bound content when a contentId is given', async () => {

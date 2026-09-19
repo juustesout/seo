@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   COSMOS_DESIGN_COLOR_KEYS,
+  COSMOS_DESIGN_SYSTEM_ID,
   emptyCosmosConfig,
   isEmptyCosmosConfig,
   parseCosmosConfig,
@@ -8,7 +9,10 @@ import {
 } from './cosmos.js';
 import {
   DEFAULT_DESIGN_SYSTEM,
+  cosmosDesignSystemRef,
   designSystemCssVariables,
+  effectiveDesignSystem,
+  isResolvedDesignSystem,
   resolveDesignSystem,
 } from './designSystem.js';
 
@@ -77,6 +81,49 @@ describe('resolveDesignSystem', () => {
     const ds = resolveDesignSystem({ colors: { primary: '#000000' }, elevation: 'none' });
     ds.colors.primary = '#ffffff';
     expect(DEFAULT_DESIGN_SYSTEM).toEqual(before);
+  });
+});
+
+describe('effectiveDesignSystem', () => {
+  it('returns a resolved design system unchanged (idempotent)', () => {
+    const resolved = resolveDesignSystem({ colors: { primary: '#111111' }, spacingScale: 'spacious' });
+    expect(isResolvedDesignSystem(resolved)).toBe(true);
+    expect(effectiveDesignSystem(resolved)).toBe(resolved);
+  });
+
+  it('resolves raw Cosmos design input', () => {
+    const ds = effectiveDesignSystem({ colors: { primary: '#0b5fff' }, radiusScale: 'large' });
+    expect(ds.colors.primary).toBe('#0b5fff');
+    expect(ds.shape).toEqual(resolveDesignSystem({ radiusScale: 'large' }).shape);
+  });
+
+  it('resolves a full Cosmos config from its design section', () => {
+    const config = parseCosmosConfig({ identity: { name: 'Acme' }, design: { colors: { primary: '#abcdef' } } });
+    const ds = effectiveDesignSystem(config);
+    expect(ds.colors.primary).toBe('#abcdef');
+    expect(isResolvedDesignSystem(config)).toBe(false);
+  });
+
+  it('falls back to the safe defaults for missing or invalid input', () => {
+    expect(effectiveDesignSystem()).toEqual(DEFAULT_DESIGN_SYSTEM);
+    expect(effectiveDesignSystem(null)).toEqual(DEFAULT_DESIGN_SYSTEM);
+    expect(effectiveDesignSystem({ colors: { primary: 'not-a-color' } })).toEqual(DEFAULT_DESIGN_SYSTEM);
+  });
+});
+
+describe('cosmosDesignSystemRef', () => {
+  it('is undefined when the project configured no design tokens', () => {
+    expect(cosmosDesignSystemRef(emptyCosmosConfig())).toBeUndefined();
+    expect(cosmosDesignSystemRef(parseCosmosConfig({ design: {} }))).toBeUndefined();
+  });
+
+  it('references the Cosmos design system when tokens exist', () => {
+    expect(cosmosDesignSystemRef(parseCosmosConfig({ design: { colors: { primary: '#111111' } } }))).toEqual({
+      id: COSMOS_DESIGN_SYSTEM_ID,
+    });
+    expect(cosmosDesignSystemRef(parseCosmosConfig({ design: { spacingScale: 'compact' } }))).toEqual({
+      id: COSMOS_DESIGN_SYSTEM_ID,
+    });
   });
 });
 

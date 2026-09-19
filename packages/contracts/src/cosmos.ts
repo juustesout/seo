@@ -87,6 +87,13 @@ export const COSMOS_DESIGN_COLOR_KEYS = [
 export type CosmosDesignColorKey = (typeof COSMOS_DESIGN_COLOR_KEYS)[number];
 export type CosmosDesignColors = Partial<Record<CosmosDesignColorKey, string>>;
 
+/**
+ * The design-system identity Cosmos provides. Cosmos is the only token source
+ * today, so a rendered document references it by this stable id instead of
+ * carrying token values (see `CanonicalMeta.designSystem`).
+ */
+export const COSMOS_DESIGN_SYSTEM_ID = 'cosmos';
+
 export const COSMOS_FONT_WEIGHTS = [300, 400, 500, 600, 700, 800] as const;
 export type CosmosFontWeight = (typeof COSMOS_FONT_WEIGHTS)[number];
 

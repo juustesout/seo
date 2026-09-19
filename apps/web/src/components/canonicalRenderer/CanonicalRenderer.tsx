@@ -14,8 +14,8 @@
 
 import { Fragment, type CSSProperties, type ReactNode } from 'react';
 import {
-  DEFAULT_DESIGN_SYSTEM,
   designSystemCssVariables,
+  effectiveDesignSystem,
   type CanonicalBlock,
   type CanonicalDocument,
   type CanonicalInline,
@@ -25,11 +25,15 @@ import { renderCanonicalBlock } from './blocks';
 import { renderInlineNodes } from './inline';
 import { classNames } from './presentation';
 import type { RenderContext } from './context';
+import { useDesignSystem } from '../../lib/designSystem';
 import './canonicalRenderer.css';
 
 export interface CanonicalRendererProps {
   document: CanonicalDocument;
-  /** Resolved Cosmos design system; defaults to the safe built-in token set. */
+  /**
+   * Resolved Cosmos design system. Defaults to the effective system from the
+   * surrounding `DesignSystemProvider`, then to the safe built-in token set.
+   */
   designSystem?: DesignSystem;
   className?: string;
 }
@@ -50,7 +54,8 @@ function createContext(designSystem: DesignSystem): RenderContext {
 }
 
 export function CanonicalRenderer({ document, designSystem, className }: CanonicalRendererProps) {
-  const resolved = designSystem ?? DEFAULT_DESIGN_SYSTEM;
+  const contextDesignSystem = useDesignSystem();
+  const resolved = effectiveDesignSystem(designSystem ?? contextDesignSystem);
   const context = createContext(resolved);
   const style = designSystemCssVariables(resolved) as CSSProperties;
   return (
@@ -58,6 +63,7 @@ export function CanonicalRenderer({ document, designSystem, className }: Canonic
       className={classNames('cosmos-doc', className)}
       style={style}
       data-cosmos-document={document.version}
+      data-cosmos-design-system={document.meta?.designSystem?.id}
     >
       <div className="cosmos-container">{context.renderBlocks(document.blocks, 'b')}</div>
     </div>

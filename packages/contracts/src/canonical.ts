@@ -296,6 +296,20 @@ export function canonicalEmptyDoc(): CanonicalDocument {
   return { version: CANONICAL_DOCUMENT_VERSION, blocks: [{ type: 'paragraph' }] };
 }
 
+/**
+ * Returns a copy of `document` that records the given design-system reference in
+ * `meta.designSystem`. Pure and additive: other `meta` fields are preserved, and
+ * an absent `ref` returns the document unchanged (nothing is invented, so the
+ * renderer keeps its default fallback).
+ */
+export function withDesignSystemRef(
+  document: CanonicalDocument,
+  ref: CanonicalDesignSystemRef | undefined,
+): CanonicalDocument {
+  if (!ref) return document;
+  return { ...document, meta: { ...document.meta, designSystem: ref } };
+}
+
 /** True when `type` is part of the known v1 semantic vocabulary. */
 export function canonicalBlockTypeOf(type: string): type is KnownCanonicalBlockType {
   return KNOWN_BLOCK_TYPES.has(type);

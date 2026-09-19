@@ -51,6 +51,7 @@ import {
   isValidDesignerPlan,
   isValidDesignerProposal,
   resolveDesignerRevisionTargets,
+  withDesignSystemRef,
 } from '@seo/contracts';
 import { ApiError } from '../apiErrors.js';
 import type { ServiceContainer } from '../context.js';
@@ -256,7 +257,8 @@ export class DesignerService {
     }
     const baseDocument = input.baseDocument ?? (content ? editorDocumentToCanonical(content.content_json) : undefined);
 
-    const cosmosText = (await getCosmosContext(this.container, projectId)).text;
+    const cosmos = await getCosmosContext(this.container, projectId);
+    const cosmosText = cosmos.text;
     const execution = await executeDesignerPlan(
       {
         projectId,
@@ -267,10 +269,15 @@ export class DesignerService {
       this.dependencies(projectId, cosmosText),
     );
 
+    // Carry the applicable design-system identity on the proposal so a Designer
+    // result renders against the same token set it was built for. An explicit
+    // base document wins; otherwise the project's Cosmos identity applies.
+    const designSystemRef =
+      execution.document.meta?.designSystem ?? input.baseDocument?.meta?.designSystem ?? cosmos.designSystemRef;
     const proposal: DesignerProposal = {
       version: DESIGNER_PROPOSAL_VERSION,
       baseRevision,
-      document: execution.document,
+      document: withDesignSystemRef(execution.document, designSystemRef),
       plan: execution.plan,
     };
     if (execution.review) proposal.review = execution.review;

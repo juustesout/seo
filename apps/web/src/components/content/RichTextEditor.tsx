@@ -10,11 +10,12 @@
  */
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { useEditor, EditorContent, type Editor } from '@tiptap/react';
-import { DEFAULT_DESIGN_SYSTEM, designSystemCssVariables, type TipDoc } from '@seo/contracts';
+import { designSystemCssVariables, effectiveDesignSystem, type DesignSystem, type TipDoc } from '@seo/contracts';
 import { EditorAiBubbleMenu, type EditorAiActions } from './EditorAiBubbleMenu';
 import { createEditorExtensions } from './editor/extensions';
 import { sanitizeEditorDoc } from './editor/sanitizeDoc';
 import { canvasModeForDocument } from './editor/compositionPresentation';
+import { useDesignSystem } from '../../lib/designSystem';
 import './editor/compositionEditor.css';
 
 export interface RichTextEditorHandle {
@@ -28,6 +29,12 @@ interface RichTextEditorProps {
   onEditor?: (editor: Editor | null) => void;
   /** When present, a selection bubble menu offers the AI edit operations. */
   aiActions?: EditorAiActions;
+  /**
+   * Effective design system for the page canvas. Defaults to the surrounding
+   * `DesignSystemProvider`, then to the safe built-in token set, so the editor
+   * uses the same tokens as the CanonicalRenderer.
+   */
+  designSystem?: DesignSystem;
 }
 
 /**
@@ -37,11 +44,13 @@ interface RichTextEditorProps {
  * act on it. The imperative handle exposes `selectHeading` for outline clicks.
  */
 export const RichTextEditor = forwardRef<RichTextEditorHandle, RichTextEditorProps>(function RichTextEditor(
-  { initialDoc, onDocChange, onEditor, aiActions },
+  { initialDoc, onDocChange, onEditor, aiActions, designSystem },
   ref,
 ) {
   const sanitizedDoc = useMemo(() => sanitizeEditorDoc(initialDoc), [initialDoc]);
   const [canvasMode, setCanvasMode] = useState<'page' | 'article'>(() => canvasModeForDocument(sanitizedDoc));
+  const contextDesignSystem = useDesignSystem();
+  const resolvedDesignSystem = effectiveDesignSystem(designSystem ?? contextDesignSystem);
 
   const editor = useEditor({
     extensions: createEditorExtensions(),
@@ -88,7 +97,7 @@ export const RichTextEditor = forwardRef<RichTextEditorHandle, RichTextEditorPro
     <div className="rt-editor" data-canvas-mode={canvasMode}>
       <div
         className={pageMode ? 'cosmos-doc rt-page-canvas' : undefined}
-        style={pageMode ? (designSystemCssVariables(DEFAULT_DESIGN_SYSTEM) as CSSProperties) : undefined}
+        style={pageMode ? (designSystemCssVariables(resolvedDesignSystem) as CSSProperties) : undefined}
         data-editor-canvas={pageMode ? 'composition' : undefined}
       >
         <div className={pageMode ? 'cosmos-container' : undefined}>

@@ -11,7 +11,13 @@
  * back into a CanonicalDocument.
  */
 
-import { COSMOS_DESIGN_COLOR_KEYS, parseCosmosDesign } from './cosmos.js';
+import {
+  COSMOS_DESIGN_COLOR_KEYS,
+  COSMOS_DESIGN_SYSTEM_ID,
+  isEmptyCosmosDesign,
+  parseCosmosConfig,
+  parseCosmosDesign,
+} from './cosmos.js';
 import type {
   CosmosBodySize,
   CosmosDesignColorKey,
@@ -20,6 +26,7 @@ import type {
   CosmosRadiusScale,
   CosmosSpacingScale,
 } from './cosmos.js';
+import type { CanonicalDesignSystemRef } from './canonical.js';
 
 export type DesignSystemColors = Record<CosmosDesignColorKey, string>;
 
@@ -188,6 +195,61 @@ export function resolveDesignSystem(value?: unknown): DesignSystem {
     effects: { ...ELEVATIONS[design.elevation ?? 'subtle'] },
     layout: { ...DEFAULT_DESIGN_SYSTEM.layout },
   };
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+/**
+ * True when `value` is already a fully resolved `DesignSystem` (the shape
+ * `resolveDesignSystem` returns), as opposed to raw Cosmos design input. The
+ * discriminator is the resolved-only sections, so a raw `CosmosDesign` (which
+ * has `spacingScale`/`radiusScale` and no `spacing`/`shape`/`layout`) can never
+ * be mistaken for a resolved one.
+ */
+export function isResolvedDesignSystem(value: unknown): value is DesignSystem {
+  if (!isPlainRecord(value)) return false;
+  return (
+    isPlainRecord(value.colors) &&
+    isPlainRecord(value.typography) &&
+    isPlainRecord(value.spacing) &&
+    isPlainRecord(value.shape) &&
+    isPlainRecord(value.effects) &&
+    isPlainRecord(value.layout)
+  );
+}
+
+/**
+ * The single authoritative entry point consumers use to obtain the effective
+ * design system. Accepts, in order of precedence:
+ *   - a resolved `DesignSystem` (returned unchanged, so it is idempotent);
+ *   - a full Cosmos config (its `design` section is resolved);
+ *   - raw Cosmos design input (resolved over safe defaults);
+ *   - nothing (the safe defaults).
+ *
+ * It delegates every expansion to `resolveDesignSystem`, so there is exactly
+ * one resolution implementation and the renderer and editor canvas cannot
+ * diverge on which tokens apply.
+ */
+export function effectiveDesignSystem(value?: unknown): DesignSystem {
+  if (value === undefined || value === null) return resolveDesignSystem();
+  if (isResolvedDesignSystem(value)) return value;
+  if (isPlainRecord(value) && isPlainRecord(value.design) && !isPlainRecord(value.colors)) {
+    return resolveDesignSystem(value.design);
+  }
+  return resolveDesignSystem(value);
+}
+
+/**
+ * The document-facing reference for a project's Cosmos design system, or
+ * `undefined` when the project has configured no design tokens (the renderer
+ * then uses the built-in defaults). This is the value that belongs in
+ * `CanonicalMeta.designSystem`: an identity reference, never token values.
+ */
+export function cosmosDesignSystemRef(value?: unknown): CanonicalDesignSystemRef | undefined {
+  const design = parseCosmosConfig(value).design;
+  return isEmptyCosmosDesign(design) ? undefined : { id: COSMOS_DESIGN_SYSTEM_ID };
 }
 
 /**

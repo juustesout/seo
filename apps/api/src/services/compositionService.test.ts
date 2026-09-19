@@ -20,6 +20,7 @@ const mock = vi.hoisted(() => ({
   providerConfigured: true,
   cosmosCalls: 0,
   cosmosText: '',
+  designSystemRef: undefined as { id: string } | undefined,
   provider: {
     id: 'openai',
     isConfigured: () => true,
@@ -47,7 +48,12 @@ vi.mock('./aiService.js', () => ({
 vi.mock('./cosmosService.js', () => ({
   getCosmosContext: async () => {
     mock.cosmosCalls += 1;
-    return { text: mock.cosmosText, hasContent: mock.cosmosText.length > 0, useProjectKnowledge: false };
+    return {
+      text: mock.cosmosText,
+      hasContent: mock.cosmosText.length > 0,
+      useProjectKnowledge: false,
+      ...(mock.designSystemRef ? { designSystemRef: mock.designSystemRef } : {}),
+    };
   },
 }));
 
@@ -82,6 +88,7 @@ beforeEach(() => {
   mock.providerConfigured = true;
   mock.cosmosCalls = 0;
   mock.cosmosText = '';
+  mock.designSystemRef = undefined;
 });
 
 describe('CompositionService', () => {
@@ -150,5 +157,18 @@ describe('CompositionService', () => {
     await service.compose('p1', INPUT);
     const writerUser = mock.chats[1]!.messages.map((m) => m.content).join('\n');
     expect(writerUser).toContain('Tone: confident, expert.');
+  });
+
+  it('records the project design-system reference on the canonical document', async () => {
+    mock.responses = [PLAN_JSON, fillsJson()];
+    mock.designSystemRef = { id: 'cosmos' };
+    const result = await service.compose('p1', INPUT);
+    expect(result.canonicalDocument.meta?.designSystem).toEqual({ id: 'cosmos' });
+  });
+
+  it('leaves the document without a reference when the project has no design tokens', async () => {
+    mock.responses = [PLAN_JSON, fillsJson()];
+    const result = await service.compose('p1', INPUT);
+    expect(result.canonicalDocument.meta?.designSystem).toBeUndefined();
   });
 });

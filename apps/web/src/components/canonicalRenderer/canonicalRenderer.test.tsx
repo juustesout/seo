@@ -111,6 +111,24 @@ describe('renderer tokens and isolation', () => {
     expect(root.style.getPropertyValue('--cosmos-container-width')).toBe(DEFAULT_DESIGN_SYSTEM.layout.containerWidth);
     expect(root.style.getPropertyValue('--cosmos-reading-width')).toBe(DEFAULT_DESIGN_SYSTEM.layout.readingWidth);
   });
+
+  it('exposes the document design-system identity without embedding token values', () => {
+    const documentEl: CanonicalDocument = {
+      version: CANONICAL_DOCUMENT_VERSION,
+      meta: { designSystem: { id: 'cosmos' } },
+      blocks: [text('a')],
+    };
+    const { container } = render(<CanonicalRenderer document={documentEl} />);
+    const root = rootOf(container);
+    expect(root.getAttribute('data-cosmos-design-system')).toBe('cosmos');
+    // The ref is identity only: with no resolved system the defaults still apply.
+    expect(root.style.getPropertyValue('--cosmos-color-primary')).toBe(DEFAULT_DESIGN_SYSTEM.colors.primary);
+  });
+
+  it('omits the design-system attribute when the document carries no reference', () => {
+    const { container } = render(<CanonicalRenderer document={doc([text('a')])} />);
+    expect(rootOf(container).hasAttribute('data-cosmos-design-system')).toBe(false);
+  });
 });
 
 describe('content blocks', () => {

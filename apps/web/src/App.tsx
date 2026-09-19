@@ -45,6 +45,7 @@ import { ContentSchedule } from './views/ContentSchedule';
 import { Publications } from './views/Publications';
 import { Compose } from './views/Compose';
 import { openProjectView } from './lib/nav';
+import { DesignSystemProvider } from './lib/designSystem';
 import { Overview } from './views/Overview';
 import { AccountIntegrations } from './views/AccountIntegrations';
 import { AccountApiKeys } from './views/AccountApiKeys';
@@ -290,42 +291,44 @@ export function App() {
     const pid = project.id;
     const view = route.view;
     return (
-      <div className="flex min-h-screen flex-col">
-        <AppHeader
-          meEmail={meEmail}
-          onSignOut={() => void signOut()}
-          active={activeTop}
-          onArea={goArea}
-          projects={me.projects}
-          currentProjectId={pid}
-          onOpenProject={goProject}
-        />
-        <div className="flex flex-1">
-          <ProjectSidebar projectId={pid} view={view} onNavigate={goProject} />
-          <main className="min-w-0 flex-1 px-6 py-6">
-            {view === 'dashboard' && <Dashboard projectId={pid} onOpenSettings={() => goProject(pid, 'settings')} />}
-            {view === 'keywords' && <Keywords projectId={pid} role={project.role} />}
-            {view === 'integrations' && <Integrations projectId={pid} />}
-            {view === 'knowledge' && (
-              <Knowledge
-                projectId={pid}
-                role={project.role}
-                section={route.sub}
-                search={route.search}
-                onNavigate={(next, params) =>
-                  openProjectView(pid, next === 'overview' ? 'knowledge' : `knowledge/${next}`, params)
-                }
-              />
-            )}
-            {view === 'content' && <Content projectId={pid} role={project.role} initialContentId={route.sub} onOpenCalendar={() => goProject(pid, 'calendar')} onOpenPublications={(contentId) => openProjectView(pid, 'publications', { content_id: contentId })} />}
-            {view === 'compose' && <Compose projectId={pid} role={project.role} onOpenEditor={(contentId) => goProject(pid, 'content', contentId)} />}
-            {view === 'calendar' && <ContentSchedule projectId={pid} role={project.role} onViewPublication={(scheduleId) => openProjectView(pid, 'publications', { schedule_id: scheduleId })} />}
-            {view === 'publications' && <Publications projectId={pid} />}
-            {view === 'publishing' && <Publishing projectId={pid} />}
-            {view === 'settings' && <ProjectSettings projectId={pid} role={project.role} />}
-          </main>
+      <DesignSystemProvider projectId={pid}>
+        <div className="flex min-h-screen flex-col">
+          <AppHeader
+            meEmail={meEmail}
+            onSignOut={() => void signOut()}
+            active={activeTop}
+            onArea={goArea}
+            projects={me.projects}
+            currentProjectId={pid}
+            onOpenProject={goProject}
+          />
+          <div className="flex flex-1">
+            <ProjectSidebar projectId={pid} view={view} onNavigate={goProject} />
+            <main className="min-w-0 flex-1 px-6 py-6">
+              {view === 'dashboard' && <Dashboard projectId={pid} onOpenSettings={() => goProject(pid, 'settings')} />}
+              {view === 'keywords' && <Keywords projectId={pid} role={project.role} />}
+              {view === 'integrations' && <Integrations projectId={pid} />}
+              {view === 'knowledge' && (
+                <Knowledge
+                  projectId={pid}
+                  role={project.role}
+                  section={route.sub}
+                  search={route.search}
+                  onNavigate={(next, params) =>
+                    openProjectView(pid, next === 'overview' ? 'knowledge' : `knowledge/${next}`, params)
+                  }
+                />
+              )}
+              {view === 'content' && <Content projectId={pid} role={project.role} initialContentId={route.sub} onOpenCalendar={() => goProject(pid, 'calendar')} onOpenPublications={(contentId) => openProjectView(pid, 'publications', { content_id: contentId })} />}
+              {view === 'compose' && <Compose projectId={pid} role={project.role} onOpenEditor={(contentId) => goProject(pid, 'content', contentId)} />}
+              {view === 'calendar' && <ContentSchedule projectId={pid} role={project.role} onViewPublication={(scheduleId) => openProjectView(pid, 'publications', { schedule_id: scheduleId })} />}
+              {view === 'publications' && <Publications projectId={pid} />}
+              {view === 'publishing' && <Publishing projectId={pid} />}
+              {view === 'settings' && <ProjectSettings projectId={pid} role={project.role} />}
+            </main>
+          </div>
         </div>
-      </div>
+      </DesignSystemProvider>
     );
   }
 
@@ -346,11 +349,13 @@ export function App() {
         {route.area === 'overview' && <Overview onOpenProject={goProject} onGoProjects={() => goArea('projects')} />}
         {route.area === 'projects' && <ProjectsPage onOpenProject={goProject} />}
         {route.area === 'compose' && composeProject && (
-          <Compose
-            projectId={composeProject.id}
-            role={composeProject.role}
-            onOpenEditor={(contentId) => goProject(composeProject.id, 'content', contentId)}
-          />
+          <DesignSystemProvider projectId={composeProject.id}>
+            <Compose
+              projectId={composeProject.id}
+              role={composeProject.role}
+              onOpenEditor={(contentId) => goProject(composeProject.id, 'content', contentId)}
+            />
+          </DesignSystemProvider>
         )}
         {route.area === 'integrations' && <AccountIntegrations onOpenProject={goProject} />}
         {route.area === 'keys' && <AccountApiKeys />}

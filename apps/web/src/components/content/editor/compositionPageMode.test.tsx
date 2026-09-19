@@ -4,6 +4,7 @@ import { resolve } from 'node:path';
 import { render, waitFor } from '@testing-library/react';
 import type { Editor } from '@tiptap/react';
 import type { TipDoc, TipNode } from '@seo/contracts';
+import { DEFAULT_DESIGN_SYSTEM, resolveDesignSystem } from '@seo/contracts';
 import { RichTextEditor } from '../RichTextEditor';
 
 const compositionCss = readFileSync(
@@ -139,6 +140,36 @@ describe('composition page canvas (Stage 8E.5)', () => {
     const grid = container.querySelector('[data-composition="compositionFeatureGrid"] .seo-composition__content');
     expect(grid?.className).toContain('cosmos-columns-3');
     expect(grid?.className).toContain('cosmos-align-center');
+  });
+
+  it('renders the editor canvas with the effective design system tokens', async () => {
+    const { container } = render(
+      <RichTextEditor
+        initialDoc={compositionDoc()}
+        designSystem={resolveDesignSystem({ colors: { primary: '#111111' } })}
+      />,
+    );
+    await waitFor(() => expect(container.querySelector('.ProseMirror')).toBeTruthy());
+    const canvas = container.querySelector<HTMLElement>('[data-editor-canvas="composition"]');
+    expect(canvas?.style.getPropertyValue('--cosmos-color-primary')).toBe('#111111');
+  });
+
+  it('falls back to the default design system when none is resolved', async () => {
+    const { container } = render(<RichTextEditor initialDoc={compositionDoc()} />);
+    await waitFor(() => expect(container.querySelector('.ProseMirror')).toBeTruthy());
+    const canvas = container.querySelector<HTMLElement>('[data-editor-canvas="composition"]');
+    expect(canvas?.style.getPropertyValue('--cosmos-color-primary')).toBe(DEFAULT_DESIGN_SYSTEM.colors.primary);
+  });
+
+  it('agrees with the renderer token set for the same design system', async () => {
+    const designSystem = resolveDesignSystem({ colors: { primary: '#0a0a0a' }, spacingScale: 'spacious' });
+    const { container } = render(<RichTextEditor initialDoc={compositionDoc()} designSystem={designSystem} />);
+    await waitFor(() => expect(container.querySelector('.ProseMirror')).toBeTruthy());
+    const canvas = container.querySelector<HTMLElement>('[data-editor-canvas="composition"]');
+    expect(canvas).toBeTruthy();
+    expect(canvas!.style.getPropertyValue('--cosmos-color-primary')).toBe(designSystem.colors.primary);
+    expect(canvas!.style.getPropertyValue('--cosmos-space-md')).toBe(designSystem.spacing.md);
+    expect(canvas!.style.getPropertyValue('--cosmos-radius-card')).toBe(designSystem.shape.card);
   });
 
   it('keeps editor chrome hidden until hover or selection so an idle canvas matches the renderer', () => {

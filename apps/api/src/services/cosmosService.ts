@@ -13,9 +13,11 @@
 
 import {
   COSMOS_CONTEXT_MAX_CHARS,
+  cosmosDesignSystemRef,
   emptyCosmosConfig,
   isEmptyCosmosConfig,
   parseCosmosConfig,
+  type CanonicalDesignSystemRef,
   type CosmosConfig,
 } from '@seo/contracts';
 import type { ServiceContainer } from '../context.js';
@@ -28,6 +30,12 @@ export interface CosmosContext {
   hasContent: boolean;
   /** Whether project knowledge may be offered to the model (Cosmos default true). */
   useProjectKnowledge: boolean;
+  /**
+   * Identity reference for the project's design tokens, when configured. This is
+   * what a canonical document records in `meta.designSystem`; absent means the
+   * renderer uses the built-in defaults.
+   */
+  designSystemRef?: CanonicalDesignSystemRef;
 }
 
 /** Reads the stored Cosmos config for one project (normalized, never null). */
@@ -127,10 +135,12 @@ export async function getCosmosContext(
 ): Promise<CosmosContext> {
   const config = await readCosmosConfig(container, projectId);
   const text = renderCosmosContext(config);
+  const designSystemRef = cosmosDesignSystemRef(config);
   return {
     text,
     hasContent: !isEmptyCosmosConfig(config),
     useProjectKnowledge: config.knowledge.useProjectKnowledge,
+    ...(designSystemRef ? { designSystemRef } : {}),
   };
 }
 

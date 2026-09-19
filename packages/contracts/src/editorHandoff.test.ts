@@ -330,3 +330,18 @@ describe('editor reverse bridge round trip (Stage 8E.6)', () => {
     expect(JSON.stringify(back)).not.toContain('[unsupported');
   });
 });
+
+describe('canonical metadata propagation', () => {
+  it('carries an explicit design-system reference onto the canonical document', () => {
+    const editor = canonicalDocumentToEditorDocument(doc([text('hello')]));
+    const back = editorDocumentToCanonical(editor, { designSystem: { id: 'cosmos' } });
+    expect(back.meta).toEqual({ designSystem: { id: 'cosmos' } });
+    expect(isValidCanonicalDoc(back)).toBe(true);
+  });
+
+  it('omits meta when none is supplied, keeping existing documents compatible', () => {
+    const back = editorDocumentToCanonical(canonicalDocumentToEditorDocument(doc([text('hello')])));
+    expect(back.meta).toBeUndefined();
+    expect(isValidCanonicalDoc(back)).toBe(true);
+  });
+});

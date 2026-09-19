@@ -33,7 +33,7 @@
  * No AI call, no network, no DOM.
  */
 
-import type { CanonicalBlock, CanonicalDocument, CanonicalInline } from './canonical.js';
+import type { CanonicalBlock, CanonicalDocument, CanonicalInline, CanonicalMeta } from './canonical.js';
 import {
   CANONICAL_COMPOSITION_ATTR_KEYS,
   CANONICAL_COMPOSITION_BLOCK_TYPES,
@@ -218,11 +218,18 @@ function toCanonicalBlock(block: CanonicalBlock): CanonicalBlock[] {
  * composition vocabulary (`compositionHero` -> `hero`, ...). Inverse of
  * {@link canonicalDocumentToEditorDocument} for the composition subset; other
  * content is handled by the Stage 1 adapter.
+ *
+ * The editor document has no metadata of its own (it is a plain Tiptap doc), so
+ * `meta` is passed in explicitly when the caller knows the document's identity -
+ * e.g. the design-system reference it renders against. Omitting it keeps the
+ * previous behaviour (no `meta`).
  */
-export function editorDocumentToCanonical(doc: TipDoc | unknown): CanonicalDocument {
+export function editorDocumentToCanonical(doc: TipDoc | unknown, meta?: CanonicalMeta): CanonicalDocument {
   const canonical = tiptapToCanonical(doc);
-  return {
+  const converted: CanonicalDocument = {
     version: CANONICAL_DOCUMENT_VERSION,
     blocks: canonical.blocks.flatMap(toCanonicalBlock),
   };
+  if (meta) converted.meta = meta;
+  return converted;
 }

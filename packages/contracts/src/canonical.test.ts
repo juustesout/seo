@@ -6,6 +6,7 @@ import {
   canonicalEmptyDoc,
   canonicalMarkTypeOf,
   isValidCanonicalDoc,
+  withDesignSystemRef,
 } from './canonical.js';
 
 function validDoc(): unknown {
@@ -250,5 +251,20 @@ describe('isValidCanonicalDoc', () => {
     let node: Record<string, unknown> = { type: 'paragraph' };
     for (let i = 0; i < 205; i += 1) node = { type: 'group', children: [node] };
     expect(isValidCanonicalDoc({ version: 1, blocks: [node] })).toBe(false);
+  });
+});
+
+describe('withDesignSystemRef', () => {
+  it('records a design-system reference without dropping existing meta', () => {
+    const source = { ...canonicalEmptyDoc(), meta: { title: 'Hello', language: 'en' } };
+    const stamped = withDesignSystemRef(source, { id: 'cosmos' });
+    expect(stamped.meta).toEqual({ title: 'Hello', language: 'en', designSystem: { id: 'cosmos' } });
+    expect(isValidCanonicalDoc(stamped)).toBe(true);
+    expect(source.meta).toEqual({ title: 'Hello', language: 'en' });
+  });
+
+  it('returns the same document when there is no reference (default fallback)', () => {
+    const source = canonicalEmptyDoc();
+    expect(withDesignSystemRef(source, undefined)).toBe(source);
   });
 });

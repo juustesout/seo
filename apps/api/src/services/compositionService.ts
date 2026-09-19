@@ -20,6 +20,7 @@ import {
   applyCompositionSlotFills,
   compileComposition,
   isValidCompositionPlan,
+  withDesignSystemRef,
 } from '@seo/contracts';
 import { ApiError } from '../apiErrors.js';
 import type { ServiceContainer } from '../context.js';
@@ -74,7 +75,8 @@ export class CompositionService {
   /** Runs the whole composer -> writer chain for the project, or throws a
    *  typed `ApiError` labelled with the phase that failed. */
   async compose(projectId: string, input: ComposeInput): Promise<ComposeResult> {
-    const cosmosText = (await getCosmosContext(this.container, projectId)).text;
+    const cosmos = await getCosmosContext(this.container, projectId);
+    const cosmosText = cosmos.text;
     const ai = new AIService(this.container);
 
     let plan: CompositionPlan;
@@ -109,7 +111,8 @@ export class CompositionService {
 
     try {
       const applied = applyCompositionSlotFills(compiled, outcome.fills);
-      return { compositionPlan: plan, canonicalDocument: applied.document };
+      const canonicalDocument = withDesignSystemRef(applied.document, cosmos.designSystemRef);
+      return { compositionPlan: plan, canonicalDocument };
     } catch (err) {
       logger.warn({ err, projectId }, 'composition fill application failed');
       const message = err instanceof Error ? err.message : 'The writer output could not be applied.';
