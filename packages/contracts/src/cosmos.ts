@@ -243,6 +243,70 @@ export function parseCosmosDesign(value: unknown): CosmosDesign {
   return design;
 }
 
+const COSMOS_DESIGN_KEYS: ReadonlySet<string> = new Set([
+  'colors',
+  'typography',
+  'spacingScale',
+  'radiusScale',
+  'elevation',
+]);
+const COSMOS_TYPOGRAPHY_KEYS: ReadonlySet<string> = new Set([
+  'headingFamily',
+  'bodyFamily',
+  'headingWeight',
+  'bodyWeight',
+  'headingScale',
+  'bodySize',
+  'lineHeight',
+]);
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+/**
+ * Strict counterpart to `parseCosmosDesign`: true only when `value` is already a
+ * well-formed `CosmosDesign` with known keys and in-range values. Unlike the
+ * parser it never drops or coerces anything, so it is the guard a portable
+ * contract uses before trusting imported token values.
+ */
+export function isValidCosmosDesign(value: unknown): value is CosmosDesign {
+  if (!isPlainRecord(value)) return false;
+  for (const key of Object.keys(value)) {
+    if (!COSMOS_DESIGN_KEYS.has(key)) return false;
+  }
+
+  if (value.colors !== undefined) {
+    if (!isPlainRecord(value.colors)) return false;
+    for (const [key, color] of Object.entries(value.colors)) {
+      if (!(COSMOS_DESIGN_COLOR_KEYS as readonly string[]).includes(key)) return false;
+      if (typeof color !== 'string' || !COSMOS_COLOR_RE.test(color)) return false;
+    }
+  }
+
+  if (value.typography !== undefined) {
+    const typography = value.typography;
+    if (!isPlainRecord(typography)) return false;
+    for (const key of Object.keys(typography)) {
+      if (!COSMOS_TYPOGRAPHY_KEYS.has(key)) return false;
+    }
+    if (typography.headingFamily !== undefined && boundedFontFamily(typography.headingFamily) === undefined) return false;
+    if (typography.bodyFamily !== undefined && boundedFontFamily(typography.bodyFamily) === undefined) return false;
+    if (typography.headingWeight !== undefined && boundedFontWeight(typography.headingWeight) === undefined) return false;
+    if (typography.bodyWeight !== undefined && boundedFontWeight(typography.bodyWeight) === undefined) return false;
+    if (typography.headingScale !== undefined && boundedEnum(typography.headingScale, COSMOS_HEADING_SCALES) === undefined) {
+      return false;
+    }
+    if (typography.bodySize !== undefined && boundedEnum(typography.bodySize, COSMOS_BODY_SIZES) === undefined) return false;
+    if (typography.lineHeight !== undefined && boundedLineHeight(typography.lineHeight) === undefined) return false;
+  }
+
+  if (value.spacingScale !== undefined && boundedEnum(value.spacingScale, COSMOS_SPACING_SCALES) === undefined) return false;
+  if (value.radiusScale !== undefined && boundedEnum(value.radiusScale, COSMOS_RADIUS_SCALES) === undefined) return false;
+  if (value.elevation !== undefined && boundedEnum(value.elevation, COSMOS_ELEVATIONS) === undefined) return false;
+  return true;
+}
+
 /** True when the design section carries no token at all. */
 export function isEmptyCosmosDesign(design: CosmosDesign): boolean {
   return (

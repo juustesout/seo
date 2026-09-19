@@ -288,6 +288,15 @@ export function contentRevisionOf(value: unknown): string {
   return `${CONTENT_REVISION_PREFIX}:${fnv1a64(stableJson(value, new WeakSet<object>()))}`;
 }
 
+/**
+ * Deterministic JSON for a JSON-safe value: object keys are sorted so two
+ * structurally equal values serialize byte-identically. Shared by the revision
+ * token above and the portable Design Package serializer.
+ */
+export function stableJsonStringify(value: unknown): string {
+  return stableJson(value, new WeakSet<object>());
+}
+
 // ---------------------------------------------------------------------------
 // Validation
 // ---------------------------------------------------------------------------
