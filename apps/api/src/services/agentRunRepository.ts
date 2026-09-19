@@ -83,6 +83,13 @@ export interface AgentRunRepository {
   getBound(runId: AgentRunId, projectId: string): Promise<AgentRunRow | null>;
   /** Idempotency read-back, scoped to the project. */
   getByProjectAndKey(projectId: string, idempotencyKey: string): Promise<AgentRunRow | null>;
+  /**
+   * Queued runs that still have no job associated and have not changed since
+   * `cutoffIso`. This is the reconciliation candidate set: a run only rests
+   * here when a submission was interrupted between persisting the run and
+   * recording its job. Malformed rows are skipped, never blindly re-enqueued.
+   */
+  listOrphaned(cutoffIso: string, limit: number): Promise<AgentRunRow[]>;
   /** Associate (or clear) the job that carries this run's execution. */
   setJobId(runId: AgentRunId, projectId: string, jobId: string | null): Promise<void>;
   /** Optimistic transition; false when no row was in `from` (e.g. already terminal). */
@@ -205,6 +212,28 @@ export class SupabaseAgentRunRepository implements AgentRunRepository {
     return rowFromColumn(data as never);
   }
 
+  async listOrphaned(cutoffIso: string, limit: number): Promise<AgentRunRow[]> {
+    const { data, error } = await this.sb
+      .from('seo_agent_runs')
+      .select(SELECT_COLUMNS)
+      .eq('status', 'queued')
+      .is('job_id', null)
+      .lte('updated_at', cutoffIso)
+      .order('updated_at', { ascending: true })
+      .limit(Math.max(1, Math.min(limit, 100)));
+    if (error) internalError('list-orphaned', error);
+    const rows: AgentRunRow[] = [];
+    for (const raw of (data ?? []) as unknown[]) {
+      try {
+        rows.push(rowFromColumn(raw as AgentRunColumn));
+      } catch (err) {
+        // A corrupt row cannot be safely re-enqueued; skip it and keep sweeping.
+        logger.warn({ err }, 'skipping malformed orphaned agent run');
+      }
+    }
+    return rows;
+  }
+
   async setJobId(runId: AgentRunId, projectId: string, jobId: string | null): Promise<void> {
     const { error } = await this.sb
       .from('seo_agent_runs')
@@ -278,6 +307,18 @@ export class InMemoryAgentRunRepository implements AgentRunRepository {
       if (row.projectId === projectId && row.idempotencyKey === idempotencyKey) return { ...row };
     }
     return null;
+  }
+
+  async listOrphaned(cutoffIso: string, limit: number): Promise<AgentRunRow[]> {
+    const cutoff = Date.parse(cutoffIso);
+    const out: AgentRunRow[] = [];
+    for (const row of this.rows.values()) {
+      if (row.status !== 'queued' || row.jobId !== null) continue;
+      if (!Number.isNaN(cutoff) && Date.parse(row.updatedAt) > cutoff) continue;
+      out.push({ ...row });
+    }
+    out.sort((a, b) => (a.updatedAt < b.updatedAt ? -1 : a.updatedAt > b.updatedAt ? 1 : 0));
+    return out.slice(0, Math.max(1, Math.min(limit, 100)));
   }
 
   async setJobId(runId: AgentRunId, projectId: string, jobId: string | null): Promise<void> {

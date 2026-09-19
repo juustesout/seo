@@ -63,7 +63,9 @@ vi.mock('../../services/contentService.js', () => ({
 
 const runs = vi.hoisted(() => ({
   submits: [] as Array<{ projectId: string; userId: string; submission: unknown }>,
+  gets: [] as Array<{ projectId: string; runId: string }>,
   result: null as unknown,
+  getResult: null as unknown,
   error: null as unknown,
 }));
 
@@ -74,11 +76,17 @@ vi.mock('../../services/agentRunService.js', () => ({
       if (runs.error) throw runs.error;
       return runs.result;
     }
+    async getRun(projectId: string, runId: string) {
+      runs.gets.push({ projectId, runId });
+      if (runs.error) throw runs.error;
+      return runs.getResult;
+    }
   },
 }));
 
 const PROJECT = '11111111-1111-4111-8111-111111111111';
 const CONTENT = '33333333-3333-4333-8333-333333333333';
+const RUN = 'ar_22222222-2222-4222-8222-222222222222';
 const TOKEN_TO_USER: Record<string, { sub: string } | undefined> = {
   'viewer-token': { sub: 'viewer-user' },
   'editor-token': { sub: 'editor-user' },
@@ -108,6 +116,20 @@ async function post(path: string, token: string | undefined, body?: unknown) {
   };
 }
 
+async function get(path: string, token: string | undefined) {
+  const res = await fetch(`${base}${path}`, {
+    method: 'GET',
+    headers: { ...(token ? { authorization: `Bearer ${token}` } : {}) },
+  });
+  return {
+    status: res.status,
+    json: (await res.json().catch(() => null)) as {
+      data?: unknown;
+      error?: { code: string; message: string };
+    },
+  };
+}
+
 beforeEach(() => {
   svc.instances = [];
   svc.intentCalls = [];
@@ -117,7 +139,9 @@ beforeEach(() => {
   content.gets = [];
   content.error = null;
   runs.submits = [];
+  runs.gets = [];
   runs.error = null;
+  runs.getResult = null;
   runs.result = {
     run: {
       runId: 'ar_22222222-2222-4222-8222-222222222222',
@@ -596,5 +620,67 @@ describe('/api/projects/:projectId/designer/runs success and errors', () => {
     expect(res.status).toBe(500);
     expect(res.json.error?.code).toBe('internal_error');
     expect(res.json.error?.message).not.toContain('internals');
+  });
+});
+
+describe('/api/projects/:projectId/designer/runs/:runId status', () => {
+  const RUN_DTO = {
+    runId: RUN,
+    kind: 'design',
+    projectId: PROJECT,
+    status: 'succeeded',
+    input: { mode: 'plan', plan: VALID_PLAN, baseRevision: 'client-rev-1' },
+    result: { version: 1, baseRevision: 'client-rev-1', document: { version: 1, blocks: [] } },
+    error: null,
+    createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-01T00:00:01.000Z',
+    completedAt: '2026-01-01T00:00:01.000Z',
+  };
+
+  it('rejects anonymous requests', async () => {
+    const res = await get(`/${PROJECT}/designer/runs/${RUN}`, undefined);
+    expect(res.status).toBe(401);
+    expect(res.json.error?.code).toBe('unauthorized');
+  });
+
+  it('allows a viewer (viewer+ read access)', async () => {
+    runs.getResult = RUN_DTO;
+    const res = await get(`/${PROJECT}/designer/runs/${RUN}`, 'viewer-token');
+    expect(res.status).toBe(200);
+    expect(res.json).toEqual({ data: RUN_DTO });
+  });
+
+  it('rejects a non-member before any read', async () => {
+    runs.getResult = RUN_DTO;
+    const res = await get(`/${PROJECT}/designer/runs/${RUN}`, 'norole-token');
+    expect(res.status).toBe(403);
+    expect(runs.gets).toHaveLength(0);
+  });
+
+  it('rejects a malformed run id', async () => {
+    const res = await get(`/${PROJECT}/designer/runs/not-a-run`, 'viewer-token');
+    expect(res.status).toBe(400);
+    expect(res.json.error?.code).toBe('bad_request');
+    expect(runs.gets).toHaveLength(0);
+  });
+
+  it('returns 404 for an unknown or foreign run', async () => {
+    runs.getResult = null;
+    const res = await get(`/${PROJECT}/designer/runs/${RUN}`, 'viewer-token');
+    expect(res.status).toBe(404);
+    expect(res.json.error?.code).toBe('agent_run_not_found');
+  });
+
+  it('binds the URL project and run id without loss', async () => {
+    runs.getResult = RUN_DTO;
+    await get(`/${PROJECT}/designer/runs/${RUN}`, 'editor-token');
+    expect(runs.gets).toEqual([{ projectId: PROJECT, runId: RUN }]);
+  });
+
+  it('propagates a typed service failure', async () => {
+    runs.error = new ApiError(503, 'agent_run_persist_failed', 'database down');
+    const res = await get(`/${PROJECT}/designer/runs/${RUN}`, 'viewer-token');
+    expect(res.status).toBe(503);
+    expect(res.json.error?.code).toBe('agent_run_persist_failed');
   });
 });

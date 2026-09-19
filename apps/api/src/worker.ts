@@ -19,11 +19,15 @@ import { getExecutor } from './jobs/executors.js';
 import { jobErrorPayload } from './jobs/types.js';
 import type { JobRecord } from './jobs/types.js';
 import { syncScheduleStatus } from './services/scheduleService.js';
+import { AgentRunService } from './services/agentRunService.js';
 
 const IDLE_POLL_MS = 5_000;
 const STALE_RUNNING_MS = 25 * 60 * 1000;
+/** Minimum spacing between orphaned-run reconciliation sweeps on the idle path. */
+const AGENT_RUN_RECONCILE_INTERVAL_MS = 60 * 1000;
 
 let stopping = false;
+let lastAgentRunReconcileAt = 0;
 
 async function sweepStaleRunning(): Promise<void> {
   const { sb } = getContainer();
@@ -40,6 +44,28 @@ async function sweepStaleRunning(): Promise<void> {
   }
   if (data && data.length > 0) logger.info({ ids: data.map((d) => d.id) }, 'requeued stale running jobs');
 }
+
+/**
+ * Adopt durable agent runs whose submission was interrupted before their job
+ * was recorded. Reuses the existing idle loop rather than a second scheduler;
+ * the throttle keeps the sweep off the queue hot path while still recovering
+ * orphans within a minute. Reconciling is best-effort and must never take the
+ * worker down, so failures are logged and swallowed.
+ */
+async function reconcileAgentRuns(
+  container: ReturnType<typeof getContainer>,
+  force = false,
+): Promise<void> {
+  if (!force && Date.now() - lastAgentRunReconcileAt < AGENT_RUN_RECONCILE_INTERVAL_MS) return;
+  lastAgentRunReconcileAt = Date.now();
+  try {
+    const result = await new AgentRunService(container).reconcileOrphanedRuns();
+    if (result.reconciled > 0) logger.info(result, 'reconciled orphaned agent runs');
+  } catch (err) {
+    logger.error({ err }, 'agent run reconciliation sweep failed');
+  }
+}
+
 
 export async function runOnce(container: ReturnType<typeof getContainer>): Promise<boolean> {
   const job: JobRecord | null = await container.jobStore.claimNext();
@@ -156,6 +182,7 @@ export async function runWorker(): Promise<void> {
   const container = getContainer();
   logger.info('SEO job worker started');
   await sweepStaleRunning();
+  await reconcileAgentRuns(container, true);
   const sweepTimer = setInterval(() => void sweepStaleRunning(), STALE_RUNNING_MS);
 
   process.on('SIGTERM', () => {
@@ -171,6 +198,7 @@ export async function runWorker(): Promise<void> {
     try {
       const didWork = await runOnce(container);
       if (!didWork) {
+        await reconcileAgentRuns(container);
         await waitForWork(container);
       }
     } catch (err) {

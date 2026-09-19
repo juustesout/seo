@@ -21,6 +21,7 @@ import { ContentService } from '../services/contentService.js';
 import { KnowledgeService } from '../services/knowledgeService.js';
 import { ContentAgentService } from '../services/contentAgentService.js';
 import { ContentAnalysisService } from '../services/contentAnalysisService.js';
+import { AgentRunService } from '../services/agentRunService.js';
 import { createWriterEngine, parseWriterInput } from '../agents/writer/engine.js';
 import { isDataImage, storeImageDataUrl } from '../infra/mediaStorage.js';
 import {
@@ -960,6 +961,22 @@ async function contentAnalyze(ctx: JobExecContext): Promise<Record<string, unkno
 }
 
 // ---------------------------------------------------------------------------
+// Durable agent runs
+// ---------------------------------------------------------------------------
+
+/**
+ * Execute one durable Designer run (`agent_design`). Thin delegation: the
+ * executor only resolves lifecycle orchestration from the service, which owns
+ * claiming the run, invoking the Designer, persisting the terminal result and
+ * retry-aware failure marking. The job is associated to the run through
+ * `params.run_id` (recorded at submission); a run already terminal is never
+ * re-executed.
+ */
+const agentDesign: JobExecutor = async ({ container, job, report }) => {
+  return new AgentRunService(container).executeDesignRun(job, report);
+};
+
+// ---------------------------------------------------------------------------
 // Registry
 // ---------------------------------------------------------------------------
 
@@ -985,6 +1002,7 @@ export const EXECUTORS: Record<string, JobExecutor> = {
   content_write: contentWrite,
   content_images: contentImages,
   content_analyze: contentAnalyze,
+  agent_design: agentDesign,
   publish,
   publish_update: publish,
   publish_delete: publish,

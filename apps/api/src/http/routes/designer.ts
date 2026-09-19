@@ -12,6 +12,9 @@
  *   - POST /api/projects/:projectId/designer/runs
  *       durably accept a plan or intent as an `seo_agent_runs` row and enqueue
  *       its `agent_design` job (202; never executes synchronously; editor+).
+ *   - GET  /api/projects/:projectId/designer/runs/:runId
+ *       read the safe lifecycle snapshot of one durable run (viewer+); the run
+ *       is bound to the URL project, so a foreign run id is never addressable.
  *   - POST /api/projects/:projectId/content/:contentId/designer/apply
  *       apply an explicitly approved proposal through the existing
  *       ContentService save path (editor+). A proposal generated against an
@@ -34,10 +37,12 @@ import {
   isValidDesignBrief,
   isValidDesignerPlan,
   isValidDesignerProposal,
+  isAgentRunId,
 } from '@seo/contracts';
 import type { DesignerIntent, DesignerPlan } from '@seo/contracts';
 import { requireAuth } from '../middleware.js';
 import { asyncHandler } from '../asyncHandler.js';
+import { ApiError } from '../../apiErrors.js';
 import { parseId, parseProjectId } from './utils.js';
 import { ContentService } from '../../services/contentService.js';
 import { AgentRunService, type AgentRunSubmission } from '../../services/agentRunService.js';
@@ -251,6 +256,29 @@ designerRouter.post(
 
     const result = await new AgentRunService(container).submitDesignRun(projectId, user!.sub, submission);
     res.status(202).json({ data: { run: result.run, reused: result.reused } });
+  }),
+);
+
+/**
+ * Read one durable Designer run (viewer+). Read-only and project-scoped: the
+ * runId is bound to the URL project, so a valid run id from another project is
+ * reported as not found (never a cross-project leak). The response is the safe
+ * lifecycle snapshot - identity, status, bounded input, persisted result or
+ * availability, and the structured error on failure.
+ */
+designerRouter.get(
+  '/runs/:runId',
+  asyncHandler(async (req, res) => {
+    const projectId = parseProjectId(req);
+    const { container, user } = req;
+    await container.access.requireRole(user!.sub, projectId, 'viewer');
+    const runId = req.params.runId;
+    if (!isAgentRunId(runId)) {
+      throw ApiError.badRequest('runId must be an agent run id (ar_<uuid>)', { runId });
+    }
+    const run = await new AgentRunService(container).getRun(projectId, runId);
+    if (!run) throw new ApiError(404, 'agent_run_not_found', 'Agent run not found', { runId });
+    res.json({ data: run });
   }),
 );
 

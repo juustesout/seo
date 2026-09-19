@@ -539,7 +539,7 @@ add a second progress document (no `progress.md`); update this section instead.
 | Phase 1 — Contracts, proposal envelope, reverse bridge | Done | `0531639` |
 | Phase 2 — Designer orchestration (synchronous) | Done | `68ad5d9`, `d442d92`, `791c763`, `f88d4e6`, `172dd7b` |
 | Phase 3 — Design Package v1 | Done | `ff652a6` |
-| Phase 4 — Durable agent runs | In progress — Part 1 done, Part 2 next | — |
+| Phase 4 — Durable agent runs | Done | `ff61c47` (Part 1), Part 2 (worker execution, status API, reconciliation) |
 | Phase 5 — Designer UI, MCP, docs | Not started | — |
 
 ADR Phase 2: DONE
@@ -551,9 +551,9 @@ ADR Phase 2: DONE
 ADR Phase 3: DONE
   └─ Design Package v1 (portable state + export/import)
 
-ADR Phase 4: IN PROGRESS
+ADR Phase 4: DONE
   ├─ Part 1 (durable agent runs) done
-  └─ Part 2 (worker execution, status API) ← NEXT
+  └─ Part 2 (worker execution, status API, reconciliation) done
 
 Phase 2 is complete: the last §13 Phase 2 bullet — wiring `resolveDesignSystem`
 into `CanonicalRenderer`, the editor canvas and the Designer — landed as chat
@@ -646,20 +646,48 @@ ADR Phase 4 — Durable agent runs (Part 1 done, summary):
 - Idempotency: an optional client key, scoped per project by a partial unique
   index. A duplicate returns the existing run and never enqueues a second job;
   a job-enqueue failure marks the run `failed` with honest failure facts.
-- Known Part 2 obligations: the worker executor for `agent_design`, the run
-  status API, and reconciliation of a `queued` run whose process died between
-  the run insert and the job enqueue (the run row is created first because it is
-  the stable identity).
 
 Verification: contracts 287, API 1495 tests green; `@seo/contracts` build and
 all three package typechecks green. Migration smoke checks were added to
 `scripts/db-migrate-local.sh`; they have not been executed in this environment
 (no local PostgreSQL).
 
+ADR Phase 4 — Durable agent runs (Part 2 done, summary):
+
+- Execution: `agent_design` is registered in the shared executor registry and
+  delegates to `AgentRunService.executeDesignRun`. The service claims the run
+  (optimistic `queued -> running`, re-entering an already `running` run on job
+  retry), runs the Designer through the same synchronous route paths (plan mode
+  via `DesignerService.execute`, intent mode via `executeIntent` with the LLM
+  planner), and only persists the validated `DesignerProposal` before flipping
+  `running -> succeeded`. A terminal run is never re-executed; a duplicate
+  delivery that loses the optimistic transition re-reads and returns rather than
+  overwriting.
+- Failure semantics: a structured, bounded `AgentRunError` is recorded only on
+  the terminal attempt. A retryable failure that the job will retry leaves the
+  run `running` so the worker's existing backoff requeues the same job; only a
+  non-retryable failure or exhausted retries marks the run `failed`. The run
+  retry decision reuses the job store's exact predicate
+  (`jobErrorPayload(...).retryable && retry_count + 1 <= max_retries`).
+- Status API: `GET /api/projects/:projectId/designer/runs/:runId` (viewer+) is
+  read-only and project-scoped through the repository's bound read; a malformed
+  run id is `400`, an unknown/foreign run is `404 agent_run_not_found`.
+- Reconciliation: `AgentRunService.reconcileOrphanedRuns` adopts a `queued` run
+  older than a 60s grace window whose `job_id` is still null (the crash between
+  run insert and job association). It re-enqueues with the SAME run-derived key
+  `agent_design:<runId>`, so it is repeat-safe and concurrent-safe; a conflict
+  means an equivalent job already exists and is skipped (fail closed). The worker
+  invokes it at startup and, throttled to once a minute, on the existing idle
+  loop - no second scheduler.
+- Out of scope (Phase 5): Designer UI, MCP, media re-resolution, new planner
+  algorithms, generalized orchestration and budget enforcement.
+
+Verification: contracts 287, API 1519 tests green; `@seo/contracts` build and
+all three package typechecks green.
+
 ### 15.3 Order after Phase 2/3
 
-1. ADR Phase 4 Part 2 — `agent_design` worker execution + run status API (next).
-2. ADR Phase 5 — Designer UI, MCP, docs.
+1. ADR Phase 5 — Designer UI, MCP, docs.
 
 Deferred hardening is not part of Phase 2 closure and does not block Phase 4:
 the H9 slot-filler rename, bounding `DesignerIntentContext.selection`, and a
