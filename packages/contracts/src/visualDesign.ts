@@ -45,6 +45,7 @@ export const VISUAL_DESIGN_PROPOSAL_VERSION = 1 as const;
 
 export const VISUAL_DESIGN_MAX_OPERATIONS = 200;
 export const VISUAL_DESIGN_MAX_RATIONALE = 50;
+export const VISUAL_DESIGN_MAX_UNMATCHED = 100;
 export const VISUAL_DESIGN_RATIONALE_MAX_CHARS = 300;
 export const VISUAL_DESIGN_TARGET_MAX_CHARS = 128;
 export const VISUAL_DESIGN_MEDIA_ID_MAX_CHARS = 128;
@@ -53,6 +54,26 @@ export const VISUAL_DESIGN_URL_MAX_CHARS = 4096;
 /** Operation kinds the current canonical model can actually express. */
 export const VISUAL_DESIGN_OPERATION_KINDS = ['select_asset', 'set_variant'] as const;
 export type VisualDesignOperationKind = (typeof VISUAL_DESIGN_OPERATION_KINDS)[number];
+
+/** Why no existing asset could be selected for a requested visual target. */
+export const VISUAL_NO_SUITABLE_ASSET_REASONS = [
+  'unknown_target',
+  'unsupported_target',
+  'no_candidates',
+  'below_threshold',
+  'all_conflicting',
+] as const;
+export type VisualNoSuitableAssetReason = (typeof VISUAL_NO_SUITABLE_ASSET_REASONS)[number];
+
+/**
+ * One visual target the selection could not fill, with the honest reason. It is
+ * review provenance: `applyVisualDesignProposal` ignores it and it is never a
+ * mutation instruction.
+ */
+export interface VisualNoSuitableAsset {
+  targetBlockId: string;
+  reason: VisualNoSuitableAssetReason;
+}
 
 /**
  * Assign an existing project media asset to one image block. `target` is the
@@ -89,6 +110,11 @@ export interface VisualDesignProposal {
   operations: VisualDesignOperation[];
   /** Optional bounded, human-readable reason per pool of operations. */
   rationale?: string[];
+  /**
+   * Targets the selection could not fill, with the honest reason. Provenance for
+   * review only: composition ignores it and it is never applied.
+   */
+  unmatched?: VisualNoSuitableAsset[];
 }
 
 /**
@@ -139,12 +165,14 @@ export class VisualDesignError extends Error {
 // Validation
 // ---------------------------------------------------------------------------
 
-const PROPOSAL_KEYS: ReadonlySet<string> = new Set(['kind', 'version', 'operations', 'rationale']);
+const PROPOSAL_KEYS: ReadonlySet<string> = new Set(['kind', 'version', 'operations', 'rationale', 'unmatched']);
 const SELECT_ASSET_KEYS: ReadonlySet<string> = new Set(['op', 'target', 'mediaId']);
 const SET_VARIANT_KEYS: ReadonlySet<string> = new Set(['op', 'target', 'variant']);
 const ASSET_REF_KEYS: ReadonlySet<string> = new Set(['mediaId', 'url', 'alt', 'caption', 'width', 'height']);
+const UNMATCHED_KEYS: ReadonlySet<string> = new Set(['targetBlockId', 'reason']);
 
 const OPERATION_KIND_SET: ReadonlySet<string> = new Set(VISUAL_DESIGN_OPERATION_KINDS);
+const UNMATCHED_REASON_SET: ReadonlySet<string> = new Set(VISUAL_NO_SUITABLE_ASSET_REASONS);
 const TARGET_RE = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -219,6 +247,17 @@ export function isValidVisualDesignOperation(value: unknown): value is VisualDes
 }
 
 /**
+ * Validates one review-only unmatched target. Unknown keys or an unlisted
+ * reason are rejected so the provenance can never smuggle a mutation payload.
+ */
+export function isValidVisualNoSuitableAsset(value: unknown): value is VisualNoSuitableAsset {
+  if (!isPlainObject(value)) return false;
+  if (!hasOnlyKeys(value, UNMATCHED_KEYS)) return false;
+  if (!isValidTarget(value.targetBlockId)) return false;
+  return typeof value.reason === 'string' && UNMATCHED_REASON_SET.has(value.reason);
+}
+
+/**
  * Strict validation of a VisualDesignProposal. Rejects a wrong discriminator,
  * an unsupported version, unknown keys, a malformed/duplicated operation list
  * and malformed rationale. Pure and non-mutating.
@@ -234,6 +273,10 @@ export function isValidVisualDesignProposal(value: unknown): value is VisualDesi
   if (value.rationale !== undefined) {
     if (!Array.isArray(value.rationale) || value.rationale.length > VISUAL_DESIGN_MAX_RATIONALE) return false;
     if (!value.rationale.every((entry) => isBoundedText(entry, VISUAL_DESIGN_RATIONALE_MAX_CHARS))) return false;
+  }
+  if (value.unmatched !== undefined) {
+    if (!Array.isArray(value.unmatched) || value.unmatched.length > VISUAL_DESIGN_MAX_UNMATCHED) return false;
+    if (!value.unmatched.every(isValidVisualNoSuitableAsset)) return false;
   }
   return true;
 }

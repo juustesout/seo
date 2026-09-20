@@ -98,6 +98,35 @@ describe('runDesignerPlanner', () => {
     expect(isValidDesignerPlan(plan)).toBe(true);
   });
 
+  it('accepts a planner plan that asks the Visual domain to choose assets', async () => {
+    const plan = {
+      version: 1,
+      steps: [
+        { kind: 'visual.apply', task: { select: {} } },
+        { kind: 'designer.review', criteria: ['document_valid'] },
+      ],
+    };
+    const planner: DesignerPlanner = { plan: async () => plan as never };
+    const out = await runDesignerPlanner(planner, INTENT);
+    expect(isDispatchableDesignerPlan(out)).toBe(true);
+  });
+
+  it('rejects a visual plan that invents asset or block identifiers', async () => {
+    const plan = {
+      version: 1,
+      steps: [
+        {
+          kind: 'visual.apply',
+          task: { select: { targetBlockIds: ['made-up-id'], assetIds: ['made-up-asset'] } },
+        },
+      ],
+    };
+    const planner: DesignerPlanner = { plan: async () => plan as never };
+    const err = await expectApiError(runDesignerPlanner(planner, INTENT));
+    expect(err.status).toBe(422);
+    expect(err.code).toBe('designer_planner_invalid_output');
+  });
+
   it('rejects invalid planner output with a stable error', async () => {
     const planner: DesignerPlanner = { plan: async () => ({ version: 1 }) as never };
     const err = await expectApiError(runDesignerPlanner(planner, INTENT));

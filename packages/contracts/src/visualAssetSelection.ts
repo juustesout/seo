@@ -40,12 +40,15 @@ import {
 import {
   VISUAL_DESIGN_MAX_OPERATIONS,
   VISUAL_DESIGN_MAX_RATIONALE,
+  VISUAL_DESIGN_MAX_UNMATCHED,
   VISUAL_DESIGN_PROPOSAL_KIND,
   VISUAL_DESIGN_PROPOSAL_VERSION,
   VISUAL_DESIGN_RATIONALE_MAX_CHARS,
   VisualDesignError,
+  isValidVisualNoSuitableAsset,
   type VisualDesignOperation,
   type VisualDesignProposal,
+  type VisualNoSuitableAsset,
 } from './visualDesign.js';
 
 /**
@@ -83,14 +86,6 @@ export interface VisualAssetCandidate {
   usageCount?: number;
 }
 
-/** Why no existing asset could be selected for a requested target. */
-export type VisualNoSuitableAssetReason =
-  | 'unknown_target'
-  | 'unsupported_target'
-  | 'no_candidates'
-  | 'below_threshold'
-  | 'all_conflicting';
-
 /**
  * One resolved asset -> target decision. `score` is retained because the
  * proposal rationale and audit trail benefit from it, but it is a match score
@@ -102,11 +97,6 @@ export interface VisualAssetSelection {
   role: VisualAssetRole;
   score: number;
   rationale: string;
-}
-
-export interface VisualNoSuitableAsset {
-  targetBlockId: string;
-  reason: VisualNoSuitableAssetReason;
 }
 
 export interface VisualAssetSelectionResult {
@@ -548,6 +538,7 @@ function findImageMediaId(blocks: readonly CanonicalBlock[], id: string): string
 export function visualDesignProposalFromSelections(
   selections: readonly VisualAssetSelection[],
   rationale?: readonly string[],
+  unmatched?: readonly VisualNoSuitableAsset[],
 ): VisualDesignProposal {
   if (selections.length > VISUAL_DESIGN_MAX_OPERATIONS) {
     throw new VisualDesignError('invalid_visual_proposal', 'Too many visual asset selections.');
@@ -588,6 +579,14 @@ export function visualDesignProposalFromSelections(
     proposal.rationale = reasons.slice(0, VISUAL_DESIGN_MAX_RATIONALE).map((entry) =>
       entry.slice(0, VISUAL_DESIGN_RATIONALE_MAX_CHARS),
     );
+  }
+  if (unmatched !== undefined && unmatched.length > 0) {
+    if (!unmatched.every(isValidVisualNoSuitableAsset)) {
+      throw new VisualDesignError('invalid_visual_proposal', 'An unmatched visual target result is not valid.');
+    }
+    proposal.unmatched = unmatched
+      .slice(0, VISUAL_DESIGN_MAX_UNMATCHED)
+      .map((entry) => ({ targetBlockId: entry.targetBlockId, reason: entry.reason }));
   }
   return proposal;
 }

@@ -35,6 +35,21 @@ function proposal(text: string): DesignerProposal {
   return { version: 1, baseRevision: 'rev1:abc', document: doc(text) };
 }
 
+function visualProposal(text: string): DesignerProposal {
+  return {
+    version: 1,
+    baseRevision: 'rev1:abc',
+    document: doc(text),
+    visual: {
+      kind: 'visual_design_proposal',
+      version: 1,
+      operations: [{ op: 'select_asset', target: 'hero__media', mediaId: 'm_solar' }],
+      rationale: ['Matched metadata on "solar".'],
+      unmatched: [{ targetBlockId: 'feat__media', reason: 'below_threshold' }],
+    },
+  };
+}
+
 function run(over: Partial<AgentRun> = {}): AgentRun {
   return {
     runId: RUN_ID,
@@ -200,6 +215,27 @@ describe('Designer', () => {
     expect(screen.queryByRole('button', { name: /apply/i })).toBeNull();
     // A succeeded run must be readable through the status endpoint.
     expect(pathsOf(fake.calls, 'GET').some((c) => c.path === RUN_PATH)).toBe(true);
+  });
+
+  it('shows the Visual domain rationale and unmatched targets as read-only provenance', async () => {
+    const fake = fakeApi(run({ status: 'queued' }));
+    render(<Designer projectId={PROJECT} role="editor" pollMs={5} />);
+
+    fireEvent.change(screen.getByLabelText('What should the Designer create?'), {
+      target: { value: 'Add matching images from our library' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Start design run' }));
+    await screen.findByText('Queued');
+
+    fake.setCurrent(run({ status: 'succeeded', result: visualProposal('Body with images') }));
+    await screen.findByText('Body with images');
+
+    expect(screen.getByText('Visual selections')).toBeTruthy();
+    expect(screen.getByText(/Matched metadata on "solar"/)).toBeTruthy();
+    expect(screen.getByText('feat__media')).toBeTruthy();
+    expect(screen.getByText(/below_threshold/)).toBeTruthy();
+    // Provenance is explanatory: it never adds an apply control of its own.
+    expect(screen.queryByRole('button', { name: /apply/i })).toBeNull();
   });
 
   it('stops polling once the run is terminal', async () => {

@@ -37,7 +37,6 @@ import type {
   DesignerProposal,
   VisualAssetCandidate,
   VisualAssetRef,
-  VisualDesignOperation,
   VisualDesignProposal,
 } from '@seo/contracts';
 import {
@@ -265,7 +264,7 @@ export class DesignerService {
           projectId,
         );
 
-        let resolvedOperations: VisualDesignOperation[];
+        let proposal: VisualDesignProposal;
         if (selection) {
           const candidates: VisualAssetCandidate[] = media.map((item) => ({
             mediaId: item.id,
@@ -294,24 +293,25 @@ export class DesignerService {
               { unmatched: result.unmatched },
             );
           }
+          // Keep the selection rationale and the targets it could not fill so
+          // the proposal explains *why* it chose each asset (provenance only).
           try {
-            resolvedOperations = visualDesignProposalFromSelections(result.selections).operations;
+            proposal = visualDesignProposalFromSelections(result.selections, undefined, result.unmatched);
           } catch (err) {
             return mapVisualDesignError(err);
           }
         } else {
-          resolvedOperations = operations ?? [];
+          proposal = {
+            kind: VISUAL_DESIGN_PROPOSAL_KIND,
+            version: VISUAL_DESIGN_PROPOSAL_VERSION,
+            operations: operations ?? [],
+          };
         }
 
-        const proposal: VisualDesignProposal = {
-          kind: VISUAL_DESIGN_PROPOSAL_KIND,
-          version: VISUAL_DESIGN_PROPOSAL_VERSION,
-          operations: resolvedOperations,
-        };
         // Resolve only the referenced assets from the project media library
         // (metadata only; bytes never touch the proposal or the document).
         const wanted = new Set(
-          resolvedOperations.flatMap((op) => (op.op === 'select_asset' ? [op.mediaId] : [])),
+          proposal.operations.flatMap((op) => (op.op === 'select_asset' ? [op.mediaId] : [])),
         );
         const assets: VisualAssetRef[] = media
           .filter((item) => wanted.has(item.id))
@@ -379,6 +379,11 @@ export class DesignerService {
       plan: execution.plan,
     };
     if (execution.review) proposal.review = execution.review;
+    // Carry the visual domain's provenance (rationale and unmatched targets)
+    // when the plan used it. It is explanation only: `document` stays the source
+    // of truth and `apply` never depends on it.
+    const visualResult = [...execution.results].reverse().find((result) => result.role === 'visual' && result.visual);
+    if (visualResult?.visual) proposal.visual = visualResult.visual;
 
     if (!isValidDesignerProposal(proposal)) {
       throw new ApiError(500, 'designer_proposal_invalid', 'The Designer produced an invalid proposal.');

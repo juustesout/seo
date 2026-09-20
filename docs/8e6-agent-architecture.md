@@ -540,7 +540,7 @@ add a second progress document (no `progress.md`); update this section instead.
 | Phase 2 — Designer orchestration (synchronous) | Done | `68ad5d9`, `d442d92`, `791c763`, `f88d4e6`, `172dd7b` |
 | Phase 3 — Design Package v1 | Done | `ff652a6` |
 | Phase 4 — Durable agent runs | Done | `ff61c47` (Part 1), Part 2 (worker execution, status API, reconciliation) |
-| Phase 5 — Designer UI, MCP, docs | In progress — 5.1, 5.2, 5.3 and 5.3.1 done | 5.1 Designer UI run foundation and 5.2 edit review + explicit apply (`apps/web/src/views/Designer.tsx`, `apps/web/src/components/designer/useDesignerRun.ts`); 5.3 Visual Design domain contract (`packages/contracts/src/visualDesign.ts`) and 5.3.1 asset selection (`packages/contracts/src/visualAssetSelection.ts`); MCP and docs pending |
+| Phase 5 — Designer UI, MCP, docs | In progress — 5.1, 5.2, 5.3, 5.3.1 and 5.3.2 done | 5.1 Designer UI run foundation and 5.2 edit review + explicit apply (`apps/web/src/views/Designer.tsx`, `apps/web/src/components/designer/useDesignerRun.ts`); 5.3 Visual Design domain contract (`packages/contracts/src/visualDesign.ts`), 5.3.1 asset selection (`packages/contracts/src/visualAssetSelection.ts`) and 5.3.2 visual intent + proposal provenance (`apps/api/src/agents/designer/plannerPrompt.ts`, `apps/api/src/services/designerService.ts`); MCP and docs pending |
 
 ADR Phase 2: DONE
   ├─ 3.1 done
@@ -555,7 +555,7 @@ ADR Phase 4: DONE
   ├─ Part 1 (durable agent runs) done
   └─ Part 2 (worker execution, status API, reconciliation) done
 
-ADR Phase 5: IN PROGRESS (5.1, 5.2, 5.3 and 5.3.1 done; MCP and docs pending; do not mark Phase 5 complete)
+ADR Phase 5: IN PROGRESS (5.1, 5.2, 5.3, 5.3.1 and 5.3.2 done; MCP and docs pending; do not mark Phase 5 complete)
   ├─ 5.1 Designer UI run foundation done: the new `/p/:projectId/designer` view
   │    submits one supported AgentRun input (intent, creation) to
   │    POST /designer/runs and follows that run through queued -> running ->
@@ -604,6 +604,16 @@ ADR Phase 5: IN PROGRESS (5.1, 5.2, 5.3 and 5.3.1 done; MCP and docs pending; do
   │    project-scoped `MediaService.list`; `DesignerService` matches in memory
   │    and still persists nothing (selection reaches the existing review/apply
   │    path only).
+  ├─ 5.3.2 Visual intent done: ordinary Designer intent can ask for visual work.
+  │    The LLM planner prompt offers `visual.apply` with an open `select: {}`
+  │    task only - the model is told never to name an asset, media id, filename
+  │    or image block id, and the plan contract rejects unknown keys that would
+  │    invite one - so the Visual domain resolves targets and assets itself.
+  │    `DesignerService` keeps the validated visual proposal on
+  │    `DesignerProposal.visual` (bounded `rationale` plus `unmatched` targets)
+  │    strictly as explanation: `document` stays the source of truth, apply
+  │    never depends on it, and the Designer UI shows the selections and
+  │    unmatched targets read-only (no new endpoint, no visual editor).
   └─ MCP as a second mouth and the roadmap docs: pending.
 
 Phase 2 is complete: the last §13 Phase 2 bullet — wiring `resolveDesignSystem`

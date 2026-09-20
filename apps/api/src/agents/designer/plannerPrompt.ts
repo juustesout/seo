@@ -14,7 +14,13 @@ import {
   type DesignerPlannerDocumentContext,
 } from './plannerContext.js';
 
-const DISPATCHABLE_KINDS = ['composer.structure', 'writer.fillSlots', 'writer.revise', 'designer.review'] as const;
+const DISPATCHABLE_KINDS = [
+  'composer.structure',
+  'writer.fillSlots',
+  'writer.revise',
+  'visual.apply',
+  'designer.review',
+] as const;
 
 function contextText(doc: DesignerPlannerDocumentContext | undefined): string {
   if (!doc) return '(no existing document)';
@@ -64,6 +70,7 @@ function outputContractText(): string {
     '    { "kind": "composer.structure", "task": { "format": "article"|"landing_page" } },',
     '    { "kind": "writer.fillSlots", "task": { "slots": string[] } },',
     '    { "kind": "writer.revise", "task": { "instruction": string, "target": { "kind": "document"|"introduction"|"section"|"block", "ref"?: string } } },',
+    '    { "kind": "visual.apply", "task": { "select": { } } },',
     '    { "kind": "designer.review", "criteria": ["document_valid"|"structure_preserved"|"slots_filled"|"seo", ...] }',
     '  ]',
     '}',
@@ -71,6 +78,12 @@ function outputContractText(): string {
     '- composer.structure builds a FRESH skeleton; writer.fillSlots fills its slots. Use both for creation.',
     '- writer.revise edits an EXISTING document; use it for revisions, never after composer.structure.',
     '- writer.revise may only reference block refs listed in the document context; "document"/"introduction" need no ref.',
+    '- visual.apply asks the Visual domain to choose existing project assets for the document image blocks.',
+    '  Use it only when the user asks for images/photos/visuals or when adding imagery is clearly part of the request.',
+    '  Always emit "task": { "select": {} } to let the server choose assets and targets.',
+    '  NEVER name an asset id, media id, filename, url or image block id, and never invent one.',
+    '  Do not promise backgrounds, CSS, cropping, image generation or uploads; only existing assets can be selected.',
+    '  A visual step needs an existing document, so place it after composer.structure or when editing stored content.',
     '- NEVER use writer.freeText; it is not wired.',
     '- Steps run in strict order; a step that needs a document must follow one that creates or loads it.',
     '- Max 8 steps per plan.',

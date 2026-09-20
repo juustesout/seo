@@ -46,7 +46,14 @@ describe('buildDesignerPlannerPrompt', () => {
     expect(user).toContain('composer.structure');
     expect(user).toContain('writer.fillSlots');
     expect(user).toContain('writer.revise');
+    expect(user).toContain('visual.apply');
     expect(user).toContain('designer.review');
+  });
+
+  it('constrains visual.apply to an open, server-resolved asset selection', () => {
+    expect(user).toContain('"select": {}');
+    expect(user).toContain('NEVER name an asset id, media id, filename, url or image block id');
+    expect(user).toContain('Do not promise backgrounds, CSS, cropping, image generation or uploads');
   });
 
   it('never exposes the project id or internal revision machinery to the prompt', () => {

@@ -28,6 +28,7 @@ import {
   VISUAL_DESIGN_PROPOSAL_VERSION,
   VisualDesignError,
   applyVisualDesignProposal,
+  isValidVisualDesignProposal,
 } from './visualDesign.js';
 
 const HERO_IMAGE = 'hero__media';
@@ -286,6 +287,22 @@ describe('visualDesignProposalFromSelections', () => {
     const composed = applyVisualDesignProposal(document(), proposal, [toAssetRef(SOLAR), toAssetRef(BATTERY)]);
     expect(composed.applied).toEqual([`select_asset:${HERO_IMAGE}`, `select_asset:${FEAT_IMAGE}`]);
     expect(composed.document.blocks[0]!.children![1]!.attrs?.mediaId).toBe('m_solar');
+  });
+
+  it('attaches review-only unmatched provenance and rejects a malformed entry', () => {
+    const unmatched = [{ targetBlockId: FEAT_IMAGE, reason: 'below_threshold' as const }];
+    const proposal = visualDesignProposalFromSelections([solarSelection], undefined, unmatched);
+    expect(proposal.unmatched).toEqual(unmatched);
+    expect(isValidVisualDesignProposal(proposal)).toBe(true);
+    // Unmatched entries are provenance, not a mutation payload: an unknown
+    // reason is rejected rather than carried onto the proposal.
+    expectVisualError(
+      () =>
+        visualDesignProposalFromSelections([solarSelection], undefined, [
+          { targetBlockId: FEAT_IMAGE, reason: 'guessed' as never },
+        ]),
+      'invalid_visual_proposal',
+    );
   });
 
   it('refuses a duplicate target or a duplicated asset instead of overwriting', () => {

@@ -68,7 +68,6 @@ describe('isValidDesignBrief', () => {
     expect(isValidDesignBrief({ goal: 'Goal', constraints: 'not-an-array' })).toBe(false);
   });
 });
-
 describe('isValidDesignerStep', () => {
   it('accepts every bounded step kind', () => {
     for (const step of validPlan.steps) expect(isValidDesignerStep(step)).toBe(true);
@@ -214,6 +213,15 @@ describe('isValidDesignerProposal', () => {
       isValidDesignerProposal({ version: 1, baseRevision: 'rev1:abc', document: compiled.document, review: { ok: 'nope' } }),
     ).toBe(false);
   });
+
+  it('accepts optional visual provenance and rejects a malformed one', () => {
+    const visual = { kind: 'visual_design_proposal', version: 1, operations: [] };
+    expect(isValidDesignerProposal({ ...validProposal, visual })).toBe(true);
+    expect(
+      isValidDesignerProposal({ ...validProposal, visual: { kind: 'visual_design_proposal', version: 1 } }),
+    ).toBe(false);
+    expect(isValidDesignerProposal({ ...validProposal, visual: 'nope' })).toBe(false);
+  });
 });
 
 describe('contentRevisionOf', () => {
@@ -319,6 +327,20 @@ describe('visual design domain integration (ADR 5.3)', () => {
     ).toBe(false);
     // The selection request is still strictly validated.
     expect(isValidDesignerStep({ kind: 'visual.apply', task: { select: { targets: ['bad id'] } } })).toBe(false);
+  });
+
+  it('rejects a planned visual step that tries to name assets or block ids', () => {
+    // The planner must not need to invent identifiers: only the open, server
+    // resolved "select" request is a valid visual task, and unknown keys that
+    // invite an asset/target list are rejected outright.
+    expect(isValidDesignerStep({ kind: 'visual.apply', task: { select: {} } })).toBe(true);
+    expect(isValidDesignerStep({ kind: 'visual.apply', task: { select: { targetBlockIds: ['made-up-id'] } } })).toBe(
+      false,
+    );
+    expect(isValidDesignerStep({ kind: 'visual.apply', task: { select: { assetIds: ['made-up-asset'] } } })).toBe(false);
+    expect(
+      isValidDesignerStep({ kind: 'visual.apply', task: { select: { targetBlockIds: ['made-up-id'], assetIds: ['x'] } } }),
+    ).toBe(false);
   });
 
   it('maps step kinds to domains and reports the domains a plan uses', () => {

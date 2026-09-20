@@ -9,6 +9,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   VISUAL_DESIGN_MAX_OPERATIONS,
+  VISUAL_DESIGN_MAX_UNMATCHED,
   VISUAL_DESIGN_PROPOSAL_KIND,
   VISUAL_DESIGN_PROPOSAL_VERSION,
   VisualDesignError,
@@ -16,6 +17,7 @@ import {
   isValidVisualAssetRef,
   isValidVisualDesignOperation,
   isValidVisualDesignProposal,
+  isValidVisualNoSuitableAsset,
 } from './visualDesign.js';
 import type { VisualAssetRef, VisualDesignProposal } from './visualDesign.js';
 import type { CanonicalDocument } from './canonical.js';
@@ -124,6 +126,24 @@ describe('isValidVisualDesignProposal', () => {
     }));
     expect(isValidVisualDesignProposal(proposal(tooMany))).toBe(false);
   });
+
+  it('accepts review-only unmatched provenance and rejects malformed entries', () => {
+    const withUnmatched = { ...proposal([]), unmatched: [{ targetBlockId: IMAGE, reason: 'below_threshold' }] };
+    expect(isValidVisualDesignProposal(withUnmatched)).toBe(true);
+    expect(isValidVisualNoSuitableAsset({ targetBlockId: IMAGE, reason: 'no_candidates' })).toBe(true);
+    // An unknown reason, an unknown key or a bad target id is never provenance.
+    expect(isValidVisualNoSuitableAsset({ targetBlockId: IMAGE, reason: 'guessed' })).toBe(false);
+    expect(isValidVisualNoSuitableAsset({ targetBlockId: IMAGE, reason: 'no_candidates', extra: true })).toBe(false);
+    expect(isValidVisualNoSuitableAsset({ targetBlockId: 'bad id', reason: 'no_candidates' })).toBe(false);
+    expect(isValidVisualDesignProposal({ ...proposal([]), unmatched: [{ targetBlockId: IMAGE, reason: 'guessed' }] })).toBe(
+      false,
+    );
+    const tooMany = Array.from({ length: VISUAL_DESIGN_MAX_UNMATCHED + 1 }, () => ({
+      targetBlockId: IMAGE,
+      reason: 'no_candidates' as const,
+    }));
+    expect(isValidVisualDesignProposal({ ...proposal([]), unmatched: tooMany })).toBe(false);
+  });
 });
 
 describe('applyVisualDesignProposal', () => {
@@ -225,6 +245,16 @@ describe('applyVisualDesignProposal', () => {
         ),
       ),
     ).toMatchObject({ code: 'invalid_visual_proposal' });
+  });
+
+  it('ignores unmatched provenance when composing (it is not an instruction)', () => {
+    const withUnmatched = {
+      ...proposal([{ op: 'select_asset', target: IMAGE, mediaId: 'm1' }]),
+      unmatched: [{ targetBlockId: BODY, reason: 'no_candidates' as const }],
+    };
+    const result = applyVisualDesignProposal(baseDocument(), withUnmatched, [ASSET]);
+    expect(result.document.blocks[0]!.children![0]!.attrs?.mediaId).toBe('m1');
+    expect(result.applied).toEqual([`select_asset:${IMAGE}`]);
   });
 });
 

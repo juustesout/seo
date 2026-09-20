@@ -13,6 +13,7 @@ import {
   MARKETING_STORYBOARD_PLAN,
   compileComposition,
   contentRevisionOf,
+  isValidDesignerProposal,
   isWritableCompositionSlot,
 } from '@seo/contracts';
 import type { CanonicalDocument, DesignerIntent, DesignerPlan, DesignerPlanner, VisualDesignOperation } from '@seo/contracts';
@@ -565,6 +566,22 @@ describe('DesignerService visual domain (ADR 5.3)', () => {
     );
     expect(err.status).toBe(422);
     expect(err.code).toBe('visual_no_suitable_asset');
+    expect(mock.updates).toHaveLength(0);
+  });
+
+  it('keeps the visual rationale and unmatched targets as proposal provenance only', async () => {
+    // Only one asset exists: the hero block matches, the feature block does not.
+    mock.media = [solar];
+    const proposal = await service.execute('p1', {
+      plan: selectPlan({}),
+      baseRevision: 'rev1:abc',
+      baseDocument: selectionDoc,
+    });
+    expect(proposal.visual?.operations).toEqual([{ op: 'select_asset', target: 'hero__media', mediaId: 'm_solar' }]);
+    expect(proposal.visual?.rationale?.[0]).toMatch(/solar/i);
+    expect(proposal.visual?.unmatched).toEqual([{ targetBlockId: 'feat__media', reason: 'all_conflicting' }]);
+    // Provenance never changes the document or the proposal's validity.
+    expect(isValidDesignerProposal(proposal)).toBe(true);
     expect(mock.updates).toHaveLength(0);
   });
 

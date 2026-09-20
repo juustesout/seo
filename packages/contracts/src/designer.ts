@@ -292,6 +292,13 @@ export interface DesignerProposal {
   document: CanonicalDocument;
   plan?: DesignerPlan;
   review?: DesignerReview;
+  /**
+   * Present when the plan used the Visual domain: the validated visual proposal
+   * that was composed. It is provenance for review (rationale and unmatched
+   * targets) and never a second mutation instruction - `document` remains the
+   * single source of truth and apply depends only on it.
+   */
+  visual?: VisualDesignProposal;
 }
 
 // ---------------------------------------------------------------------------
@@ -363,7 +370,7 @@ export function stableJsonStringify(value: unknown): string {
 
 const BRIEF_KEYS: ReadonlySet<string> = new Set(['goal', 'format', 'audience', 'topic', 'constraints']);
 const PLAN_KEYS: ReadonlySet<string> = new Set(['version', 'brief', 'steps']);
-const PROPOSAL_KEYS: ReadonlySet<string> = new Set(['version', 'baseRevision', 'document', 'plan', 'review']);
+const PROPOSAL_KEYS: ReadonlySet<string> = new Set(['version', 'baseRevision', 'document', 'plan', 'review', 'visual']);
 const REVIEW_KEYS: ReadonlySet<string> = new Set(['ok', 'errors', 'warnings', 'score']);
 const REVIEW_ISSUE_KEYS: ReadonlySet<string> = new Set(['code', 'message', 'step']);
 const STEP_TASK_KEYS: ReadonlySet<string> = new Set(['kind', 'task']);
@@ -559,6 +566,7 @@ export function isValidDesignerProposal(value: unknown): value is DesignerPropos
   if (!isValidCanonicalDoc(value.document)) return false;
   if (value.plan !== undefined && !isValidDesignerPlan(value.plan)) return false;
   if (value.review !== undefined && !isValidDesignerReview(value.review)) return false;
+  if (value.visual !== undefined && !isValidVisualDesignProposal(value.visual)) return false;
   return true;
 }
 

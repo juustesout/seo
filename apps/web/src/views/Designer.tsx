@@ -20,6 +20,7 @@ import {
   contentRevisionOf,
   type DesignerProposal,
   type DesignerReview,
+  type VisualDesignProposal,
 } from '@seo/contracts';
 import { CanonicalRenderer } from '../components/canonicalRenderer';
 import { canonicalFromEditorDocument } from '../components/content/editorDraft';
@@ -486,6 +487,7 @@ function EditReview({
       )}
 
       {proposal.review && <ReviewSummary review={proposal.review} />}
+      {proposal.visual && <VisualProvenance visual={proposal.visual} />}
 
       {documentLoading && !document && (
         <div className="rounded-[10px] border border-dashed p-10 text-center text-sm text-muted-foreground">
@@ -564,6 +566,52 @@ function ReviewSummary({ review }: { review: DesignerReview }) {
 }
 
 /**
+ * Visual-domain provenance. The Visual domain explains which existing project
+ * asset it chose for which image block (and which targets it could not fill).
+ * These are read-only explanations, never executable instructions: the proposed
+ * document above remains the single source of truth and apply depends only on it.
+ */
+function VisualProvenance({ visual }: { visual: VisualDesignProposal }) {
+  const unmatched = visual.unmatched ?? [];
+  if (visual.operations.length === 0 && unmatched.length === 0) return null;
+
+  return (
+    <div className="rounded-[10px] border bg-card p-3 text-sm">
+      <p className="m-0 text-xs font-medium uppercase tracking-wide text-muted-foreground">Visual selections</p>
+      <p className="m-0 mt-1 text-xs text-muted-foreground">
+        Chosen by the Visual domain from existing project assets. Explanation only; not applied on its own.
+      </p>
+      <ul className="m-0 mt-2 list-disc pl-5">
+        {visual.operations.map((op, index) => {
+          const reason = visual.rationale?.[index];
+          return (
+            <li key={`operation-${index}`}>
+              {op.op === 'select_asset' ? (
+                <>
+                  <span className="font-mono text-xs">{op.target}</span> &rarr; asset{' '}
+                  <span className="font-mono text-xs">{op.mediaId}</span>
+                </>
+              ) : (
+                <>
+                  <span className="font-mono text-xs">{op.target}</span> &rarr; variant{' '}
+                  <span className="font-mono text-xs">{op.variant}</span>
+                </>
+              )}
+              {reason ? `: ${reason}` : ''}
+            </li>
+          );
+        })}
+        {unmatched.map((entry, index) => (
+          <li key={`unmatched-${index}`} className="text-muted-foreground">
+            No asset for <span className="font-mono text-xs">{entry.targetBlockId}</span> ({entry.reason})
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+/**
  * Creation-mode proposal. It has no document to apply to (the apply route
  * requires an existing content record), so it stays explicitly proposal-only.
  */
@@ -579,6 +627,7 @@ function ProposalResult({ proposal }: { proposal: DesignerProposal }) {
       </div>
 
       {proposal.review && <ReviewSummary review={proposal.review} />}
+      {proposal.visual && <VisualProvenance visual={proposal.visual} />}
 
       <div className="overflow-hidden rounded-[10px] border bg-white">
         <CanonicalRenderer document={proposal.document} />
