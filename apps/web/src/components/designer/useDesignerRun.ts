@@ -38,7 +38,13 @@ export interface DesignerRunState {
   error: string | null;
   /** True when the server collapsed this submission onto an existing run. */
   reused: boolean;
-  submit: (instruction: string) => Promise<void>;
+  /**
+   * Submit one intent. Without a target this is a creation intent anchored to
+   * the empty-document revision; with a `contentId` it is an edit intent where
+   * the server derives the base revision from the stored document (the contract
+   * forbids sending both, so the revision check is never bypassed).
+   */
+  submit: (instruction: string, target?: { contentId?: string }) => Promise<void>;
   reset: () => void;
 }
 
@@ -117,7 +123,7 @@ export function useDesignerRun(projectId: string, pollMs = 2000): DesignerRunSta
   }, [projectId]);
 
   const submit = useCallback(
-    async (instruction: string) => {
+    async (instruction: string, target?: { contentId?: string }) => {
       const text = instruction.trim();
       if (!text || submittingRef.current) return;
       submittingRef.current = true;
@@ -133,7 +139,9 @@ export function useDesignerRun(projectId: string, pollMs = 2000): DesignerRunSta
           `/projects/${projectId}/designer/runs`,
           {
             method: 'POST',
-            body: { mode: 'intent', instruction: text, base_revision: CREATION_BASE_REVISION },
+            body: target?.contentId
+              ? { mode: 'intent', instruction: text, content_id: target.contentId }
+              : { mode: 'intent', instruction: text, base_revision: CREATION_BASE_REVISION },
           },
         );
         if (epoch !== epochRef.current) return;

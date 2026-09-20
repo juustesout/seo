@@ -10,6 +10,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { AgentRun, CanonicalDocument, DesignerProposal } from '@seo/contracts';
+import { contentRevisionOf, tiptapEmptyDoc } from '@seo/contracts';
 import { Designer } from './Designer';
 
 const { apiMock } = vi.hoisted(() => ({ apiMock: { api: vi.fn() } }));
@@ -315,5 +316,307 @@ describe('Designer', () => {
 
     await screen.findByText(/Connection problem while refreshing the run/);
     expect(screen.getByText(RUN_ID)).toBeTruthy();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 5.2: edit mode, review, apply and reject
+// ---------------------------------------------------------------------------
+
+const CID = '33333333-3333-4333-8333-333333333333';
+const CONTENT_DOC = tiptapEmptyDoc();
+const REV = contentRevisionOf(CONTENT_DOC);
+const CONTENT_LIST_PATH = `/projects/${PROJECT}/content?limit=300`;
+const CONTENT_DETAIL_PATH = `/projects/${PROJECT}/content/${CID}`;
+const APPLY_PATH = `/projects/${PROJECT}/content/${CID}/designer/apply`;
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((r, j) => {
+    resolve = r;
+    reject = j;
+  });
+  return { promise, resolve, reject };
+}
+
+function editProposal(text: string, baseRevision = REV): DesignerProposal {
+  return { version: 1, baseRevision, document: doc(text) };
+}
+
+function editRun(over: Partial<AgentRun> = {}): AgentRun {
+  return run({
+    input: { mode: 'intent', intent: { instruction: 'Improve it', projectId: PROJECT, contentId: CID } },
+    ...over,
+  });
+}
+
+function listRow() {
+  return { id: CID, title: 'Existing article', status: 'draft', updated_at: '2026-01-01T00:00:00.000Z' };
+}
+
+interface EditApi {
+  calls: Call[];
+  setRun: (next: AgentRun) => void;
+  isApplied: () => boolean;
+}
+
+/** Transport fake for the edit flow: list, detail, runs and apply. */
+function editApi(
+  initial: AgentRun,
+  overrides: { contentJson?: unknown; onApply?: () => unknown } = {},
+): EditApi {
+  let currentRun = initial;
+  const contentJson = overrides.contentJson ?? CONTENT_DOC;
+  const calls: Call[] = [];
+  let applied = false;
+  apiMock.api.mockReset();
+  apiMock.api.mockImplementation(async (path: string, opts: { method?: string; body?: unknown } = {}) => {
+    const method = opts.method ?? 'GET';
+    calls.push({ path, method, body: opts.body });
+    if (path === CONTENT_LIST_PATH) return { content: [listRow()], total: 1 };
+    if (path === CONTENT_DETAIL_PATH) {
+      return { ...listRow(), content_json: contentJson };
+    }
+    if (method === 'POST' && path === RUNS_PATH) return { run: currentRun, reused: false };
+    if (method === 'GET' && path.startsWith(`/projects/${PROJECT}/designer/runs/`)) return currentRun;
+    if (method === 'POST' && path === APPLY_PATH) {
+      if (overrides.onApply) return overrides.onApply();
+      applied = true;
+      return { id: CID };
+    }
+    throw new Error(`unexpected ${method} ${path}`);
+  });
+  return {
+    calls,
+    setRun: (next) => {
+      currentRun = next;
+    },
+    isApplied: () => applied,
+  };
+}
+
+async function selectEditDocument() {
+  fireEvent.click(screen.getByRole('button', { name: 'Edit existing' }));
+  await screen.findByText('Existing article (draft)');
+  fireEvent.change(screen.getByLabelText('Select document'), { target: { value: CID } });
+  await screen.findByText('Existing article');
+}
+
+async function startEditRun(instruction = 'Tighten the introduction') {
+  fireEvent.change(screen.getByLabelText('How should the Designer change this document?'), {
+    target: { value: instruction },
+  });
+  fireEvent.click(screen.getByRole('button', { name: 'Start design run' }));
+}
+
+describe('Designer edit + apply', () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+    apiMock.api.mockReset();
+  });
+
+  it('switches to edit mode, lists documents and shows the selected revision', async () => {
+    editApi(editRun({ status: 'queued' }));
+    render(<Designer projectId={PROJECT} role="editor" pollMs={5} />);
+    expect(screen.getByLabelText('What should the Designer create?')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit existing' }));
+    await screen.findByText('Existing article (draft)');
+    expect(screen.getByLabelText('How should the Designer change this document?')).toBeTruthy();
+
+    fireEvent.change(screen.getByLabelText('Select document'), { target: { value: CID } });
+    await screen.findByText(REV);
+    expect(screen.getByText('Existing article')).toBeTruthy();
+  });
+
+  it('submits an edit run with the document id and no client base revision', async () => {
+    const fake = editApi(editRun({ status: 'queued' }));
+    render(<Designer projectId={PROJECT} role="editor" pollMs={5} />);
+    await selectEditDocument();
+    await startEditRun('Tighten the introduction');
+
+    await screen.findByText('Queued');
+    const post = pathsOf(fake.calls, 'POST').find((c) => c.path === RUNS_PATH)!;
+    expect(post.body).toMatchObject({
+      mode: 'intent',
+      instruction: 'Tighten the introduction',
+      content_id: CID,
+    });
+    expect('base_revision' in (post.body as object)).toBe(false);
+    expect(window.localStorage.getItem(BOOKMARK_KEY)).toBe(RUN_ID);
+  });
+
+  it('will not start an edit run without a document', async () => {
+    editApi(editRun({ status: 'queued' }));
+    render(<Designer projectId={PROJECT} role="editor" pollMs={5} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Edit existing' }));
+    await screen.findByText('Existing article (draft)');
+    fireEvent.change(screen.getByLabelText('How should the Designer change this document?'), {
+      target: { value: 'Tighten the introduction' },
+    });
+
+    expect((screen.getByRole('button', { name: 'Start design run' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByText('Select a document before starting an edit run.')).toBeTruthy();
+  });
+
+  it('enters review for a succeeded edit run with source identity and proposal', async () => {
+    editApi(editRun({ status: 'succeeded', result: editProposal('Edited proposal body') }));
+    render(<Designer projectId={PROJECT} role="editor" pollMs={5} />);
+    await selectEditDocument();
+    await startEditRun();
+
+    await screen.findByText('Edited proposal body');
+    expect(screen.getByText('Proposed document')).toBeTruthy();
+    expect(screen.getByText('Current saved document')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Apply to document' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Reject' })).toBeTruthy();
+    expect(screen.getAllByText(REV).length).toBeGreaterThan(0);
+  });
+
+  it('applies the proposal with its revision and refreshes the document', async () => {
+    const fake = editApi(editRun({ status: 'succeeded', result: editProposal('Edited proposal body') }));
+    render(<Designer projectId={PROJECT} role="editor" pollMs={5} />);
+    await selectEditDocument();
+    await startEditRun();
+    await screen.findByText('Edited proposal body');
+
+    const detailReadsBefore = fake.calls.filter((c) => c.method === 'GET' && c.path === CONTENT_DETAIL_PATH).length;
+    fireEvent.click(screen.getByRole('button', { name: 'Apply to document' }));
+
+    await screen.findByText('Proposal applied to the saved document.');
+    const apply = pathsOf(fake.calls, 'POST').find((c) => c.path === APPLY_PATH)!;
+    expect((apply.body as { proposal: DesignerProposal }).proposal.baseRevision).toBe(REV);
+    expect(fake.isApplied()).toBe(true);
+    await waitFor(() =>
+      expect(
+        fake.calls.filter((c) => c.method === 'GET' && c.path === CONTENT_DETAIL_PATH).length,
+      ).toBeGreaterThan(detailReadsBefore),
+    );
+  });
+
+  it('reports a stale proposal refused by the server without marking it applied', async () => {
+    const fake = editApi(editRun({ status: 'succeeded', result: editProposal('Edited proposal body') }), {
+      onApply: () => {
+        throw new ApiRequestError(
+          'stale_proposal',
+          'The content changed since this proposal was generated; generate it again.',
+          409,
+        );
+      },
+    });
+    render(<Designer projectId={PROJECT} role="editor" pollMs={5} />);
+    await selectEditDocument();
+    await startEditRun();
+    await screen.findByText('Edited proposal body');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Apply to document' }));
+    await screen.findByText('This proposal is stale and was not applied.');
+    expect(screen.getByText(/The content changed since this proposal was generated/)).toBeTruthy();
+    expect(fake.isApplied()).toBe(false);
+  });
+
+  it('disables apply when the source document no longer matches the proposal', async () => {
+    const changedDoc = { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'changed' }] }] };
+    editApi(editRun({ status: 'succeeded', result: editProposal('Edited proposal body') }), {
+      contentJson: changedDoc,
+    });
+    render(<Designer projectId={PROJECT} role="editor" pollMs={5} />);
+    await selectEditDocument();
+    await startEditRun();
+    await screen.findByText('Edited proposal body');
+
+    expect(
+      (screen.getByRole('button', { name: 'Apply to document' }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    expect(screen.getByText(/The saved document changed after this proposal was generated/)).toBeTruthy();
+  });
+
+  it('cannot apply the same proposal twice', async () => {
+    const applyDeferred = deferred<unknown>();
+    let applyCalls = 0;
+    apiMock.api.mockReset();
+    apiMock.api.mockImplementation(
+      async (path: string, opts: { method?: string; body?: unknown } = {}) => {
+        const method = opts.method ?? 'GET';
+        if (path === CONTENT_LIST_PATH) return { content: [listRow()], total: 1 };
+        if (path === CONTENT_DETAIL_PATH) return { ...listRow(), content_json: CONTENT_DOC };
+        if (method === 'POST' && path === RUNS_PATH) {
+          return { run: editRun({ status: 'succeeded', result: editProposal('Edited proposal body') }), reused: false };
+        }
+        if (method === 'POST' && path === APPLY_PATH) {
+          applyCalls += 1;
+          return applyDeferred.promise;
+        }
+        throw new Error(`unexpected ${method} ${path}`);
+      },
+    );
+    render(<Designer projectId={PROJECT} role="editor" pollMs={5} />);
+    await selectEditDocument();
+    await startEditRun();
+    await screen.findByText('Edited proposal body');
+
+    const button = screen.getByRole('button', { name: 'Apply to document' });
+    fireEvent.click(button);
+    fireEvent.click(button);
+
+    await waitFor(() => expect(applyCalls).toBe(1));
+    applyDeferred.resolve({ id: CID });
+    await screen.findByText('Proposal applied to the saved document.');
+  });
+
+  it('rejects a proposal without modifying the saved content', async () => {
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    const fake = editApi(editRun({ status: 'succeeded', result: editProposal('Edited proposal body') }));
+    render(<Designer projectId={PROJECT} role="editor" pollMs={5} />);
+    await selectEditDocument();
+    await startEditRun();
+    await screen.findByText('Edited proposal body');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Reject' }));
+    await screen.findByText('Proposal rejected. The saved document was not changed.');
+    expect(confirmSpy).toHaveBeenCalled();
+    expect(fake.isApplied()).toBe(false);
+    expect(pathsOf(fake.calls, 'POST').some((c) => c.path === APPLY_PATH)).toBe(false);
+
+    confirmSpy.mockRestore();
+  });
+
+  it('never lets a stale document response overwrite a newer selection', async () => {
+    const docA = '44444444-4444-4444-8444-444444444444';
+    const docB = '55555555-5555-4555-8555-555555555555';
+    const pendingA = deferred<unknown>();
+    apiMock.api.mockReset();
+    apiMock.api.mockImplementation(async (path: string, opts: { method?: string } = {}) => {
+      const method = opts.method ?? 'GET';
+      if (path === CONTENT_LIST_PATH) {
+        return {
+          content: [
+            { id: docA, title: 'Doc A', status: 'draft', updated_at: null },
+            { id: docB, title: 'Doc B', status: 'draft', updated_at: null },
+          ],
+          total: 2,
+        };
+      }
+      if (path === `/projects/${PROJECT}/content/${docA}`) return pendingA.promise;
+      if (path === `/projects/${PROJECT}/content/${docB}`) {
+        return { id: docB, title: 'Doc B', status: 'draft', updated_at: null, content_json: CONTENT_DOC };
+      }
+      throw new Error(`unexpected ${method} ${path}`);
+    });
+
+    render(<Designer projectId={PROJECT} role="editor" pollMs={5} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Edit existing' }));
+    await screen.findByText('Doc A (draft)');
+
+    fireEvent.change(screen.getByLabelText('Select document'), { target: { value: docA } });
+    fireEvent.change(screen.getByLabelText('Select document'), { target: { value: docB } });
+    await screen.findByText('Doc B');
+
+    pendingA.resolve({ id: docA, title: 'Doc A', status: 'draft', updated_at: null, content_json: CONTENT_DOC });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(screen.getByText('Doc B')).toBeTruthy();
+    expect(screen.queryByText('Doc A')).toBeNull();
   });
 });

@@ -540,7 +540,7 @@ add a second progress document (no `progress.md`); update this section instead.
 | Phase 2 — Designer orchestration (synchronous) | Done | `68ad5d9`, `d442d92`, `791c763`, `f88d4e6`, `172dd7b` |
 | Phase 3 — Design Package v1 | Done | `ff652a6` |
 | Phase 4 — Durable agent runs | Done | `ff61c47` (Part 1), Part 2 (worker execution, status API, reconciliation) |
-| Phase 5 — Designer UI, MCP, docs | In progress — 5.1 done | Phase 5.1 Designer UI run foundation (`apps/web/src/views/Designer.tsx`, `apps/web/src/components/designer/useDesignerRun.ts`); plan review/accept, MCP and docs pending |
+| Phase 5 — Designer UI, MCP, docs | In progress — 5.1 and 5.2 done | 5.1 Designer UI run foundation and 5.2 edit review + explicit apply (`apps/web/src/views/Designer.tsx`, `apps/web/src/components/designer/useDesignerRun.ts`); MCP and docs pending |
 
 ADR Phase 2: DONE
   ├─ 3.1 done
@@ -555,15 +555,24 @@ ADR Phase 4: DONE
   ├─ Part 1 (durable agent runs) done
   └─ Part 2 (worker execution, status API, reconciliation) done
 
-ADR Phase 5: IN PROGRESS (only 5.1 is done; do not mark Phase 5 complete)
+ADR Phase 5: IN PROGRESS (5.1 and 5.2 done; MCP and docs pending; do not mark Phase 5 complete)
   ├─ 5.1 Designer UI run foundation done: the new `/p/:projectId/designer` view
   │    submits one supported AgentRun input (intent, creation) to
   │    POST /designer/runs and follows that run through queued -> running ->
   │    succeeded | failed via GET /designer/runs/:runId. The project-scoped run
   │    bookmark is restored and polling resumed on mount, and the succeeded
   │    `DesignerProposal` is shown as a proposal only (no apply/save/publish).
-  └─ 5.2 plan review + explicit accept to the Editor, MCP as a second mouth,
-       and the roadmap docs: pending.
+  ├─ 5.2 Designer review + explicit apply done: the same view has Create new and
+  │    Edit existing modes. An edit run is submitted against the selected
+  │    document's server-derived revision (POST /designer/runs with `content_id`;
+  │    the contract forbids sending `base_revision` alongside it). The succeeded
+  │    proposal is reviewed beside the current saved document, and is written only
+  │    through the existing `POST /content/:contentId/designer/apply`, which
+  │    re-checks the revision and refuses a stale proposal (409 `stale_proposal`).
+  │    No client-side save; reject is local and never touches saved content. This
+  │    satisfies the §13 "review + explicit accept to the Editor" intent via the
+  │    existing safe apply capability rather than a new endpoint.
+  └─ MCP as a second mouth and the roadmap docs: pending.
 
 Phase 2 is complete: the last §13 Phase 2 bullet — wiring `resolveDesignSystem`
 into `CanonicalRenderer`, the editor canvas and the Designer — landed as chat
