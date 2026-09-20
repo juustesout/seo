@@ -1,6 +1,6 @@
 # Editor-Native Designer — Product & UX Contract (ADR Phase R0)
 
-Status: **R0 done (recon + contract)**. This document is the product handle for
+Status: **R0 done (recon + contract); R1 done (editor shell built)**. This document is the product handle for
 the R-series. `docs/editor-native-designer-roadmap.md` is the guiding brief and
 stays authoritative for intent; this document turns that intent into concrete
 product rules and records what the current UI actually is.
@@ -355,7 +355,7 @@ overshadows the Editor.
 | Phase | Name | Status |
 | --- | --- | --- |
 | R0 | Product Reset & Experience Contract | **Done** (this document) |
-| R1 | Editor Shell & Interaction Foundation | Not started |
+| R1 | Editor Shell & Interaction Foundation | **Done** (R1.1 recon + shell build) |
 | R2 | Embedded Designer Agent Shell | Not started |
 | R3 | First Vertical Slice, Image Insertion | Not started |
 | R4 | In-Editor Proposal, Apply & Undo | Not started |
@@ -369,21 +369,15 @@ overshadows the Editor.
 
 ## 15. Handoff to the next briefing
 
-Next deliverable: **Phase R1.1 — Editor Shell Recon & Experience Foundation**
-(a recon that ends in an implementation brief, still no feature code before the
-brief is agreed). It must, against this contract:
+Next deliverable: **Phase R2 — Embedded Designer Agent Shell**. The R1 shell is
+in place (`EditorWorkspace`, one `DocumentHeader`, merged `ContextualToolbar`,
+`IntelligenceRail`, lifted `EditorSelectionContext`, in-editor `PreviewPane`, a
+reserved `InlineAssistantSlot`, a workspace keymap and an on-demand insert rail),
+so the agent can land in that fixed place instead of becoming another panel. R2
+must build on the R1.1 recon (`docs/editor-shell-recon.md`); it must not add a
+route or bolt on a parallel surface.
 
-- inventory the current Editor components
-  (`components/content/editor/*`, `ContentToolbar`, `RichTextEditor`,
-  `ContentEditorHeader`, and the stacked sidebar panels);
-- propose the shell: document header, clear save status, undo/redo, preview,
-  publish/schedule, contextual toolbar, selection state, active-block state, one
-  fixed place for AI assistance, responsive behaviour, keyboard-first baseline,
-  and calm empty/loading/error states;
-- deliberately **not** integrate Designer yet (R2), so AI cannot be bolted on as
-  a panel again.
-
-After R1 comes the first real build slice: **Phase R3.1 — Embedded Designer Image
+After R2 comes the first real build slice: **Phase R3.1 — Embedded Designer Image
 Insertion**, measured only by the §11 definition of done.
 
 ---

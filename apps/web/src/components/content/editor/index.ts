@@ -14,6 +14,7 @@ export {
 } from './elementRegistry';
 export { getElementSettingsRenderer, renderElementSettings } from './settingsRegistry';
 export { readCanvasSelection } from './selection';
+export { EditorSelectionProvider, useEditorSelection } from './EditorSelectionContext';
 export { createEditorExtensions } from './extensions';
 export { sanitizeEditorDoc } from './sanitizeDoc';
 export {

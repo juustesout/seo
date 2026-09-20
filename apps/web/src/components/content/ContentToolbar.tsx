@@ -106,7 +106,7 @@ function AiMenu({ ai }: { ai: ContentAiToolbar }) {
  * `editor` (nullable while the editor initializes) and an optional `ai`
  * descriptor that, when present, adds the AI dropdown.
  */
-export function ContentToolbar({ editor, ai }: { editor: Editor | null; ai?: ContentAiToolbar }) {
+export function ContentToolbar({ editor, ai, extra }: { editor: Editor | null; ai?: ContentAiToolbar; extra?: ReactNode }) {
   if (!editor)
     return (
       <div className="flex flex-wrap items-center gap-0.5 border-b bg-muted/40 px-2 py-1.5 text-xs text-muted-foreground">
@@ -161,6 +161,7 @@ export function ContentToolbar({ editor, ai }: { editor: Editor | null; ai?: Con
       {sep}
       <ToolbarButton title="Undo" label="undo" disabled={!editor.can().undo()} onClick={run(() => cmd((c) => c.undo()))} />
       <ToolbarButton title="Redo" label="redo" disabled={!editor.can().redo()} onClick={run(() => cmd((c) => c.redo()))} />
+      {extra}
       {ai && <AiMenu ai={ai} />}
     </div>
   );

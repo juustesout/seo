@@ -1,38 +1,45 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import type { Editor } from '@tiptap/react';
 import { EditorSidebar } from './EditorSidebar';
 import { EditorMain } from './EditorMain';
-import { toolbarActionsFromEditor, type EditorToolbarActions } from './EditorToolbar';
 import { getEditorElement } from './elementRegistry';
 import { insertComposition, selectInsertedComposition } from './insertComposition';
 import { readCanvasSelection } from './selection';
-import type { AutosaveStatus } from '../useAutosave';
-import type { EditorElementDefinition, EditorSelection, EditorShellState, SidebarMode } from './types';
+import { useEditorSelection } from './EditorSelectionContext';
+import type { EditorElementDefinition, EditorSelection, SidebarMode } from './types';
 
 export function EditorShell({
   editor,
-  toolbarActions,
-  saveState,
+  toolbar,
   children,
+  showRail = true,
   onSelectionChange,
 }: {
   editor?: Editor | null;
-  toolbarActions?: EditorToolbarActions | null;
-  saveState?: AutosaveStatus;
+  /** When provided, replaces the default composition toolbar above the canvas. */
+  toolbar?: ReactNode;
   children: ReactNode;
+  /** Collapsible insert rail; on-demand in the workspace, open by default standalone. */
+  showRail?: boolean;
   onSelectionChange?: (selection: EditorSelection) => void;
 }) {
+  const shared = useEditorSelection();
   const [sidebarMode, setSidebarMode] = useState<SidebarMode>('elements');
-  const [selectedElement, setSelectedElement] = useState<EditorSelection>(null);
+  const [localSelection, setLocalSelection] = useState<EditorSelection>(null);
   const [insertHint, setInsertHint] = useState<string | null>(null);
+
+  // Prefer the lifted workspace selection; fall back to local state when the
+  // surface is used standalone (tests, other hosts).
+  const selectedElement = shared ? shared.selection : localSelection;
 
   const applySelection = useCallback(
     (selection: EditorSelection, switchToSettings: boolean) => {
-      setSelectedElement(selection);
+      if (shared) shared.setSelection(selection);
+      else setLocalSelection(selection);
       onSelectionChange?.(selection);
       if (switchToSettings && selection) setSidebarMode('settings');
     },
-    [onSelectionChange],
+    [shared, onSelectionChange],
   );
 
   const handleBrowserSelect = useCallback(
@@ -84,29 +91,25 @@ export function EditorShell({
     };
   }, [editor, applySelection]);
 
-  const boundToolbar = useMemo(
-    () => toolbarActions ?? toolbarActionsFromEditor(editor ?? null),
-    [toolbarActions, editor],
-  );
-
-  const state: EditorShellState = { sidebarMode, selectedElement };
-
   return (
     <div
       className="flex min-h-[520px] flex-col overflow-hidden rounded-[10px] border bg-card lg:flex-row"
       data-testid="editor-shell"
-      data-sidebar-mode={state.sidebarMode}
-      data-selected-type={state.selectedElement?.type ?? ''}
-      data-selected-path={(state.selectedElement?.path ?? []).join('.')}
+      data-sidebar-mode={sidebarMode}
+      data-rail-open={showRail ? 'true' : 'false'}
+      data-selected-type={selectedElement?.type ?? ''}
+      data-selected-path={(selectedElement?.path ?? []).join('.')}
     >
-      <EditorSidebar
-        mode={sidebarMode}
-        onModeChange={setSidebarMode}
-        selectedElement={selectedElement}
-        onSelectElement={handleBrowserSelect}
-        insertHint={insertHint}
-      />
-      <EditorMain editor={editor} toolbarActions={boundToolbar} saveState={saveState} onSelect={handleCanvasSelect}>
+      {showRail && (
+        <EditorSidebar
+          mode={sidebarMode}
+          onModeChange={setSidebarMode}
+          selectedElement={selectedElement}
+          onSelectElement={handleBrowserSelect}
+          insertHint={insertHint}
+        />
+      )}
+      <EditorMain editor={editor} toolbar={toolbar} onSelect={handleCanvasSelect}>
         {children}
       </EditorMain>
     </div>

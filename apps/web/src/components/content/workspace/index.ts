@@ -1,0 +1,10 @@
+export { EditorWorkspace } from './EditorWorkspace';
+export type { EditorWorkspaceProps } from './EditorWorkspace';
+export { DocumentHeader, SAVE_LABEL } from './DocumentHeader';
+export type { DocumentHeaderProps } from './DocumentHeader';
+export { ContextualToolbar } from './ContextualToolbar';
+export { IntelligenceRail } from './IntelligenceRail';
+export type { IntelligenceRailProps, RailTab } from './IntelligenceRail';
+export { PreviewPane } from './PreviewPane';
+export { InlineAssistantSlot } from './InlineAssistantSlot';
+export { CollapsibleSection } from './CollapsibleSection';

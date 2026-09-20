@@ -2,9 +2,6 @@ import { useEffect, useReducer } from 'react';
 import type { Editor } from '@tiptap/react';
 import { NodeSelection } from '@tiptap/pm/state';
 import { Button } from '@/components/ui/button';
-import { cn } from '@/lib/utils';
-import type { AutosaveStatus } from '../useAutosave';
-import { SAVE_LABEL } from '../ContentEditorHeader';
 import { COMPOSITION_NODE_TYPES } from './CompositionNodes';
 import { deleteSelectedComposition } from './insertComposition';
 
@@ -29,25 +26,29 @@ export function toolbarActionsFromEditor(editor: Editor | null): EditorToolbarAc
   };
 }
 
-function canDeleteComposition(editor: Editor | null | undefined): boolean {
+/** True when the current selection is a composition node that can be deleted. */
+export function canDeleteComposition(editor: Editor | null | undefined): boolean {
   if (!editor || editor.isDestroyed) return false;
   const { selection } = editor.state;
   if (!(selection instanceof NodeSelection)) return false;
   return (COMPOSITION_NODE_TYPES as readonly string[]).includes(selection.node.type.name);
 }
 
+/**
+ * Composition toolbar: undo/redo plus deleting the selected composition node.
+ * Save status is deliberately not shown here - the document header owns the one
+ * save indicator, so this surface never duplicates it.
+ */
 export function EditorToolbar({
   editor,
   actions,
   canUndo,
   canRedo,
-  saveState,
 }: {
   editor?: Editor | null;
   actions?: EditorToolbarActions | null;
   canUndo?: boolean;
   canRedo?: boolean;
-  saveState?: AutosaveStatus;
 }) {
   const [, refresh] = useReducer((n: number) => n + 1, 0);
   useEffect(() => {
@@ -99,18 +100,6 @@ export function EditorToolbar({
       >
         Delete
       </Button>
-      {saveState && (
-        <span
-          className={cn(
-            'ml-auto text-xs text-muted-foreground',
-            saveState === 'failed' && 'text-destructive',
-            saveState === 'saved' && 'text-success',
-          )}
-          data-testid="editor-toolbar-save"
-        >
-          {SAVE_LABEL[saveState]}
-        </span>
-      )}
     </div>
   );
 }
