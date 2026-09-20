@@ -6,10 +6,8 @@
  */
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import type { SupabaseClient } from '@supabase/supabase-js';
-import type { JobStore } from '../jobs/types.js';
+import type { ServiceContainer } from '../context.js';
 import type { ApiKeyRecord } from '../infra/apiKeys.js';
-import { AccessService } from '../supabase.js';
 import type { MpcDeps } from './server.js';
 import { registerTools } from './server.js';
 
@@ -21,18 +19,22 @@ import { registerTools } from './server.js';
  * the AccessService authorizes that the user is a member (never stronger than
  * their membership role in that project). The same AccessService answers
  * project discovery (project_list) for both key kinds.
+ *
+ * The full container is carried through so tools that need the production
+ * service wiring (the Designer) reuse the exact same services REST does.
  */
-export function depsFromApiKey(sb: SupabaseClient, jobStore: JobStore, key: ApiKeyRecord): MpcDeps {
+export function depsFromApiKey(container: ServiceContainer, key: ApiKeyRecord): MpcDeps {
   const accountKey = key.project_id === null;
   return {
-    sb,
-    jobStore,
+    sb: container.sb,
+    jobStore: container.jobStore,
     scope: accountKey ? 'account' : 'project',
     projectId: key.project_id,
     userId: key.created_by,
     canRead: key.scopes.includes('read'),
     canWrite: key.scopes.includes('write'),
-    access: new AccessService(sb),
+    access: container.access,
+    container,
   };
 }
 

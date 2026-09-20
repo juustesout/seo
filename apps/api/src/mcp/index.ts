@@ -38,7 +38,7 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  const server: McpServer = createSeoMcpServer(depsFromApiKey(container.sb, container.jobStore, key));
+  const server: McpServer = createSeoMcpServer(depsFromApiKey(container, key));
 
   const transport = new StdioServerTransport();
   await server.connect(transport);

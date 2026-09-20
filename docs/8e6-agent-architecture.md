@@ -540,7 +540,7 @@ add a second progress document (no `progress.md`); update this section instead.
 | Phase 2 — Designer orchestration (synchronous) | Done | `68ad5d9`, `d442d92`, `791c763`, `f88d4e6`, `172dd7b` |
 | Phase 3 — Design Package v1 | Done | `ff652a6` |
 | Phase 4 — Durable agent runs | Done | `ff61c47` (Part 1), Part 2 (worker execution, status API, reconciliation) |
-| Phase 5 — Designer UI, MCP, docs | In progress — 5.1, 5.2, 5.3, 5.3.1 and 5.3.2 done | 5.1 Designer UI run foundation and 5.2 edit review + explicit apply (`apps/web/src/views/Designer.tsx`, `apps/web/src/components/designer/useDesignerRun.ts`); 5.3 Visual Design domain contract (`packages/contracts/src/visualDesign.ts`), 5.3.1 asset selection (`packages/contracts/src/visualAssetSelection.ts`) and 5.3.2 visual intent + proposal provenance (`apps/api/src/agents/designer/plannerPrompt.ts`, `apps/api/src/services/designerService.ts`); MCP and docs pending |
+| Phase 5 — Designer UI, MCP, docs | In progress — 5.1, 5.2, 5.3, 5.3.1, 5.3.2 and 5.4 (MCP) done | 5.1 Designer UI run foundation and 5.2 edit review + explicit apply (`apps/web/src/views/Designer.tsx`, `apps/web/src/components/designer/useDesignerRun.ts`); 5.3 Visual Design domain contract (`packages/contracts/src/visualDesign.ts`), 5.3.1 asset selection (`packages/contracts/src/visualAssetSelection.ts`), 5.3.2 visual intent + proposal provenance (`apps/api/src/agents/designer/plannerPrompt.ts`, `apps/api/src/services/designerService.ts`) and 5.4 MCP exposure of the Designer lifecycle (`apps/api/src/mcp/server.ts`, `apps/api/src/mcp/designer.test.ts`); roadmap docs update pending |
 
 ADR Phase 2: DONE
   ├─ 3.1 done
@@ -555,7 +555,7 @@ ADR Phase 4: DONE
   ├─ Part 1 (durable agent runs) done
   └─ Part 2 (worker execution, status API, reconciliation) done
 
-ADR Phase 5: IN PROGRESS (5.1, 5.2, 5.3, 5.3.1 and 5.3.2 done; MCP and docs pending; do not mark Phase 5 complete)
+ADR Phase 5: IN PROGRESS (5.1, 5.2, 5.3, 5.3.1, 5.3.2 and 5.4 done; roadmap docs pending; do not mark Phase 5 complete)
   ├─ 5.1 Designer UI run foundation done: the new `/p/:projectId/designer` view
   │    submits one supported AgentRun input (intent, creation) to
   │    POST /designer/runs and follows that run through queued -> running ->
@@ -614,7 +614,27 @@ ADR Phase 5: IN PROGRESS (5.1, 5.2, 5.3, 5.3.1 and 5.3.2 done; MCP and docs pend
   │    strictly as explanation: `document` stays the source of truth, apply
   │    never depends on it, and the Designer UI shows the selections and
   │    unmatched targets read-only (no new endpoint, no visual editor).
-  └─ MCP as a second mouth and the roadmap docs: pending.
+  ├─ 5.4 MCP exposure done: external agents reach the same Designer lifecycle
+  │    through four thin MCP tools over the existing services
+  │    (`apps/api/src/mcp/server.ts`). `designer_capabilities` describes the
+  │    proposal-first contract; `designer_execute` shapes intent/plan input into
+  │    the existing durable run (`AgentRunService.submitDesignRun`) and returns
+  │    the run, never a content write; `designer_get_run` reads one run through
+  │    the project-scoped `AgentRunService.getRun`, so the proposal (document,
+  │    plan, review and visual provenance) and queued/running/succeeded/failed
+  │    states cross the boundary unchanged; `designer_apply` forwards a
+  │    validated proposal to the existing revision-guarded
+  │    `DesignerService.apply` (stale proposals still 409). Authorization and
+  │    project scoping reuse the shared MCP key context (`resolveProjectId`);
+  │    MCP owns no planner, executor, run model, proposal format or mutation
+  │    path. MCP tests cover execute -> inspect -> apply plus cross-project
+  │    rejection (`apps/api/src/mcp/designer.test.ts`).
+  │    Scope decision: `designer_execute` submits a durable Designer run
+  │    through `AgentRunService.submitDesignRun` and returns the run
+  │    representation; it does not synchronously return a proposal or mutate
+  │    content. Proposal inspection and explicit application remain separate
+  │    operations.
+  └─ Roadmap status update (`roadmap.md` MCP row now lists the Designer tools and the durable-run scope): done.
 
 Phase 2 is complete: the last §13 Phase 2 bullet — wiring `resolveDesignSystem`
 into `CanonicalRenderer`, the editor canvas and the Designer — landed as chat

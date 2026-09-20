@@ -100,7 +100,7 @@ export function createMcpHttpRouter(options: McpHttpRouterOptions = {}): Router 
         return;
       }
 
-      const server = createSeoMcpServer(depsFromApiKey(container.sb, container.jobStore, key));
+      const server = createSeoMcpServer(depsFromApiKey(container, key));
       let storedId: string | undefined;
       const transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: () => randomUUID(),

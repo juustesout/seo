@@ -17,6 +17,7 @@ const PID = '22222222-2222-4222-8222-222222222222';
 const SCHED = '33333333-3333-4333-8333-333333333333';
 const PUB = '44444444-4444-4444-8444-444444444444';
 const ANY_UUID = '00000000-0000-4000-8000-000000000000';
+const RUN = 'ar_11111111-1111-4111-8111-111111111111';
 
 const byName = (name: string) => buildTools().find((t) => t.name === name)!;
 
@@ -71,6 +72,10 @@ describe('mcp tool registry', () => {
         'content_list',
         'content_resolve_images',
         'content_update',
+        'designer_apply',
+        'designer_capabilities',
+        'designer_execute',
+        'designer_get_run',
         'jobs_list',
         'project_list',
         'publication_get',
@@ -85,8 +90,8 @@ describe('mcp tool registry', () => {
       expect(tool.description).toContain('schema v1');
       expect(tool.inputSchema).toBeTruthy();
     }
-    expect(tools.filter((t) => t.readOnly)).toHaveLength(8);
-    expect(tools.filter((t) => !t.readOnly)).toHaveLength(6);
+    expect(tools.filter((t) => t.readOnly)).toHaveLength(10);
+    expect(tools.filter((t) => !t.readOnly)).toHaveLength(8);
   });
 
   it('registers only tools the bound key scopes allow (no useless write tools for a reader)', () => {
@@ -97,10 +102,14 @@ describe('mcp tool registry', () => {
     expect(registered).toContain('publication_list');
     expect(registered).toContain('content_get');
     expect(registered).toContain('project_list');
+    expect(registered).toContain('designer_capabilities');
+    expect(registered).toContain('designer_get_run');
     expect(registered).not.toContain('schedule_create');
     expect(registered).not.toContain('schedule_reschedule');
     expect(registered).not.toContain('schedule_cancel');
     expect(registered).not.toContain('content_update');
+    expect(registered).not.toContain('designer_execute');
+    expect(registered).not.toContain('designer_apply');
   });
 });
 
@@ -113,6 +122,8 @@ describe('mcp authorization (scope mirrors project role)', () => {
     await expectsDenied(byName('schedule_list').handler(readOnlyDeps, { project_id: 'p1' }));
     await expectsDenied(byName('publication_list').handler(readOnlyDeps, { project_id: 'p1' }));
     await expectsDenied(byName('publication_get').handler(readOnlyDeps, { project_id: 'p1', publication_id: ANY_UUID }));
+    await expectsDenied(byName('designer_capabilities').handler(readOnlyDeps, {}));
+    await expectsDenied(byName('designer_get_run').handler(readOnlyDeps, { project_id: 'p1', run_id: RUN }));
   });
 
   it('denies write tools when the bound key has no write scope (viewer)', async () => {
@@ -125,6 +136,8 @@ describe('mcp authorization (scope mirrors project role)', () => {
     );
     await expectsDenied(byName('schedule_reschedule').handler(noWrite, { project_id: 'p1', schedule_id: SCHED, scheduled_at: '2026-09-10T09:00:00+02:00' }));
     await expectsDenied(byName('schedule_cancel').handler(noWrite, { project_id: 'p1', schedule_id: SCHED }));
+    await expectsDenied(byName('designer_execute').handler(noWrite, { project_id: 'p1', mode: 'intent', instruction: 'x', base_revision: 'rev1:abc' }));
+    await expectsDenied(byName('designer_apply').handler(noWrite, { project_id: 'p1', content_id: CID, proposal: {} }));
   });
 
   it('viewer can list schedules and publications (read scope only)', async () => {

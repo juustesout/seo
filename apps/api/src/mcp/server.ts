@@ -23,12 +23,26 @@
 
 import { z } from 'zod';
 import type { SupabaseClient } from '@supabase/supabase-js';
+import {
+  AGENT_RUN_IDEMPOTENCY_KEY_MAX_CHARS,
+  DESIGNER_BASE_REVISION_MAX_CHARS,
+  DESIGNER_DOMAINS,
+  DESIGNER_FORMAT_IDS,
+  DESIGNER_INTENT_INSTRUCTION_MAX_CHARS,
+  isAgentRunId,
+  isValidDesignBrief,
+  isValidDesignerPlan,
+  isValidDesignerProposal,
+} from '@seo/contracts';
+import type { DesignBrief } from '@seo/contracts';
 import type { JobStore } from '../jobs/types.js';
 import type { ServiceContainer } from '../context.js';
 import { ContentService } from '../services/contentService.js';
 import { ContentAnalysisService } from '../services/contentAnalysisService.js';
 import { ScheduleService, SCHEDULE_STATUSES } from '../services/scheduleService.js';
 import { PublicationService, PUBLICATION_STATUSES } from '../services/publicationService.js';
+import { AgentRunService, type AgentRunSubmission } from '../services/agentRunService.js';
+import { DesignerService } from '../services/designerService.js';
 import { ApiError } from '../apiErrors.js';
 import { AccessService } from '../supabase.js';
 
@@ -37,6 +51,13 @@ const asContainer = (sb: SupabaseClient): ServiceContainer => ({ sb } as unknown
 /** Container carrying the job store for services that enqueue work (schedules). */
 const fullContainer = (deps: MpcDeps): ServiceContainer =>
   ({ sb: deps.sb, jobStore: deps.jobStore }) as unknown as ServiceContainer;
+
+/**
+ * Container for services that need the full production wiring (the Designer's
+ * AI/registry/Cosmos seams). Falls back to the reduced container when a session
+ * was built without one, which keeps unit tests able to construct deps directly.
+ */
+const serviceContainer = (deps: MpcDeps): ServiceContainer => deps.container ?? fullContainer(deps);
 
 export interface MpcDeps {
   sb: SupabaseClient;
@@ -55,6 +76,13 @@ export interface MpcDeps {
   canWrite: boolean;
   /** Membership authorization, present for account-key sessions. */
   access?: AccessService;
+  /**
+   * The full service container, when the transport has one (stdio + HTTP do).
+   * Services that need production wiring beyond `sb`/`jobStore` (the Designer's
+   * AI/registry/Cosmos seams) read it here; the reduce-only factories below are
+   * for the services that need nothing more.
+   */
+  container?: ServiceContainer;
 }
 
 export interface ToolDef {
@@ -529,7 +557,193 @@ export function buildTools(): ToolDef[] {
     },
   });
 
+  // ---------------------------------------------------------------------------
+  // Designer (proposal-first agent capability over DesignerService)
+  // ---------------------------------------------------------------------------
+
+  tools.push({
+    name: 'designer_capabilities',
+    title: 'Describe the Designer capability',
+    description:
+      'Describe what the Designer can do and how to use it (schema v1, read). The Designer is proposal-first: designer_execute turns an instruction (or an explicit plan) into a durable run, designer_get_run returns the validated proposal, and only designer_apply writes that proposal to existing content. There is no automatic apply and no publishing. No project data is read.',
+    readOnly: true,
+    inputSchema: {},
+    handler: async (deps) => {
+      requireRead(deps);
+      return {
+        data: {
+          capability: 'designer',
+          summary: 'Proposal-first design: execute an instruction, inspect the proposal, then explicitly apply it.',
+          modes: ['intent', 'plan'],
+          proposal_first: true,
+          apply_required: true,
+          asynchronous: true,
+          tools: { execute: 'designer_execute', inspect: 'designer_get_run', apply: 'designer_apply' },
+          formats: DESIGNER_FORMAT_IDS,
+          domains: DESIGNER_DOMAINS,
+          visual: {
+            uses_existing_project_assets: true,
+            guidance:
+              'Ask for visuals in natural language. Do not invent media ids, asset ids, filenames, urls or image block ids; the Designer selects from the existing project assets itself.',
+          },
+          revision_protection:
+            'A proposal carries the content revision it was built against; applying a stale proposal is refused instead of rebased.',
+          limitations: [
+            'Execution never applies changes to content automatically.',
+            'Publishing is outside the Designer capability.',
+            'No media upload, image generation, or arbitrary CSS/layout manipulation.',
+          ],
+        },
+      };
+    },
+  });
+
+  tools.push({
+    name: 'designer_execute',
+    title: 'Execute a Designer instruction into a durable run',
+    description:
+      'Execute a Designer instruction (or an explicit validated plan) and durably queue it as a run that produces a proposal (schema v1, write). It never applies changes to content and never publishes - inspect the run with designer_get_run and apply a produced proposal with designer_apply. Provide content_id for an existing-content edit (the base revision is derived server-side) or base_revision for a creation. For account/master keys project_id is required and must be a project you are a member of with editor access.',
+    readOnly: false,
+    inputSchema: {
+      project_id: z.string().uuid().optional().describe('Project to operate on (required for account keys; must match the bound project otherwise)'),
+      mode: z.enum(['intent', 'plan']).describe('intent: natural language instruction. plan: an explicit validated DesignerPlan'),
+      instruction: z.string().min(1).max(DESIGNER_INTENT_INSTRUCTION_MAX_CHARS).optional().describe('Natural-language instruction (intent mode)'),
+      plan: z.record(z.unknown()).optional().describe('Validated DesignerPlan (plan mode)'),
+      content_id: z.string().uuid().optional().describe('Existing content to edit; the base revision is derived server-side'),
+      base_revision: z.string().min(1).max(DESIGNER_BASE_REVISION_MAX_CHARS).optional().describe('Creation base revision when there is no content_id'),
+      brief: z.record(z.unknown()).optional().describe('Optional structured design brief'),
+      idempotency_key: z.string().min(1).max(AGENT_RUN_IDEMPOTENCY_KEY_MAX_CHARS).optional().describe('Collapses a duplicate submission onto the existing run'),
+    },
+    handler: async (deps, args) => {
+      requireWrite(deps);
+      const projectId = await resolveProjectId(deps, args, 'write');
+      const userId = deps.userId;
+      if (!userId) {
+        throw new ApiError(403, 'forbidden', 'No user identity is bound to this API key; cannot execute a design run');
+      }
+      const submission = designRunSubmission(args);
+      if (submission.contentId !== undefined) {
+        await new ContentService(deps.sb).get(projectId, submission.contentId);
+      }
+      const result = await new AgentRunService(serviceContainer(deps)).submitDesignRun(projectId, userId, submission);
+      return { data: { run: result.run, reused: result.reused } };
+    },
+  });
+
+  tools.push({
+    name: 'designer_get_run',
+    title: 'Inspect a durable Designer run',
+    description:
+      'Return one durable Designer run by id - its status (queued/running/succeeded/failed), bounded input and, once succeeded, the validated proposal with its plan, review and optional visual provenance (schema v1, read). The run id is bound to the project: a run from another project is reported as not found. For account/master keys project_id is required and must be a project you are a member of.',
+    readOnly: true,
+    inputSchema: {
+      project_id: z.string().uuid().optional().describe('Project to operate on (required for account keys; must match the bound project otherwise)'),
+      run_id: z.string().describe('Designer run id (ar_<uuid>)'),
+    },
+    handler: async (deps, args) => {
+      requireRead(deps);
+      const projectId = await resolveProjectId(deps, args, 'read');
+      const runId = strArg(args.run_id);
+      if (!runId || !isAgentRunId(runId)) {
+        throw new ApiError(400, 'invalid_input', 'run_id must be a Designer run id (ar_<uuid>)');
+      }
+      const run = await new AgentRunService(serviceContainer(deps)).getRun(projectId, runId);
+      if (!run) {
+        throw new ApiError(404, 'agent_run_not_found', 'Agent run not found', { runId });
+      }
+      return { data: run };
+    },
+  });
+
+  tools.push({
+    name: 'designer_apply',
+    title: 'Explicitly apply a Designer proposal',
+    description:
+      'Explicitly apply a previously generated Designer proposal to an existing content item (schema v1, write). This is the only Designer operation that writes content; it never publishes. The proposal carries the base revision it was built against and a stale proposal is refused (409 stale_proposal) rather than silently rebased. For account/master keys project_id is required and must be a project you are a member of with editor access.',
+    readOnly: false,
+    inputSchema: {
+      project_id: z.string().uuid().optional().describe('Project to operate on (required for account keys; must match the bound project otherwise)'),
+      content_id: z.string().uuid().describe('Content item the proposal was generated for'),
+      proposal: z.record(z.unknown()).describe('The validated DesignerProposal returned by designer_get_run'),
+    },
+    handler: async (deps, args) => {
+      requireWrite(deps);
+      const projectId = await resolveProjectId(deps, args, 'write');
+      const userId = deps.userId;
+      if (!userId) {
+        throw new ApiError(403, 'forbidden', 'No user identity is bound to this API key; cannot apply a design proposal');
+      }
+      const contentId = requireUuid(args.content_id, 'content_id');
+      if (!isValidDesignerProposal(args.proposal)) {
+        throw new ApiError(400, 'invalid_input', 'proposal must be a valid Designer proposal');
+      }
+      const row = await new DesignerService(serviceContainer(deps)).apply(projectId, contentId, args.proposal, userId);
+      return { data: row };
+    },
+  });
+
   return tools;
+}
+
+/**
+ * Shape a Designer execution request into the existing durable-run contract,
+ * mirroring the `/designer/runs` route rules: exactly one of plan/instruction
+ * for the chosen mode, and either a content_id (server-derived revision) or a
+ * creation base_revision - never both. The service validates the result again.
+ */
+function designRunSubmission(args: Record<string, unknown>): AgentRunSubmission {
+  const mode = enumArg(args.mode, ['intent', 'plan'] as const, 'mode');
+  if (!mode) throw new ApiError(400, 'invalid_input', 'mode must be one of: intent, plan');
+
+  const contentId = uuidArg(args.content_id, 'content_id');
+  const baseRevision = strArg(args.base_revision);
+  if (baseRevision !== undefined && baseRevision.length > DESIGNER_BASE_REVISION_MAX_CHARS) {
+    throw new ApiError(400, 'invalid_input', `base_revision must be at most ${DESIGNER_BASE_REVISION_MAX_CHARS} characters`);
+  }
+  if (contentId !== undefined && baseRevision !== undefined) {
+    throw new ApiError(
+      400,
+      'invalid_input',
+      'base_revision must not be provided with content_id; the revision is derived from stored content',
+    );
+  }
+  if (contentId === undefined && baseRevision === undefined) {
+    throw new ApiError(400, 'invalid_input', 'Provide content_id (existing-content edit) or base_revision (creation)');
+  }
+
+  let brief: DesignBrief | undefined;
+  if (args.brief !== undefined) {
+    if (!isValidDesignBrief(args.brief)) throw new ApiError(400, 'invalid_input', 'brief must be a valid design brief');
+    brief = args.brief;
+  }
+  const idempotencyKey = strArg(args.idempotency_key);
+
+  const common = {
+    ...(contentId !== undefined ? { contentId } : {}),
+    ...(baseRevision !== undefined ? { baseRevision } : {}),
+    ...(brief !== undefined ? { brief } : {}),
+    ...(idempotencyKey !== undefined ? { idempotencyKey } : {}),
+  };
+
+  if (mode === 'plan') {
+    if (args.instruction !== undefined) {
+      throw new ApiError(400, 'invalid_input', 'instruction is only valid for intent mode');
+    }
+    const plan = args.plan;
+    if (!isValidDesignerPlan(plan)) {
+      throw new ApiError(400, 'invalid_input', 'plan must be a valid Designer plan');
+    }
+    return { mode: 'plan', plan, ...common };
+  }
+
+  if (args.plan !== undefined) {
+    throw new ApiError(400, 'invalid_input', 'plan is only valid for plan mode');
+  }
+  const instruction = strArg(args.instruction)?.trim();
+  if (!instruction || instruction.length > DESIGNER_INTENT_INSTRUCTION_MAX_CHARS) {
+    throw new ApiError(400, 'invalid_input', 'instruction is required for intent mode and must be within the length limit');
+  }
+  return { mode: 'intent', instruction, ...common };
 }
 
 /** Validate a required UUID-shaped argument, returning it as a string. */

@@ -155,10 +155,12 @@ describe('mcp http session lifecycle + tools', () => {
     const listed = await client.post('tools/list', {});
     expect(listed.status).toBe(200);
     const names = toolsOf(listed.body);
-    expect(names).toHaveLength(14);
+    expect(names).toHaveLength(18);
     expect(names).toContain('schedule_create');
     expect(names).toContain('content_update');
     expect(names).toContain('project_list');
+    expect(names).toContain('designer_execute');
+    expect(names).toContain('designer_apply');
 
     const ran = await client.post('tools/call', { name: 'content_list', arguments: {} });
     const result = (ran.body as { result?: { content?: { text?: string }[]; isError?: boolean } }).result;
@@ -173,15 +175,19 @@ describe('mcp http session lifecycle + tools', () => {
 
     const listed = await client.post('tools/list', {});
     const names = toolsOf(listed.body);
-    expect(names).toHaveLength(8);
+    expect(names).toHaveLength(10);
     expect(names).toContain('content_list');
     expect(names).toContain('project_list');
     expect(names).toContain('schedule_list');
+    expect(names).toContain('designer_capabilities');
+    expect(names).toContain('designer_get_run');
     expect(names).not.toContain('schedule_create');
     expect(names).not.toContain('schedule_reschedule');
     expect(names).not.toContain('schedule_cancel');
     expect(names).not.toContain('content_update');
     expect(names).not.toContain('content_generate');
+    expect(names).not.toContain('designer_execute');
+    expect(names).not.toContain('designer_apply');
 
     // A write tool that is not registered must not be callable by name.
     const call = await client.post('tools/call', {
