@@ -35,12 +35,20 @@ import type {
   DesignerPlan,
   DesignerPlanner,
   DesignerProposal,
+  VisualAssetCandidate,
+  VisualAssetRef,
+  VisualDesignOperation,
+  VisualDesignProposal,
 } from '@seo/contracts';
 import {
   DESIGNER_PROPOSAL_VERSION,
   DesignerRevisionError,
+  VISUAL_DESIGN_PROPOSAL_KIND,
+  VISUAL_DESIGN_PROPOSAL_VERSION,
+  VisualDesignError,
   applyCompositionSlotFills,
   applyDesignerRevision,
+  applyVisualDesignProposal,
   boundCompositionPlannerBrief,
   canonicalDocumentToEditorDocument,
   compileComposition,
@@ -51,10 +59,13 @@ import {
   isValidDesignerPlan,
   isValidDesignerProposal,
   resolveDesignerRevisionTargets,
+  selectVisualAssets,
+  visualDesignProposalFromSelections,
   withDesignSystemRef,
 } from '@seo/contracts';
 import { ApiError } from '../apiErrors.js';
 import type { ServiceContainer } from '../context.js';
+import { SupabaseStorageStore } from '../infra/mediaStorage.js';
 import { createAiCompositionWriter } from '../agents/composition/writer.js';
 import { createAiDesignerRevisionWriter, type DesignerRevisionWriterOutcome } from '../agents/designer/revisionWriter.js';
 import {
@@ -67,6 +78,7 @@ import { compositionWriterError } from './compositionService.js';
 import { CompositionPlannerService } from './compositionPlannerService.js';
 import { ContentService } from './contentService.js';
 import { DesignerPlannerContextService } from './designerPlannerContextService.js';
+import { MediaService } from './mediaService.js';
 import { getCosmosContext } from './cosmosService.js';
 
 /** Request for one Designer execution. Never persists. */
@@ -127,6 +139,19 @@ function designerRevisionWriterError(outcome: Extract<DesignerRevisionWriterOutc
 function mapDesignerRevisionError(err: unknown): never {
   if (err instanceof DesignerRevisionError) {
     throw new ApiError(422, 'designer_revision_invalid_target', err.message);
+  }
+  throw err;
+}
+
+/**
+ * Maps a visual contract failure onto an honest wire error. A duplicate
+ * operation is a genuine conflict (409); every other rejection is a bounded
+ * 422. Never a 500 and never a silent no-op.
+ */
+function mapVisualDesignError(err: unknown): never {
+  if (err instanceof VisualDesignError) {
+    const status = err.code === 'duplicate_operation' ? 409 : 422;
+    throw new ApiError(status, `visual_design_${err.code}`, err.message);
   }
   throw err;
 }
@@ -231,6 +256,79 @@ export class DesignerService {
           return { role: 'writer', document: applied.document } satisfies AgentResult;
         } catch (err) {
           return mapDesignerRevisionError(err);
+        }
+      },
+      visual: async ({ document, operations, selection }) => {
+        // Resolve the project's media library once. Only metadata is read here;
+        // bytes never touch the proposal, the document or the plan.
+        const media = await new MediaService(this.container.sb, new SupabaseStorageStore(this.container.sb)).list(
+          projectId,
+        );
+
+        let resolvedOperations: VisualDesignOperation[];
+        if (selection) {
+          const candidates: VisualAssetCandidate[] = media.map((item) => ({
+            mediaId: item.id,
+            filename: item.filename,
+            alt: item.alt_text,
+            caption: item.caption,
+            mimeType: item.mime_type,
+            ...(item.width !== null ? { width: item.width } : {}),
+            ...(item.height !== null ? { height: item.height } : {}),
+            usageCount: item.usage_count,
+          }));
+          let result;
+          try {
+            result = selectVisualAssets(document, candidates, selection);
+          } catch (err) {
+            return mapVisualDesignError(err);
+          }
+          // An explicit target list is a promise: every named target must
+          // resolve, and a request that matches nothing is an honest failure -
+          // never an arbitrary fallback image.
+          if (result.selections.length === 0 || (selection.targets !== undefined && result.unmatched.length > 0)) {
+            throw new ApiError(
+              422,
+              'visual_no_suitable_asset',
+              'No existing project asset matches the requested visual targets.',
+              { unmatched: result.unmatched },
+            );
+          }
+          try {
+            resolvedOperations = visualDesignProposalFromSelections(result.selections).operations;
+          } catch (err) {
+            return mapVisualDesignError(err);
+          }
+        } else {
+          resolvedOperations = operations ?? [];
+        }
+
+        const proposal: VisualDesignProposal = {
+          kind: VISUAL_DESIGN_PROPOSAL_KIND,
+          version: VISUAL_DESIGN_PROPOSAL_VERSION,
+          operations: resolvedOperations,
+        };
+        // Resolve only the referenced assets from the project media library
+        // (metadata only; bytes never touch the proposal or the document).
+        const wanted = new Set(
+          resolvedOperations.flatMap((op) => (op.op === 'select_asset' ? [op.mediaId] : [])),
+        );
+        const assets: VisualAssetRef[] = media
+          .filter((item) => wanted.has(item.id))
+          .map((item) => ({
+            mediaId: item.id,
+            url: item.url,
+            alt: item.alt_text,
+            caption: item.caption,
+            ...(item.width !== null ? { width: item.width } : {}),
+            ...(item.height !== null ? { height: item.height } : {}),
+          }));
+
+        try {
+          const composed = applyVisualDesignProposal(document, proposal, assets);
+          return { role: 'visual', document: composed.document, visual: proposal } satisfies AgentResult;
+        } catch (err) {
+          return mapVisualDesignError(err);
         }
       },
     };

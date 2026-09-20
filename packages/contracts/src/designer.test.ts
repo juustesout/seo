@@ -5,6 +5,8 @@ import {
   DESIGNER_INTENT_MAX_METADATA_KEYS,
   DESIGNER_MAX_STEPS,
   contentRevisionOf,
+  designerDomainOfStepKind,
+  designerDomainsOfPlan,
   isValidAgentResult,
   isValidDesignBrief,
   isValidDesignerIntent,
@@ -272,6 +274,85 @@ describe('isValidDesignerIntent', () => {
         projectId,
         context: { metadata: Object.fromEntries(Array.from({ length: DESIGNER_INTENT_MAX_METADATA_KEYS + 1 }, (_, i) => [`k${i}`, i])) },
       }),
+    ).toBe(false);
+  });
+});
+
+describe('visual design domain integration (ADR 5.3)', () => {
+  const imageDoc = { version: 1 as const, blocks: [{ type: 'hero', children: [{ id: 'hero__media', type: 'image' }] }] };
+
+  it('accepts a visual.apply step in a plan', () => {
+    const plan = {
+      version: 1,
+      steps: [
+        { kind: 'visual.apply', task: { operations: [{ op: 'select_asset', target: 'hero__media', mediaId: 'm1' }] } },
+      ],
+    };
+    expect(isValidDesignerPlan(plan)).toBe(true);
+    expect(
+      isValidDesignerStep({
+        kind: 'visual.apply',
+        task: { operations: [{ op: 'set_variant', target: 'hero', variant: 'centered' }] },
+      }),
+    ).toBe(true);
+  });
+
+  it('rejects a visual.apply step with an unknown operation or extra key', () => {
+    expect(
+      isValidDesignerStep({ kind: 'visual.apply', task: { operations: [{ op: 'set_css', target: 'hero' }] } }),
+    ).toBe(false);
+    expect(isValidDesignerStep({ kind: 'visual.apply', task: { operations: [], assets: [] } })).toBe(false);
+    expect(isValidDesignerStep({ kind: 'visual.apply', task: { operations: 'all' } })).toBe(false);
+  });
+
+  it('accepts an asset-selection visual task, exclusively', () => {
+    // An open selection request is a valid visual task.
+    expect(isValidDesignerStep({ kind: 'visual.apply', task: { select: {} } })).toBe(true);
+    expect(
+      isValidDesignerStep({ kind: 'visual.apply', task: { select: { targets: ['hero__media'], minScore: 2 } } }),
+    ).toBe(true);
+    // Neither operations nor a selection request is meaningless.
+    expect(isValidDesignerStep({ kind: 'visual.apply', task: {} })).toBe(false);
+    // Both at once is rejected: a step names assets or asks the domain to pick.
+    expect(
+      isValidDesignerStep({ kind: 'visual.apply', task: { operations: [], select: {} } }),
+    ).toBe(false);
+    // The selection request is still strictly validated.
+    expect(isValidDesignerStep({ kind: 'visual.apply', task: { select: { targets: ['bad id'] } } })).toBe(false);
+  });
+
+  it('maps step kinds to domains and reports the domains a plan uses', () => {
+    expect(designerDomainOfStepKind('composer.structure')).toBe('layout');
+    expect(designerDomainOfStepKind('writer.fillSlots')).toBe('content');
+    expect(designerDomainOfStepKind('visual.apply')).toBe('visual');
+    expect(designerDomainOfStepKind('designer.review')).toBeNull();
+    expect(
+      designerDomainsOfPlan({
+        version: 1,
+        steps: [
+          { kind: 'composer.structure', task: { format: 'landing_page' } },
+          { kind: 'writer.fillSlots', task: { slots: [] } },
+          { kind: 'visual.apply', task: { operations: [] } },
+          { kind: 'designer.review', criteria: ['document_valid'] },
+        ],
+      }),
+    ).toEqual(['layout', 'content', 'visual']);
+  });
+
+  it('requires a validated visual proposal on a visual agent result', () => {
+    const visualProposal = {
+      kind: 'visual_design_proposal',
+      version: 1,
+      operations: [{ op: 'set_variant', target: 'hero', variant: 'centered' }],
+    };
+    expect(isValidAgentResult({ role: 'visual', document: imageDoc, visual: visualProposal })).toBe(true);
+    // A visual role without its proposal is incomplete.
+    expect(isValidAgentResult({ role: 'visual', document: imageDoc })).toBe(false);
+    // A non-visual role must not carry one.
+    expect(isValidAgentResult({ role: 'writer', document: imageDoc, visual: visualProposal })).toBe(false);
+    // The embedded proposal is still validated.
+    expect(
+      isValidAgentResult({ role: 'visual', document: imageDoc, visual: { kind: 'visual_design_proposal', version: 1 } }),
     ).toBe(false);
   });
 });

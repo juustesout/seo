@@ -540,7 +540,7 @@ add a second progress document (no `progress.md`); update this section instead.
 | Phase 2 — Designer orchestration (synchronous) | Done | `68ad5d9`, `d442d92`, `791c763`, `f88d4e6`, `172dd7b` |
 | Phase 3 — Design Package v1 | Done | `ff652a6` |
 | Phase 4 — Durable agent runs | Done | `ff61c47` (Part 1), Part 2 (worker execution, status API, reconciliation) |
-| Phase 5 — Designer UI, MCP, docs | In progress — 5.1 and 5.2 done | 5.1 Designer UI run foundation and 5.2 edit review + explicit apply (`apps/web/src/views/Designer.tsx`, `apps/web/src/components/designer/useDesignerRun.ts`); MCP and docs pending |
+| Phase 5 — Designer UI, MCP, docs | In progress — 5.1, 5.2, 5.3 and 5.3.1 done | 5.1 Designer UI run foundation and 5.2 edit review + explicit apply (`apps/web/src/views/Designer.tsx`, `apps/web/src/components/designer/useDesignerRun.ts`); 5.3 Visual Design domain contract (`packages/contracts/src/visualDesign.ts`) and 5.3.1 asset selection (`packages/contracts/src/visualAssetSelection.ts`); MCP and docs pending |
 
 ADR Phase 2: DONE
   ├─ 3.1 done
@@ -555,7 +555,7 @@ ADR Phase 4: DONE
   ├─ Part 1 (durable agent runs) done
   └─ Part 2 (worker execution, status API, reconciliation) done
 
-ADR Phase 5: IN PROGRESS (5.1 and 5.2 done; MCP and docs pending; do not mark Phase 5 complete)
+ADR Phase 5: IN PROGRESS (5.1, 5.2, 5.3 and 5.3.1 done; MCP and docs pending; do not mark Phase 5 complete)
   ├─ 5.1 Designer UI run foundation done: the new `/p/:projectId/designer` view
   │    submits one supported AgentRun input (intent, creation) to
   │    POST /designer/runs and follows that run through queued -> running ->
@@ -572,6 +572,38 @@ ADR Phase 5: IN PROGRESS (5.1 and 5.2 done; MCP and docs pending; do not mark Ph
   │    No client-side save; reject is local and never touches saved content. This
   │    satisfies the §13 "review + explicit accept to the Editor" intent via the
   │    existing safe apply capability rather than a new endpoint.
+  ├─ 5.3 Visual Design domain done: visual reasoning is its own Designer domain
+  │    with a proposal contract, not an informal duty of the orchestrator.
+  │    `packages/contracts/src/visualDesign.ts` defines a pure
+  │    `visual_design_proposal` (operations over canonical block ids) plus a
+  │    total, deterministic `applyVisualDesignProposal` that folds a validated
+  │    proposal into a `CanonicalDocument`. It references existing project media
+  │    by id (resolved metadata only, never bytes) and supports only operations
+  │    the canonical model already expresses (`select_asset`, `set_variant`), so
+  │    no arbitrary CSS/background/bytes can enter. Conflicts (unknown target,
+  │    non-image target for an asset, missing asset, unsupported variant,
+  │    duplicate operation) fail explicitly - no silent overwrite. The Designer
+  │    plan gains a `visual.apply` step kind and the `visual` role
+  │    (`DESIGNER_DOMAINS` = layout, content, visual), and `DesignerService`
+  │    wires the capability through `MediaService` listing. It remains a proposal
+  │    that composes into `DesignerProposal`: no second persistence path, no
+  │    auto-apply, and the existing review/apply safety is unchanged.
+  ├─ 5.3.1 Visual asset selection done: the Visual domain can now choose *which*
+  │    existing asset fits a document instead of only composing a named one.
+  │    `packages/contracts/src/visualAssetSelection.ts` derives each image
+  │    block's surrounding text context, ranks the project's existing assets
+  │    over metadata that actually exists (filename, alt text, caption, MIME,
+  │    dimensions, usage), and returns a deterministic selection - or an
+  │    explicit no-suitable-asset result, never a guess. One asset is never
+  │    reused across blocks; unsupported MIME types and cross-project assets
+  │    cannot be selected. `visualDesignProposalFromSelections` feeds the
+  │    selections into the same `visual_design_proposal` pipeline, and the
+  │    `visual.apply` task accepts either explicit `operations` or a `select`
+  │    request (exactly one). No media index was added: `seo_media` is neither
+  │    lexically indexed nor embedded, so selection reuses the existing
+  │    project-scoped `MediaService.list`; `DesignerService` matches in memory
+  │    and still persists nothing (selection reaches the existing review/apply
+  │    path only).
   └─ MCP as a second mouth and the roadmap docs: pending.
 
 Phase 2 is complete: the last §13 Phase 2 bullet — wiring `resolveDesignSystem`

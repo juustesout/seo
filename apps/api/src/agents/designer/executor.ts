@@ -37,6 +37,8 @@ import type {
   DesignerReviewIssue,
   DesignerRevisionTarget,
   DesignBriefFormat,
+  VisualAssetSelectionRequest,
+  VisualDesignOperation,
 } from '@seo/contracts';
 import {
   canonicalDocumentToEditorDocument,
@@ -100,12 +102,30 @@ export interface DesignerReviseInput {
   document: CanonicalDocument;
 }
 
+/**
+ * Input for a `visual.apply` step: the current document plus the visual-domain
+ * operations to compose. The capability resolves assets through the media
+ * infrastructure and returns the composed document with the validated visual
+ * proposal attached; it never persists and never invents an asset.
+ */
+export interface DesignerVisualInput {
+  projectId: string;
+  brief?: DesignBrief;
+  document: CanonicalDocument;
+  /** Explicit visual operations, when the plan names them. */
+  operations?: VisualDesignOperation[];
+  /** Or a bounded asset-selection request the domain resolves itself. */
+  selection?: VisualAssetSelectionRequest;
+}
+
 /** Typed service calls the Designer may make, one per specialist capability. */
 export interface DesignerExecutorDependencies {
   structure(input: DesignerStructureInput): Promise<DesignerStructureOutput>;
   fillSlots(input: DesignerFillSlotsInput): Promise<AgentResult>;
   /** Bounded, structure-preserving revision of the current document. */
   revise?(input: DesignerReviseInput): Promise<AgentResult>;
+  /** Visual domain: asset selection and bounded presentation on the document. */
+  visual?(input: DesignerVisualInput): Promise<AgentResult>;
   /** Optional Writer free-text seam; absent means the step is unavailable. */
   freeText?(input: DesignerFreeTextInput): Promise<AgentResult>;
 }
@@ -359,6 +379,29 @@ export async function executeDesignerPlan(
           document: state.document,
         });
         if (!isValidAgentResult(result) || result.role !== 'writer') throw stepResultInvalid(step.kind, index);
+        state.document = result.document;
+        state.results.push(result);
+        break;
+      }
+      case 'visual.apply': {
+        if (!state.document) throw stepOrderError(step.kind, index);
+        if (!deps.visual) {
+          throw new ApiError(
+            503,
+            'visual_design_unavailable',
+            'The visual.apply capability is not available; no visual design capability is wired for this step.',
+          );
+        }
+        const result = await deps.visual({
+          projectId: input.projectId,
+          brief,
+          document: state.document,
+          ...(step.task.operations !== undefined ? { operations: step.task.operations } : {}),
+          ...(step.task.select !== undefined ? { selection: step.task.select } : {}),
+        });
+        // The capability returns a document plus its validated visual proposal;
+        // a malformed result never becomes the working document.
+        if (!isValidAgentResult(result) || result.role !== 'visual') throw stepResultInvalid(step.kind, index);
         state.document = result.document;
         state.results.push(result);
         break;

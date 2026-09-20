@@ -29,5 +29,7 @@ export * from './compositionPlanner.js';
 export * from './compositionWriter.js';
 export * from './designerRevision.js';
 export * from './designer.js';
+export * from './visualDesign.js';
+export * from './visualAssetSelection.js';
 export * from './designPackage.js';
 export * from './agentRun.js';

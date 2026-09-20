@@ -92,6 +92,7 @@ export const DISPATCHABLE_DESIGNER_STEP_KINDS: readonly DesignerStepKind[] = [
   'composer.structure',
   'writer.fillSlots',
   'writer.revise',
+  'visual.apply',
   'designer.review',
 ];
 

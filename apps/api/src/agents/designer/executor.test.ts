@@ -237,6 +237,80 @@ describe('executeDesignerPlan', () => {
     const err = await expectApiError(executeDesignerPlan({ projectId: 'p1', plan }, deps()));
     expect(err.code).toBe('designer_step_order_invalid');
   });
+
+  it('dispatches visual.apply to the visual capability with the current document', async () => {
+    const imageDoc = { version: 1 as const, blocks: [{ id: 'hero__media', type: 'image' }] };
+    const operations = [{ op: 'select_asset' as const, target: 'hero__media', mediaId: 'm1' }];
+    const visualProposal = { kind: 'visual_design_proposal' as const, version: 1 as const, operations };
+    const composedDoc = {
+      version: 1 as const,
+      blocks: [
+        { id: 'hero__media', type: 'image', attrs: { mediaId: 'm1', src: 'https://cdn.example.com/x.png', alt: '', caption: '' } },
+      ],
+    };
+    const visual = vi.fn(async () => ({ role: 'visual' as const, document: composedDoc, visual: visualProposal }));
+    const plan = { version: 1 as const, steps: [{ kind: 'visual.apply' as const, task: { operations } }] };
+
+    const result = await executeDesignerPlan({ projectId: 'p1', plan, baseDocument: imageDoc }, deps({ visual }));
+
+    expect(result.document).toEqual(composedDoc);
+    expect(result.results.map((r) => r.role)).toEqual(['visual']);
+    expect(visual).toHaveBeenCalledWith(expect.objectContaining({ document: imageDoc, operations }));
+    expect((visual.mock.calls[0] as unknown[])[0]).not.toHaveProperty('selection');
+  });
+
+  it('forwards an asset-selection request to the visual capability', async () => {
+    const imageDoc = { version: 1 as const, blocks: [{ id: 'hero__media', type: 'image' }] };
+    const composedDoc = {
+      version: 1 as const,
+      blocks: [
+        { id: 'hero__media', type: 'image', attrs: { mediaId: 'm1', src: 'https://cdn.example.com/x.png', alt: '', caption: '' } },
+      ],
+    };
+    const visualProposal = {
+      kind: 'visual_design_proposal' as const,
+      version: 1 as const,
+      operations: [{ op: 'select_asset' as const, target: 'hero__media', mediaId: 'm1' }],
+    };
+    const visual = vi.fn(async () => ({ role: 'visual' as const, document: composedDoc, visual: visualProposal }));
+    const plan = {
+      version: 1 as const,
+      steps: [{ kind: 'visual.apply' as const, task: { select: { targets: ['hero__media'] } } }],
+    };
+
+    await executeDesignerPlan({ projectId: 'p1', plan, baseDocument: imageDoc }, deps({ visual }));
+
+    expect(visual).toHaveBeenCalledWith(
+      expect.objectContaining({ document: imageDoc, selection: { targets: ['hero__media'] } }),
+    );
+    expect((visual.mock.calls[0] as unknown[])[0]).not.toHaveProperty('operations');
+  });
+
+  it('reports visual.apply as unavailable when no capability is wired', async () => {
+    const plan = { version: 1 as const, steps: [{ kind: 'visual.apply' as const, task: { operations: [] } }] };
+    const err = await expectApiError(
+      executeDesignerPlan({ projectId: 'p1', plan, baseDocument: compiled.document }, deps()),
+    );
+    expect(err.status).toBe(503);
+    expect(err.code).toBe('visual_design_unavailable');
+  });
+
+  it('fails visual.apply without a base document or earlier structure', async () => {
+    const plan = { version: 1 as const, steps: [{ kind: 'visual.apply' as const, task: { operations: [] } }] };
+    const err = await expectApiError(executeDesignerPlan({ projectId: 'p1', plan }, deps({ visual: vi.fn() })));
+    expect(err.status).toBe(422);
+    expect(err.code).toBe('designer_step_order_invalid');
+  });
+
+  it('rejects a visual result without its validated domain proposal', async () => {
+    const visual = vi.fn(async () => ({ role: 'visual' as const, document: compiled.document }));
+    const plan = { version: 1 as const, steps: [{ kind: 'visual.apply' as const, task: { operations: [] } }] };
+    const err = await expectApiError(
+      executeDesignerPlan({ projectId: 'p1', plan, baseDocument: compiled.document }, deps({ visual })),
+    );
+    expect(err.status).toBe(422);
+    expect(err.code).toBe('designer_step_result_invalid');
+  });
 });
 
 describe('runDesignerReview', () => {

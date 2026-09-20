@@ -31,6 +31,11 @@ import {
   isValidDesignerRevisionTarget,
   type DesignerRevisionTarget,
 } from './designerRevision.js';
+import { isValidVisualDesignOperation, isValidVisualDesignProposal, type VisualDesignOperation, type VisualDesignProposal } from './visualDesign.js';
+import {
+  isValidVisualAssetSelectionRequest,
+  type VisualAssetSelectionRequest,
+} from './visualAssetSelection.js';
 
 export const DESIGNER_PLAN_VERSION = 1 as const;
 export const DESIGNER_PROPOSAL_VERSION = 1 as const;
@@ -62,12 +67,13 @@ const MAX_STEP_INDEX = 10000;
 export const DESIGNER_FORMAT_IDS = ['article', 'landing_page'] as const;
 export type DesignBriefFormat = (typeof DESIGNER_FORMAT_IDS)[number];
 
-/** The five typed orchestration steps a Designer plan may contain. */
+/** The six typed orchestration steps a Designer plan may contain. */
 export const DESIGNER_STEP_KINDS = [
   'writer.freeText',
   'writer.fillSlots',
   'writer.revise',
   'composer.structure',
+  'visual.apply',
   'designer.review',
 ] as const;
 export type DesignerStepKind = (typeof DESIGNER_STEP_KINDS)[number];
@@ -82,8 +88,42 @@ export const DESIGNER_REVIEW_CRITERIA = [
 export type DesignerReviewCriterion = (typeof DESIGNER_REVIEW_CRITERIA)[number];
 
 /** Specialist roles that can return an `AgentResult` to the Designer. */
-export const DESIGNER_AGENT_ROLES = ['writer', 'composer'] as const;
+export const DESIGNER_AGENT_ROLES = ['writer', 'composer', 'visual'] as const;
 export type DesignerAgentRole = (typeof DESIGNER_AGENT_ROLES)[number];
+
+/**
+ * The specialist domains the orchestrator coordinates. Layout owns structure,
+ * content owns copy, visual owns asset selection and bounded presentation. The
+ * mapping to step kinds is explicit so the orchestrator can reason about which
+ * domains a plan actually uses without hardcoding step names at call sites.
+ */
+export const DESIGNER_DOMAINS = ['layout', 'content', 'visual'] as const;
+export type DesignerDomain = (typeof DESIGNER_DOMAINS)[number];
+
+const DESIGNER_STEP_DOMAINS: Record<DesignerStepKind, DesignerDomain | null> = {
+  'composer.structure': 'layout',
+  'writer.freeText': 'content',
+  'writer.fillSlots': 'content',
+  'writer.revise': 'content',
+  'visual.apply': 'visual',
+  // The review step is the orchestrator's own deterministic check, not a domain.
+  'designer.review': null,
+};
+
+/** The domain a step belongs to, or null for orchestrator-owned steps. */
+export function designerDomainOfStepKind(kind: DesignerStepKind): DesignerDomain | null {
+  return DESIGNER_STEP_DOMAINS[kind] ?? null;
+}
+
+/** The distinct domains a plan uses, in first-seen order. */
+export function designerDomainsOfPlan(plan: DesignerPlan): DesignerDomain[] {
+  const domains: DesignerDomain[] = [];
+  for (const step of plan.steps) {
+    const domain = designerDomainOfStepKind(step.kind);
+    if (domain && !domains.includes(domain)) domains.push(domain);
+  }
+  return domains;
+}
 
 // ---------------------------------------------------------------------------
 // Design brief
@@ -120,6 +160,18 @@ export interface ComposerStructureTask {
   format: DesignBriefFormat;
 }
 
+/**
+ * Visual task: apply a bounded set of visual-domain operations to the current
+ * document, OR ask the Visual domain to select existing assets for the
+ * document's image blocks. Exactly one of the two must be present. In both
+ * cases the capability resolves assets and composes them; the plan never names
+ * an asset the domain cannot verify, and a selection never invents one.
+ */
+export interface VisualApplyTask {
+  operations?: VisualDesignOperation[];
+  select?: VisualAssetSelectionRequest;
+}
+
 /** Writer task: rewrite the copy of the bounded target blocks in place. */
 export interface WriterReviseTask {
   instruction: string;
@@ -147,6 +199,11 @@ export interface ComposerStructureStep {
   task: ComposerStructureTask;
 }
 
+export interface VisualApplyStep {
+  kind: 'visual.apply';
+  task: VisualApplyTask;
+}
+
 export interface DesignerReviewStep {
   kind: 'designer.review';
   criteria: DesignerReviewCriterion[];
@@ -157,6 +214,7 @@ export type DesignerStep =
   | WriterFillSlotsStep
   | WriterReviseStep
   | ComposerStructureStep
+  | VisualApplyStep
   | DesignerReviewStep;
 
 // ---------------------------------------------------------------------------
@@ -192,6 +250,8 @@ export interface AgentResult {
   filled?: string[];
   /** Present for the Writer: writable slots left empty (e.g. media/evidence). */
   unfilled?: string[];
+  /** Present for the Visual domain: the validated visual proposal that was composed. */
+  visual?: VisualDesignProposal;
 }
 
 // ---------------------------------------------------------------------------
@@ -312,7 +372,8 @@ const FILL_SLOTS_TASK_KEYS: ReadonlySet<string> = new Set(['slots']);
 const REVISE_TASK_KEYS: ReadonlySet<string> = new Set(['instruction', 'target']);
 const STRUCTURE_TASK_KEYS: ReadonlySet<string> = new Set(['format']);
 const REVIEW_STEP_KEYS: ReadonlySet<string> = new Set(['kind', 'criteria']);
-const AGENT_RESULT_KEYS: ReadonlySet<string> = new Set(['role', 'document', 'slots', 'filled', 'unfilled']);
+const VISUAL_TASK_KEYS: ReadonlySet<string> = new Set(['operations', 'select']);
+const AGENT_RESULT_KEYS: ReadonlySet<string> = new Set(['role', 'document', 'slots', 'filled', 'unfilled', 'visual']);
 
 const FORMAT_SET: ReadonlySet<string> = new Set(DESIGNER_FORMAT_IDS);
 const STEP_KIND_SET: ReadonlySet<string> = new Set(DESIGNER_STEP_KINDS);
@@ -413,6 +474,21 @@ export function isValidDesignerStep(value: unknown): value is DesignerStep {
       if (!isPlainObject(task) || !hasOnlyKeys(task, STRUCTURE_TASK_KEYS)) return false;
       return isValidFormat(task.format);
     }
+    case 'visual.apply': {
+      if (!hasOnlyKeys(value, STEP_TASK_KEYS)) return false;
+      const task = value.task;
+      if (!isPlainObject(task) || !hasOnlyKeys(task, VISUAL_TASK_KEYS)) return false;
+      const hasOperations = task.operations !== undefined;
+      const hasSelect = task.select !== undefined;
+      // Explicit operations and an open asset-selection request are mutually
+      // exclusive; at least one is required.
+      if (hasOperations === hasSelect) return false;
+      if (hasOperations) {
+        if (!Array.isArray(task.operations)) return false;
+        return task.operations.every(isValidVisualDesignOperation);
+      }
+      return isValidVisualAssetSelectionRequest(task.select);
+    }
     case 'designer.review': {
       if (!hasOnlyKeys(value, REVIEW_STEP_KEYS)) return false;
       const criteria = value.criteria;
@@ -453,7 +529,10 @@ export function isValidAgentResult(value: unknown): value is AgentResult {
   if (value.slots !== undefined && !isValidCompositionSlotMap(value.slots)) return false;
   if (value.filled !== undefined && !isValidSlotList(value.filled)) return false;
   if (value.unfilled !== undefined && !isValidSlotList(value.unfilled)) return false;
-  return true;
+  if (value.visual !== undefined && !isValidVisualDesignProposal(value.visual)) return false;
+  // A visual result must carry its validated domain proposal; other roles must not.
+  if (value.role === 'visual') return value.visual !== undefined;
+  return value.visual === undefined;
 }
 
 /** Validates a deterministic review result. */

@@ -15,7 +15,7 @@ import {
   contentRevisionOf,
   isWritableCompositionSlot,
 } from '@seo/contracts';
-import type { DesignerIntent, DesignerPlan, DesignerPlanner } from '@seo/contracts';
+import type { CanonicalDocument, DesignerIntent, DesignerPlan, DesignerPlanner, VisualDesignOperation } from '@seo/contracts';
 import { DesignerService } from './designerService.js';
 
 const mock = vi.hoisted(() => ({
@@ -29,6 +29,18 @@ const mock = vi.hoisted(() => ({
   contentJson: null as unknown,
   updates: [] as unknown[],
   getCalls: 0,
+  media: [] as Array<{
+    id: string;
+    filename: string;
+    mime_type: string;
+    url: string;
+    alt_text: string;
+    caption: string;
+    width: number | null;
+    height: number | null;
+    usage_count: number;
+  }>,
+  mediaListCalls: [] as string[],
   provider: {
     id: 'openai',
     isConfigured: () => true,
@@ -78,6 +90,15 @@ vi.mock('./contentService.js', () => ({
   },
 }));
 
+vi.mock('./mediaService.js', () => ({
+  MediaService: class {
+    async list(projectId: string) {
+      mock.mediaListCalls.push(projectId);
+      return mock.media;
+    }
+  },
+}));
+
 const compiled = compileComposition(MARKETING_STORYBOARD_PLAN);
 const PLAN_JSON = JSON.stringify(MARKETING_STORYBOARD_PLAN);
 
@@ -123,6 +144,8 @@ beforeEach(() => {
   mock.contentJson = null;
   mock.updates = [];
   mock.getCalls = 0;
+  mock.media = [];
+  mock.mediaListCalls = [];
 });
 
 describe('DesignerService.execute', () => {
@@ -352,5 +375,212 @@ describe('DesignerService.apply', () => {
     expect(err.status).toBe(400);
     expect(mock.getCalls).toBe(0);
     expect(mock.updates).toHaveLength(0);
+  });
+});
+
+describe('DesignerService visual domain (ADR 5.3)', () => {
+  const imageDoc = { version: 1 as const, blocks: [{ id: 'hero__media', type: 'image' }] };
+  const selectAsset = { op: 'select_asset' as const, target: 'hero__media', mediaId: 'm1' };
+  const asset = (id: string, overrides: Record<string, unknown> = {}) => ({
+    id,
+    filename: `${id}.png`,
+    mime_type: 'image/png',
+    url: `https://cdn.example.com/${id}.png`,
+    alt_text: 'Hero',
+    caption: '',
+    width: 1200,
+    height: 800,
+    usage_count: 0,
+    ...overrides,
+  });
+  const plan = (operations: VisualDesignOperation[]) => ({
+    version: 1 as const,
+    steps: [{ kind: 'visual.apply' as const, task: { operations } }],
+  });
+  const selectPlan = (select: Record<string, unknown>) => ({
+    version: 1 as const,
+    steps: [{ kind: 'visual.apply' as const, task: { select } }],
+  });
+  const selectionDoc: CanonicalDocument = {
+    version: 1 as const,
+    meta: { title: 'Power your property' },
+    blocks: [
+      {
+        id: 'hero',
+        type: 'hero',
+        children: [
+          {
+            id: 'hero__title',
+            type: 'heading',
+            attrs: { level: 1 },
+            content: [{ type: 'text', text: 'Affordable solar energy' }],
+          },
+          { id: 'hero__media', type: 'image' },
+        ],
+      },
+      {
+        id: 'features',
+        type: 'section',
+        children: [
+          {
+            id: 'feat__title',
+            type: 'heading',
+            attrs: { level: 2 },
+            content: [{ type: 'text', text: 'Battery storage' }],
+          },
+          { id: 'feat__media', type: 'image' },
+        ],
+      },
+    ],
+  };
+  const solar = asset('m_solar', {
+    filename: 'solar-panels.png',
+    alt_text: 'Solar panels on a roof',
+    caption: 'Clean energy',
+    width: 1600,
+    height: 900,
+  });
+  const battery = asset('m_battery', {
+    filename: 'home-battery.jpg',
+    mime_type: 'image/jpeg',
+    alt_text: 'Home battery storage unit',
+  });
+
+  it('composes resolved media metadata into the proposal and never persists', async () => {
+    mock.media = [asset('m1')];
+    const proposal = await service.execute('p1', {
+      plan: plan([selectAsset]),
+      baseRevision: 'rev1:abc',
+      baseDocument: imageDoc,
+    });
+    expect(proposal.baseRevision).toBe('rev1:abc');
+    expect(proposal.document.blocks[0]?.attrs).toEqual({
+      mediaId: 'm1',
+      src: 'https://cdn.example.com/m1.png',
+      alt: 'Hero',
+      caption: '',
+      width: 1200,
+      height: 800,
+    });
+    expect(mock.mediaListCalls).toEqual(['p1']);
+    expect(mock.updates).toHaveLength(0);
+  });
+
+  it('fails honestly when a referenced asset is not in the project library', async () => {
+    mock.media = [];
+    const err = await expectApiError(
+      service.execute('p1', { plan: plan([selectAsset]), baseRevision: 'rev1:abc', baseDocument: imageDoc }),
+    );
+    expect(err.status).toBe(422);
+    expect(err.code).toBe('visual_design_unknown_asset');
+    expect(mock.updates).toHaveLength(0);
+  });
+
+  it('fails when a visual target does not resolve to a block', async () => {
+    mock.media = [asset('m1')];
+    const err = await expectApiError(
+      service.execute('p1', {
+        plan: plan([{ op: 'select_asset', target: 'missing', mediaId: 'm1' }]),
+        baseRevision: 'rev1:abc',
+        baseDocument: imageDoc,
+      }),
+    );
+    expect(err.status).toBe(422);
+    expect(err.code).toBe('visual_design_unknown_target');
+  });
+
+  it('refuses to assign an asset to a non-image block', async () => {
+    mock.media = [asset('m1')];
+    const err = await expectApiError(
+      service.execute('p1', {
+        plan: plan([{ op: 'select_asset', target: 'hero', mediaId: 'm1' }]),
+        baseRevision: 'rev1:abc',
+        baseDocument: { version: 1 as const, blocks: [{ id: 'hero', type: 'section' }] },
+      }),
+    );
+    expect(err.status).toBe(422);
+    expect(err.code).toBe('visual_design_unsupported_target');
+  });
+
+  it('fails conflicting duplicate operations instead of silently overwriting', async () => {
+    mock.media = [asset('m1'), asset('m2')];
+    const err = await expectApiError(
+      service.execute('p1', {
+        plan: plan([selectAsset, { op: 'select_asset', target: 'hero__media', mediaId: 'm2' }]),
+        baseRevision: 'rev1:abc',
+        baseDocument: imageDoc,
+      }),
+    );
+    expect(err.status).toBe(409);
+    expect(err.code).toBe('visual_design_duplicate_operation');
+    expect(mock.updates).toHaveLength(0);
+  });
+
+  it('selects the best matching project asset for each image block and never persists', async () => {
+    mock.media = [solar, battery];
+    const proposal = await service.execute('p1', {
+      plan: selectPlan({}),
+      baseRevision: 'rev1:abc',
+      baseDocument: selectionDoc,
+    });
+    expect(proposal.document.blocks[0]?.children?.[1]?.attrs?.mediaId).toBe('m_solar');
+    expect(proposal.document.blocks[1]?.children?.[1]?.attrs?.mediaId).toBe('m_battery');
+    expect(proposal.baseRevision).toBe('rev1:abc');
+    // Retrieval is project-scoped: only this project's media list was read.
+    expect(mock.mediaListCalls).toEqual(['p1']);
+    expect(mock.updates).toHaveLength(0);
+  });
+
+  it('selects an asset only from the project-scoped media list it was given', async () => {
+    mock.media = [solar];
+    const proposal = await service.execute('p1', {
+      plan: selectPlan({ targets: ['hero__media'] }),
+      baseRevision: 'rev1:abc',
+      baseDocument: selectionDoc,
+    });
+    expect(proposal.document.blocks[0]?.children?.[1]?.attrs?.mediaId).toBe('m_solar');
+    expect(mock.mediaListCalls).toEqual(['p1']);
+    expect(mock.updates).toHaveLength(0);
+  });
+
+  it('fails explicitly with no suitable asset when nothing matches', async () => {
+    mock.media = [asset('m_cat', { filename: 'cat.png', alt_text: 'A cat' })];
+    const err = await expectApiError(
+      service.execute('p1', { plan: selectPlan({}), baseRevision: 'rev1:abc', baseDocument: selectionDoc }),
+    );
+    expect(err.status).toBe(422);
+    expect(err.code).toBe('visual_no_suitable_asset');
+    expect((err as { details?: { unmatched?: unknown[] } }).details?.unmatched).toHaveLength(2);
+    expect(mock.updates).toHaveLength(0);
+  });
+
+  it('fails an explicit target list that cannot be satisfied instead of guessing', async () => {
+    mock.media = [solar];
+    const err = await expectApiError(
+      service.execute('p1', {
+        plan: selectPlan({ targets: ['feat__media'] }),
+        baseRevision: 'rev1:abc',
+        baseDocument: selectionDoc,
+      }),
+    );
+    expect(err.status).toBe(422);
+    expect(err.code).toBe('visual_no_suitable_asset');
+    expect(mock.updates).toHaveLength(0);
+  });
+
+  it('reaches the existing review/apply path without any direct persistence', async () => {
+    mock.contentJson = { type: 'doc', content: [{ type: 'paragraph' }] };
+    mock.media = [solar, battery];
+    const proposal = await service.execute('p1', {
+      plan: selectPlan({}),
+      contentId: 'c1',
+      baseDocument: selectionDoc,
+    });
+    expect(proposal.baseRevision).toBe(contentRevisionOf(mock.contentJson));
+    expect(mock.updates).toHaveLength(0);
+
+    const row = await service.apply('p1', 'c1', proposal, 'u1');
+    expect(row).toMatchObject({ id: 'c1' });
+    expect(mock.updates).toHaveLength(1);
   });
 });
