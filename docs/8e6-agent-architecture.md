@@ -540,7 +540,7 @@ add a second progress document (no `progress.md`); update this section instead.
 | Phase 2 — Designer orchestration (synchronous) | Done | `68ad5d9`, `d442d92`, `791c763`, `f88d4e6`, `172dd7b` |
 | Phase 3 — Design Package v1 | Done | `ff652a6` |
 | Phase 4 — Durable agent runs | Done | `ff61c47` (Part 1), Part 2 (worker execution, status API, reconciliation) |
-| Phase 5 — Designer UI, MCP, docs | Not started | — |
+| Phase 5 — Designer UI, MCP, docs | In progress — 5.1 done | Phase 5.1 Designer UI run foundation (`apps/web/src/views/Designer.tsx`, `apps/web/src/components/designer/useDesignerRun.ts`); plan review/accept, MCP and docs pending |
 
 ADR Phase 2: DONE
   ├─ 3.1 done
@@ -554,6 +554,16 @@ ADR Phase 3: DONE
 ADR Phase 4: DONE
   ├─ Part 1 (durable agent runs) done
   └─ Part 2 (worker execution, status API, reconciliation) done
+
+ADR Phase 5: IN PROGRESS (only 5.1 is done; do not mark Phase 5 complete)
+  ├─ 5.1 Designer UI run foundation done: the new `/p/:projectId/designer` view
+  │    submits one supported AgentRun input (intent, creation) to
+  │    POST /designer/runs and follows that run through queued -> running ->
+  │    succeeded | failed via GET /designer/runs/:runId. The project-scoped run
+  │    bookmark is restored and polling resumed on mount, and the succeeded
+  │    `DesignerProposal` is shown as a proposal only (no apply/save/publish).
+  └─ 5.2 plan review + explicit accept to the Editor, MCP as a second mouth,
+       and the roadmap docs: pending.
 
 Phase 2 is complete: the last §13 Phase 2 bullet — wiring `resolveDesignSystem`
 into `CanonicalRenderer`, the editor canvas and the Designer — landed as chat

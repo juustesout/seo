@@ -15,6 +15,7 @@
 import { useEffect, useState } from 'react';
 import {
   BookOpen,
+  Bot,
   CalendarDays,
   FolderKanban,
   KeyRound,
@@ -44,6 +45,7 @@ import { Content } from './views/Content';
 import { ContentSchedule } from './views/ContentSchedule';
 import { Publications } from './views/Publications';
 import { Compose } from './views/Compose';
+import { Designer } from './views/Designer';
 import { openProjectView } from './lib/nav';
 import { DesignSystemProvider } from './lib/designSystem';
 import { Overview } from './views/Overview';
@@ -111,6 +113,7 @@ const PROJECT_NAV: Array<{ id: string; label: string; icon: NavIcon }> = [
   { id: 'integrations', label: 'Integrations', icon: Plug },
   { id: 'knowledge', label: 'Knowledge Base', icon: BookOpen },
   { id: 'content', label: 'Content Studio', icon: PenSquare },
+  { id: 'designer', label: 'Designer', icon: Bot },
   { id: 'compose', label: 'Compose', icon: Sparkles },
   { id: 'calendar', label: 'Calendar', icon: CalendarDays },
   { id: 'publications', label: 'Publications', icon: Newspaper },
@@ -320,6 +323,7 @@ export function App() {
                 />
               )}
               {view === 'content' && <Content projectId={pid} role={project.role} initialContentId={route.sub} onOpenCalendar={() => goProject(pid, 'calendar')} onOpenPublications={(contentId) => openProjectView(pid, 'publications', { content_id: contentId })} />}
+              {view === 'designer' && <Designer projectId={pid} role={project.role} />}
               {view === 'compose' && <Compose projectId={pid} role={project.role} onOpenEditor={(contentId) => goProject(pid, 'content', contentId)} />}
               {view === 'calendar' && <ContentSchedule projectId={pid} role={project.role} onViewPublication={(scheduleId) => openProjectView(pid, 'publications', { schedule_id: scheduleId })} />}
               {view === 'publications' && <Publications projectId={pid} />}
