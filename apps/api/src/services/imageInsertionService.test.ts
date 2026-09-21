@@ -8,8 +8,19 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ServiceContainer } from '../context.js';
-import type { CanonicalDocument, DesignerIntent, ImageInsertionContext, ImageInsertionSectionTarget } from '@seo/contracts';
-import { canonicalDocumentToEditorDocument, contentRevisionOf, editorDocumentToCanonical } from '@seo/contracts';
+import type {
+  CanonicalDocument,
+  DesignerIntent,
+  ImageInsertionContext,
+  ImageInsertionHeroTarget,
+  ImageInsertionSectionTarget,
+} from '@seo/contracts';
+import {
+  IMAGE_INSERTION_HERO_PLACEMENT,
+  canonicalDocumentToEditorDocument,
+  contentRevisionOf,
+  editorDocumentToCanonical,
+} from '@seo/contracts';
 import { ImageInsertionService, imageInsertionContextOf } from './imageInsertionService.js';
 
 const mock = vi.hoisted(() => ({
@@ -212,16 +223,29 @@ describe('ImageInsertionService visual intent (R4.1)', () => {
 
   it('refuses a role the editor cannot host yet, before reading content', async () => {
     const err = await expectApiError(
-      service.buildProposal(PROJECT_ID, intent({ instruction: 'Maak de hero sterker.' }), context()),
+      service.buildProposal(PROJECT_ID, intent({ instruction: 'Maak het logo sterker.' }), context()),
     );
     expect(err.status).toBe(422);
     expect(err.code).toBe('visual_role_unsupported');
     expect(mock.getCalls).toBe(0);
   });
 
-  it('asks for clarification when several roles are named', async () => {
+  it('reports a combined hero and background request as unsupported', async () => {
     const err = await expectApiError(
       service.buildProposal(PROJECT_ID, intent({ instruction: 'Voeg een hero en een achtergrond toe.' }), context()),
+    );
+    expect(err.status).toBe(422);
+    expect(err.code).toBe('image_insertion_unrecognized_instruction');
+    expect(mock.getCalls).toBe(0);
+  });
+
+  it('asks for clarification when several roles are named', async () => {
+    const err = await expectApiError(
+      service.buildProposal(
+        PROJECT_ID,
+        intent({ instruction: 'Voeg een illustratie en een decoratieve afbeelding toe.' }),
+        context(),
+      ),
     );
     expect(err.status).toBe(422);
     expect(err.code).toBe('visual_intent_needs_clarification');
@@ -363,5 +387,125 @@ describe('ImageInsertionService section visuals (R4.2)', () => {
     expect(err.status).toBe(422);
     expect(err.code).toBe('visual_intent_needs_clarification');
     expect(mock.getCalls).toBe(0);
+  });
+});
+
+const HERO_CANONICAL: CanonicalDocument = {
+  version: 1,
+  meta: { title: 'Solar for every roof' },
+  blocks: [
+    { type: 'heading', attrs: { level: 1 }, content: [{ type: 'text', text: 'Solar for every roof' }] },
+    { type: 'paragraph', content: [{ type: 'text', text: 'We install solar panels on residential roofs.' }] },
+    { type: 'heading', attrs: { level: 2 }, content: [{ type: 'text', text: 'How it works' }] },
+    { type: 'paragraph', content: [{ type: 'text', text: 'Panels capture sunlight.' }] },
+  ],
+};
+
+const HERO_TARGET: ImageInsertionHeroTarget = {
+  kind: 'hero',
+  heroPath: [0],
+  anchorPath: [0],
+  nodeType: 'heading',
+  placement: IMAGE_INSERTION_HERO_PLACEMENT,
+  heading: 'Solar for every roof',
+  supportingText: 'We install solar panels on residential roofs.',
+};
+
+function heroContext(over: Partial<ImageInsertionContext> = {}): ImageInsertionContext {
+  return context({
+    document: HERO_CANONICAL,
+    target: { kind: 'cursor', position: 3 },
+    heroTarget: { ...HERO_TARGET },
+    nearbyText: '',
+    sectionHeading: 'Solar for every roof',
+    ...over,
+  });
+}
+
+describe('ImageInsertionService hero visuals (R4.3)', () => {
+  it('builds a full-bleed hero insertion after the hero heading', async () => {
+    const proposal = await service.buildProposal(
+      PROJECT_ID,
+      intent({ instruction: 'Maak de hero sterker.' }),
+      heroContext(),
+    );
+    expect(proposal.insertion?.visual).toMatchObject({ role: 'hero', intent: 'emphasis', placement: 'full_bleed' });
+    expect(proposal.insertion?.target).toMatchObject({ kind: 'hero', heroPath: [0], anchorPath: [0], placement: 'full_bleed' });
+    expect(proposal.insertion?.image.assetId).toBe('m_solar');
+  });
+
+  it('accepts a hero target supplied directly as the location', async () => {
+    const proposal = await service.buildProposal(
+      PROJECT_ID,
+      intent({ instruction: 'Maak de hero sterker.' }),
+      context({ document: HERO_CANONICAL, target: { ...HERO_TARGET }, nearbyText: '' }),
+    );
+    expect(proposal.insertion?.target).toMatchObject({ kind: 'hero', heroPath: [0], anchorPath: [0] });
+  });
+
+  it('uses the hero heading and supporting copy to drive the search', async () => {
+    mock.media = [
+      { ...mock.media[0]!, id: 'm_wind', filename: 'wind.png', alt_text: 'Wind turbines', caption: '' },
+      { ...mock.media[0]!, id: 'm_solar', filename: 'solar.png', alt_text: 'Solar panels', caption: '' },
+    ];
+    const proposal = await service.buildProposal(PROJECT_ID, intent({ instruction: 'Maak de hero sterker.' }), heroContext());
+    expect(proposal.insertion?.image.assetId).toBe('m_solar');
+  });
+
+  it('refuses a hero request with no resolvable hero target', async () => {
+    const err = await expectApiError(
+      service.buildProposal(
+        PROJECT_ID,
+        intent({ instruction: 'Maak de hero sterker.' }),
+        context({ document: HERO_CANONICAL, sectionHeading: 'Solar for every roof' }),
+      ),
+    );
+    expect(err.status).toBe(422);
+    expect(err.code).toBe('hero_target_unresolved');
+    expect(mock.mediaListCalls).toEqual([]);
+  });
+
+  it('refuses a hero target whose heading no longer exists', async () => {
+    const err = await expectApiError(
+      service.buildProposal(
+        PROJECT_ID,
+        intent({ instruction: 'Maak de hero sterker.' }),
+        heroContext({ heroTarget: { ...HERO_TARGET, heroPath: [3], anchorPath: [3] } }),
+      ),
+    );
+    expect(err.status).toBe(422);
+    expect(err.code).toBe('hero_target_unresolved');
+  });
+
+  it('refuses a hero placement it cannot host instead of downgrading it', async () => {
+    const err = await expectApiError(
+      service.buildProposal(
+        PROJECT_ID,
+        intent({ instruction: 'Maak de hero sterker met een overlay.' }),
+        heroContext(),
+      ),
+    );
+    expect(err.status).toBe(422);
+    expect(err.code).toBe('visual_placement_unsupported');
+    expect(mock.mediaListCalls).toEqual([]);
+  });
+
+  it('refuses to add a second image to a hero that already has one', async () => {
+    const withImage: CanonicalDocument = {
+      version: 1,
+      blocks: [
+        { type: 'heading', attrs: { level: 1 }, content: [{ type: 'text', text: 'Solar for every roof' }] },
+        { type: 'image', attrs: { mediaId: 'm_existing', src: 'https://cdn.test/a.png', alt: 'Panels' } },
+      ],
+    };
+    const err = await expectApiError(
+      service.buildProposal(
+        PROJECT_ID,
+        intent({ instruction: 'Maak de hero sterker.' }),
+        heroContext({ document: withImage }),
+      ),
+    );
+    expect(err.status).toBe(422);
+    expect(err.code).toBe('hero_image_already_present');
   });
 });

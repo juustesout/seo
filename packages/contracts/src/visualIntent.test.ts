@@ -111,12 +111,17 @@ describe('resolveVisualDesignIntent context and precedence', () => {
 
 describe('resolveVisualDesignIntent uncertainty', () => {
   it('asks for clarification when several roles are named', () => {
-    const result = resolveVisualDesignIntent('Voeg een hero en een achtergrond toe.', context());
+    const result = resolveVisualDesignIntent('Voeg een illustratie en een decoratieve afbeelding toe.', context());
     expect(result.status).toBe('needs_clarification');
     if (result.status !== 'needs_clarification') return;
-    expect(result.candidates.map((candidate) => candidate.role)).toEqual(['hero', 'background']);
+    expect(result.candidates.map((candidate) => candidate.role)).toEqual(['illustration', 'decorative']);
     expect(result.question.length).toBeGreaterThan(0);
     expect(result.candidates.every(isValidVisualDesignIntent)).toBe(true);
+  });
+
+  it('reports a combined hero and background request as unsupported (R4.3)', () => {
+    const result = resolveVisualDesignIntent('Voeg een hero en een achtergrond toe.', context());
+    expect(result).toEqual({ status: 'unsupported', reason: 'hero_background_unsupported' });
   });
 
   it('asks for clarification when a purpose is named but no role can be justified', () => {
@@ -144,9 +149,9 @@ describe('resolveVisualDesignIntent uncertainty', () => {
     expect(resolveVisualDesignIntent('   ', context())).toEqual({ status: 'unsupported', reason: 'empty_instruction' });
   });
 
-  it('marks which resolved roles R4.1 can actually place', () => {
+  it('marks which resolved roles the current capabilities can actually place', () => {
     expect(isVisualIntentInsertable(resolved('Voeg een illustratie toe.'))).toBe(true);
-    expect(isVisualIntentInsertable(resolved('Maak de hero sterker.'))).toBe(false);
+    expect(isVisualIntentInsertable(resolved('Maak de hero sterker.'))).toBe(true);
     expect(isVisualIntentInsertable(resolved('Gebruik een rustige achtergrond.'))).toBe(false);
   });
 });

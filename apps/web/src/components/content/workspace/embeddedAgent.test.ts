@@ -7,6 +7,7 @@ import {
   embeddedAgentOutcomeFromRun,
   embeddedAgentRunPath,
   embeddedAgentSubmission,
+  embeddedAgentWantsImageContext,
   visualIntentLabel,
   visualRoleLabel,
   type EmbeddedAgentSubmissionInput,
@@ -271,11 +272,13 @@ describe('embeddedAgent visual intent (R4.1)', () => {
     expect(outcome).toMatchObject({ kind: 'insertion', operation: withVisual });
   });
 
-  it('maps an unsupported role to product language without internal copy', () => {
-    const outcome = embeddedAgentOutcomeFromError(new ApiRequestError('visual_role_unsupported', 'hero unsupported', 422));
+  it('maps an unsupported role to product language without echoing backend internals', () => {
+    const outcome = embeddedAgentOutcomeFromError(
+      new ApiRequestError('visual_role_unsupported', 'role=logo not hostable', 422),
+    );
     expect(outcome.kind).toBe('unsupported');
     expect(outcome.message).toContain('inline image');
-    expect(outcome.message).not.toContain('hero');
+    expect(outcome.message).not.toContain('not hostable');
   });
 
   it('maps an ambiguous request to a clarification instead of a guess', () => {
@@ -283,7 +286,7 @@ describe('embeddedAgent visual intent (R4.1)', () => {
       embeddedAgentOutcomeFromError(new ApiRequestError('visual_intent_needs_clarification', 'which role?', 422)),
     ).toEqual({
       kind: 'clarification',
-      message: 'What kind of visual do you want here: an inline image, a section image or an illustration?',
+      message: 'What kind of visual do you want here: an inline image, a section image, a hero image or an illustration?',
     });
   });
 
@@ -341,5 +344,64 @@ describe('embeddedAgent section visuals (R4.2)', () => {
     );
     expect(outcome).toMatchObject({ kind: 'insertion', operation: sectionInsertion });
     expect(outcome.message).toContain('section');
+  });
+});
+
+describe('embeddedAgent hero visuals (R4.3)', () => {
+  it('asks the user to anchor the request when no hero is found', () => {
+    expect(embeddedAgentOutcomeFromError(new ApiRequestError('hero_target_unresolved', 'no hero', 422))).toEqual({
+      kind: 'clarification',
+      message: "I couldn't find a hero area on this page. Add a hero section or a heading at the top and try again.",
+    });
+  });
+
+  it('reports an already-imaged hero as a neutral note, not a failure', () => {
+    expect(embeddedAgentOutcomeFromError(new ApiRequestError('hero_image_already_present', 'has image', 422))).toEqual({
+      kind: 'empty',
+      message: 'This hero already has an image. Remove or replace it first, then ask again.',
+    });
+  });
+
+  it('describes a hero candidate as landing in the hero', () => {
+    const heroInsertion: InsertImageOperation = {
+      ...INSERTION,
+      target: { kind: 'hero', heroPath: [0], anchorPath: [0], nodeType: 'heading', placement: 'full_bleed' },
+      visual: { role: 'hero', intent: 'emphasis', placement: 'full_bleed' },
+    };
+    const outcome = embeddedAgentOutcomeFromRun(
+      run({
+        status: 'succeeded',
+        result: { version: 1, baseRevision: 'rev1:abc', document: { version: 1, blocks: [] }, insertion: heroInsertion },
+      }),
+    );
+    expect(outcome).toMatchObject({ kind: 'insertion', operation: heroInsertion });
+    expect(outcome.message).toContain('hero');
+  });
+
+  it('maps an unsupported hero placement to product language', () => {
+    const outcome = embeddedAgentOutcomeFromRun(
+      run({
+        status: 'failed',
+        error: { code: 'visual_placement_unsupported', message: 'overlay unsupported', retryable: false },
+      }),
+    );
+    expect(outcome.kind).toBe('unsupported');
+    expect(outcome.message).toContain('full-width hero');
+    expect(outcome.message).not.toContain('overlay');
+  });
+});
+
+describe('embeddedAgentWantsImageContext', () => {
+  it('routes plain image requests and explicit hero requests through the image path', () => {
+    expect(embeddedAgentWantsImageContext('Zet hier een passende afbeelding.')).toBe(true);
+    expect(embeddedAgentWantsImageContext('Geef deze sectie een passende afbeelding.')).toBe(true);
+    expect(embeddedAgentWantsImageContext('Maak de hero sterker.')).toBe(true);
+    expect(embeddedAgentWantsImageContext('Maak de hero-afbeelding sterker.')).toBe(true);
+  });
+
+  it('leaves ordinary and unsupported-role instructions to the Designer run', () => {
+    expect(embeddedAgentWantsImageContext('Add a section')).toBe(false);
+    expect(embeddedAgentWantsImageContext('Maak het mooier.')).toBe(false);
+    expect(embeddedAgentWantsImageContext('Gebruik een rustige achtergrond.')).toBe(false);
   });
 });

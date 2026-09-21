@@ -20,6 +20,7 @@
 
 import {
   DESIGNER_PROPOSAL_VERSION,
+  IMAGE_INSERTION_HERO_PLACEMENT,
   IMAGE_INSERTION_SECTION_PLACEMENT,
   contentRevisionOf,
   editorDocumentToCanonical,
@@ -28,6 +29,7 @@ import {
   isValidDesignerProposal,
   isValidImageInsertionContext,
   isValidInsertImageOperation,
+  resolveHeroVisual,
   resolveSectionVisual,
   resolveVisualDesignIntent,
   selectImageInsertionCandidate,
@@ -35,6 +37,7 @@ import {
   type DesignerProposal,
   type ImageInsertionCandidate,
   type ImageInsertionContext,
+  type ImageInsertionHeroTarget,
   type ImageInsertionSectionTarget,
   type InsertImageOperation,
   type VisualAssetCandidate,
@@ -87,6 +90,16 @@ function toVisualCandidate(item: {
 function sectionTargetOf(context: ImageInsertionContext): ImageInsertionSectionTarget | null {
   if (context.sectionTarget) return context.sectionTarget;
   return context.target.kind === 'section' ? context.target : null;
+}
+
+/**
+ * The hero addressed by the transmitted context: the editor's dedicated hero hint
+ * when present, or a hero target used directly as the location (API callers and
+ * tests). Null when the context names no hero at all.
+ */
+function heroTargetOf(context: ImageInsertionContext): ImageInsertionHeroTarget | null {
+  if (context.heroTarget) return context.heroTarget;
+  return context.target.kind === 'hero' ? context.target : null;
 }
 
 export class ImageInsertionService {
@@ -143,18 +156,20 @@ export class ImageInsertionService {
       );
     }
 
-    const section = visual.role === 'section' ? this.resolveSectionTarget(context, visual) : null;    const operationTarget = section ? section.target : context.target;
-    const effectiveContext = section ? section.context : context;
+    const section = visual.role === 'section' ? this.resolveSectionTarget(context, visual) : null;
+    const hero = visual.role === 'hero' ? this.resolveHeroTarget(context, visual) : null;
+    const located = section ?? hero;
+    const operationTarget = located ? located.target : context.target;
+    const effectiveContext = located ? located.context : context;
 
     const media = await new MediaService(this.container.sb, new SupabaseStorageStore(this.container.sb)).list(projectId);
     const selection = selectImageInsertionCandidate(effectiveContext, media.map(toVisualCandidate), { visual });
     if (!selection) {
+      const scope = section ? 'this section' : hero ? 'this hero' : 'this text';
       throw new ApiError(
         422,
         'image_insertion_no_candidate',
-        section
-          ? 'No existing image in this project matches this section closely enough.'
-          : 'No existing image in this project matches this text closely enough.',
+        `No existing image in this project matches ${scope} closely enough.`,
       );
     }
 
@@ -248,6 +263,67 @@ export class ImageInsertionService {
     return {
       target,
       context: { ...context, target, sectionHeading: section.heading, nearbyText: section.body },
+    };
+  }
+
+  /**
+   * Resolves the hero context for a `hero` visual, or fails honestly.
+   *
+   * A hero image needs a heading-anchored location and hero-level copy, so this
+   * refuses (never guesses) when the editor sent no hero target, the heading can
+   * no longer be found, or the hero already contains an image (R4.3 does not
+   * silently duplicate or replace a visual). The returned context carries the
+   * hero heading and bounded supporting copy so ranking reasons about the whole
+   * hero, not only the selected sentence. A placement other than the supported
+   * full-bleed is refused rather than downgraded into a section image.
+   */
+  private resolveHeroTarget(
+    context: ImageInsertionContext,
+    visual: VisualDesignIntent,
+  ): { target: ImageInsertionHeroTarget; context: ImageInsertionContext } {
+    const heroTarget = heroTargetOf(context);
+    if (!heroTarget) {
+      throw new ApiError(
+        422,
+        'hero_target_unresolved',
+        "I couldn't find a hero area on this page. Add a hero section or a heading at the top and try again.",
+      );
+    }
+    if (visual.placement !== undefined && visual.placement !== IMAGE_INSERTION_HERO_PLACEMENT) {
+      throw new ApiError(
+        422,
+        'visual_placement_unsupported',
+        `A ${visual.placement} hero image is not supported in the editor yet.`,
+        { placement: visual.placement },
+      );
+    }
+    const hero = resolveHeroVisual(context.document, heroTarget);
+    if (!hero) {
+      throw new ApiError(
+        422,
+        'hero_target_unresolved',
+        "I couldn't find that hero in the document any more. Put the cursor in the hero and try again.",
+      );
+    }
+    if (hero.hasImage) {
+      throw new ApiError(
+        422,
+        'hero_image_already_present',
+        'This hero already has an image. Remove or replace it first, then ask again.',
+      );
+    }
+    const target: ImageInsertionHeroTarget = {
+      kind: 'hero',
+      heroPath: hero.heroPath,
+      anchorPath: hero.anchorPath,
+      nodeType: hero.nodeType,
+      placement: IMAGE_INSERTION_HERO_PLACEMENT,
+      heading: hero.heading,
+      supportingText: hero.supportingText,
+    };
+    return {
+      target,
+      context: { ...context, target, sectionHeading: hero.heading, nearbyText: hero.supportingText },
     };
   }
 }

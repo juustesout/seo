@@ -35,5 +35,6 @@ export * from './imageInsertion.js';
 export * from './visualVocabulary.js';
 export * from './visualIntent.js';
 export * from './sectionVisual.js';
+export * from './heroVisual.js';
 export * from './designPackage.js';
 export * from './agentRun.js';

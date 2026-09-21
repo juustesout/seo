@@ -176,7 +176,8 @@ Supported now:
 
 Explicitly not supported (reported as such, not faked):
 
-- other visual roles as hosts (hero, background, logo, icon, ...);
+- other visual roles as hosts (background, logo, icon, ...); the `hero` host was
+  added in R4.3 (`docs/hero-visual-capability.md`);
 - replacement of an existing image (including a section image);
 - choosing between multiple candidates ("another one");
 - plural / multi-image insertion;
@@ -190,11 +191,12 @@ order, each fully integrating one capability and keeping every invariant (three
 separate axes, honest refusal over guessing, pure ranking, no new persistence, no
 new route or detached UI):
 
-1. Host blocks for `hero` and full-bleed `background`.
-2. Replacement of an existing image block (the R4.1-resolved role becomes the
+1. [Done in R4.3] Host block for `hero` - see `docs/hero-visual-capability.md`.
+2. Host block for full-bleed `background`.
+3. Replacement of an existing image block (the R4.1-resolved role becomes the
    replacement's role) - this also makes `hasImage` sections replaceable.
-3. Candidate choice ("show me another") reusing the same ranker and intent.
-4. `logo` / `icon` hosts.
+4. Candidate choice ("show me another") reusing the same ranker and intent.
+5. `logo` / `icon` hosts.
 
 ## 12. Implementation report
 

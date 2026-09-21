@@ -20,6 +20,8 @@
 import type { Editor } from '@tiptap/react';
 import type { Node as PmNode } from '@tiptap/pm/model';
 import {
+  IMAGE_INSERTION_HERO_PLACEMENT,
+  IMAGE_INSERTION_HERO_SUPPORTING_MAX_CHARS,
   IMAGE_INSERTION_LANGUAGE_MAX_CHARS,
   IMAGE_INSERTION_MAX_TEXT_CHARS,
   IMAGE_INSERTION_NEARBY_MAX_CHARS,
@@ -27,6 +29,7 @@ import {
   IMAGE_INSERTION_TITLE_MAX_CHARS,
   isValidImageInsertionContext,
   type ImageInsertionContext,
+  type ImageInsertionHeroTarget,
   type ImageInsertionSectionTarget,
   type ImageInsertionTarget,
   type InsertImageOperation,
@@ -46,10 +49,17 @@ export interface EditorImageSemantics {
    * canonical snapshot and the editor re-validates it before inserting.
    */
   sectionTarget?: ImageInsertionSectionTarget;
+  /**
+   * R4.3: the hero the request addresses, when one can be resolved. It is a
+   * structural hint for the `hero` role; the backend validates it against the
+   * canonical snapshot and the editor re-validates it before inserting.
+   */
+  heroTarget?: ImageInsertionHeroTarget;
 }
 
-/** Editor node names that describe a section for R4.2. */
+/** Editor node names that describe a section for R4.2 and a hero for R4.3. */
 const SECTION_NODE_TYPE = 'compositionSection';
+const HERO_NODE_TYPE = 'compositionHero';
 const HEADING_NODE_TYPE = 'heading';
 
 /** Why an insertion could not be applied. Product copy maps these, they are not shown raw. */
@@ -146,6 +156,80 @@ export function readEditorSectionTarget(editor: Editor | null): ImageInsertionSe
   return null;
 }
 
+/** Bounded supporting copy after `fromIndex`, optionally stopping at a heading. */
+function supportingTextAfter(container: PmNode, fromIndex: number, stopAtHeading: boolean): string {
+  const parts: string[] = [];
+  for (let index = fromIndex + 1; index < container.childCount; index += 1) {
+    const child = container.child(index);
+    if (stopAtHeading && child.type.name === HEADING_NODE_TYPE) break;
+    const text = normalize(child.textContent);
+    if (text) parts.push(text);
+  }
+  return normalize(parts.join(' ')).slice(0, IMAGE_INSERTION_HERO_SUPPORTING_MAX_CHARS);
+}
+
+/**
+ * Reads the hero the current request addresses, as a structural hint for the
+ * `hero` visual role (R4.3). Two shapes are recognized, mirroring the canonical
+ * hero definition: an explicit `compositionHero` container (preferring the one
+ * the selection sits in, otherwise the first), or the first top-level heading as
+ * the page hero. Returns null when neither exists so the backend can ask instead
+ * of guessing. Pure read.
+ */
+export function readEditorHeroTarget(editor: Editor | null): ImageInsertionHeroTarget | null {
+  if (!editor || editor.isDestroyed) return null;
+  const { doc, selection } = editor.state;
+  if (doc.childCount === 0) return null;
+
+  const topIndex = Math.max(0, Math.min(doc.resolve(selection.from).index(0), doc.childCount - 1));
+
+  let heroIndex: number | null = null;
+  for (let index = 0; index < doc.childCount; index += 1) {
+    if (doc.child(index).type.name !== HERO_NODE_TYPE) continue;
+    if (index === topIndex) {
+      heroIndex = index;
+      break;
+    }
+    if (heroIndex === null) heroIndex = index;
+  }
+  if (heroIndex !== null) {
+    const host = doc.child(heroIndex);
+    const headingIndex = firstHeadingIndex(host);
+    if (headingIndex === null) return null;
+    const headingNode = host.child(headingIndex);
+    const heading = headingText(headingNode);
+    if (!heading) return null;
+    const supportingText = supportingTextAfter(host, headingIndex, false);
+    return {
+      kind: 'hero',
+      heroPath: [heroIndex],
+      anchorPath: [heroIndex, headingIndex],
+      nodeType: HERO_NODE_TYPE,
+      placement: IMAGE_INSERTION_HERO_PLACEMENT,
+      heading,
+      ...(supportingText ? { supportingText } : {}),
+    };
+  }
+
+  for (let index = 0; index < doc.childCount; index += 1) {
+    const node = doc.child(index);
+    if (node.type.name !== HEADING_NODE_TYPE) continue;
+    const heading = headingText(node);
+    if (!heading) continue;
+    const supportingText = supportingTextAfter(doc, index, true);
+    return {
+      kind: 'hero',
+      heroPath: [index],
+      anchorPath: [index],
+      nodeType: HEADING_NODE_TYPE,
+      placement: IMAGE_INSERTION_HERO_PLACEMENT,
+      heading,
+      ...(supportingText ? { supportingText } : {}),
+    };
+  }
+  return null;
+}
+
 /**
  * Reads bounded semantic context from the live editor: the selected text, the
  * surrounding copy (previous/current/next block) and the nearest preceding
@@ -180,6 +264,7 @@ export function readEditorImageSemantics(editor: Editor | null): EditorImageSema
 
   const targetNodeType = doc.childCount > 0 ? doc.child(topIndex).type.name : undefined;
   const sectionTarget = readEditorSectionTarget(editor);
+  const heroTarget = readEditorHeroTarget(editor);
 
   return {
     ...(selectedText ? { selectedText } : {}),
@@ -187,6 +272,7 @@ export function readEditorImageSemantics(editor: Editor | null): EditorImageSema
     ...(sectionHeading ? { sectionHeading } : {}),
     ...(targetNodeType ? { targetNodeType } : {}),
     ...(sectionTarget ? { sectionTarget } : {}),
+    ...(heroTarget ? { heroTarget } : {}),
   };
 }
 
@@ -221,6 +307,7 @@ export function imageInsertionContextFromSnapshot(
       ? { targetNodeType: clamp(semantics.targetNodeType, IMAGE_INSERTION_NODE_TYPE_MAX_CHARS) }
       : {}),
     ...(semantics.sectionTarget ? { sectionTarget: semantics.sectionTarget } : {}),
+    ...(semantics.heroTarget ? { heroTarget: semantics.heroTarget } : {}),
     ...(meta.language ? { language: clamp(meta.language, IMAGE_INSERTION_LANGUAGE_MAX_CHARS) } : {}),
   };
   return isValidImageInsertionContext(context) ? context : null;
@@ -257,7 +344,7 @@ export function resolveImageInsertionRange(
       ? { from: target.from, to: target.to }
       : null;
   }
-  if (target.kind === 'section') {
+  if (target.kind === 'section' || target.kind === 'hero') {
     const before = positionBeforePath(editor.state.doc, target.anchorPath);
     if (before === null) return null;
     const heading = editor.state.doc.nodeAt(before);
@@ -265,7 +352,8 @@ export function resolveImageInsertionRange(
     const after = before + heading.nodeSize;
     // Anchor inside the heading's text (a valid text position) so `insertMedia`
     // inserts after the heading block; an empty heading falls back to the block
-    // boundary. The heading itself is never replaced (a section keeps its title).
+    // boundary. The heading itself is never replaced (a section/hero keeps its
+    // title).
     const inside = after - 1;
     if (heading.content.size > 0 && inside > before) return inside;
     return after <= size ? after : null;

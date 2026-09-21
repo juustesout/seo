@@ -71,7 +71,7 @@ export const IMAGE_INSERTION_DEFAULT_MIN_SCORE = VISUAL_ASSET_DEFAULT_MIN_SCORE;
 // ---------------------------------------------------------------------------
 
 /** How the user expressed the insertion location in the current document. */
-export const IMAGE_INSERTION_TARGET_KINDS = ['cursor', 'text-selection', 'block', 'section'] as const;
+export const IMAGE_INSERTION_TARGET_KINDS = ['cursor', 'text-selection', 'block', 'section', 'hero'] as const;
 export type ImageInsertionTargetKind = (typeof IMAGE_INSERTION_TARGET_KINDS)[number];
 
 /**
@@ -81,6 +81,17 @@ export type ImageInsertionTargetKind = (typeof IMAGE_INSERTION_TARGET_KINDS)[num
  * silently rendered as something it is not.
  */
 export const IMAGE_INSERTION_SECTION_PLACEMENT = 'contained' as const;
+
+/**
+ * The one placement a hero image supports today: a full-bleed image in the hero
+ * region. R4.3 deliberately does not host overlay/side-by-side hero treatments,
+ * so a resolved hero intent with any other placement is refused rather than
+ * downgraded into a section image.
+ */
+export const IMAGE_INSERTION_HERO_PLACEMENT = 'full_bleed' as const;
+
+/** Bounded supporting copy derived from a hero and used for hero retrieval. */
+export const IMAGE_INSERTION_HERO_SUPPORTING_MAX_CHARS = 600;
 
 /** An insertion point at the caret (editor document position). */
 export interface ImageInsertionCursorTarget {
@@ -124,11 +135,37 @@ export interface ImageInsertionSectionTarget {
   heading?: string;
 }
 
+/**
+ * R4.3: a hero visual target. A "hero" is either an explicit composition `hero`
+ * container or the heading-delimited page hero; both are addressed by structural
+ * index paths for one document snapshot only.
+ *
+ * `heroPath` identifies the addressed hero (the container block, or the heading
+ * block that starts a page hero). `anchorPath` identifies the heading block the
+ * image is inserted after, so the insertion is deterministic ("after the hero
+ * heading, before its supporting copy"). `placement` is fixed to the one hero
+ * treatment R4.3 hosts. Paths are location hints, never durable identities; the
+ * editor and the API both re-validate them against the live document.
+ */
+export interface ImageInsertionHeroTarget {
+  kind: 'hero';
+  heroPath: number[];
+  anchorPath: number[];
+  /** Canonical/editor node type of the hero host, as a context hint. */
+  nodeType: string;
+  placement: typeof IMAGE_INSERTION_HERO_PLACEMENT;
+  /** Bounded resolved heading text, as a context hint; the editor re-reads it. */
+  heading?: string;
+  /** Bounded supporting copy after the heading, as a context hint. */
+  supportingText?: string;
+}
+
 export type ImageInsertionTarget =
   | ImageInsertionCursorTarget
   | ImageInsertionTextSelectionTarget
   | ImageInsertionBlockTarget
-  | ImageInsertionSectionTarget;
+  | ImageInsertionSectionTarget
+  | ImageInsertionHeroTarget;
 
 // ---------------------------------------------------------------------------
 // Candidate
@@ -193,6 +230,15 @@ export interface ImageInsertionContext {
    * before use; ignored for non-section roles.
    */
   sectionTarget?: ImageInsertionSectionTarget;
+  /**
+   * R4.3: the hero the request addresses, when the editor could resolve one. It
+   * is a structural hint for the `hero` role only: the editor always sends the
+   * real caret/selection as `target`, and this carries the addressed hero so the
+   * backend can anchor a hero image without re-deriving the editor's structure.
+   * Validated against the canonical snapshot before use; ignored for non-hero
+   * roles.
+   */
+  heroTarget?: ImageInsertionHeroTarget;
   /** The user's selected text, when the target is a text selection. */
   selectedText?: string;
   /** Bounded surrounding copy (current block plus nearby blocks). */
@@ -219,6 +265,15 @@ const CURSOR_KEYS: ReadonlySet<string> = new Set(['kind', 'position']);
 const TEXT_SELECTION_KEYS: ReadonlySet<string> = new Set(['kind', 'from', 'to']);
 const BLOCK_KEYS: ReadonlySet<string> = new Set(['kind', 'path']);
 const SECTION_KEYS: ReadonlySet<string> = new Set(['kind', 'sectionPath', 'anchorPath', 'heading']);
+const HERO_KEYS: ReadonlySet<string> = new Set([
+  'kind',
+  'heroPath',
+  'anchorPath',
+  'nodeType',
+  'placement',
+  'heading',
+  'supportingText',
+]);
 const CANDIDATE_KEYS: ReadonlySet<string> = new Set([
   'assetId',
   'url',
@@ -235,6 +290,7 @@ const CONTEXT_KEYS: ReadonlySet<string> = new Set([
   'document',
   'target',
   'sectionTarget',
+  'heroTarget',
   'selectedText',
   'nearbyText',
   'documentTitle',
@@ -298,6 +354,16 @@ export function isValidImageInsertionTarget(value: unknown): value is ImageInser
         isBlockPath(value.anchorPath) &&
         isOptionalBoundedString(value.heading, IMAGE_INSERTION_TITLE_MAX_CHARS)
       );
+    case 'hero':
+      return (
+        hasOnlyKeys(value, HERO_KEYS) &&
+        isBlockPath(value.heroPath) &&
+        isBlockPath(value.anchorPath) &&
+        isBoundedString(value.nodeType, IMAGE_INSERTION_NODE_TYPE_MAX_CHARS) &&
+        value.placement === IMAGE_INSERTION_HERO_PLACEMENT &&
+        isOptionalBoundedString(value.heading, IMAGE_INSERTION_TITLE_MAX_CHARS) &&
+        isOptionalBoundedString(value.supportingText, IMAGE_INSERTION_HERO_SUPPORTING_MAX_CHARS)
+      );
     default:
       return false;
   }
@@ -340,6 +406,14 @@ export function isValidInsertImageOperation(value: unknown): value is InsertImag
     return false;
   }
 
+  // R4.3: a `hero` target requires the hero role and the one supported hero
+  // placement, and a hero role requires a hero target. A hero intent with any
+  // other placement is a mismatched operation, never silently downgraded.
+  const heroTarget = target.kind === 'hero';
+  const heroVisual = visual?.role === 'hero';
+  if (heroTarget !== heroVisual) return false;
+  if (heroVisual && visual?.placement !== IMAGE_INSERTION_HERO_PLACEMENT) return false;
+
   return isOptionalBoundedString(value.rationale, IMAGE_INSERTION_RATIONALE_MAX_CHARS);
 }
 
@@ -359,6 +433,12 @@ export function isValidImageInsertionContext(value: unknown): value is ImageInse
   if (
     value.sectionTarget !== undefined &&
     !(isValidImageInsertionTarget(value.sectionTarget) && value.sectionTarget.kind === 'section')
+  ) {
+    return false;
+  }
+  if (
+    value.heroTarget !== undefined &&
+    !(isValidImageInsertionTarget(value.heroTarget) && value.heroTarget.kind === 'hero')
   ) {
     return false;
   }

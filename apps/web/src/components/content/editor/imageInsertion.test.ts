@@ -16,6 +16,7 @@ import {
   applyImageInsertionOperation,
   imageInsertionContextFromSnapshot,
   imageInsertionTargetFromSelection,
+  readEditorHeroTarget,
   readEditorImageSemantics,
   readEditorSectionTarget,
   resolveImageInsertionRange,
@@ -277,6 +278,99 @@ describe('section targeting (R4.2)', () => {
       target: { kind: 'section', sectionPath: [0], anchorPath: [0], heading: 'Solar energy' },
       image: { assetId: 'm1', url: 'https://cdn.test/solar.png', alt: 'Solar panels' },
       visual: { role: 'section', intent: 'reinforce', placement: 'contained' },
+    });
+    expect(result).toEqual({ ok: true });
+    const content = editor.getJSON().content ?? [];
+    expect(content[0]!.type).toBe('heading');
+    expect(content[1]!.type).toBe('image');
+
+    editor.commands.undo();
+    expect(JSON.stringify(editor.getJSON()).includes('"type":"image"')).toBe(false);
+  });
+});
+
+describe('hero targeting (R4.3)', () => {
+  function makeEditorWith(content: JSONContent[]): Editor {
+    const editor = new Editor({
+      extensions: createEditorExtensions({ nodeViews: false }),
+      content: { type: 'doc', content },
+    });
+    editors.push(editor);
+    return editor;
+  }
+
+  it('reads the first top-level heading as the page hero', () => {
+    const editor = makeEditor();
+    editor.commands.setTextSelection(CURSOR_IN_SECOND);
+    expect(readEditorHeroTarget(editor)).toEqual({
+      kind: 'hero',
+      heroPath: [0],
+      anchorPath: [0],
+      nodeType: 'heading',
+      placement: 'full_bleed',
+      heading: 'Solar energy',
+      supportingText: 'Solar panels store energy. Battery storage holds charge.',
+    });
+  });
+
+  it('prefers an explicit composition hero the selection sits in', () => {
+    const editor = makeEditorWith([
+      { type: 'heading', attrs: { level: 1 }, content: [{ type: 'text', text: 'Page title' }] },
+      {
+        type: 'compositionHero',
+        content: [
+          { type: 'heading', attrs: { level: 1 }, content: [{ type: 'text', text: 'Storage' }] },
+          { type: 'paragraph', content: [{ type: 'text', text: 'Batteries hold charge.' }] },
+        ],
+      },
+    ]);
+    editor.commands.setTextSelection(15);
+    expect(readEditorHeroTarget(editor)).toEqual({
+      kind: 'hero',
+      heroPath: [1],
+      anchorPath: [1, 0],
+      nodeType: 'compositionHero',
+      placement: 'full_bleed',
+      heading: 'Storage',
+      supportingText: 'Batteries hold charge.',
+    });
+  });
+
+  it('returns null when the document has no heading or hero', () => {
+    const editor = makeEditorWith([{ type: 'paragraph', content: [{ type: 'text', text: 'Just prose.' }] }]);
+    editor.commands.setTextSelection(3);
+    expect(readEditorHeroTarget(editor)).toBeNull();
+  });
+
+  it('carries the hero hint into the transmitted context', () => {
+    const editor = makeEditor();
+    editor.commands.setTextSelection(CURSOR_IN_SECOND);
+    const context = imageInsertionContextFromSnapshot(snapshotOf(editor), readEditorImageSemantics(editor));
+    expect(context?.heroTarget).toMatchObject({
+      kind: 'hero',
+      heroPath: [0],
+      anchorPath: [0],
+      placement: 'full_bleed',
+      heading: 'Solar energy',
+    });
+  });
+
+  it('resolves a hero target to the position after the hero heading', () => {
+    const editor = makeEditor();
+    const heading = editor.state.doc.child(0);
+    expect(resolveImageInsertionRange(editor, { kind: 'hero', heroPath: [0], anchorPath: [0], nodeType: 'heading', placement: 'full_bleed' })).toBe(
+      heading.nodeSize - 1,
+    );
+    expect(resolveImageInsertionRange(editor, { kind: 'hero', heroPath: [1], anchorPath: [1], nodeType: 'heading', placement: 'full_bleed' })).toBeNull();
+  });
+
+  it('inserts a hero image after the heading and undo removes it', () => {
+    const editor = makeEditor();
+    const result = applyImageInsertionOperation(editor, {
+      type: 'insert_image',
+      target: { kind: 'hero', heroPath: [0], anchorPath: [0], nodeType: 'heading', placement: 'full_bleed' },
+      image: { assetId: 'm1', url: 'https://cdn.test/solar.png', alt: 'Solar panels' },
+      visual: { role: 'hero', intent: 'emphasis', placement: 'full_bleed' },
     });
     expect(result).toEqual({ ok: true });
     const content = editor.getJSON().content ?? [];

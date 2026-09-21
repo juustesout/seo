@@ -20,7 +20,9 @@
  * is pure: no React, no network.
  */
 import {
+  isImageInsertionInstruction,
   isValidInsertImageOperation,
+  resolveVisualDesignIntent,
   type AgentRun,
   type ImageInsertionContext,
   type InsertImageOperation,
@@ -81,20 +83,23 @@ const UNAVAILABLE_CODE_RE = /_unavailable$/;
 const UNAVAILABLE_MESSAGE = "This action isn't available yet.";
 const NO_SUITABLE_IMAGE_MESSAGE = "I couldn't find a suitable image for this section.";
 const STALE_IMAGE_CONTEXT_MESSAGE = 'The document changed while I was finding the image. Please run the request again.';
-/** R4.2: the section role could not be anchored to a heading. */
+/** R4.2/R4.3: the role could not be anchored to a heading/hero. */
 const SECTION_TARGET_UNRESOLVED_MESSAGE =
   "I couldn't find a section heading here. Put the cursor under a section heading and try again.";
 const SECTION_IMAGE_PRESENT_MESSAGE = 'This section already has an image. Remove or replace it first, then ask again.';
+const HERO_TARGET_UNRESOLVED_MESSAGE =
+  "I couldn't find a hero area on this page. Add a hero section or a heading at the top and try again.";
+const HERO_IMAGE_PRESENT_MESSAGE = 'This hero already has an image. Remove or replace it first, then ask again.';
 
 /** R4.1 product copy for the typed visual-intent outcomes. */
 const VISUAL_ROLE_UNSUPPORTED_MESSAGE =
-  "That kind of visual isn't supported here yet. I can add an inline image, a section image or an illustration.";
+  "That kind of visual isn't supported here yet. I can add an inline image, a section image, a hero image or an illustration.";
 const VISUAL_CLARIFICATION_MESSAGE =
-  'What kind of visual do you want here: an inline image, a section image or an illustration?';
+  'What kind of visual do you want here: an inline image, a section image, a hero image or an illustration?';
 const VISUAL_UNSUPPORTED_MESSAGE =
   "I couldn't tell what visual you want here. Try naming it, for example an illustration or a background image.";
 const VISUAL_PLACEMENT_UNSUPPORTED_MESSAGE =
-  "That placement isn't supported here yet. I can add a contained image inside the section.";
+  "That placement isn't supported here yet. I can add a contained section image or a full-width hero image.";
 
 /** Shown when the user asked for an image but there is no reliable insertion point. */
 export const IMAGE_INSERTION_CLARIFICATION_MESSAGE =
@@ -175,9 +180,26 @@ function imageInsertionOutcome(code: string | null | undefined): EmbeddedAgentOu
       return { kind: 'clarification', message: SECTION_TARGET_UNRESOLVED_MESSAGE };
     case 'section_image_already_present':
       return { kind: 'empty', message: SECTION_IMAGE_PRESENT_MESSAGE };
+    case 'hero_target_unresolved':
+      return { kind: 'clarification', message: HERO_TARGET_UNRESOLVED_MESSAGE };
+    case 'hero_image_already_present':
+      return { kind: 'empty', message: HERO_IMAGE_PRESENT_MESSAGE };
     default:
       return null;
   }
+}
+
+/**
+ * True when an instruction is a visual request this capability can act on: a
+ * plain image-insertion request, or an explicit hero request ("Maak de hero
+ * sterker.") that names no image noun. Only the hero role is admitted without an
+ * image noun: words like "section" appear in ordinary instructions ("Add a
+ * section") and must keep routing to the Designer run, not to image insertion.
+ */
+export function embeddedAgentWantsImageContext(instruction: string): boolean {
+  if (isImageInsertionInstruction(instruction)) return true;
+  const resolution = resolveVisualDesignIntent(instruction, { nearbyText: '' });
+  return resolution.status === 'resolved' && resolution.intent.role === 'hero';
 }
 
 export interface EmbeddedAgentSubmissionInput {
@@ -257,6 +279,13 @@ function completedMessage(run: AgentRun): string {
   return 'The Agent prepared a proposal. Your document is unchanged; applying proposals comes in a later step.';
 }
 
+/** Product-language description of where a reviewable insertion will land. */
+function insertionCandidateMessage(role: VisualAssetRole | undefined): string {
+  if (role === 'section') return 'I found a suitable image for this section. Insert it after the heading?';
+  if (role === 'hero') return 'I found a suitable hero image. Insert it in the hero?';
+  return 'I found a suitable image. Insert it where you asked?';
+}
+
 /**
  * Maps a durable run snapshot to a product outcome. Terminal results are
  * grounded in the actual run: a succeeded run produced a proposal (never an
@@ -273,10 +302,7 @@ export function embeddedAgentOutcomeFromRun(run: AgentRun): EmbeddedAgentOutcome
     if (isValidInsertImageOperation(insertion)) {
       return {
         kind: 'insertion',
-        message:
-          insertion.visual?.role === 'section'
-            ? 'I found a suitable image for this section. Insert it after the heading?'
-            : 'I found a suitable image. Insert it where you asked?',
+        message: insertionCandidateMessage(insertion.visual?.role),
         operation: insertion,
       };
     }

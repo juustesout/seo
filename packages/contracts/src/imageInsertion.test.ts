@@ -90,6 +90,24 @@ describe('target validation', () => {
     expect(isValidImageInsertionTarget({ kind: 'section', sectionPath: [0] })).toBe(false);
   });
 
+  it('accepts a hero target with bounded paths, node type and fixed placement', () => {
+    const hero = {
+      kind: 'hero',
+      heroPath: [0],
+      anchorPath: [0],
+      nodeType: 'heading',
+      placement: 'full_bleed',
+      heading: 'Solar for every roof',
+      supportingText: 'Clean energy for homes.',
+    };
+    expect(isValidImageInsertionTarget(hero)).toBe(true);
+    expect(isValidImageInsertionTarget({ ...hero, heroPath: [2], anchorPath: [2, 0], nodeType: 'compositionHero' })).toBe(true);
+    expect(isValidImageInsertionTarget({ ...hero, placement: 'overlay' })).toBe(false);
+    expect(isValidImageInsertionTarget({ ...hero, nodeType: 'x'.repeat(101) })).toBe(false);
+    expect(isValidImageInsertionTarget({ ...hero, supportingText: 'x'.repeat(601) })).toBe(false);
+    expect(isValidImageInsertionTarget({ kind: 'hero', heroPath: [0], anchorPath: [] })).toBe(false);
+  });
+
   it('rejects malformed, reversed and unbounded targets', () => {
     expect(isValidImageInsertionTarget({ kind: 'cursor', position: -1 })).toBe(false);
     expect(isValidImageInsertionTarget({ kind: 'cursor' })).toBe(false);
@@ -146,6 +164,40 @@ describe('candidate and operation validation', () => {
       }),
     ).toBe(false);
   });
+
+  it('requires a hero target and a full-bleed hero role to agree (R4.3)', () => {
+    const image = { assetId: 'm_solar', url: 'https://x.test/a.png', alt: 'Solar' };
+    const heroTarget = { kind: 'hero', heroPath: [0], anchorPath: [0], nodeType: 'heading', placement: 'full_bleed' };
+    const heroVisual = { role: 'hero', intent: 'emphasis', placement: 'full_bleed' };
+
+    expect(isValidInsertImageOperation({ type: 'insert_image', target: heroTarget, image, visual: heroVisual })).toBe(true);
+    // A hero target without a hero role is a mismatched operation.
+    expect(isValidInsertImageOperation({ type: 'insert_image', target: heroTarget, image })).toBe(false);
+    expect(
+      isValidInsertImageOperation({ type: 'insert_image', target: heroTarget, image, visual: { role: 'inline', intent: 'reinforce' } }),
+    ).toBe(false);
+    // A hero role without a hero target is a mismatched operation.
+    expect(
+      isValidInsertImageOperation({ type: 'insert_image', target: { kind: 'cursor', position: 2 }, image, visual: heroVisual }),
+    ).toBe(false);
+    // A hero intent with any other placement is refused, not downgraded.
+    expect(
+      isValidInsertImageOperation({
+        type: 'insert_image',
+        target: heroTarget,
+        image,
+        visual: { role: 'hero', intent: 'emphasis', placement: 'overlay' },
+      }),
+    ).toBe(false);
+    expect(
+      isValidInsertImageOperation({
+        type: 'insert_image',
+        target: heroTarget,
+        image,
+        visual: { role: 'hero', intent: 'emphasis' },
+      }),
+    ).toBe(false);
+  });
 });
 
 describe('context validation', () => {
@@ -168,6 +220,14 @@ describe('context validation', () => {
     // The hint must itself be a section target, never some other location kind.
     expect(isValidImageInsertionContext({ ...context(), sectionTarget: { kind: 'cursor', position: 1 } })).toBe(false);
     expect(isValidImageInsertionContext({ ...context(), sectionTarget: { kind: 'section', sectionPath: [] } })).toBe(false);
+  });
+
+  it('accepts a hero hint alongside the real caret target (R4.3)', () => {
+    const heroTarget = { kind: 'hero', heroPath: [0], anchorPath: [0], nodeType: 'heading', placement: 'full_bleed' };
+    expect(isValidImageInsertionContext({ ...context(), heroTarget })).toBe(true);
+    // The hint must itself be a hero target, never some other location kind.
+    expect(isValidImageInsertionContext({ ...context(), heroTarget: { kind: 'cursor', position: 1 } })).toBe(false);
+    expect(isValidImageInsertionContext({ ...context(), heroTarget: { kind: 'section', sectionPath: [0], anchorPath: [0] } })).toBe(false);
   });
 });
 

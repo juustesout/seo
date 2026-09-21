@@ -180,6 +180,14 @@ export function resolveVisualDesignIntent(instruction: string, context: VisualIn
   const nonSectionRoles = [...new Set(matchedRoles.filter((role) => role !== 'section'))];
   const roles = nonSectionRoles.length === 1 ? nonSectionRoles : matchedRoles;
 
+  // R4.3: a hero and a background are different hosts with different placements.
+  // The pair cannot be satisfied by one visual, and reinterpreting it as a single
+  // full-bleed image would silently downgrade the request, so it is reported
+  // unsupported rather than guessed at.
+  if (roles.includes('hero') && roles.includes('background')) {
+    return { status: 'unsupported', reason: 'hero_background_unsupported' };
+  }
+
   // R4.2 can place one image per request. A clearly plural/multi request is
   // clarified instead of silently resolved to a single image.
   const pluralImage = PLURAL_IMAGE_RE.test(text);

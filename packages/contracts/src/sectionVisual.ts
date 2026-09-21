@@ -18,7 +18,15 @@
  * mutation, no persistence.
  */
 
-import type { CanonicalBlock, CanonicalDocument, CanonicalInline } from './canonical.js';
+import type { CanonicalBlock, CanonicalDocument } from './canonical.js';
+import {
+  canonicalBlockContainsImage,
+  canonicalBlockText,
+  canonicalHeadingLevel,
+  normalizeCanonicalText,
+  resolveCanonicalPath,
+  sameCanonicalPath,
+} from './canonicalText.js';
 import { IMAGE_INSERTION_TITLE_MAX_CHARS, type ImageInsertionSectionTarget } from './imageInsertion.js';
 
 /** Canonical block type that represents an explicit section container. */
@@ -39,69 +47,6 @@ export interface ResolvedSectionVisual {
   hasImage: boolean;
 }
 
-interface ResolvedPath {
-  siblings: CanonicalBlock[];
-  index: number;
-  block: CanonicalBlock;
-}
-
-function normalize(value: string): string {
-  return value.replace(/\s+/g, ' ').trim();
-}
-
-function inlineText(content: readonly CanonicalInline[] | undefined): string {
-  if (!content) return '';
-  const parts: string[] = [];
-  for (const inline of content) {
-    if (inline.type === 'text' && typeof inline.text === 'string') parts.push(inline.text);
-  }
-  return normalize(parts.join(' '));
-}
-
-/** Plain text of a block, skipping media/markup so the copy drives retrieval. */
-function blockText(block: CanonicalBlock): string {
-  if (block.type === 'image' || block.type === 'html' || block.type === 'custom') return '';
-  const parts: string[] = [inlineText(block.content)];
-  if (block.children) {
-    for (const child of block.children) {
-      const text = blockText(child);
-      if (text) parts.push(text);
-    }
-  }
-  return normalize(parts.join(' '));
-}
-
-function containsImage(block: CanonicalBlock): boolean {
-  if (block.type === 'image') return true;
-  if (!block.children) return false;
-  return block.children.some(containsImage);
-}
-
-function headingLevel(block: CanonicalBlock): number {
-  const level = block.attrs?.level;
-  return typeof level === 'number' && Number.isInteger(level) ? level : 6;
-}
-
-/** Resolves a structural index path to its block and the sibling array it lives in. */
-function resolvePath(blocks: readonly CanonicalBlock[], path: readonly number[]): ResolvedPath | null {
-  if (path.length === 0) return null;
-  let siblings: readonly CanonicalBlock[] = blocks;
-  for (let depth = 0; depth < path.length - 1; depth += 1) {
-    const index = path[depth]!;
-    const block = siblings[index];
-    if (!block || !block.children) return null;
-    siblings = block.children;
-  }
-  const index = path[path.length - 1]!;
-  const block = siblings[index];
-  if (!block) return null;
-  return { siblings: siblings as CanonicalBlock[], index, block };
-}
-
-function samePath(a: readonly number[], b: readonly number[]): boolean {
-  return a.length === b.length && a.every((value, index) => value === b[index]);
-}
-
 /**
  * Resolves a section target against a canonical document, or null when the
  * target no longer maps to a real heading / explicit section. The caller turns
@@ -112,21 +57,21 @@ export function resolveSectionVisual(
   document: CanonicalDocument,
   target: ImageInsertionSectionTarget,
 ): ResolvedSectionVisual | null {
-  const anchor = resolvePath(document.blocks, target.anchorPath);
+  const anchor = resolveCanonicalPath(document.blocks, target.anchorPath);
   if (!anchor || anchor.block.type !== 'heading') return null;
-  const heading = blockText(anchor.block).slice(0, IMAGE_INSERTION_TITLE_MAX_CHARS);
+  const heading = canonicalBlockText(anchor.block).slice(0, IMAGE_INSERTION_TITLE_MAX_CHARS);
   if (!heading) return null;
 
-  const region = samePath(target.sectionPath, target.anchorPath)
+  const region = sameCanonicalPath(target.sectionPath, target.anchorPath)
     ? null
-    : resolvePath(document.blocks, target.sectionPath);
-  if (region === null && !samePath(target.sectionPath, target.anchorPath)) return null;
+    : resolveCanonicalPath(document.blocks, target.sectionPath);
+  if (region === null && !sameCanonicalPath(target.sectionPath, target.anchorPath)) return null;
 
   let siblings: CanonicalBlock[];
   let headingIndex: number;
   let sectionHasImage: boolean;
 
-  if (samePath(target.sectionPath, target.anchorPath)) {
+  if (sameCanonicalPath(target.sectionPath, target.anchorPath)) {
     siblings = anchor.siblings;
     headingIndex = anchor.index;
     sectionHasImage = false;
@@ -134,24 +79,24 @@ export function resolveSectionVisual(
     const section = region!;
     if (section.block.type !== SECTION_BLOCK_TYPE) return null;
     const expected = [...target.sectionPath, anchor.index];
-    if (!samePath(expected, target.anchorPath)) return null;
+    if (!sameCanonicalPath(expected, target.anchorPath)) return null;
     siblings = section.block.children ?? [];
     headingIndex = anchor.index;
     if (siblings[headingIndex] !== anchor.block) return null;
-    sectionHasImage = containsImage(section.block);
+    sectionHasImage = canonicalBlockContainsImage(section.block);
   }
 
-  const level = headingLevel(anchor.block);
+  const level = canonicalHeadingLevel(anchor.block);
   const parts: string[] = [];
   let regionHasImage = false;
   for (let index = headingIndex + 1; index < siblings.length; index += 1) {
     const child = siblings[index]!;
-    if (child.type === 'heading' && headingLevel(child) <= level) break;
-    if (containsImage(child)) regionHasImage = true;
-    const text = blockText(child);
+    if (child.type === 'heading' && canonicalHeadingLevel(child) <= level) break;
+    if (canonicalBlockContainsImage(child)) regionHasImage = true;
+    const text = canonicalBlockText(child);
     if (text) parts.push(text);
   }
-  const body = normalize(parts.join(' ')).slice(0, SECTION_VISUAL_MAX_BODY_CHARS);
+  const body = normalizeCanonicalText(parts.join(' ')).slice(0, SECTION_VISUAL_MAX_BODY_CHARS);
 
   return {
     sectionPath: [...target.sectionPath],

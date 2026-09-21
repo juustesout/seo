@@ -93,10 +93,10 @@ describe('visual accessibility semantics', () => {
 
 describe('visual insertability', () => {
   it('declares only the roles the current canonical model can host', () => {
-    expect(VISUAL_INSERTABLE_ROLES).toEqual(['inline', 'section', 'illustration', 'decorative']);
+    expect(VISUAL_INSERTABLE_ROLES).toEqual(['inline', 'section', 'hero', 'illustration', 'decorative']);
     expect(isVisualInsertableRole('inline')).toBe(true);
     expect(isVisualInsertableRole('illustration')).toBe(true);
-    expect(isVisualInsertableRole('hero')).toBe(false);
+    expect(isVisualInsertableRole('hero')).toBe(true);
     expect(isVisualInsertableRole('background')).toBe(false);
     expect(isVisualInsertableRole('thumbnail')).toBe(false);
   });

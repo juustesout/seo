@@ -19,7 +19,6 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  isImageInsertionInstruction,
   type AgentRun,
   type ImageInsertionContext,
   type InsertImageOperation,
@@ -32,6 +31,7 @@ import {
   embeddedAgentOutcomeFromRun,
   embeddedAgentRunPath,
   embeddedAgentSubmission,
+  embeddedAgentWantsImageContext,
   type EmbeddedAgentState,
 } from './embeddedAgent';
 import type { ImageInsertionApplyResult } from '../editor/imageInsertion';
@@ -165,7 +165,7 @@ export function useEmbeddedAgent(options: UseEmbeddedAgentOptions): EmbeddedAgen
     if (submittingRef.current) return;
     if (!canSubmit) return;
     const text = instruction.trim();
-    const wantsImage = isImageInsertionInstruction(text);
+    const wantsImage = embeddedAgentWantsImageContext(text);
     let imageContext: ImageInsertionContext | null = null;
     if (wantsImage) {
       imageContext = contentId ? buildImageInsertionContext?.() ?? null : null;

@@ -301,6 +301,13 @@ const SECTION_INSERTION: InsertImageOperation = {
   visual: { role: 'section', intent: 'reinforce', placement: 'contained' },
 };
 
+const HERO_INSERTION: InsertImageOperation = {
+  type: 'insert_image',
+  target: { kind: 'hero', heroPath: [0], anchorPath: [0], nodeType: 'heading', placement: 'full_bleed' },
+  image: { assetId: 'm1', url: 'https://cdn.test/solar.png', alt: 'Solar panels' },
+  visual: { role: 'hero', intent: 'emphasis', placement: 'full_bleed' },
+};
+
 function imageSucceeded(): AgentRun {
   return run({
     status: 'succeeded',
@@ -445,12 +452,12 @@ describe('EmbeddedAgentEntry visual intent (R4.1)', () => {
       editor.commands.setTextSelection(3);
     });
     apiMock.api.mockResolvedValueOnce({
-      run: run({ status: 'failed', error: { code: 'visual_role_unsupported', message: 'hero unsupported', retryable: false } }),
+      run: run({ status: 'failed', error: { code: 'visual_role_unsupported', message: 'logo unsupported', retryable: false } }),
       reused: false,
     });
 
     render(<EditorHarness editor={editor} />);
-    fireEvent.change(screen.getByTestId('embedded-agent-input'), { target: { value: 'Maak de hero sterker.' } });
+    fireEvent.change(screen.getByTestId('embedded-agent-input'), { target: { value: 'Maak het logo sterker.' } });
     fireEvent.click(screen.getByTestId('embedded-agent-send'));
 
     await waitFor(() =>
@@ -524,6 +531,71 @@ describe('EmbeddedAgentEntry section visuals (R4.2)', () => {
 
     await waitFor(() =>
       expect(screen.getByTestId('embedded-agent-status').textContent).toContain('Put the cursor under a section heading'),
+    );
+    expect(JSON.stringify(editor.getJSON())).not.toContain('"type":"image"');
+  });
+});
+
+describe('EmbeddedAgentEntry hero visuals (R4.3)', () => {
+  it('sends the hero hint, previews the candidate, and inserts in the hero', async () => {
+    const editor = new Editor({ extensions: createEditorExtensions({ nodeViews: false }), content: SECTION_DOC });
+    editors.push(editor);
+    act(() => {
+      editor.commands.setTextSelection(20);
+    });
+    apiMock.api
+      .mockResolvedValueOnce({ run: run({ status: 'queued' }), reused: false })
+      .mockResolvedValueOnce(
+        run({
+          status: 'succeeded',
+          result: { version: 1, baseRevision: 'rev1:abc', document: { version: 1, blocks: [] }, insertion: HERO_INSERTION },
+        }),
+      );
+
+    render(<EditorHarness editor={editor} doc={SECTION_DOC} />);
+    fireEvent.change(screen.getByTestId('embedded-agent-input'), { target: { value: 'Maak de hero-afbeelding sterker.' } });
+    fireEvent.click(screen.getByTestId('embedded-agent-send'));
+
+    await waitFor(() => expect(screen.getByTestId('embedded-agent-image-role').textContent).toContain('Hero visual'));
+    const body = apiMock.api.mock.calls[0]![1]!.body as Record<string, unknown>;
+    expect(body.editor_context).toMatchObject({
+      target: { kind: 'cursor' },
+      heroTarget: { kind: 'hero', heroPath: [0], anchorPath: [0], placement: 'full_bleed' },
+    });
+
+    fireEvent.click(screen.getByTestId('embedded-agent-insert'));
+    await waitFor(() => expect(screen.getByTestId('embedded-agent-status').textContent).toContain('Image inserted'));
+
+    const content = editor.getJSON().content ?? [];
+    expect(content[0]!.type).toBe('heading');
+    expect(content[1]!.type).toBe('image');
+  });
+
+  it('asks the user to anchor the request when the hero cannot be found', async () => {
+    const editor = new Editor({
+      extensions: createEditorExtensions({ nodeViews: false }),
+      content: { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Just prose.' }] }] },
+    });
+    editors.push(editor);
+    act(() => {
+      editor.commands.setTextSelection(3);
+    });
+    apiMock.api.mockResolvedValueOnce({
+      run: run({ status: 'failed', error: { code: 'hero_target_unresolved', message: 'no hero', retryable: false } }),
+      reused: false,
+    });
+
+    render(
+      <EditorHarness
+        editor={editor}
+        doc={{ type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Just prose.' }] }] }}
+      />,
+    );
+    fireEvent.change(screen.getByTestId('embedded-agent-input'), { target: { value: 'Maak de hero-afbeelding sterker.' } });
+    fireEvent.click(screen.getByTestId('embedded-agent-send'));
+
+    await waitFor(() =>
+      expect(screen.getByTestId('embedded-agent-status').textContent).toContain("couldn't find a hero area"),
     );
     expect(JSON.stringify(editor.getJSON())).not.toContain('"type":"image"');
   });
