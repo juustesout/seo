@@ -23,6 +23,7 @@ import {
   IMAGE_INSERTION_LANGUAGE_MAX_CHARS,
   IMAGE_INSERTION_MAX_TEXT_CHARS,
   IMAGE_INSERTION_NEARBY_MAX_CHARS,
+  IMAGE_INSERTION_NODE_TYPE_MAX_CHARS,
   IMAGE_INSERTION_TITLE_MAX_CHARS,
   isValidImageInsertionContext,
   type ImageInsertionContext,
@@ -36,6 +37,8 @@ export interface EditorImageSemantics {
   selectedText?: string;
   nearbyText: string;
   sectionHeading?: string;
+  /** The top-level node type the selection sits on, a role hint for R4.1. */
+  targetNodeType?: string;
 }
 
 /** Why an insertion could not be applied. Product copy maps these, they are not shown raw. */
@@ -117,10 +120,13 @@ export function readEditorImageSemantics(editor: Editor | null): EditorImageSema
     }
   });
 
+  const targetNodeType = doc.childCount > 0 ? doc.child(topIndex).type.name : undefined;
+
   return {
     ...(selectedText ? { selectedText } : {}),
     nearbyText,
     ...(sectionHeading ? { sectionHeading } : {}),
+    ...(targetNodeType ? { targetNodeType } : {}),
   };
 }
 
@@ -151,6 +157,9 @@ export function imageInsertionContextFromSnapshot(
     nearbyText: clamp(semantics.nearbyText, IMAGE_INSERTION_NEARBY_MAX_CHARS),
     ...(meta.title ? { documentTitle: clamp(meta.title, IMAGE_INSERTION_TITLE_MAX_CHARS) } : {}),
     ...(semantics.sectionHeading ? { sectionHeading: clamp(semantics.sectionHeading, IMAGE_INSERTION_TITLE_MAX_CHARS) } : {}),
+    ...(semantics.targetNodeType
+      ? { targetNodeType: clamp(semantics.targetNodeType, IMAGE_INSERTION_NODE_TYPE_MAX_CHARS) }
+      : {}),
     ...(meta.language ? { language: clamp(meta.language, IMAGE_INSERTION_LANGUAGE_MAX_CHARS) } : {}),
   };
   return isValidImageInsertionContext(context) ? context : null;

@@ -188,3 +188,56 @@ describe('ImageInsertionService.buildProposal', () => {
     expect(err.code).toBe('image_insertion_no_candidate');
   });
 });
+
+describe('ImageInsertionService visual intent (R4.1)', () => {
+  it('resolves and preserves the visual role on the operation', async () => {
+    const proposal = await service.buildProposal(
+      PROJECT_ID,
+      intent({ instruction: 'Voeg een illustratie toe die dit uitlegt.' }),
+      context(),
+    );
+    expect(proposal.insertion?.visual).toMatchObject({ role: 'illustration', intent: 'explain' });
+    expect(mock.mediaListCalls).toEqual([PROJECT_ID]);
+  });
+
+  it('marks a decorative insertion as non-descriptive (empty alt)', async () => {
+    const proposal = await service.buildProposal(
+      PROJECT_ID,
+      intent({ instruction: 'Plaats hier een decoratieve afbeelding.' }),
+      context(),
+    );
+    expect(proposal.insertion?.visual?.role).toBe('decorative');
+    expect(proposal.insertion?.image.alt).toBe('');
+  });
+
+  it('refuses a role the editor cannot host yet, before reading content', async () => {
+    const err = await expectApiError(
+      service.buildProposal(PROJECT_ID, intent({ instruction: 'Maak de hero sterker.' }), context()),
+    );
+    expect(err.status).toBe(422);
+    expect(err.code).toBe('visual_role_unsupported');
+    expect(mock.getCalls).toBe(0);
+  });
+
+  it('asks for clarification when several roles are named', async () => {
+    const err = await expectApiError(
+      service.buildProposal(PROJECT_ID, intent({ instruction: 'Voeg een hero en een achtergrond toe.' }), context()),
+    );
+    expect(err.status).toBe(422);
+    expect(err.code).toBe('visual_intent_needs_clarification');
+    expect(mock.getCalls).toBe(0);
+  });
+
+  it('routes an illustration instruction through the role-aware ranker', async () => {
+    mock.media = [
+      { ...mock.media[0]!, id: 'm_portrait', filename: 'solar-portrait.png', width: 900, height: 1600 },
+      { ...mock.media[0]!, id: 'm_landscape', filename: 'solar-landscape.png', width: 1600, height: 900 },
+    ];
+    const proposal = await service.buildProposal(
+      PROJECT_ID,
+      intent({ instruction: 'Voeg een illustratie toe die dit uitlegt.' }),
+      context(),
+    );
+    expect(proposal.insertion?.image.assetId).toBe('m_landscape');
+  });
+});

@@ -24,6 +24,8 @@ import {
   type AgentRun,
   type ImageInsertionContext,
   type InsertImageOperation,
+  type VisualAssetRole,
+  type VisualIntent,
 } from '@seo/contracts';
 import { ApiRequestError } from '../../../lib/api';
 import type { EditorSelectionSnapshot } from '../editor/editorContext';
@@ -79,6 +81,67 @@ const UNAVAILABLE_CODE_RE = /_unavailable$/;
 const UNAVAILABLE_MESSAGE = "This action isn't available yet.";
 const NO_SUITABLE_IMAGE_MESSAGE = "I couldn't find a suitable image for this section.";
 const STALE_IMAGE_CONTEXT_MESSAGE = 'The document changed while I was finding the image. Please run the request again.';
+
+/** R4.1 product copy for the typed visual-intent outcomes. */
+const VISUAL_ROLE_UNSUPPORTED_MESSAGE =
+  "That kind of visual isn't supported here yet. I can add an inline image, a section image or an illustration.";
+const VISUAL_CLARIFICATION_MESSAGE =
+  'What kind of visual do you want here: an inline image, a section image or an illustration?';
+const VISUAL_UNSUPPORTED_MESSAGE =
+  "I couldn't tell what visual you want here. Try naming it, for example an illustration or a background image.";
+
+/** Human-readable role labels the inline candidate can show. */
+export const VISUAL_ROLE_LABELS: Readonly<Record<VisualAssetRole, string>> = {
+  hero: 'Hero visual',
+  section: 'Section image',
+  inline: 'Inline image',
+  background: 'Background visual',
+  illustration: 'Illustration',
+  icon: 'Icon',
+  logo: 'Logo',
+  decorative: 'Decorative visual',
+  thumbnail: 'Thumbnail',
+  avatar: 'Avatar',
+};
+
+const VISUAL_INTENT_LABELS: Readonly<Record<VisualIntent, string>> = {
+  explain: 'explains',
+  reinforce: 'supports the text',
+  atmosphere: 'sets the mood',
+  emphasis: 'adds emphasis',
+  attention: 'guides attention',
+  context: 'adds context',
+  brand: 'carries the brand',
+  decoration: 'decorates',
+};
+
+/** Product label for a resolved role, or null when there is none. */
+export function visualRoleLabel(role: VisualAssetRole | undefined): string | null {
+  return role ? VISUAL_ROLE_LABELS[role] : null;
+}
+
+/** Product label for a resolved intent, or null when there is none. */
+export function visualIntentLabel(intent: VisualIntent | undefined): string | null {
+  return intent ? VISUAL_INTENT_LABELS[intent] : null;
+}
+
+/**
+ * Product-language message for the R4.1 visual-intent error codes, or null when
+ * the code is not one of them. The backend message is not echoed (it names
+ * internal roles); the typed code drives the copy.
+ */
+function visualIntentMessage(code: string | null | undefined): EmbeddedAgentOutcome | null {
+  switch (code) {
+    case 'visual_role_unsupported':
+      return { kind: 'unsupported', message: VISUAL_ROLE_UNSUPPORTED_MESSAGE };
+    case 'visual_intent_needs_clarification':
+      return { kind: 'clarification', message: VISUAL_CLARIFICATION_MESSAGE };
+    case 'visual_intent_unsupported':
+      return { kind: 'unsupported', message: VISUAL_UNSUPPORTED_MESSAGE };
+    default:
+      return null;
+  }
+}
 
 /** Shown when the user asked for an image but there is no reliable insertion point. */
 export const IMAGE_INSERTION_CLARIFICATION_MESSAGE =
@@ -209,6 +272,8 @@ export function embeddedAgentOutcomeFromRun(run: AgentRun): EmbeddedAgentOutcome
       ? { kind: 'empty', message: insertionMessage }
       : { kind: 'error', message: insertionMessage, canRetry: error?.code === 'stale_editor_context' };
   }
+  const visualOutcome = visualIntentMessage(error?.code);
+  if (visualOutcome) return visualOutcome;
   if (error && UNAVAILABLE_CODE_RE.test(error.code)) {
     return { kind: 'unsupported', message: UNAVAILABLE_MESSAGE };
   }
@@ -232,6 +297,8 @@ export function embeddedAgentOutcomeFromError(error: unknown): EmbeddedAgentOutc
         ? { kind: 'empty', message: insertionMessage }
         : { kind: 'error', message: insertionMessage, canRetry: error.code === 'stale_editor_context' };
     }
+    const visualOutcome = visualIntentMessage(error.code);
+    if (visualOutcome) return visualOutcome;
     if (error.status === 401 || error.status === 403) {
       return { kind: 'error', message: "You don't have access to ask the Agent here.", canRetry: false };
     }

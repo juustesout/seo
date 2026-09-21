@@ -8,7 +8,7 @@
  * "Insert image" confirmation, never an automatic document change.
  */
 import { Button } from '@/components/ui/button';
-import type { EmbeddedAgentState } from './embeddedAgent';
+import { visualIntentLabel, visualRoleLabel, type EmbeddedAgentState } from './embeddedAgent';
 
 export interface EmbeddedAgentStatusProps {
   state: EmbeddedAgentState;
@@ -39,7 +39,10 @@ export function EmbeddedAgentStatus({ state, onRetry, onInsert, onCancel }: Embe
   }
 
   if (state.status === 'insertion') {
-    const { image } = state.operation;
+    const { image, visual } = state.operation;
+    const roleLabel = visualRoleLabel(visual?.role);
+    const intentLabel = visualIntentLabel(visual?.intent);
+    const decorative = visual?.accessibilityRequired === false;
     return (
       <div
         role="status"
@@ -47,14 +50,19 @@ export function EmbeddedAgentStatus({ state, onRetry, onInsert, onCancel }: Embe
         data-testid="embedded-agent-image-candidate"
         className="grid gap-2 rounded-md border border-border bg-muted/30 px-3 py-2 text-xs"
       >
-        <p className="m-0 font-medium text-foreground">Suggested image</p>
+        <p className="m-0 font-medium text-foreground" data-testid="embedded-agent-image-role">
+          {roleLabel ?? 'Suggested image'}
+        </p>
+        {roleLabel && intentLabel && <p className="m-0 text-muted-foreground">This visual {intentLabel}.</p>}
         <img
           src={image.url}
           alt={image.alt}
           data-testid="embedded-agent-image-preview"
           className="max-h-40 w-full rounded object-cover"
         />
-        <p className="m-0 text-muted-foreground">Alt text: {image.alt || 'none'}</p>
+        <p className="m-0 text-muted-foreground">
+          {decorative ? 'Decorative - no alt text needed.' : `Alt text: ${image.alt || 'none'}`}
+        </p>
         {image.sourceUrl && (
           <p className="m-0 text-muted-foreground">
             Source:{' '}

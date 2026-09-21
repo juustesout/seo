@@ -85,6 +85,13 @@ describe('readEditorImageSemantics', () => {
     expect(semantics.nearbyText).toContain('Battery storage holds charge.');
     expect(semantics.sectionHeading).toBe('Solar energy');
     expect(semantics.selectedText).toBeUndefined();
+    expect(semantics.targetNodeType).toBe('paragraph');
+  });
+
+  it('reports the node type of the block the selection sits on (R4.1 role hint)', () => {
+    const editor = makeEditor();
+    editor.commands.setTextSelection(2);
+    expect(readEditorImageSemantics(editor).targetNodeType).toBe('heading');
   });
 
   it('captures the selected text', () => {
@@ -108,6 +115,7 @@ describe('imageInsertionContextFromSnapshot', () => {
     expect(context?.revision).toBe(snapshot.document.revision);
     expect(context?.target).toEqual({ kind: 'cursor', position: CURSOR_IN_SECOND });
     expect(context?.sectionHeading).toBe('Solar energy');
+    expect(context?.targetNodeType).toBe('paragraph');
     expect(context?.nearbyText.length).toBeLessThanOrEqual(600);
   });
 

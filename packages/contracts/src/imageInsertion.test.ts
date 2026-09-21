@@ -10,6 +10,7 @@ import { describe, expect, it } from 'vitest';
 import {
   IMAGE_INSERTION_MAX_TEXT_CHARS,
   buildImageInsertionQuery,
+  imageInsertionAltForIntent,
   isImageInsertionInstruction,
   isValidImageInsertionCandidate,
   isValidImageInsertionContext,
@@ -103,6 +104,14 @@ describe('candidate and operation validation', () => {
     expect(isValidInsertImageOperation({ ...op, type: 'replace_image' })).toBe(false);
     expect(isValidInsertImageOperation({ ...op, extra: 1 })).toBe(false);
   });
+
+  it('accepts an R4.1 visual intent and keeps R3.1 operations valid', () => {
+    const base = { type: 'insert_image', target: { kind: 'cursor', position: 2 }, image: { assetId: 'm_solar', url: 'https://x.test/a.png', alt: 'Solar' } };
+    expect(isValidInsertImageOperation(base)).toBe(true);
+    expect(isValidInsertImageOperation({ ...base, visual: { role: 'illustration', intent: 'explain' } })).toBe(true);
+    expect(isValidInsertImageOperation({ ...base, visual: { role: 'cover', intent: 'explain' } })).toBe(false);
+    expect(isValidInsertImageOperation({ ...base, visual: { role: 'inline', intent: 'inspire' } })).toBe(false);
+  });
 });
 
 describe('context validation', () => {
@@ -112,6 +121,11 @@ describe('context validation', () => {
     expect(isValidImageInsertionContext({ ...context(), document: { version: 1, blocks: [{ type: '' }] } })).toBe(false);
     expect(isValidImageInsertionContext({ ...context(), nearbyText: 'x'.repeat(601) })).toBe(false);
     expect(isValidImageInsertionContext({ ...context(), target: { kind: 'cursor' } })).toBe(false);
+  });
+
+  it('accepts an optional bounded target node type and rejects an unbounded one', () => {
+    expect(isValidImageInsertionContext(context({ targetNodeType: 'compositionHero' }))).toBe(true);
+    expect(isValidImageInsertionContext({ ...context(), targetNodeType: 'x'.repeat(101) })).toBe(false);
   });
 });
 
@@ -139,5 +153,26 @@ describe('selectImageInsertionCandidate', () => {
       CANDIDATES,
     );
     expect(result?.candidate.mediaId).toBe('m_team');
+  });
+
+  it('lets a visual intent shape the order of equally relevant assets', () => {
+    const portrait = { mediaId: 'm_portrait', filename: 'solar-portrait.png', alt: 'Solar panels on a roof', mimeType: 'image/png', width: 900, height: 1600 };
+    const candidates = [CANDIDATES[0]!, portrait];
+    const plain = selectImageInsertionCandidate(context(), candidates);
+    expect(plain?.candidate.mediaId).toBe('m_portrait');
+    const hero = selectImageInsertionCandidate(context(), candidates, {
+      visual: { role: 'hero', intent: 'emphasis' },
+    });
+    expect(hero?.candidate.mediaId).toBe('m_solar');
+  });
+});
+
+describe('imageInsertionAltForIntent', () => {
+  it('drops alt text for decorative roles and preserves it otherwise', () => {
+    expect(imageInsertionAltForIntent({ role: 'decorative', intent: 'decoration' }, 'A texture', 'texture.png')).toBe('');
+    expect(imageInsertionAltForIntent({ role: 'background', intent: 'atmosphere' }, 'Canal', 'canal.png')).toBe('');
+    expect(imageInsertionAltForIntent({ role: 'inline', intent: 'reinforce' }, 'Solar panels')).toBe('Solar panels');
+    expect(imageInsertionAltForIntent({ role: 'inline', intent: 'reinforce' }, '', 'solar.png')).toBe('solar.png');
+    expect(imageInsertionAltForIntent(undefined, '', 'solar.png')).toBe('solar.png');
   });
 });

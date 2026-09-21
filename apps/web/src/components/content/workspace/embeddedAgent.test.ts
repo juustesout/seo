@@ -7,6 +7,8 @@ import {
   embeddedAgentOutcomeFromRun,
   embeddedAgentRunPath,
   embeddedAgentSubmission,
+  visualIntentLabel,
+  visualRoleLabel,
   type EmbeddedAgentSubmissionInput,
 } from './embeddedAgent';
 
@@ -246,5 +248,50 @@ describe('embeddedAgentOutcomeFromError', () => {
     expect(
       embeddedAgentOutcomeFromError(new ApiRequestError('image_insertion_requires_saved_document', 'save first', 422)),
     ).toMatchObject({ kind: 'error', canRetry: false });
+  });
+});
+
+describe('embeddedAgent visual intent (R4.1)', () => {
+  it('labels resolved roles and intents in product language', () => {
+    expect(visualRoleLabel('illustration')).toBe('Illustration');
+    expect(visualRoleLabel('hero')).toBe('Hero visual');
+    expect(visualRoleLabel(undefined)).toBeNull();
+    expect(visualIntentLabel('explain')).toBe('explains');
+    expect(visualIntentLabel(undefined)).toBeNull();
+  });
+
+  it('keeps the resolved visual intent on the reviewable candidate', () => {
+    const withVisual: InsertImageOperation = { ...INSERTION, visual: { role: 'illustration', intent: 'explain' } };
+    const outcome = embeddedAgentOutcomeFromRun(
+      run({
+        status: 'succeeded',
+        result: { version: 1, baseRevision: 'rev1:abc', document: { version: 1, blocks: [] }, insertion: withVisual },
+      }),
+    );
+    expect(outcome).toMatchObject({ kind: 'insertion', operation: withVisual });
+  });
+
+  it('maps an unsupported role to product language without internal copy', () => {
+    const outcome = embeddedAgentOutcomeFromError(new ApiRequestError('visual_role_unsupported', 'hero unsupported', 422));
+    expect(outcome.kind).toBe('unsupported');
+    expect(outcome.message).toContain('inline image');
+    expect(outcome.message).not.toContain('hero');
+  });
+
+  it('maps an ambiguous request to a clarification instead of a guess', () => {
+    expect(
+      embeddedAgentOutcomeFromError(new ApiRequestError('visual_intent_needs_clarification', 'which role?', 422)),
+    ).toEqual({
+      kind: 'clarification',
+      message: 'What kind of visual do you want here: an inline image, a section image or an illustration?',
+    });
+  });
+
+  it('reports an unresolvable visual request as unsupported', () => {
+    expect(
+      embeddedAgentOutcomeFromRun(
+        run({ status: 'failed', error: { code: 'visual_intent_unsupported', message: 'no role', retryable: false } }),
+      ),
+    ).toMatchObject({ kind: 'unsupported' });
   });
 });

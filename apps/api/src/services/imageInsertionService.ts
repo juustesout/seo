@@ -22,10 +22,12 @@ import {
   DESIGNER_PROPOSAL_VERSION,
   contentRevisionOf,
   editorDocumentToCanonical,
-  isImageInsertionInstruction,
+  imageInsertionAltForIntent,
+  isVisualIntentInsertable,
   isValidDesignerProposal,
   isValidImageInsertionContext,
   isValidInsertImageOperation,
+  resolveVisualDesignIntent,
   selectImageInsertionCandidate,
   type DesignerIntent,
   type DesignerProposal,
@@ -86,11 +88,26 @@ export class ImageInsertionService {
     intent: DesignerIntent,
     context: ImageInsertionContext,
   ): Promise<DesignerProposal> {
-    if (!isImageInsertionInstruction(intent.instruction)) {
+    const resolution = resolveVisualDesignIntent(intent.instruction, context);
+    if (resolution.status === 'needs_clarification') {
+      throw new ApiError(422, 'visual_intent_needs_clarification', resolution.question, {
+        roles: resolution.candidates.map((candidate) => candidate.role),
+      });
+    }
+    if (resolution.status === 'unsupported') {
       throw new ApiError(
         422,
         'image_insertion_unrecognized_instruction',
         'This instruction is not an image-insertion request.',
+      );
+    }
+    const visual = resolution.intent;
+    if (!isVisualIntentInsertable(visual)) {
+      throw new ApiError(
+        422,
+        'visual_role_unsupported',
+        `A ${visual.role} visual is not supported in the editor yet.`,
+        { role: visual.role },
       );
     }
     if (intent.contentId === undefined) {
@@ -113,7 +130,7 @@ export class ImageInsertionService {
     }
 
     const media = await new MediaService(this.container.sb, new SupabaseStorageStore(this.container.sb)).list(projectId);
-    const selection = selectImageInsertionCandidate(context, media.map(toVisualCandidate));
+    const selection = selectImageInsertionCandidate(context, media.map(toVisualCandidate), { visual });
     if (!selection) {
       throw new ApiError(
         422,
@@ -130,7 +147,7 @@ export class ImageInsertionService {
     const image: ImageInsertionCandidate = {
       assetId: item.id,
       url: item.url,
-      alt: (item.alt_text || item.filename).trim(),
+      alt: imageInsertionAltForIntent(visual, item.alt_text, item.filename),
       ...(item.caption ? { caption: item.caption } : {}),
       ...(item.width !== null ? { width: item.width } : {}),
       ...(item.height !== null ? { height: item.height } : {}),
@@ -139,6 +156,7 @@ export class ImageInsertionService {
       type: 'insert_image',
       target: context.target,
       image,
+      visual,
       ...(selection.rationale ? { rationale: selection.rationale } : {}),
     };
     if (!isValidInsertImageOperation(operation)) {

@@ -50,14 +50,24 @@ import {
   type VisualDesignProposal,
   type VisualNoSuitableAsset,
 } from './visualDesign.js';
+import {
+  isValidVisualDesignIntent,
+  orientationOf,
+  visualAspectPreference,
+  type VisualDesignIntent,
+} from './visualVocabulary.js';
 
 /**
  * Visual roles the canonical model can actually host today. Only `image` blocks
  * accept an asset reference; there is no background/media-role field, so no
  * other role is invented here.
+ *
+ * This is the *host* role (which canonical block receives the asset), a
+ * different axis from the R4.1 design `VisualAssetRole` (hero/section/inline/...).
+ * It is named `VisualHostRole` for exactly that reason.
  */
-export const VISUAL_ASSET_ROLES = ['image'] as const;
-export type VisualAssetRole = (typeof VISUAL_ASSET_ROLES)[number];
+export const VISUAL_HOST_ROLES = ['image'] as const;
+export type VisualHostRole = (typeof VISUAL_HOST_ROLES)[number];
 
 /** MIME types the media library accepts; anything else is not selectable. */
 export const VISUAL_ASSET_MIME_TYPES = ['image/png', 'image/jpeg', 'image/webp'] as const;
@@ -94,7 +104,7 @@ export interface VisualAssetCandidate {
 export interface VisualAssetSelection {
   assetId: string;
   targetBlockId: string;
-  role: VisualAssetRole;
+  role: VisualHostRole;
   score: number;
   rationale: string;
 }
@@ -108,28 +118,47 @@ export interface VisualAssetSelectionResult {
  * One candidate ranked against a bounded text query, with the score and the
  * metadata tokens that produced it. `score` is a match score over textual
  * metadata, never a claim about the image's visual content.
+ *
+ * `fit` is the R4.1 role/placement signal: a small, deterministic score over
+ * orientation, aspect ratio and metadata completeness. It NEVER decides whether
+ * a candidate is relevant enough (that stays `score`), only how equal-relevance
+ * candidates are ordered, so a role can shape the choice without inventing
+ * relevance.
  */
 export interface RankedVisualAssetCandidate {
   candidate: VisualAssetCandidate;
   score: number;
+  fit: number;
   matched: string[];
   rationale: string;
 }
 
 /**
+ * R4.1 ranking hints. `visual` is the resolved design intent whose role/placement
+ * shape the fit score; it is optional so the R3.1 insertion path and the
+ * image-block selection keep their exact previous ordering when it is absent.
+ */
+export interface VisualAssetRankingOptions {
+  visual?: VisualDesignIntent;
+}
+
+/**
  * Caller-supplied selection options. `targets` names specific canonical block
  * ids (an explicit request); when absent, every image block with an id is a
- * candidate target. `minScore` overrides the default relevance floor.
+ * candidate target. `minScore` overrides the default relevance floor. `visual`
+ * (R4.1) supplies a resolved design intent so role/placement shape the ranking
+ * of equally relevant assets.
  */
 export interface VisualAssetSelectionRequest {
   targets?: string[];
   minScore?: number;
+  visual?: VisualDesignIntent;
 }
 
 /** One image block the matcher may fill, with its surrounding text context. */
 export interface VisualTarget {
   blockId: string;
-  role: VisualAssetRole;
+  role: VisualHostRole;
   /** Document context (title, section heading, parent copy, existing alt). */
   context: string;
 }
@@ -154,8 +183,8 @@ const CANDIDATE_KEYS: ReadonlySet<string> = new Set([
   'usageCount',
 ]);
 const SELECTION_KEYS: ReadonlySet<string> = new Set(['assetId', 'targetBlockId', 'role', 'score', 'rationale']);
-const REQUEST_KEYS: ReadonlySet<string> = new Set(['targets', 'minScore']);
-const ROLE_SET: ReadonlySet<string> = new Set(VISUAL_ASSET_ROLES);
+const REQUEST_KEYS: ReadonlySet<string> = new Set(['targets', 'minScore', 'visual']);
+const ROLE_SET: ReadonlySet<string> = new Set(VISUAL_HOST_ROLES);
 const MIME_SET: ReadonlySet<string> = new Set(VISUAL_ASSET_MIME_TYPES);
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -228,6 +257,7 @@ export function isValidVisualAssetSelectionRequest(value: unknown): value is Vis
   if (value.minScore !== undefined) {
     if (typeof value.minScore !== 'number' || !Number.isFinite(value.minScore) || value.minScore < 0) return false;
   }
+  if (value.visual !== undefined && !isValidVisualDesignIntent(value.visual)) return false;
   return true;
 }
 
@@ -434,9 +464,46 @@ function rationaleFor(score: number, tokens: readonly string[]): string {
   return reason.slice(0, VISUAL_DESIGN_RATIONALE_MAX_CHARS);
 }
 
-function compareCandidates(a: VisualAssetCandidate, b: VisualAssetCandidate, scores: Map<string, number>): number {
+/**
+ * The R4.1 fit score for one candidate: how well its real dimensions and
+ * metadata match the resolved role/placement. Subject relevance stays the
+ * primary score; this only orders candidates that are equally relevant, so a
+ * hero prefers a landscape asset without any image ever being invented.
+ *
+ * Weights are small and integer so the result is explainable and stable:
+ * orientation match +2 / mismatch -1, aspect-ratio closeness +1, and one point
+ * each for having alt text, a caption and known dimensions.
+ */
+function fitScore(candidate: VisualAssetCandidate, options: VisualAssetRankingOptions | undefined): number {
+  const visual = options?.visual;
+  if (!visual) return 0;
+  const preference = visualAspectPreference(visual);
+  let fit = 0;
+  const orientation = orientationOf(candidate.width, candidate.height);
+  if (preference.orientation && orientation) {
+    fit += orientation === preference.orientation ? 2 : -1;
+  }
+  if (preference.ratio && typeof candidate.width === 'number' && typeof candidate.height === 'number' && candidate.width > 0 && candidate.height > 0) {
+    const ratio = candidate.width / candidate.height;
+    const relative = Math.abs(ratio - preference.ratio) / preference.ratio;
+    if (relative <= 0.25) fit += 1;
+  }
+  if (candidate.alt && candidate.alt.trim().length > 0) fit += 1;
+  if (candidate.caption && candidate.caption.trim().length > 0) fit += 1;
+  if (orientation) fit += 1;
+  return fit;
+}
+
+function compareCandidates(
+  a: VisualAssetCandidate,
+  b: VisualAssetCandidate,
+  scores: Map<string, number>,
+  fits: Map<string, number>,
+): number {
   const scoreDelta = (scores.get(b.mediaId) ?? 0) - (scores.get(a.mediaId) ?? 0);
   if (scoreDelta !== 0) return scoreDelta;
+  const fitDelta = (fits.get(b.mediaId) ?? 0) - (fits.get(a.mediaId) ?? 0);
+  if (fitDelta !== 0) return fitDelta;
   const areaDelta = areaOf(b) - areaOf(a);
   if (areaDelta !== 0) return areaDelta;
   const usageDelta = (a.usageCount ?? 0) - (b.usageCount ?? 0);
@@ -451,10 +518,15 @@ function compareCandidates(a: VisualAssetCandidate, b: VisualAssetCandidate, sco
  * the same query + candidates always produce the same order, and the ranking is
  * shared by the image-block selection and the context-aware image insertion so
  * the two never diverge.
+ *
+ * When `options.visual` is supplied (R4.1), role/placement shape the ordering
+ * through `fit` after subject relevance; without it the order is exactly the R3.1
+ * order.
  */
 export function rankVisualAssetCandidates(
   queryText: string,
   candidates: readonly VisualAssetCandidate[],
+  options?: VisualAssetRankingOptions,
 ): RankedVisualAssetCandidate[] {
   const usable: VisualAssetCandidate[] = [];
   for (const candidate of candidates) {
@@ -465,14 +537,19 @@ export function rankVisualAssetCandidates(
   }
   const queryTokens = tokenize(queryText);
   const scores = new Map<string, number>();
-  for (const candidate of usable) scores.set(candidate.mediaId, matchScore(queryTokens, candidate));
+  const fits = new Map<string, number>();
+  for (const candidate of usable) {
+    scores.set(candidate.mediaId, matchScore(queryTokens, candidate));
+    fits.set(candidate.mediaId, fitScore(candidate, options));
+  }
   return [...usable]
-    .sort((a, b) => compareCandidates(a, b, scores))
+    .sort((a, b) => compareCandidates(a, b, scores, fits))
     .map((candidate) => {
       const score = scores.get(candidate.mediaId) ?? 0;
       return {
         candidate,
         score,
+        fit: fits.get(candidate.mediaId) ?? 0,
         matched: matchedTokens(queryTokens, candidate),
         rationale: rationaleFor(score, matchedTokens(queryTokens, candidate)),
       };
@@ -540,7 +617,7 @@ export function selectVisualAssets(
       continue;
     }
 
-    const ranked = rankVisualAssetCandidates(target.context, pool);
+    const ranked = rankVisualAssetCandidates(target.context, pool, request.visual ? { visual: request.visual } : undefined);
     const best = ranked[0];
     if (!best || best.score < minScore) {
       unmatched.push({ targetBlockId: target.blockId, reason: 'below_threshold' });

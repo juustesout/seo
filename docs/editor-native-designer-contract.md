@@ -1,6 +1,6 @@
 # Editor-Native Designer — Product & UX Contract (ADR Phase R0)
 
-Status: **R0 done (recon + contract); R1 done (editor shell built); R1.2 done (editor context foundation); R2.1 done (embedded agent entry surface); R3.1 done (context-aware image insertion, `docs/context-aware-image-insertion.md`)**. This document is the product handle for
+Status: **R0 done (recon + contract); R1 done (editor shell built); R1.2 done (editor context foundation); R2.1 done (embedded agent entry surface); R3.1 done (context-aware image insertion, `docs/context-aware-image-insertion.md`); R4.1 done (visual design intent & asset roles, `docs/visual-design-foundation.md`)**. This document is the product handle for
 the R-series. `docs/editor-native-designer-roadmap.md` is the guiding brief and
 stays authoritative for intent; this document turns that intent into concrete
 product rules and records what the current UI actually is.
@@ -359,7 +359,7 @@ overshadows the Editor.
 | R1.2 | Editor Context Foundation | **Done** (`docs/editor-context-foundation.md`) |
 | R2 | Embedded Designer Agent Shell | In progress (R2.1 entry surface done, `docs/embedded-agent-entry-surface.md`) |
 | R3 | First Vertical Slice, Image Insertion | **R3.1 done** (`docs/context-aware-image-insertion.md`) |
-| R4 | In-Editor Proposal, Apply & Undo | Not started |
+| R4 | In-Editor Proposal, Apply & Undo | In progress (R4.1 visual design foundation done, `docs/visual-design-foundation.md`) |
 | R5 | Contextual Designer Actions | Not started |
 | R6 | Designer Capabilities as Native Editor Tools | Not started |
 | R7 | Unified Intelligence Layer | Not started |
@@ -385,8 +385,38 @@ image block, and media-library-only sourcing (no generation/search).
 Next deliverable: **Phase R4 - In-Editor Proposal, Apply & Undo**, generalizing the
 R3.1 preview/apply/undo surface into a review step for non-visual Designer
 proposals, still inside the Editor and still behind the revision-guarded apply
-choke point. R3.1 stays the reference slice: one action, one understandable result,
-in product language.
+choke point. R3.1 stays the reference slice: one action, one understandable
+result, in product language.
+
+## 16. R4.1 visual design foundation
+
+R4.1 adds the shared graphics language the R-series needs before it can grow
+beyond one image role. It separates three axes that people casually merge -
+`VisualAssetRole` (where/how), `VisualIntent` (purpose) and `VisualPlacement`
+(layout) - and resolves them from an Editor instruction plus context through a
+conservative, deterministic, pure resolver: explicit role wins, explicit
+intent/placement overrides the role default, editor node type only breaks ties,
+ambiguity becomes a clarification question, and a non-visual request is refused
+rather than guessed. The shared visual ranker now factors role/placement/aspect
+fit below subject relevance, with no `visual` option reproducing the exact R3.1
+order. Accessibility defaults live in the vocabulary: decorative/background
+roles get empty alt, content-bearing roles require descriptive alt, and roles
+the editor cannot host yet (hero, background, logo) are reported as
+`visual_role_unsupported` before any content is read. Visual intent rides the
+existing R3.1 operation envelope, so there is no migration, no new table, no new
+route and no new panel. Full contract, vocabulary, error table and limitations
+are in `docs/visual-design-foundation.md`.
+
+## 17. Handoff to the next briefing
+
+R4.1 is done and R3.1 still works. The next step is to widen the *host* side so
+more resolved roles become real, keeping every R4.1 invariant (three separate
+axes, honest refusal over guessing, pure ranking, no new persistence, no new
+route or detached UI). In priority order: host blocks for `hero` and full-bleed
+`background`; replacement of an existing image block; candidate choice ("show me
+another") reusing the same ranker and intent; then `logo`/`icon` hosts. The
+general R4 review-before-apply step for non-visual Designer proposals remains
+open. Details and rationale are in `docs/visual-design-foundation.md`.
 
 ---
 
@@ -397,6 +427,7 @@ in product language.
 - `docs/editor-context-foundation.md` — R1.2 editor context contract and report.
 - `docs/embedded-agent-entry-surface.md` — R2.1 embedded agent contract and report.
 - `docs/context-aware-image-insertion.md` — R3.1 contract and report.
+- `docs/visual-design-foundation.md` — R4.1 visual design intent & asset roles.
 - `docs/8e6-agent-architecture.md` — the Designer/Writer/Composer backend ADR
   whose infrastructure R0 keeps and hides.
 - `docs/content-studio-roadmap.md`, `docs/w10-magic-roadmap.md` — prior

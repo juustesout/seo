@@ -37,6 +37,7 @@ import {
   rankVisualAssetCandidates,
   type VisualAssetCandidate,
 } from './visualAssetSelection.js';
+import { isValidVisualDesignIntent, visualAltTextForRole, type VisualDesignIntent } from './visualVocabulary.js';
 
 /** The single operation type this phase produces. */
 export const IMAGE_INSERTION_OPERATION_TYPE = 'insert_image' as const;
@@ -59,6 +60,8 @@ export const IMAGE_INSERTION_MAX_TEXT_CHARS = 2000;
 export const IMAGE_INSERTION_NEARBY_MAX_CHARS = 600;
 export const IMAGE_INSERTION_TITLE_MAX_CHARS = 300;
 export const IMAGE_INSERTION_LANGUAGE_MAX_CHARS = 40;
+/** Bound for the canonical/editor node type the selection sits on (R4.1 role hint). */
+export const IMAGE_INSERTION_NODE_TYPE_MAX_CHARS = 100;
 /** Serialized-size ceiling for the whole context, enforced at the API edge. */
 export const IMAGE_INSERTION_CONTEXT_MAX_CHARS = 100_000;
 export const IMAGE_INSERTION_DEFAULT_MIN_SCORE = VISUAL_ASSET_DEFAULT_MIN_SCORE;
@@ -124,6 +127,13 @@ export interface InsertImageOperation {
   type: typeof IMAGE_INSERTION_OPERATION_TYPE;
   target: ImageInsertionTarget;
   image: ImageInsertionCandidate;
+  /**
+   * R4.1: the resolved visual design intent (role/purpose/placement) behind the
+   * insertion. It is usage intent, not asset metadata, and is kept structured so
+   * review, alt policy and future design tools read the same thing. Optional so
+   * R3.1 operations remain valid.
+   */
+  visual?: VisualDesignIntent;
   rationale?: string;
 }
 
@@ -156,6 +166,12 @@ export interface ImageInsertionContext {
   sectionHeading?: string;
   /** Document language, when the snapshot has one. */
   language?: string;
+  /**
+   * R4.1: canonical/editor node type the selection sits on (e.g. `heading`,
+   * `compositionHero`). A bounded contextual hint for role resolution; the
+   * resolver only uses it when the instruction names no role itself.
+   */
+  targetNodeType?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -175,7 +191,7 @@ const CANDIDATE_KEYS: ReadonlySet<string> = new Set([
   'width',
   'height',
 ]);
-const OPERATION_KEYS: ReadonlySet<string> = new Set(['type', 'target', 'image', 'rationale']);
+const OPERATION_KEYS: ReadonlySet<string> = new Set(['type', 'target', 'image', 'visual', 'rationale']);
 const CONTEXT_KEYS: ReadonlySet<string> = new Set([
   'revision',
   'document',
@@ -185,6 +201,7 @@ const CONTEXT_KEYS: ReadonlySet<string> = new Set([
   'documentTitle',
   'sectionHeading',
   'language',
+  'targetNodeType',
 ]);
 
 const TARGET_KIND_SET: ReadonlySet<string> = new Set(IMAGE_INSERTION_TARGET_KINDS);
@@ -263,6 +280,7 @@ export function isValidInsertImageOperation(value: unknown): value is InsertImag
   if (value.type !== IMAGE_INSERTION_OPERATION_TYPE) return false;
   if (!isValidImageInsertionTarget(value.target)) return false;
   if (!isValidImageInsertionCandidate(value.image)) return false;
+  if (value.visual !== undefined && !isValidVisualDesignIntent(value.visual)) return false;
   return isOptionalBoundedString(value.rationale, IMAGE_INSERTION_RATIONALE_MAX_CHARS);
 }
 
@@ -283,6 +301,7 @@ export function isValidImageInsertionContext(value: unknown): value is ImageInse
   if (!isBoundedString(value.nearbyText, IMAGE_INSERTION_NEARBY_MAX_CHARS)) return false;
   if (!isOptionalBoundedString(value.documentTitle, IMAGE_INSERTION_TITLE_MAX_CHARS)) return false;
   if (!isOptionalBoundedString(value.sectionHeading, IMAGE_INSERTION_TITLE_MAX_CHARS)) return false;
+  if (!isOptionalBoundedString(value.targetNodeType, IMAGE_INSERTION_NODE_TYPE_MAX_CHARS)) return false;
   return isOptionalBoundedString(value.language, IMAGE_INSERTION_LANGUAGE_MAX_CHARS);
 }
 
@@ -374,15 +393,33 @@ export interface ImageInsertionSelection {
 export function selectImageInsertionCandidate(
   context: ImageInsertionContext,
   candidates: readonly VisualAssetCandidate[],
-  options: { minScore?: number } = {},
+  options: { minScore?: number; visual?: VisualDesignIntent } = {},
 ): ImageInsertionSelection | null {
   const taken = new Set<string>();
   collectUsedMediaIds(context.document.blocks, taken);
   const pool = candidates.filter((candidate) => !taken.has(candidate.mediaId));
   const minScore = options.minScore ?? IMAGE_INSERTION_DEFAULT_MIN_SCORE;
-  const best = rankVisualAssetCandidates(buildImageInsertionQuery(context), pool)[0];
+  const best = rankVisualAssetCandidates(
+    buildImageInsertionQuery(context),
+    pool,
+    options.visual ? { visual: options.visual } : undefined,
+  )[0];
   if (!best || best.score < minScore) return null;
   return { candidate: best.candidate, score: best.score, rationale: best.rationale };
+}
+
+/**
+ * Applies the R4.1 role's alt-text policy to a resolved insertion. Decorative and
+ * background visuals get an empty alt (marked decorative) instead of a
+ * descriptor that would mislead a screen reader; content-bearing roles keep the
+ * descriptive text and fall back to the filename only when none was provided.
+ */
+export function imageInsertionAltForIntent(intent: VisualDesignIntent | undefined, alt: string, fallback = ''): string {
+  if (!intent) {
+    const trimmed = alt.trim();
+    return trimmed.length > 0 ? trimmed : fallback.trim();
+  }
+  return visualAltTextForRole(intent.role, alt, fallback);
 }
 
 function collectUsedMediaIds(blocks: readonly CanonicalBlock[], out: Set<string>): void {

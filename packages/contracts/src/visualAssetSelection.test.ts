@@ -12,12 +12,13 @@ import {
   VISUAL_ASSET_DEFAULT_MIN_SCORE,
   VISUAL_ASSET_MAX_CANDIDATES,
   VISUAL_ASSET_MIME_TYPES,
-  VISUAL_ASSET_ROLES,
+  VISUAL_HOST_ROLES,
   collectVisualTargets,
   isSelectableVisualMimeType,
   isValidVisualAssetCandidate,
   isValidVisualAssetSelection,
   isValidVisualAssetSelectionRequest,
+  rankVisualAssetCandidates,
   selectVisualAssets,
   visualDesignProposalFromSelections,
 } from './visualAssetSelection.js';
@@ -128,14 +129,65 @@ describe('validators', () => {
     expect(isValidVisualAssetSelection({ ...selection, score: -1 })).toBe(false);
     expect(isValidVisualAssetSelection({ ...selection, role: 'background' })).toBe(false);
     expect(isValidVisualAssetSelection({ ...selection, extra: true })).toBe(false);
-    expect(VISUAL_ASSET_ROLES).toEqual(['image']);
+    expect(VISUAL_HOST_ROLES).toEqual(['image']);
 
     expect(isValidVisualAssetSelectionRequest({})).toBe(true);
     expect(isValidVisualAssetSelectionRequest({ targets: [HERO_IMAGE], minScore: 2 })).toBe(true);
     expect(isValidVisualAssetSelectionRequest({ targets: [] })).toBe(false);
     expect(isValidVisualAssetSelectionRequest({ targets: ['bad id'] })).toBe(false);
     expect(isValidVisualAssetSelectionRequest({ minScore: -1 })).toBe(false);
+    expect(isValidVisualAssetSelectionRequest({ visual: { role: 'hero', intent: 'emphasis' } })).toBe(true);
+    expect(isValidVisualAssetSelectionRequest({ visual: { role: 'cover', intent: 'emphasis' } })).toBe(false);
     expect(isValidVisualAssetSelectionRequest({ nope: true })).toBe(false);
+  });
+});
+
+describe('rankVisualAssetCandidates visual fit (R4.1)', () => {
+  const landscape = { mediaId: 'm_land', filename: 'solar-land.png', alt: 'Solar panels', mimeType: 'image/png', width: 1600, height: 900 };
+  const bigPortrait = { mediaId: 'm_port', filename: 'solar-port.png', alt: 'Solar panels', mimeType: 'image/png', width: 2000, height: 3000 };
+  const square = { mediaId: 'm_square', filename: 'solar-square.png', alt: 'Solar panels', mimeType: 'image/png', width: 1000, height: 1000 };
+  const wide = { mediaId: 'm_wide', filename: 'solar-wide.png', alt: 'Solar panels', mimeType: 'image/png', width: 1600, height: 900 };
+
+  it('lets the role orientation shape the order of equally relevant assets', () => {
+    const withoutVisual = rankVisualAssetCandidates('solar panels', [landscape, bigPortrait]).map((r) => r.candidate.mediaId);
+    expect(withoutVisual).toEqual(['m_port', 'm_land']);
+    const withVisual = rankVisualAssetCandidates('solar panels', [landscape, bigPortrait], {
+      visual: { role: 'hero', intent: 'emphasis' },
+    }).map((r) => r.candidate.mediaId);
+    expect(withVisual).toEqual(['m_land', 'm_port']);
+  });
+
+  it('lets an explicit aspect ratio shape the order', () => {
+    const withoutVisual = rankVisualAssetCandidates('solar panels', [square, wide]).map((r) => r.candidate.mediaId);
+    expect(withoutVisual).toEqual(['m_wide', 'm_square']);
+    const withVisual = rankVisualAssetCandidates('solar panels', [square, wide], {
+      visual: { role: 'inline', intent: 'reinforce', aspectRatio: '1:1' },
+    }).map((r) => r.candidate.mediaId);
+    expect(withVisual).toEqual(['m_square', 'm_wide']);
+  });
+
+  it('keeps subject relevance primary over role fit', () => {
+    const matching = { mediaId: 'm_match', filename: 'solar-match.png', alt: 'Solar panels', mimeType: 'image/png', width: 900, height: 1600 };
+    const unrelated = { mediaId: 'm_un', filename: 'team.png', alt: 'Team photo', mimeType: 'image/png', width: 1600, height: 900 };
+    const ranked = rankVisualAssetCandidates('solar panels', [matching, unrelated], {
+      visual: { role: 'hero', intent: 'emphasis' },
+    });
+    expect(ranked.map((r) => r.candidate.mediaId)).toEqual(['m_match', 'm_un']);
+    expect(ranked[0]!.score).toBeGreaterThan(ranked[1]!.score);
+  });
+
+  it('orders equal score and fit deterministically and excludes invalid assets', () => {
+    const a = { mediaId: 'm_a', filename: 'solar-a.png', alt: 'Solar panels', mimeType: 'image/png' };
+    const b = { mediaId: 'm_b', filename: 'solar-b.png', alt: 'Solar panels', mimeType: 'image/png' };
+    const svg = { mediaId: 'm_svg', filename: 'solar.svg', alt: 'Solar panels', mimeType: 'image/svg+xml' };
+    const ranked = rankVisualAssetCandidates('solar panels', [b, a, svg]);
+    expect(ranked.map((r) => r.candidate.mediaId)).toEqual(['m_a', 'm_b']);
+    expect(ranked.every((r) => r.candidate.mediaId !== 'm_svg')).toBe(true);
+  });
+
+  it('is backward compatible: no options means the R3.1 order', () => {
+    const plain = rankVisualAssetCandidates('solar panels', [landscape, bigPortrait]);
+    expect(plain.map((r) => r.fit)).toEqual([0, 0]);
   });
 });
 

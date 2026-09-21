@@ -214,6 +214,8 @@ export function useEmbeddedAgent(options: UseEmbeddedAgentOptions): EmbeddedAgen
           setState({ status: 'unsupported', instruction: submitted, message: outcome.message });
         } else if (outcome.kind === 'empty') {
           setState({ status: 'empty', instruction: submitted, message: outcome.message });
+        } else if (outcome.kind === 'clarification') {
+          setState({ status: 'clarification', instruction: submitted, message: outcome.message });
         } else if (outcome.kind === 'error') {
           setState({ status: 'error', instruction: submitted, message: outcome.message, canRetry: outcome.canRetry });
         } else {
@@ -288,6 +290,8 @@ export function useEmbeddedAgent(options: UseEmbeddedAgentOptions): EmbeddedAgen
             setState({ status: 'unsupported', instruction: submittedRef.current, message: outcome.message });
           } else if (outcome.kind === 'empty') {
             setState({ status: 'empty', instruction: submittedRef.current, message: outcome.message });
+          } else if (outcome.kind === 'clarification') {
+            setState({ status: 'clarification', instruction: submittedRef.current, message: outcome.message });
           } else if (outcome.kind === 'error') {
             setState({ status: 'error', instruction: submittedRef.current, message: outcome.message, canRetry: outcome.canRetry });
           } else {

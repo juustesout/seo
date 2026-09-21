@@ -201,6 +201,9 @@ name internal steps) are never echoed.
 - Richer semantic context (project topic, knowledge) once it is available in a
   bounded, validated shape.
 
+The broader visual-role vocabulary this slice would build on is defined by
+**R4.1** in `docs/visual-design-foundation.md`.
+
 ## 13. Implementation report
 
 Files changed:

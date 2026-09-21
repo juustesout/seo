@@ -395,3 +395,52 @@ describe('EmbeddedAgentEntry image insertion (R3.1)', () => {
     expect(JSON.stringify(editor.getJSON())).not.toContain('"type":"image"');
   });
 });
+
+describe('EmbeddedAgentEntry visual intent (R4.1)', () => {
+  it('shows the resolved visual role on the inline candidate', async () => {
+    const editor = makeImageEditor();
+    act(() => {
+      editor.commands.setTextSelection(3);
+    });
+    apiMock.api
+      .mockResolvedValueOnce({ run: run({ status: 'queued' }), reused: false })
+      .mockResolvedValueOnce(
+        run({
+          status: 'succeeded',
+          result: {
+            version: 1,
+            baseRevision: 'rev1:abc',
+            document: { version: 1, blocks: [] },
+            insertion: { ...INSERTION, visual: { role: 'illustration', intent: 'explain' } },
+          },
+        }),
+      );
+
+    render(<EditorHarness editor={editor} />);
+    fireEvent.change(screen.getByTestId('embedded-agent-input'), { target: { value: 'Voeg een illustratie toe die dit uitlegt.' } });
+    fireEvent.click(screen.getByTestId('embedded-agent-send'));
+
+    await waitFor(() => expect(screen.getByTestId('embedded-agent-image-role').textContent).toContain('Illustration'));
+    expect(screen.getByTestId('embedded-agent-image-candidate').textContent).toContain('explains');
+  });
+
+  it('reports a visual role the editor cannot host yet without mutating the document', async () => {
+    const editor = makeImageEditor();
+    act(() => {
+      editor.commands.setTextSelection(3);
+    });
+    apiMock.api.mockResolvedValueOnce({
+      run: run({ status: 'failed', error: { code: 'visual_role_unsupported', message: 'hero unsupported', retryable: false } }),
+      reused: false,
+    });
+
+    render(<EditorHarness editor={editor} />);
+    fireEvent.change(screen.getByTestId('embedded-agent-input'), { target: { value: 'Maak de hero sterker.' } });
+    fireEvent.click(screen.getByTestId('embedded-agent-send'));
+
+    await waitFor(() =>
+      expect(screen.getByTestId('embedded-agent-status').textContent).toContain("isn't supported here yet"),
+    );
+    expect(JSON.stringify(editor.getJSON())).not.toContain('"type":"image"');
+  });
+});
