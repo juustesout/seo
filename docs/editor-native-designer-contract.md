@@ -1,6 +1,6 @@
 # Editor-Native Designer — Product & UX Contract (ADR Phase R0)
 
-Status: **R0 done (recon + contract); R1 done (editor shell built); R1.2 done (editor context foundation); R2.1 done (embedded agent entry surface); R3.1 done (context-aware image insertion, `docs/context-aware-image-insertion.md`); R4.1 done (visual design intent & asset roles, `docs/visual-design-foundation.md`)**. This document is the product handle for
+Status: **R0 done (recon + contract); R1 done (editor shell built); R1.2 done (editor context foundation); R2.1 done (embedded agent entry surface); R3.1 done (context-aware image insertion, `docs/context-aware-image-insertion.md`); R4.1 done (visual design intent & asset roles, `docs/visual-design-foundation.md`); R4.2 done (role-aware section image capability, `docs/section-visual-capability.md`)**. This document is the product handle for
 the R-series. `docs/editor-native-designer-roadmap.md` is the guiding brief and
 stays authoritative for intent; this document turns that intent into concrete
 product rules and records what the current UI actually is.
@@ -359,7 +359,7 @@ overshadows the Editor.
 | R1.2 | Editor Context Foundation | **Done** (`docs/editor-context-foundation.md`) |
 | R2 | Embedded Designer Agent Shell | In progress (R2.1 entry surface done, `docs/embedded-agent-entry-surface.md`) |
 | R3 | First Vertical Slice, Image Insertion | **R3.1 done** (`docs/context-aware-image-insertion.md`) |
-| R4 | In-Editor Proposal, Apply & Undo | In progress (R4.1 visual design foundation done, `docs/visual-design-foundation.md`) |
+| R4 | In-Editor Proposal, Apply & Undo | In progress (R4.1 visual design foundation done, `docs/visual-design-foundation.md`; R4.2 section image capability done, `docs/section-visual-capability.md`) |
 | R5 | Contextual Designer Actions | Not started |
 | R6 | Designer Capabilities as Native Editor Tools | Not started |
 | R7 | Unified Intelligence Layer | Not started |
@@ -418,6 +418,41 @@ another") reusing the same ranker and intent; then `logo`/`icon` hosts. The
 general R4 review-before-apply step for non-visual Designer proposals remains
 open. Details and rationale are in `docs/visual-design-foundation.md`.
 
+## 18. R4.2 role-aware section image capability
+
+R4.2 turns the R4.1 foundation into the first user-visible role-aware
+capability: a **section** image, requested in the Editor as "Geef deze sectie
+een passende afbeelding." (or English). A section is the document's real
+structure, not a new abstraction: an explicit composition `section` container,
+or a heading-delimited region (a heading plus its following blocks until the
+next heading of the same or higher level). The Editor always sends its real
+caret/selection as `target` and adds the addressed section as a structural
+`sectionTarget` hint; the backend validates that hint against the canonical
+snapshot with the same pure `resolveSectionVisual` the capability is defined
+by, then ranks existing media against the section heading plus its bounded body
+and inserts after the heading, before the first content block. The inline
+candidate is unchanged from R3.1 (preview, role label, Insert / Cancel) and the
+insertion is still one undoable editor transaction through the existing
+`insertMedia` command; the backend still never writes the document. One role is
+fully integrated on purpose; the other insertable roles keep their R4.1
+resolution and honest refusals. Full contract, error table and limitations are
+in `docs/section-visual-capability.md`.
+
+## 19. Handoff to the next briefing
+
+R4.2 is done, R4.1 and R3.1 still work. "Geef deze sectie een passende
+afbeelding." now inserts a real section image inside the Editor, and plain "Zet
+hier een passende afbeelding." is unchanged. The next step is to widen the
+*host* side further while keeping every R4.1/R4.2 invariant (three separate
+axes, honest refusal over guessing, pure ranking, one role fully integrated at a
+time, no new persistence, no new route or detached UI). In priority order:
+host blocks for `hero` and full-bleed `background`; replacement of an existing
+image block (including a section image); candidate choice ("show me another")
+reusing the same ranker and intent; then `logo`/`icon` hosts. The general R4
+review-before-apply step for non-visual Designer proposals remains open.
+Details and rationale are in `docs/section-visual-capability.md` and
+`docs/visual-design-foundation.md`.
+
 ---
 
 ## See also
@@ -428,6 +463,7 @@ open. Details and rationale are in `docs/visual-design-foundation.md`.
 - `docs/embedded-agent-entry-surface.md` — R2.1 embedded agent contract and report.
 - `docs/context-aware-image-insertion.md` — R3.1 contract and report.
 - `docs/visual-design-foundation.md` — R4.1 visual design intent & asset roles.
+- `docs/section-visual-capability.md` — R4.2 role-aware section image capability.
 - `docs/8e6-agent-architecture.md` — the Designer/Writer/Composer backend ADR
   whose infrastructure R0 keeps and hides.
 - `docs/content-studio-roadmap.md`, `docs/w10-magic-roadmap.md` — prior

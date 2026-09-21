@@ -18,7 +18,6 @@ import {
 
 function context(over: Partial<VisualIntentContext> = {}): VisualIntentContext {
   return {
-    target: { kind: 'cursor', position: 3 },
     nearbyText: 'We install solar panels on residential roofs.',
     ...over,
   };
@@ -31,6 +30,17 @@ function resolved(instruction: string, over: Partial<VisualIntentContext> = {}) 
 }
 
 describe('resolveVisualDesignIntent roles', () => {
+  it('resolves an explicit section request to section/reinforce/contained (R4.2)', () => {
+    const intent = resolved('Geef deze sectie een passende afbeelding.');
+    expect(intent.role).toBe('section');
+    expect(intent.intent).toBe('reinforce');
+    expect(intent.placement).toBe('contained');
+  });
+
+  it('keeps an illustration request distinct from a section request', () => {
+    expect(resolved('Voeg een illustratie toe aan deze sectie.').role).toBe('illustration');
+  });
+
   it('resolves an explicit hero request to hero/emphasis', () => {
     const intent = resolved('Maak de hero sterker.');
     expect(intent.role).toBe('hero');
@@ -115,6 +125,17 @@ describe('resolveVisualDesignIntent uncertainty', () => {
     if (result.status !== 'needs_clarification') return;
     expect(result.candidates.map((candidate) => candidate.role)).toEqual(['hero', 'section']);
     expect(result.candidates.every((candidate) => candidate.intent === 'brand')).toBe(true);
+  });
+
+  it('asks for clarification when the request is clearly plural or multi-image (R4.2)', () => {
+    const plural = resolveVisualDesignIntent('Voeg ondersteunende beelden toe aan deze sectie.', context());
+    expect(plural.status).toBe('needs_clarification');
+    if (plural.status !== 'needs_clarification') return;
+    expect(plural.candidates.map((candidate) => candidate.role)).toContain('section');
+    expect(plural.question.length).toBeGreaterThan(0);
+
+    const multi = resolveVisualDesignIntent('Voeg meerdere afbeeldingen toe.', context());
+    expect(multi.status).toBe('needs_clarification');
   });
 
   it('reports unsupported for a request it cannot resolve to any visual', () => {

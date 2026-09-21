@@ -20,6 +20,7 @@
 
 import {
   DESIGNER_PROPOSAL_VERSION,
+  IMAGE_INSERTION_SECTION_PLACEMENT,
   contentRevisionOf,
   editorDocumentToCanonical,
   imageInsertionAltForIntent,
@@ -27,14 +28,17 @@ import {
   isValidDesignerProposal,
   isValidImageInsertionContext,
   isValidInsertImageOperation,
+  resolveSectionVisual,
   resolveVisualDesignIntent,
   selectImageInsertionCandidate,
   type DesignerIntent,
   type DesignerProposal,
   type ImageInsertionCandidate,
   type ImageInsertionContext,
+  type ImageInsertionSectionTarget,
   type InsertImageOperation,
   type VisualAssetCandidate,
+  type VisualDesignIntent,
 } from '@seo/contracts';
 import { ApiError } from '../apiErrors.js';
 import type { ServiceContainer } from '../context.js';
@@ -73,6 +77,16 @@ function toVisualCandidate(item: {
     ...(item.height !== null ? { height: item.height } : {}),
     usageCount: item.usage_count,
   };
+}
+
+/**
+ * The section addressed by the transmitted context: the editor's dedicated
+ * section hint when present, or a section target used directly as the location
+ * (API callers and tests). Null when the context names no section at all.
+ */
+function sectionTargetOf(context: ImageInsertionContext): ImageInsertionSectionTarget | null {
+  if (context.sectionTarget) return context.sectionTarget;
+  return context.target.kind === 'section' ? context.target : null;
 }
 
 export class ImageInsertionService {
@@ -129,13 +143,18 @@ export class ImageInsertionService {
       );
     }
 
+    const section = visual.role === 'section' ? this.resolveSectionTarget(context, visual) : null;    const operationTarget = section ? section.target : context.target;
+    const effectiveContext = section ? section.context : context;
+
     const media = await new MediaService(this.container.sb, new SupabaseStorageStore(this.container.sb)).list(projectId);
-    const selection = selectImageInsertionCandidate(context, media.map(toVisualCandidate), { visual });
+    const selection = selectImageInsertionCandidate(effectiveContext, media.map(toVisualCandidate), { visual });
     if (!selection) {
       throw new ApiError(
         422,
         'image_insertion_no_candidate',
-        'No existing image in this project matches this section closely enough.',
+        section
+          ? 'No existing image in this project matches this section closely enough.'
+          : 'No existing image in this project matches this text closely enough.',
       );
     }
 
@@ -154,7 +173,7 @@ export class ImageInsertionService {
     };
     const operation: InsertImageOperation = {
       type: 'insert_image',
-      target: context.target,
+      target: operationTarget,
       image,
       visual,
       ...(selection.rationale ? { rationale: selection.rationale } : {}),
@@ -173,5 +192,62 @@ export class ImageInsertionService {
       throw new ApiError(500, 'designer_proposal_invalid', 'The Agent produced an invalid proposal.');
     }
     return proposal;
+  }
+
+  /**
+   * Resolves the section context for a `section` visual, or fails honestly.
+   *
+   * A section image needs a heading-anchored location and section-level copy, so
+   * this refuses (never guesses) when the editor sent no section target, the
+   * heading can no longer be found, or the section already contains an image
+   * (R4.2 does not silently duplicate a visual). The returned context carries the
+   * section heading and bounded body so ranking reasons about the whole section,
+   * not only the selected sentence.
+   */
+  private resolveSectionTarget(
+    context: ImageInsertionContext,
+    visual: VisualDesignIntent,
+  ): { target: ImageInsertionSectionTarget; context: ImageInsertionContext } {
+    const sectionTarget = sectionTargetOf(context);
+    if (!sectionTarget) {
+      throw new ApiError(
+        422,
+        'section_target_unresolved',
+        "I couldn't find a section to place the image in. Put the cursor under a section heading and try again.",
+      );
+    }
+    if (visual.placement !== undefined && visual.placement !== IMAGE_INSERTION_SECTION_PLACEMENT) {
+      throw new ApiError(
+        422,
+        'visual_placement_unsupported',
+        `A ${visual.placement} section image is not supported in the editor yet.`,
+        { placement: visual.placement },
+      );
+    }
+    const section = resolveSectionVisual(context.document, sectionTarget);
+    if (!section) {
+      throw new ApiError(
+        422,
+        'section_target_unresolved',
+        "I couldn't find that section in the document any more. Put the cursor under a section heading and try again.",
+      );
+    }
+    if (section.hasImage) {
+      throw new ApiError(
+        422,
+        'section_image_already_present',
+        'This section already has an image. Remove or replace it first, then ask again.',
+      );
+    }
+    const target: ImageInsertionSectionTarget = {
+      kind: 'section',
+      sectionPath: section.sectionPath,
+      anchorPath: section.anchorPath,
+      heading: section.heading,
+    };
+    return {
+      target,
+      context: { ...context, target, sectionHeading: section.heading, nearbyText: section.body },
+    };
   }
 }

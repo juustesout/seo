@@ -8,7 +8,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ServiceContainer } from '../context.js';
-import type { CanonicalDocument, DesignerIntent, ImageInsertionContext } from '@seo/contracts';
+import type { CanonicalDocument, DesignerIntent, ImageInsertionContext, ImageInsertionSectionTarget } from '@seo/contracts';
 import { canonicalDocumentToEditorDocument, contentRevisionOf, editorDocumentToCanonical } from '@seo/contracts';
 import { ImageInsertionService, imageInsertionContextOf } from './imageInsertionService.js';
 
@@ -239,5 +239,129 @@ describe('ImageInsertionService visual intent (R4.1)', () => {
       context(),
     );
     expect(proposal.insertion?.image.assetId).toBe('m_landscape');
+  });
+});
+
+const SECTION_CANONICAL: CanonicalDocument = {
+  version: 1,
+  meta: { title: 'Solar for every roof' },
+  blocks: [
+    { type: 'heading', attrs: { level: 2 }, content: [{ type: 'text', text: 'Solar energy' }] },
+    { type: 'paragraph', content: [{ type: 'text', text: 'We cover residential roofs.' }] },
+    { type: 'heading', attrs: { level: 2 }, content: [{ type: 'text', text: 'Wind power' }] },
+    { type: 'paragraph', content: [{ type: 'text', text: 'Turbines capture wind.' }] },
+  ],
+};
+
+const SECTION_TARGET: ImageInsertionSectionTarget = {
+  kind: 'section',
+  sectionPath: [0],
+  anchorPath: [0],
+  heading: 'Solar energy',
+};
+
+function sectionContext(over: Partial<ImageInsertionContext> = {}): ImageInsertionContext {
+  return context({
+    document: SECTION_CANONICAL,
+    target: { kind: 'cursor', position: 3 },
+    sectionTarget: { ...SECTION_TARGET },
+    nearbyText: '',
+    sectionHeading: 'Solar energy',
+    ...over,
+  });
+}
+
+describe('ImageInsertionService section visuals (R4.2)', () => {
+  it('builds a section-targeted insertion after the section heading', async () => {
+    const proposal = await service.buildProposal(
+      PROJECT_ID,
+      intent({ instruction: 'Geef deze sectie een passende afbeelding.' }),
+      sectionContext(),
+    );
+    expect(proposal.insertion?.visual).toMatchObject({ role: 'section', intent: 'reinforce', placement: 'contained' });
+    expect(proposal.insertion?.target).toEqual({ kind: 'section', sectionPath: [0], anchorPath: [0], heading: 'Solar energy' });
+    expect(proposal.insertion?.image.assetId).toBe('m_solar');
+  });
+
+  it('uses the section heading and body to drive the search, not only the sentence', async () => {
+    mock.media = [
+      { ...mock.media[0]!, id: 'm_wind', filename: 'wind.png', alt_text: 'Wind turbines', caption: '' },
+      { ...mock.media[0]!, id: 'm_solar', filename: 'solar.png', alt_text: 'Solar panels', caption: '' },
+    ];
+    const proposal = await service.buildProposal(
+      PROJECT_ID,
+      intent({ instruction: 'Geef deze sectie een afbeelding.' }),
+      sectionContext({ documentTitle: 'Installation guide' }),
+    );
+    expect(proposal.insertion?.image.assetId).toBe('m_solar');
+  });
+
+  it('refuses a section request with no resolvable section target', async () => {
+    const err = await expectApiError(
+      service.buildProposal(
+        PROJECT_ID,
+        intent({ instruction: 'Geef deze sectie een passende afbeelding.' }),
+        context({ sectionHeading: 'Solar energy' }),
+      ),
+    );
+    expect(err.status).toBe(422);
+    expect(err.code).toBe('section_target_unresolved');
+    expect(mock.mediaListCalls).toEqual([]);
+  });
+
+  it('refuses a section target whose heading no longer exists', async () => {
+    const err = await expectApiError(
+      service.buildProposal(
+        PROJECT_ID,
+        intent({ instruction: 'Geef deze sectie een passende afbeelding.' }),
+        sectionContext({ sectionTarget: { kind: 'section', sectionPath: [1], anchorPath: [1], heading: 'Solar energy' } }),
+      ),
+    );
+    expect(err.status).toBe(422);
+    expect(err.code).toBe('section_target_unresolved');
+  });
+
+  it('refuses to add a second image to a section that already has one', async () => {
+    const withImage: CanonicalDocument = {
+      version: 1,
+      blocks: [
+        { type: 'heading', attrs: { level: 2 }, content: [{ type: 'text', text: 'Solar energy' }] },
+        { type: 'image', attrs: { mediaId: 'm_existing', src: 'https://cdn.test/a.png', alt: 'Panels' } },
+      ],
+    };
+    const err = await expectApiError(
+      service.buildProposal(
+        PROJECT_ID,
+        intent({ instruction: 'Geef deze sectie een passende afbeelding.' }),
+        sectionContext({ document: withImage }),
+      ),
+    );
+    expect(err.status).toBe(422);
+    expect(err.code).toBe('section_image_already_present');
+  });
+
+  it('refuses a section placement it cannot host', async () => {
+    const err = await expectApiError(
+      service.buildProposal(
+        PROJECT_ID,
+        intent({ instruction: 'Geef deze sectie een afbeelding op volledige breedte.' }),
+        sectionContext(),
+      ),
+    );
+    expect(err.status).toBe(422);
+    expect(err.code).toBe('visual_placement_unsupported');
+  });
+
+  it('asks for clarification for a plural section request', async () => {
+    const err = await expectApiError(
+      service.buildProposal(
+        PROJECT_ID,
+        intent({ instruction: 'Voeg ondersteunende beelden toe aan deze sectie.' }),
+        sectionContext(),
+      ),
+    );
+    expect(err.status).toBe(422);
+    expect(err.code).toBe('visual_intent_needs_clarification');
+    expect(mock.getCalls).toBe(0);
   });
 });

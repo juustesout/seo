@@ -7,7 +7,7 @@
  * that refuses an unresolvable target or a non-library candidate.
  */
 import { afterEach, describe, expect, it } from 'vitest';
-import { Editor } from '@tiptap/core';
+import { Editor, type JSONContent } from '@tiptap/core';
 import type { InsertImageOperation, TipDoc } from '@seo/contracts';
 import { createEditorExtensions } from './extensions';
 import { buildEditorContextSnapshot, type EditorContextSnapshot, type EditorSelectionSnapshot } from './editorContext';
@@ -17,6 +17,7 @@ import {
   imageInsertionContextFromSnapshot,
   imageInsertionTargetFromSelection,
   readEditorImageSemantics,
+  readEditorSectionTarget,
   resolveImageInsertionRange,
 } from './imageInsertion';
 
@@ -185,5 +186,104 @@ describe('applyImageInsertionOperation', () => {
     const editor = makeEditor();
     expect(resolveImageInsertionRange(editor, { kind: 'block', path: [1] })).toBe(15);
     expect(resolveImageInsertionRange(editor, { kind: 'block', path: [99] })).toBeNull();
+  });
+});
+
+describe('section targeting (R4.2)', () => {
+  function makeEditorWith(content: JSONContent[]): Editor {
+    const editor = new Editor({
+      extensions: createEditorExtensions({ nodeViews: false }),
+      content: { type: 'doc', content },
+    });
+    editors.push(editor);
+    return editor;
+  }
+
+  it('reads the nearest preceding heading as a section target', () => {
+    const editor = makeEditor();
+    editor.commands.setTextSelection(CURSOR_IN_SECOND);
+    expect(readEditorSectionTarget(editor)).toEqual({
+      kind: 'section',
+      sectionPath: [0],
+      anchorPath: [0],
+      heading: 'Solar energy',
+    });
+  });
+
+  it('uses the heading itself when the cursor sits on it', () => {
+    const editor = makeEditor();
+    editor.commands.setTextSelection(2);
+    expect(readEditorSectionTarget(editor)).toEqual({
+      kind: 'section',
+      sectionPath: [0],
+      anchorPath: [0],
+      heading: 'Solar energy',
+    });
+  });
+
+  it('returns null when the document has no heading to anchor to', () => {
+    const editor = makeEditorWith([{ type: 'paragraph', content: [{ type: 'text', text: 'Just prose.' }] }]);
+    editor.commands.setTextSelection(3);
+    expect(readEditorSectionTarget(editor)).toBeNull();
+  });
+
+  it('addresses an explicit composition section through its heading child', () => {
+    const editor = makeEditorWith([
+      {
+        type: 'compositionSection',
+        content: [
+          { type: 'heading', attrs: { level: 2 }, content: [{ type: 'text', text: 'Solar energy' }] },
+          { type: 'paragraph', content: [{ type: 'text', text: 'Panels on roofs.' }] },
+        ],
+      },
+    ]);
+    editor.commands.setTextSelection(6);
+    expect(readEditorSectionTarget(editor)).toEqual({
+      kind: 'section',
+      sectionPath: [0],
+      anchorPath: [0, 0],
+      heading: 'Solar energy',
+    });
+  });
+
+  it('carries the section hint into the transmitted context', () => {
+    const editor = makeEditor();
+    editor.commands.setTextSelection(CURSOR_IN_SECOND);
+    const context = imageInsertionContextFromSnapshot(snapshotOf(editor), readEditorImageSemantics(editor));
+    expect(context?.target).toEqual({ kind: 'cursor', position: CURSOR_IN_SECOND });
+    expect(context?.sectionTarget).toEqual({
+      kind: 'section',
+      sectionPath: [0],
+      anchorPath: [0],
+      heading: 'Solar energy',
+    });
+  });
+
+  it('resolves a section target to the position after the heading', () => {
+    const editor = makeEditor();
+    const heading = editor.state.doc.child(0);
+    // Anchored inside the heading text (after its content), not on the raw block
+    // boundary, so the heading is never replaced by the image.
+    expect(resolveImageInsertionRange(editor, { kind: 'section', sectionPath: [0], anchorPath: [0] })).toBe(
+      heading.nodeSize - 1,
+    );
+    expect(resolveImageInsertionRange(editor, { kind: 'section', sectionPath: [1], anchorPath: [1] })).toBeNull();
+  });
+
+  it('inserts a section image after the heading and undo removes it', () => {
+    const editor = makeEditor();
+    const result = applyImageInsertionOperation(editor, {
+      type: 'insert_image',
+      target: { kind: 'section', sectionPath: [0], anchorPath: [0], heading: 'Solar energy' },
+      image: { assetId: 'm1', url: 'https://cdn.test/solar.png', alt: 'Solar panels' },
+      visual: { role: 'section', intent: 'reinforce', placement: 'contained' },
+    });
+    expect(result).toEqual({ ok: true });
+    const content = editor.getJSON().content ?? [];
+    expect(content[0]!.type).toBe('heading');
+    expect(content[1]!.type).toBe('image');
+
+    editor.commands.undo();
+    expect(JSON.stringify(editor.getJSON()).includes('"type":"image"')).toBe(false);
   });
 });

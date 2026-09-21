@@ -27,6 +27,7 @@ import {
   IMAGE_INSERTION_TITLE_MAX_CHARS,
   isValidImageInsertionContext,
   type ImageInsertionContext,
+  type ImageInsertionSectionTarget,
   type ImageInsertionTarget,
   type InsertImageOperation,
 } from '@seo/contracts';
@@ -39,7 +40,17 @@ export interface EditorImageSemantics {
   sectionHeading?: string;
   /** The top-level node type the selection sits on, a role hint for R4.1. */
   targetNodeType?: string;
+  /**
+   * R4.2: the section the selection sits in, when one can be resolved. It is a
+   * structural hint for the `section` role; the backend validates it against the
+   * canonical snapshot and the editor re-validates it before inserting.
+   */
+  sectionTarget?: ImageInsertionSectionTarget;
 }
+
+/** Editor node names that describe a section for R4.2. */
+const SECTION_NODE_TYPE = 'compositionSection';
+const HEADING_NODE_TYPE = 'heading';
 
 /** Why an insertion could not be applied. Product copy maps these, they are not shown raw. */
 export type ImageInsertionApplyReason =
@@ -88,6 +99,53 @@ export function imageInsertionTargetFromSelection(selection: EditorSelectionSnap
   return null;
 }
 
+function headingText(node: PmNode): string {
+  return normalize(node.textContent).slice(0, IMAGE_INSERTION_TITLE_MAX_CHARS);
+}
+
+/** Index of the first non-empty heading among a container's children, or null. */
+function firstHeadingIndex(container: PmNode): number | null {
+  for (let index = 0; index < container.childCount; index += 1) {
+    const child = container.child(index);
+    if (child.type.name === HEADING_NODE_TYPE && headingText(child).length > 0) return index;
+  }
+  return null;
+}
+
+/**
+ * Reads the section the current selection sits in, as a structural hint for the
+ * `section` visual role. Two shapes are recognized, mirroring the canonical
+ * section definition: an explicit `compositionSection` container, or the nearest
+ * preceding top-level heading (a heading-delimited region). Returns null when
+ * neither exists so the backend can ask instead of guessing. Pure read.
+ */
+export function readEditorSectionTarget(editor: Editor | null): ImageInsertionSectionTarget | null {
+  if (!editor || editor.isDestroyed) return null;
+  const { doc, selection } = editor.state;
+  if (doc.childCount === 0) return null;
+
+  const topIndex = Math.max(0, Math.min(doc.resolve(selection.from).index(0), doc.childCount - 1));
+  const topNode = doc.child(topIndex);
+
+  if (topNode.type.name === SECTION_NODE_TYPE) {
+    const headingIndex = firstHeadingIndex(topNode);
+    if (headingIndex === null) return null;
+    const heading = headingText(topNode.child(headingIndex));
+    if (!heading) return null;
+    return { kind: 'section', sectionPath: [topIndex], anchorPath: [topIndex, headingIndex], heading };
+  }
+
+  for (let index = topIndex; index >= 0; index -= 1) {
+    const node = doc.child(index);
+    if (node.type.name === HEADING_NODE_TYPE) {
+      const heading = headingText(node);
+      if (!heading) return null;
+      return { kind: 'section', sectionPath: [index], anchorPath: [index], heading };
+    }
+  }
+  return null;
+}
+
 /**
  * Reads bounded semantic context from the live editor: the selected text, the
  * surrounding copy (previous/current/next block) and the nearest preceding
@@ -121,12 +179,14 @@ export function readEditorImageSemantics(editor: Editor | null): EditorImageSema
   });
 
   const targetNodeType = doc.childCount > 0 ? doc.child(topIndex).type.name : undefined;
+  const sectionTarget = readEditorSectionTarget(editor);
 
   return {
     ...(selectedText ? { selectedText } : {}),
     nearbyText,
     ...(sectionHeading ? { sectionHeading } : {}),
     ...(targetNodeType ? { targetNodeType } : {}),
+    ...(sectionTarget ? { sectionTarget } : {}),
   };
 }
 
@@ -160,6 +220,7 @@ export function imageInsertionContextFromSnapshot(
     ...(semantics.targetNodeType
       ? { targetNodeType: clamp(semantics.targetNodeType, IMAGE_INSERTION_NODE_TYPE_MAX_CHARS) }
       : {}),
+    ...(semantics.sectionTarget ? { sectionTarget: semantics.sectionTarget } : {}),
     ...(meta.language ? { language: clamp(meta.language, IMAGE_INSERTION_LANGUAGE_MAX_CHARS) } : {}),
   };
   return isValidImageInsertionContext(context) ? context : null;
@@ -195,6 +256,19 @@ export function resolveImageInsertionRange(
     return Number.isInteger(target.from) && target.from >= 0 && target.to >= target.from && target.to <= size
       ? { from: target.from, to: target.to }
       : null;
+  }
+  if (target.kind === 'section') {
+    const before = positionBeforePath(editor.state.doc, target.anchorPath);
+    if (before === null) return null;
+    const heading = editor.state.doc.nodeAt(before);
+    if (!heading || heading.type.name !== HEADING_NODE_TYPE) return null;
+    const after = before + heading.nodeSize;
+    // Anchor inside the heading's text (a valid text position) so `insertMedia`
+    // inserts after the heading block; an empty heading falls back to the block
+    // boundary. The heading itself is never replaced (a section keeps its title).
+    const inside = after - 1;
+    if (heading.content.size > 0 && inside > before) return inside;
+    return after <= size ? after : null;
   }
   const before = positionBeforePath(editor.state.doc, target.path);
   if (before === null) return null;

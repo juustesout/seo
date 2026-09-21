@@ -71,8 +71,16 @@ export const IMAGE_INSERTION_DEFAULT_MIN_SCORE = VISUAL_ASSET_DEFAULT_MIN_SCORE;
 // ---------------------------------------------------------------------------
 
 /** How the user expressed the insertion location in the current document. */
-export const IMAGE_INSERTION_TARGET_KINDS = ['cursor', 'text-selection', 'block'] as const;
+export const IMAGE_INSERTION_TARGET_KINDS = ['cursor', 'text-selection', 'block', 'section'] as const;
 export type ImageInsertionTargetKind = (typeof IMAGE_INSERTION_TARGET_KINDS)[number];
+
+/**
+ * The one placement a section image supports today: a contained image inside the
+ * section. R4.2 deliberately does not host full-bleed or overlay placements, so a
+ * resolved section intent with any other placement is refused rather than
+ * silently rendered as something it is not.
+ */
+export const IMAGE_INSERTION_SECTION_PLACEMENT = 'contained' as const;
 
 /** An insertion point at the caret (editor document position). */
 export interface ImageInsertionCursorTarget {
@@ -97,10 +105,30 @@ export interface ImageInsertionBlockTarget {
   path: number[];
 }
 
+/**
+ * R4.2: a section visual target. A "section" is either an explicit composition
+ * `section` container or a heading-delimited content region; both are addressed
+ * by structural index paths for one document snapshot only.
+ *
+ * `sectionPath` identifies the addressed section (the container block, or the
+ * heading block that starts a region). `anchorPath` identifies the heading block
+ * the image is inserted after, so the insertion is deterministic
+ * ("after the section heading, before its first content block"). Paths are
+ * location hints, never durable identities; the editor re-validates them.
+ */
+export interface ImageInsertionSectionTarget {
+  kind: 'section';
+  sectionPath: number[];
+  anchorPath: number[];
+  /** Bounded resolved heading text, as a context hint; the editor re-reads it. */
+  heading?: string;
+}
+
 export type ImageInsertionTarget =
   | ImageInsertionCursorTarget
   | ImageInsertionTextSelectionTarget
-  | ImageInsertionBlockTarget;
+  | ImageInsertionBlockTarget
+  | ImageInsertionSectionTarget;
 
 // ---------------------------------------------------------------------------
 // Candidate
@@ -156,6 +184,15 @@ export interface ImageInsertionContext {
   document: CanonicalDocument;
   /** The resolved insertion location. */
   target: ImageInsertionTarget;
+  /**
+   * R4.2: the section the selection currently sits in, when the editor could
+   * resolve one. It is a structural hint for the `section` role only: the editor
+   * always sends the real caret/selection as `target`, and this carries the
+   * addressed section so the backend can anchor a section image without
+   * re-deriving the editor's structure. Validated against the canonical snapshot
+   * before use; ignored for non-section roles.
+   */
+  sectionTarget?: ImageInsertionSectionTarget;
   /** The user's selected text, when the target is a text selection. */
   selectedText?: string;
   /** Bounded surrounding copy (current block plus nearby blocks). */
@@ -181,6 +218,7 @@ export interface ImageInsertionContext {
 const CURSOR_KEYS: ReadonlySet<string> = new Set(['kind', 'position']);
 const TEXT_SELECTION_KEYS: ReadonlySet<string> = new Set(['kind', 'from', 'to']);
 const BLOCK_KEYS: ReadonlySet<string> = new Set(['kind', 'path']);
+const SECTION_KEYS: ReadonlySet<string> = new Set(['kind', 'sectionPath', 'anchorPath', 'heading']);
 const CANDIDATE_KEYS: ReadonlySet<string> = new Set([
   'assetId',
   'url',
@@ -196,6 +234,7 @@ const CONTEXT_KEYS: ReadonlySet<string> = new Set([
   'revision',
   'document',
   'target',
+  'sectionTarget',
   'selectedText',
   'nearbyText',
   'documentTitle',
@@ -252,6 +291,13 @@ export function isValidImageInsertionTarget(value: unknown): value is ImageInser
       return hasOnlyKeys(value, TEXT_SELECTION_KEYS) && isPosition(value.from) && isPosition(value.to) && value.from <= value.to;
     case 'block':
       return hasOnlyKeys(value, BLOCK_KEYS) && isBlockPath(value.path);
+    case 'section':
+      return (
+        hasOnlyKeys(value, SECTION_KEYS) &&
+        isBlockPath(value.sectionPath) &&
+        isBlockPath(value.anchorPath) &&
+        isOptionalBoundedString(value.heading, IMAGE_INSERTION_TITLE_MAX_CHARS)
+      );
     default:
       return false;
   }
@@ -281,6 +327,19 @@ export function isValidInsertImageOperation(value: unknown): value is InsertImag
   if (!isValidImageInsertionTarget(value.target)) return false;
   if (!isValidImageInsertionCandidate(value.image)) return false;
   if (value.visual !== undefined && !isValidVisualDesignIntent(value.visual)) return false;
+
+  const target = value.target;
+  const visual = value.visual as VisualDesignIntent | undefined;
+  // R4.2: the resolved role and the target kind must agree. A `section` target
+  // without a section role (or vice versa) is a mismatched operation, and a
+  // section intent may only carry the one placement the section host supports.
+  const sectionTarget = target.kind === 'section';
+  const sectionVisual = visual?.role === 'section';
+  if (sectionTarget !== sectionVisual) return false;
+  if (sectionVisual && visual?.placement !== undefined && visual.placement !== IMAGE_INSERTION_SECTION_PLACEMENT) {
+    return false;
+  }
+
   return isOptionalBoundedString(value.rationale, IMAGE_INSERTION_RATIONALE_MAX_CHARS);
 }
 
@@ -297,6 +356,12 @@ export function isValidImageInsertionContext(value: unknown): value is ImageInse
   }
   if (!isValidCanonicalDoc(value.document)) return false;
   if (!isValidImageInsertionTarget(value.target)) return false;
+  if (
+    value.sectionTarget !== undefined &&
+    !(isValidImageInsertionTarget(value.sectionTarget) && value.sectionTarget.kind === 'section')
+  ) {
+    return false;
+  }
   if (!isOptionalBoundedString(value.selectedText, IMAGE_INSERTION_MAX_TEXT_CHARS)) return false;
   if (!isBoundedString(value.nearbyText, IMAGE_INSERTION_NEARBY_MAX_CHARS)) return false;
   if (!isOptionalBoundedString(value.documentTitle, IMAGE_INSERTION_TITLE_MAX_CHARS)) return false;

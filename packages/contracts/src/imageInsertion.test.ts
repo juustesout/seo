@@ -82,6 +82,14 @@ describe('target validation', () => {
     expect(isValidImageInsertionTarget({ kind: 'block', path: [0, 1] })).toBe(true);
   });
 
+  it('accepts a section target with bounded paths and heading', () => {
+    expect(isValidImageInsertionTarget({ kind: 'section', sectionPath: [0], anchorPath: [0] })).toBe(true);
+    expect(isValidImageInsertionTarget({ kind: 'section', sectionPath: [2], anchorPath: [2, 0], heading: 'Solar energy' })).toBe(true);
+    expect(isValidImageInsertionTarget({ kind: 'section', sectionPath: [], anchorPath: [0] })).toBe(false);
+    expect(isValidImageInsertionTarget({ kind: 'section', sectionPath: [0], anchorPath: [0], heading: 'x'.repeat(301) })).toBe(false);
+    expect(isValidImageInsertionTarget({ kind: 'section', sectionPath: [0] })).toBe(false);
+  });
+
   it('rejects malformed, reversed and unbounded targets', () => {
     expect(isValidImageInsertionTarget({ kind: 'cursor', position: -1 })).toBe(false);
     expect(isValidImageInsertionTarget({ kind: 'cursor' })).toBe(false);
@@ -112,6 +120,32 @@ describe('candidate and operation validation', () => {
     expect(isValidInsertImageOperation({ ...base, visual: { role: 'cover', intent: 'explain' } })).toBe(false);
     expect(isValidInsertImageOperation({ ...base, visual: { role: 'inline', intent: 'inspire' } })).toBe(false);
   });
+
+  it('requires a section target and a section role to agree (R4.2)', () => {
+    const image = { assetId: 'm_solar', url: 'https://x.test/a.png', alt: 'Solar' };
+    const sectionTarget = { kind: 'section', sectionPath: [1], anchorPath: [1], heading: 'Solar energy' };
+    const sectionVisual = { role: 'section', intent: 'reinforce', placement: 'contained' };
+
+    expect(isValidInsertImageOperation({ type: 'insert_image', target: sectionTarget, image, visual: sectionVisual })).toBe(true);
+    // A section target without a section role is a mismatched operation.
+    expect(isValidInsertImageOperation({ type: 'insert_image', target: sectionTarget, image })).toBe(false);
+    expect(isValidInsertImageOperation({ type: 'insert_image', target: sectionTarget, image, visual: { role: 'inline', intent: 'reinforce' } })).toBe(false);
+    // A section role without a section target is a mismatched operation.
+    expect(isValidInsertImageOperation({ type: 'insert_image', target: { kind: 'cursor', position: 2 }, image, visual: sectionVisual })).toBe(false);
+  });
+
+  it('rejects a section intent with an unsupported placement (R4.2)', () => {
+    const image = { assetId: 'm_solar', url: 'https://x.test/a.png', alt: 'Solar' };
+    const sectionTarget = { kind: 'section', sectionPath: [1], anchorPath: [1] };
+    expect(
+      isValidInsertImageOperation({
+        type: 'insert_image',
+        target: sectionTarget,
+        image,
+        visual: { role: 'section', intent: 'reinforce', placement: 'full_bleed' },
+      }),
+    ).toBe(false);
+  });
 });
 
 describe('context validation', () => {
@@ -126,6 +160,14 @@ describe('context validation', () => {
   it('accepts an optional bounded target node type and rejects an unbounded one', () => {
     expect(isValidImageInsertionContext(context({ targetNodeType: 'compositionHero' }))).toBe(true);
     expect(isValidImageInsertionContext({ ...context(), targetNodeType: 'x'.repeat(101) })).toBe(false);
+  });
+
+  it('accepts a section hint alongside the real caret target (R4.2)', () => {
+    const withSection = { ...context(), sectionTarget: { kind: 'section', sectionPath: [1], anchorPath: [1], heading: 'Solar energy' } };
+    expect(isValidImageInsertionContext(withSection)).toBe(true);
+    // The hint must itself be a section target, never some other location kind.
+    expect(isValidImageInsertionContext({ ...context(), sectionTarget: { kind: 'cursor', position: 1 } })).toBe(false);
+    expect(isValidImageInsertionContext({ ...context(), sectionTarget: { kind: 'section', sectionPath: [] } })).toBe(false);
   });
 });
 

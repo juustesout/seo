@@ -51,7 +51,7 @@ export type VisualIntentResolution =
 /** Context the resolver may read. A structural subset of the transmitted context. */
 export type VisualIntentContext = Pick<
   ImageInsertionContext,
-  'target' | 'targetNodeType' | 'selectedText' | 'nearbyText' | 'documentTitle' | 'sectionHeading' | 'language'
+  'targetNodeType' | 'selectedText' | 'nearbyText' | 'documentTitle' | 'sectionHeading' | 'language'
 >;
 
 interface RoleSignal {
@@ -76,6 +76,14 @@ const ROLE_SIGNALS: readonly RoleSignal[] = [
   { role: 'section', pattern: /\bsectie\b|\bsection\b|sectieafbeelding|ondersteunende afbeelding/ },
   { role: 'inline', pattern: /\binline\b|in de (lopende )?tekst/ },
 ];
+
+/**
+ * Explicit plural image nouns and multi-quantity words. R4.2 can place one image
+ * per request, so a request that clearly asks for several is clarified rather
+ * than silently satisfied with one. Localized (Dutch + English).
+ */
+const PLURAL_IMAGE_RE = /\b(beelden|afbeeldingen|foto's|fotos|illustraties|images|pictures|photos)\b/;
+const MULTI_QUANTITY_RE = /\b(meerdere|multiple|several|twee|two|drie|three|gallerie|gallery)\b/;
 
 interface IntentSignal {
   intent: VisualIntent;
@@ -166,12 +174,32 @@ export function resolveVisualDesignIntent(instruction: string, context: VisualIn
   if (text.length === 0) return { status: 'unsupported', reason: 'empty_instruction' };
 
   const matchedRoles = ROLE_SIGNALS.filter((signal) => signal.pattern.test(text)).map((signal) => signal.role);
+  // `section` can be a location word ("...aan deze sectie") rather than the
+  // requested role. When exactly one other explicit role is named, that role
+  // wins; only genuinely competing roles force a clarification.
+  const nonSectionRoles = [...new Set(matchedRoles.filter((role) => role !== 'section'))];
+  const roles = nonSectionRoles.length === 1 ? nonSectionRoles : matchedRoles;
 
-  if (matchedRoles.length > 1) {
-    const candidates = matchedRoles.map((role) =>
+  // R4.2 can place one image per request. A clearly plural/multi request is
+  // clarified instead of silently resolved to a single image.
+  const pluralImage = PLURAL_IMAGE_RE.test(text);
+  const multiQuantity = MULTI_QUANTITY_RE.test(text);
+  if (pluralImage || (multiQuantity && (isImageInsertionInstruction(instruction) || roles.length > 0))) {
+    const candidates = (roles.length > 0 ? roles : (['section', 'inline'] as const)).map((role) =>
       buildIntent(role, resolveIntentWord(text, role), VISUAL_ROLE_DEFAULT_PLACEMENT[role], context, instruction),
     );
-    const names = matchedRoles.join(' or ');
+    return {
+      status: 'needs_clarification',
+      candidates,
+      question: 'I can add one image at a time. Which single image should I add here?',
+    };
+  }
+
+  if (roles.length > 1) {
+    const candidates = roles.map((role) =>
+      buildIntent(role, resolveIntentWord(text, role), VISUAL_ROLE_DEFAULT_PLACEMENT[role], context, instruction),
+    );
+    const names = roles.join(' or ');
     return {
       status: 'needs_clarification',
       candidates,
@@ -180,8 +208,8 @@ export function resolveVisualDesignIntent(instruction: string, context: VisualIn
   }
 
   let role: VisualAssetRole;
-  if (matchedRoles.length === 1) {
-    role = matchedRoles[0]!;
+  if (roles.length === 1) {
+    role = roles[0]!;
   } else {
     const hinted = visualRoleFromNodeType(context.targetNodeType);
     if (hinted) {

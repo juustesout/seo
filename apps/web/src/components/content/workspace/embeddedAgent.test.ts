@@ -295,3 +295,51 @@ describe('embeddedAgent visual intent (R4.1)', () => {
     ).toMatchObject({ kind: 'unsupported' });
   });
 });
+
+describe('embeddedAgent section visuals (R4.2)', () => {
+  it('asks the user to anchor the request when no section is found', () => {
+    expect(
+      embeddedAgentOutcomeFromError(new ApiRequestError('section_target_unresolved', 'no heading', 422)),
+    ).toEqual({
+      kind: 'clarification',
+      message: "I couldn't find a section heading here. Put the cursor under a section heading and try again.",
+    });
+  });
+
+  it('reports an already-imaged section as a neutral note, not a failure', () => {
+    expect(
+      embeddedAgentOutcomeFromError(new ApiRequestError('section_image_already_present', 'has image', 422)),
+    ).toEqual({
+      kind: 'empty',
+      message: 'This section already has an image. Remove or replace it first, then ask again.',
+    });
+  });
+
+  it('maps an unsupported section placement to product language', () => {
+    const outcome = embeddedAgentOutcomeFromRun(
+      run({
+        status: 'failed',
+        error: { code: 'visual_placement_unsupported', message: 'full_bleed unsupported', retryable: false },
+      }),
+    );
+    expect(outcome.kind).toBe('unsupported');
+    expect(outcome.message).toContain('contained');
+    expect(outcome.message).not.toContain('full_bleed');
+  });
+
+  it('describes a section candidate as anchored after the heading', () => {
+    const sectionInsertion: InsertImageOperation = {
+      ...INSERTION,
+      target: { kind: 'section', sectionPath: [1], anchorPath: [1], heading: 'Solar energy' },
+      visual: { role: 'section', intent: 'reinforce', placement: 'contained' },
+    };
+    const outcome = embeddedAgentOutcomeFromRun(
+      run({
+        status: 'succeeded',
+        result: { version: 1, baseRevision: 'rev1:abc', document: { version: 1, blocks: [] }, insertion: sectionInsertion },
+      }),
+    );
+    expect(outcome).toMatchObject({ kind: 'insertion', operation: sectionInsertion });
+    expect(outcome.message).toContain('section');
+  });
+});

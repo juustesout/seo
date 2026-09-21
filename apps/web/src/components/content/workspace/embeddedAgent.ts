@@ -81,6 +81,10 @@ const UNAVAILABLE_CODE_RE = /_unavailable$/;
 const UNAVAILABLE_MESSAGE = "This action isn't available yet.";
 const NO_SUITABLE_IMAGE_MESSAGE = "I couldn't find a suitable image for this section.";
 const STALE_IMAGE_CONTEXT_MESSAGE = 'The document changed while I was finding the image. Please run the request again.';
+/** R4.2: the section role could not be anchored to a heading. */
+const SECTION_TARGET_UNRESOLVED_MESSAGE =
+  "I couldn't find a section heading here. Put the cursor under a section heading and try again.";
+const SECTION_IMAGE_PRESENT_MESSAGE = 'This section already has an image. Remove or replace it first, then ask again.';
 
 /** R4.1 product copy for the typed visual-intent outcomes. */
 const VISUAL_ROLE_UNSUPPORTED_MESSAGE =
@@ -89,6 +93,12 @@ const VISUAL_CLARIFICATION_MESSAGE =
   'What kind of visual do you want here: an inline image, a section image or an illustration?';
 const VISUAL_UNSUPPORTED_MESSAGE =
   "I couldn't tell what visual you want here. Try naming it, for example an illustration or a background image.";
+const VISUAL_PLACEMENT_UNSUPPORTED_MESSAGE =
+  "That placement isn't supported here yet. I can add a contained image inside the section.";
+
+/** Shown when the user asked for an image but there is no reliable insertion point. */
+export const IMAGE_INSERTION_CLARIFICATION_MESSAGE =
+  'Where should I place the image? Put the cursor where you want it, or select a paragraph.';
 
 /** Human-readable role labels the inline candidate can show. */
 export const VISUAL_ROLE_LABELS: Readonly<Record<VisualAssetRole, string>> = {
@@ -138,29 +148,33 @@ function visualIntentMessage(code: string | null | undefined): EmbeddedAgentOutc
       return { kind: 'clarification', message: VISUAL_CLARIFICATION_MESSAGE };
     case 'visual_intent_unsupported':
       return { kind: 'unsupported', message: VISUAL_UNSUPPORTED_MESSAGE };
+    case 'visual_placement_unsupported':
+      return { kind: 'unsupported', message: VISUAL_PLACEMENT_UNSUPPORTED_MESSAGE };
     default:
       return null;
   }
 }
 
-/** Shown when the user asked for an image but there is no reliable insertion point. */
-export const IMAGE_INSERTION_CLARIFICATION_MESSAGE =
-  'Where should I place the image? Put the cursor where you want it, or select a paragraph.';
-
 /**
- * Product-language message for the typed image-insertion error codes, or null
+ * Product-language outcome for the typed image-insertion error codes, or null
  * when the code is not one of them. Keeps the visible copy understandable while
- * the code stays available internally.
+ * the code stays available internally. R4.2 adds the section outcomes: a missing
+ * section is a clarification (the user repositions), an existing image is a
+ * neutral note rather than a failure.
  */
-function imageInsertionMessage(code: string | null | undefined): string | null {
+function imageInsertionOutcome(code: string | null | undefined): EmbeddedAgentOutcome | null {
   switch (code) {
     case 'image_insertion_no_candidate':
-      return NO_SUITABLE_IMAGE_MESSAGE;
+      return { kind: 'empty', message: NO_SUITABLE_IMAGE_MESSAGE };
     case 'stale_editor_context':
-      return STALE_IMAGE_CONTEXT_MESSAGE;
+      return { kind: 'error', message: STALE_IMAGE_CONTEXT_MESSAGE, canRetry: true };
     case 'image_insertion_requires_saved_document':
     case 'designer_insertion_requires_editor':
-      return 'Save the document before asking for an image.';
+      return { kind: 'error', message: 'Save the document before asking for an image.', canRetry: false };
+    case 'section_target_unresolved':
+      return { kind: 'clarification', message: SECTION_TARGET_UNRESOLVED_MESSAGE };
+    case 'section_image_already_present':
+      return { kind: 'empty', message: SECTION_IMAGE_PRESENT_MESSAGE };
     default:
       return null;
   }
@@ -259,19 +273,18 @@ export function embeddedAgentOutcomeFromRun(run: AgentRun): EmbeddedAgentOutcome
     if (isValidInsertImageOperation(insertion)) {
       return {
         kind: 'insertion',
-        message: 'I found a suitable image. Insert it where you asked?',
+        message:
+          insertion.visual?.role === 'section'
+            ? 'I found a suitable image for this section. Insert it after the heading?'
+            : 'I found a suitable image. Insert it where you asked?',
         operation: insertion,
       };
     }
     return { kind: 'completed', message: completedMessage(run) };
   }
   const error = run.error;
-  const insertionMessage = imageInsertionMessage(error?.code);
-  if (insertionMessage) {
-    return error?.code === 'image_insertion_no_candidate'
-      ? { kind: 'empty', message: insertionMessage }
-      : { kind: 'error', message: insertionMessage, canRetry: error?.code === 'stale_editor_context' };
-  }
+  const insertionOutcome = imageInsertionOutcome(error?.code);
+  if (insertionOutcome) return insertionOutcome;
   const visualOutcome = visualIntentMessage(error?.code);
   if (visualOutcome) return visualOutcome;
   if (error && UNAVAILABLE_CODE_RE.test(error.code)) {
@@ -291,12 +304,8 @@ export function embeddedAgentOutcomeFromRun(run: AgentRun): EmbeddedAgentOutcome
  */
 export function embeddedAgentOutcomeFromError(error: unknown): EmbeddedAgentOutcome {
   if (error instanceof ApiRequestError) {
-    const insertionMessage = imageInsertionMessage(error.code);
-    if (insertionMessage) {
-      return error.code === 'image_insertion_no_candidate'
-        ? { kind: 'empty', message: insertionMessage }
-        : { kind: 'error', message: insertionMessage, canRetry: error.code === 'stale_editor_context' };
-    }
+    const insertionOutcome = imageInsertionOutcome(error.code);
+    if (insertionOutcome) return insertionOutcome;
     const visualOutcome = visualIntentMessage(error.code);
     if (visualOutcome) return visualOutcome;
     if (error.status === 401 || error.status === 403) {
