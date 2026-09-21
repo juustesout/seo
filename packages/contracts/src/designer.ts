@@ -33,6 +33,10 @@ import {
 } from './designerRevision.js';
 import { isValidVisualDesignOperation, isValidVisualDesignProposal, type VisualDesignOperation, type VisualDesignProposal } from './visualDesign.js';
 import {
+  isValidInsertImageOperation,
+  type InsertImageOperation,
+} from './imageInsertion.js';
+import {
   isValidVisualAssetSelectionRequest,
   type VisualAssetSelectionRequest,
 } from './visualAssetSelection.js';
@@ -299,6 +303,14 @@ export interface DesignerProposal {
    * single source of truth and apply depends only on it.
    */
   visual?: VisualDesignProposal;
+  /**
+   * R3.1: a suggested image insertion resolved from the editor's context. When
+   * present, `document` is the base document the insertion was resolved against,
+   * NOT a post-apply document: the editor applies the operation as its own
+   * undoable transaction and `apply` refuses such a proposal so it can never
+   * masquerade as an applied change.
+   */
+  insertion?: InsertImageOperation;
 }
 
 // ---------------------------------------------------------------------------
@@ -370,7 +382,7 @@ export function stableJsonStringify(value: unknown): string {
 
 const BRIEF_KEYS: ReadonlySet<string> = new Set(['goal', 'format', 'audience', 'topic', 'constraints']);
 const PLAN_KEYS: ReadonlySet<string> = new Set(['version', 'brief', 'steps']);
-const PROPOSAL_KEYS: ReadonlySet<string> = new Set(['version', 'baseRevision', 'document', 'plan', 'review', 'visual']);
+const PROPOSAL_KEYS: ReadonlySet<string> = new Set(['version', 'baseRevision', 'document', 'plan', 'review', 'visual', 'insertion']);
 const REVIEW_KEYS: ReadonlySet<string> = new Set(['ok', 'errors', 'warnings', 'score']);
 const REVIEW_ISSUE_KEYS: ReadonlySet<string> = new Set(['code', 'message', 'step']);
 const STEP_TASK_KEYS: ReadonlySet<string> = new Set(['kind', 'task']);
@@ -567,6 +579,7 @@ export function isValidDesignerProposal(value: unknown): value is DesignerPropos
   if (value.plan !== undefined && !isValidDesignerPlan(value.plan)) return false;
   if (value.review !== undefined && !isValidDesignerReview(value.review)) return false;
   if (value.visual !== undefined && !isValidVisualDesignProposal(value.visual)) return false;
+  if (value.insertion !== undefined && !isValidInsertImageOperation(value.insertion)) return false;
   return true;
 }
 

@@ -19,7 +19,12 @@
  * contract; the context is validated locally instead (see the hook). This module
  * is pure: no React, no network.
  */
-import { type AgentRun } from '@seo/contracts';
+import {
+  isValidInsertImageOperation,
+  type AgentRun,
+  type ImageInsertionContext,
+  type InsertImageOperation,
+} from '@seo/contracts';
 import { ApiRequestError } from '../../../lib/api';
 import type { EditorSelectionSnapshot } from '../editor/editorContext';
 
@@ -32,6 +37,8 @@ import type { EditorSelectionSnapshot } from '../editor/editorContext';
 export type EmbeddedAgentOutcome =
   | { kind: 'working'; message: string }
   | { kind: 'completed'; message: string }
+  | { kind: 'insertion'; message: string; operation: InsertImageOperation }
+  | { kind: 'empty'; message: string }
   | { kind: 'clarification'; message: string }
   | { kind: 'unsupported'; message: string }
   | { kind: 'error'; message: string; canRetry: boolean };
@@ -41,6 +48,8 @@ export type EmbeddedAgentOutcome =
  * required: a durable run is queued/running before it is terminal, and that must
  * be shown as progress without exposing run ids or state-machine terminology.
  * `clarification` is likewise reserved for a backend follow-up question.
+ * `insertion` and `applied` are the R3.1 image path: a reviewable candidate, then
+ * the single confirmed insertion into the live editor.
  */
 export type EmbeddedAgentState =
   | { status: 'closed' }
@@ -48,6 +57,9 @@ export type EmbeddedAgentState =
   | { status: 'submitting'; instruction: string }
   | { status: 'working'; instruction: string; message: string }
   | { status: 'completed'; instruction: string; message: string }
+  | { status: 'insertion'; instruction: string; message: string; operation: InsertImageOperation }
+  | { status: 'applied'; instruction: string; message: string }
+  | { status: 'empty'; instruction: string; message: string }
   | { status: 'clarification'; instruction: string; message: string }
   | { status: 'unsupported'; instruction: string; message: string }
   | { status: 'error'; instruction: string; message: string; canRetry: boolean };
@@ -65,6 +77,31 @@ const UNAVAILABLE_CODE_RE = /_unavailable$/;
  * classifiers branch on status and code), only the copy is product-facing.
  */
 const UNAVAILABLE_MESSAGE = "This action isn't available yet.";
+const NO_SUITABLE_IMAGE_MESSAGE = "I couldn't find a suitable image for this section.";
+const STALE_IMAGE_CONTEXT_MESSAGE = 'The document changed while I was finding the image. Please run the request again.';
+
+/** Shown when the user asked for an image but there is no reliable insertion point. */
+export const IMAGE_INSERTION_CLARIFICATION_MESSAGE =
+  'Where should I place the image? Put the cursor where you want it, or select a paragraph.';
+
+/**
+ * Product-language message for the typed image-insertion error codes, or null
+ * when the code is not one of them. Keeps the visible copy understandable while
+ * the code stays available internally.
+ */
+function imageInsertionMessage(code: string | null | undefined): string | null {
+  switch (code) {
+    case 'image_insertion_no_candidate':
+      return NO_SUITABLE_IMAGE_MESSAGE;
+    case 'stale_editor_context':
+      return STALE_IMAGE_CONTEXT_MESSAGE;
+    case 'image_insertion_requires_saved_document':
+    case 'designer_insertion_requires_editor':
+      return 'Save the document before asking for an image.';
+    default:
+      return null;
+  }
+}
 
 export interface EmbeddedAgentSubmissionInput {
   projectId: string;
@@ -73,6 +110,11 @@ export interface EmbeddedAgentSubmissionInput {
   /** Local revision; used as `base_revision` only for a creation (`contentId` null). */
   revision: string | null;
   instruction: string;
+  /**
+   * The validated R3.1 image-insertion context. Only sent for an existing
+   * document; the contract requires `content_id` alongside it.
+   */
+  imageContext?: ImageInsertionContext | null;
 }
 
 export interface EmbeddedAgentSubmission {
@@ -93,7 +135,15 @@ export function embeddedAgentSubmission(
   if (!instruction || !input.projectId) return null;
   const path = `/projects/${input.projectId}/designer/runs`;
   if (input.contentId) {
-    return { path, body: { mode: 'intent', instruction, content_id: input.contentId } };
+    return {
+      path,
+      body: {
+        mode: 'intent',
+        instruction,
+        content_id: input.contentId,
+        ...(input.imageContext ? { editor_context: input.imageContext } : {}),
+      },
+    };
   }
   if (!input.revision) return null;
   return { path, body: { mode: 'intent', instruction, base_revision: input.revision } };
@@ -142,9 +192,23 @@ export function embeddedAgentOutcomeFromRun(run: AgentRun): EmbeddedAgentOutcome
     return { kind: 'working', message: 'The Agent is working on your request…' };
   }
   if (run.status === 'succeeded') {
+    const insertion = run.result?.insertion;
+    if (isValidInsertImageOperation(insertion)) {
+      return {
+        kind: 'insertion',
+        message: 'I found a suitable image. Insert it where you asked?',
+        operation: insertion,
+      };
+    }
     return { kind: 'completed', message: completedMessage(run) };
   }
   const error = run.error;
+  const insertionMessage = imageInsertionMessage(error?.code);
+  if (insertionMessage) {
+    return error?.code === 'image_insertion_no_candidate'
+      ? { kind: 'empty', message: insertionMessage }
+      : { kind: 'error', message: insertionMessage, canRetry: error?.code === 'stale_editor_context' };
+  }
   if (error && UNAVAILABLE_CODE_RE.test(error.code)) {
     return { kind: 'unsupported', message: UNAVAILABLE_MESSAGE };
   }
@@ -162,6 +226,12 @@ export function embeddedAgentOutcomeFromRun(run: AgentRun): EmbeddedAgentOutcome
  */
 export function embeddedAgentOutcomeFromError(error: unknown): EmbeddedAgentOutcome {
   if (error instanceof ApiRequestError) {
+    const insertionMessage = imageInsertionMessage(error.code);
+    if (insertionMessage) {
+      return error.code === 'image_insertion_no_candidate'
+        ? { kind: 'empty', message: insertionMessage }
+        : { kind: 'error', message: insertionMessage, canRetry: error.code === 'stale_editor_context' };
+    }
     if (error.status === 401 || error.status === 403) {
       return { kind: 'error', message: "You don't have access to ask the Agent here.", canRetry: false };
     }

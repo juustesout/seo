@@ -19,6 +19,8 @@ import {
   canonicalDocumentToEditorDocument,
   contentRevisionOf,
   isValidCanonicalDoc,
+  type ImageInsertionContext,
+  type InsertImageOperation,
   type TipDoc,
 } from '@seo/contracts';
 import {
@@ -29,6 +31,12 @@ import {
   type ExternalEditorDocumentInput,
   type ExternalEditorDocumentResult,
 } from './editorContext';
+import {
+  applyImageInsertionOperation,
+  imageInsertionContextFromSnapshot,
+  readEditorImageSemantics,
+  type ImageInsertionApplyResult,
+} from './imageInsertion';
 import { readSelectionSnapshot } from './selection';
 
 export interface EditorContextValue {
@@ -39,6 +47,17 @@ export interface EditorContextValue {
    * stale revision and documents that cannot be represented in the editor.
    */
   applyExternalDocument: (input: ExternalEditorDocumentInput) => ExternalEditorDocumentResult;
+  /**
+   * Builds the bounded R3.1 image-insertion context from the live editor, or
+   * null when the document is not ready/persisted/clean or has no reliable
+   * target. Backend-facing: never contains a Tiptap object.
+   */
+  buildImageInsertionContext: () => ImageInsertionContext | null;
+  /**
+   * Applies a returned `insert_image` operation as one undoable editor
+   * transaction, guarded by the revision the request was generated against.
+   */
+  applyImageInsertion: (operation: InsertImageOperation, expectedRevision: string) => ImageInsertionApplyResult;
 }
 
 const EditorContext = createContext<EditorContextValue | null>(null);
@@ -109,9 +128,24 @@ export function EditorContextProvider({
     [ready, editor, doc],
   );
 
+  const buildImageInsertionContext = useCallback((): ImageInsertionContext | null => {
+    const semantics = readEditorImageSemantics(editor);
+    return imageInsertionContextFromSnapshot(snapshot, semantics);
+  }, [editor, snapshot]);
+
+  const applyImageInsertion = useCallback(
+    (operation: InsertImageOperation, expectedRevision: string): ImageInsertionApplyResult => {
+      if (!ready) return { ok: false, reason: 'not-ready' };
+      if (!editor || editor.isDestroyed) return { ok: false, reason: 'no-editor' };
+      if (contentRevisionOf(doc) !== expectedRevision) return { ok: false, reason: 'stale-revision' };
+      return applyImageInsertionOperation(editor, operation);
+    },
+    [ready, editor, doc],
+  );
+
   const value = useMemo<EditorContextValue>(
-    () => ({ snapshot, applyExternalDocument }),
-    [snapshot, applyExternalDocument],
+    () => ({ snapshot, applyExternalDocument, buildImageInsertionContext, applyImageInsertion }),
+    [snapshot, applyExternalDocument, buildImageInsertionContext, applyImageInsertion],
   );
 
   return <EditorContext.Provider value={value}>{children}</EditorContext.Provider>;

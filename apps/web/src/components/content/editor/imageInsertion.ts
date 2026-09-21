@@ -1,0 +1,229 @@
+/**
+ * Editor-native image insertion helpers (R3.1).
+ *
+ * Pure, deterministic glue between the R1.2 editor context and the R3.1
+ * `insert_image` contract. It builds the bounded context the backend reasons
+ * over, re-validates the returned location against the live document, and
+ * applies the insertion as one undoable editor transaction through the existing
+ * `insertMedia` command (the same command the media picker uses).
+ *
+ * Deliberate boundaries:
+ *   - The location is a per-snapshot hint; it is re-validated here before any
+ *     mutation. An unresolvable target fails honestly instead of inserting at an
+ *     arbitrary position.
+ *   - Only a library-backed image (`assetId`) is insertable: the image node's
+ *     canonical value is the media reference, so a candidate without one is
+ *     refused rather than rendered as a broken image.
+ *   - This module reads the live editor only for semantics/location; it never
+ *     owns document state and never persists.
+ */
+import type { Editor } from '@tiptap/react';
+import type { Node as PmNode } from '@tiptap/pm/model';
+import {
+  IMAGE_INSERTION_LANGUAGE_MAX_CHARS,
+  IMAGE_INSERTION_MAX_TEXT_CHARS,
+  IMAGE_INSERTION_NEARBY_MAX_CHARS,
+  IMAGE_INSERTION_TITLE_MAX_CHARS,
+  isValidImageInsertionContext,
+  type ImageInsertionContext,
+  type ImageInsertionTarget,
+  type InsertImageOperation,
+} from '@seo/contracts';
+import type { EditorContextSnapshot, EditorSelectionSnapshot } from './editorContext';
+
+/** The semantic context derived from the live editor for one insertion. */
+export interface EditorImageSemantics {
+  selectedText?: string;
+  nearbyText: string;
+  sectionHeading?: string;
+}
+
+/** Why an insertion could not be applied. Product copy maps these, they are not shown raw. */
+export type ImageInsertionApplyReason =
+  | 'no-editor'
+  | 'not-ready'
+  | 'stale-revision'
+  | 'unresolved-target'
+  | 'missing-asset'
+  | 'apply-failed';
+
+export type ImageInsertionApplyResult = { ok: true } | { ok: false; reason: ImageInsertionApplyReason };
+
+function normalize(value: string): string {
+  return value.replace(/\s+/g, ' ').trim();
+}
+
+function clamp(value: string, max: number): string {
+  return normalize(value).slice(0, max);
+}
+
+/**
+ * Maps the normalized selection onto an insertion target, or null when there is
+ * no reliable point. A selected image is deliberately not a target: replacement
+ * is out of scope for R3.1 and must not silently become a duplicate insertion.
+ */
+export function imageInsertionTargetFromSelection(selection: EditorSelectionSnapshot): ImageInsertionTarget | null {
+  if (selection.type === 'cursor' && typeof selection.from === 'number') {
+    return { kind: 'cursor', position: selection.from };
+  }
+  if (
+    selection.type === 'text' &&
+    typeof selection.from === 'number' &&
+    typeof selection.to === 'number' &&
+    selection.from < selection.to
+  ) {
+    return { kind: 'text-selection', from: selection.from, to: selection.to };
+  }
+  if (
+    selection.type === 'node' &&
+    selection.nodeType !== 'image' &&
+    selection.nodePath &&
+    selection.nodePath.length > 0
+  ) {
+    return { kind: 'block', path: [...selection.nodePath] };
+  }
+  return null;
+}
+
+/**
+ * Reads bounded semantic context from the live editor: the selected text, the
+ * surrounding copy (previous/current/next block) and the nearest preceding
+ * heading. It never reads the whole document body and never invents context.
+ */
+export function readEditorImageSemantics(editor: Editor | null): EditorImageSemantics {
+  if (!editor || editor.isDestroyed) return { nearbyText: '' };
+  const { doc, selection } = editor.state;
+
+  const selectedText = selection.empty
+    ? undefined
+    : doc.textBetween(selection.from, selection.to, ' ', ' ').replace(/\s+/g, ' ').trim().slice(0, IMAGE_INSERTION_MAX_TEXT_CHARS);
+
+  const topIndex = Math.max(0, Math.min(doc.resolve(selection.from).index(0), doc.childCount - 1));
+  const around: Array<PmNode | null> = [
+    topIndex > 0 ? doc.child(topIndex - 1) : null,
+    doc.childCount > 0 ? doc.child(topIndex) : null,
+    topIndex + 1 < doc.childCount ? doc.child(topIndex + 1) : null,
+  ];
+  const nearbyText = around
+    .filter((node): node is PmNode => node !== null && !node.isLeaf && normalize(node.textContent).length > 0)
+    .map((node) => normalize(node.textContent))
+    .join(' ')
+    .slice(0, IMAGE_INSERTION_NEARBY_MAX_CHARS);
+
+  let sectionHeading: string | undefined;
+  doc.nodesBetween(0, selection.from, (node) => {
+    if (node.type.name === 'heading' && normalize(node.textContent).length > 0) {
+      sectionHeading = normalize(node.textContent).slice(0, IMAGE_INSERTION_TITLE_MAX_CHARS);
+    }
+  });
+
+  return {
+    ...(selectedText ? { selectedText } : {}),
+    nearbyText,
+    ...(sectionHeading ? { sectionHeading } : {}),
+  };
+}
+
+/**
+ * Builds the bounded insert context from an editor snapshot. Returns null unless
+ * the document is ready, persisted, representable, clean and has a reliable
+ * target - the caller turns null into a clarification instead of guessing.
+ */
+export function imageInsertionContextFromSnapshot(
+  snapshot: EditorContextSnapshot,
+  semantics: EditorImageSemantics,
+): ImageInsertionContext | null {
+  if (!snapshot.ready || snapshot.contentId === null) return null;
+  if (snapshot.document.unrepresentable || snapshot.document.dirty) return null;
+  const canonical = snapshot.document.canonical;
+  const revision = snapshot.document.revision;
+  if (!canonical || !revision) return null;
+
+  const target = imageInsertionTargetFromSelection(snapshot.selection);
+  if (!target) return null;
+
+  const meta = canonical.meta ?? {};
+  const context: ImageInsertionContext = {
+    revision,
+    document: canonical,
+    target,
+    ...(semantics.selectedText ? { selectedText: clamp(semantics.selectedText, IMAGE_INSERTION_MAX_TEXT_CHARS) } : {}),
+    nearbyText: clamp(semantics.nearbyText, IMAGE_INSERTION_NEARBY_MAX_CHARS),
+    ...(meta.title ? { documentTitle: clamp(meta.title, IMAGE_INSERTION_TITLE_MAX_CHARS) } : {}),
+    ...(semantics.sectionHeading ? { sectionHeading: clamp(semantics.sectionHeading, IMAGE_INSERTION_TITLE_MAX_CHARS) } : {}),
+    ...(meta.language ? { language: clamp(meta.language, IMAGE_INSERTION_LANGUAGE_MAX_CHARS) } : {}),
+  };
+  return isValidImageInsertionContext(context) ? context : null;
+}
+
+/** Walks a structural index path to the position immediately before its node. */
+function positionBeforePath(doc: PmNode, path: readonly number[]): number | null {
+  let node: PmNode = doc;
+  let pos = 0;
+  for (const index of path) {
+    if (!Number.isInteger(index) || index < 0 || index >= node.childCount) return null;
+    for (let i = 0; i < index; i += 1) pos += node.child(i).nodeSize;
+    node = node.child(index);
+    pos += 1;
+  }
+  return pos - 1;
+}
+
+/**
+ * Re-validates an insertion target against the live document and resolves it to
+ * an editor range. Null means the target no longer maps to a safe position, so
+ * the caller must not insert.
+ */
+export function resolveImageInsertionRange(
+  editor: Editor,
+  target: ImageInsertionTarget,
+): number | { from: number; to: number } | null {
+  const size = editor.state.doc.content.size;
+  if (target.kind === 'cursor') {
+    return Number.isInteger(target.position) && target.position >= 0 && target.position <= size ? target.position : null;
+  }
+  if (target.kind === 'text-selection') {
+    return Number.isInteger(target.from) && target.from >= 0 && target.to >= target.from && target.to <= size
+      ? { from: target.from, to: target.to }
+      : null;
+  }
+  const before = positionBeforePath(editor.state.doc, target.path);
+  if (before === null) return null;
+  const node = editor.state.doc.nodeAt(before);
+  if (!node || node.type.name === 'image') return null;
+  const inside = before + 1;
+  return inside <= size ? inside : null;
+}
+
+/**
+ * Applies an `insert_image` operation as one editor transaction. Reuses the
+ * existing `insertMedia` command, so the image lands on a valid block boundary
+ * and `undo` removes it cleanly. Returns a typed failure instead of mutating on
+ * an unresolvable target or a non-library candidate.
+ */
+export function applyImageInsertionOperation(
+  editor: Editor | null,
+  operation: InsertImageOperation,
+): ImageInsertionApplyResult {
+  if (!editor || editor.isDestroyed) return { ok: false, reason: 'no-editor' };
+  const assetId = operation.image.assetId;
+  if (!assetId) return { ok: false, reason: 'missing-asset' };
+  const range = resolveImageInsertionRange(editor, operation.target);
+  if (range === null) return { ok: false, reason: 'unresolved-target' };
+  try {
+    const applied = editor
+      .chain()
+      .focus()
+      .setTextSelection(range)
+      .insertMedia({
+        mediaId: assetId,
+        src: operation.image.url,
+        ...(operation.image.alt ? { alt: operation.image.alt } : {}),
+        ...(operation.image.caption ? { caption: operation.image.caption } : {}),
+      })
+      .run();
+    return applied ? { ok: true } : { ok: false, reason: 'apply-failed' };
+  } catch {
+    return { ok: false, reason: 'apply-failed' };
+  }
+}

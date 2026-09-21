@@ -77,6 +77,7 @@ import { compositionWriterError } from './compositionService.js';
 import { CompositionPlannerService } from './compositionPlannerService.js';
 import { ContentService } from './contentService.js';
 import { DesignerPlannerContextService } from './designerPlannerContextService.js';
+import { ImageInsertionService, imageInsertionContextOf } from './imageInsertionService.js';
 import { MediaService } from './mediaService.js';
 import { getCosmosContext } from './cosmosService.js';
 
@@ -407,6 +408,10 @@ export class DesignerService {
     if (intent.projectId !== projectId) {
       throw new ApiError(400, 'invalid_designer_intent', 'The Designer intent does not belong to this project.');
     }
+    const insertionContext = imageInsertionContextOf(intent);
+    if (insertionContext) {
+      return new ImageInsertionService(this.container).buildProposal(projectId, intent, insertionContext);
+    }
     const plan = await runDesignerPlanner(this.planner, intent);
     return this.execute(projectId, {
       plan,
@@ -426,6 +431,14 @@ export class DesignerService {
   async apply(projectId: string, contentId: string, rawProposal: unknown, userId: string) {
     if (!isValidDesignerProposal(rawProposal)) throw ApiError.badRequest('Invalid designer proposal');
     const proposal = rawProposal;
+
+    if (proposal.insertion) {
+      throw new ApiError(
+        422,
+        'designer_insertion_requires_editor',
+        'This proposal inserts an image through the editor and cannot be applied directly.',
+      );
+    }
 
     const content = new ContentService(this.container.sb);
     const current = await content.get(projectId, contentId);

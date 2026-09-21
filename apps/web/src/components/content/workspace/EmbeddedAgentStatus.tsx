@@ -1,10 +1,11 @@
 /**
- * Embedded Agent status surface (R2.1).
+ * Embedded Agent status surface (R2.1, extended R3.1).
  *
  * Renders the product-language state of one Agent interaction. It is deliberately
  * small: a progress line, a plain result line, or a recoverable error with an
- * optional retry. It never shows run ids, statuses, revisions or raw payloads,
- * and it never claims the document changed (R2.1 applies nothing).
+ * optional retry. It never shows run ids, statuses, revisions or raw payloads.
+ * R3.1 adds the inline image candidate: a compact preview with an explicit
+ * "Insert image" confirmation, never an automatic document change.
  */
 import { Button } from '@/components/ui/button';
 import type { EmbeddedAgentState } from './embeddedAgent';
@@ -12,9 +13,13 @@ import type { EmbeddedAgentState } from './embeddedAgent';
 export interface EmbeddedAgentStatusProps {
   state: EmbeddedAgentState;
   onRetry: () => void;
+  /** Confirms the current image candidate; required to render the candidate actions. */
+  onInsert?: () => void;
+  /** Dismisses the current result without changing the document. */
+  onCancel?: () => void;
 }
 
-export function EmbeddedAgentStatus({ state, onRetry }: EmbeddedAgentStatusProps) {
+export function EmbeddedAgentStatus({ state, onRetry, onInsert, onCancel }: EmbeddedAgentStatusProps) {
   if (state.status === 'closed' || state.status === 'idle') return null;
 
   if (state.status === 'submitting') {
@@ -28,6 +33,62 @@ export function EmbeddedAgentStatus({ state, onRetry }: EmbeddedAgentStatusProps
   if (state.status === 'working') {
     return (
       <p role="status" aria-live="polite" data-testid="embedded-agent-status" className="m-0 text-xs text-muted-foreground">
+        {state.message}
+      </p>
+    );
+  }
+
+  if (state.status === 'insertion') {
+    const { image } = state.operation;
+    return (
+      <div
+        role="status"
+        aria-live="polite"
+        data-testid="embedded-agent-image-candidate"
+        className="grid gap-2 rounded-md border border-border bg-muted/30 px-3 py-2 text-xs"
+      >
+        <p className="m-0 font-medium text-foreground">Suggested image</p>
+        <img
+          src={image.url}
+          alt={image.alt}
+          data-testid="embedded-agent-image-preview"
+          className="max-h-40 w-full rounded object-cover"
+        />
+        <p className="m-0 text-muted-foreground">Alt text: {image.alt || 'none'}</p>
+        {image.sourceUrl && (
+          <p className="m-0 text-muted-foreground">
+            Source:{' '}
+            <a href={image.sourceUrl} target="_blank" rel="noreferrer noopener" className="underline">
+              {image.sourceUrl}
+            </a>
+          </p>
+        )}
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            type="button"
+            size="sm"
+            onClick={onInsert}
+            disabled={!onInsert}
+            data-testid="embedded-agent-insert"
+          >
+            Insert image
+          </Button>
+          <Button type="button" size="sm" variant="ghost" onClick={onCancel}>
+            Cancel
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
+  if (state.status === 'applied') {
+    return (
+      <p
+        role="status"
+        aria-live="polite"
+        data-testid="embedded-agent-status"
+        className="m-0 rounded-md border border-success/30 bg-success/5 px-3 py-2 text-xs text-success"
+      >
         {state.message}
       </p>
     );
@@ -53,6 +114,19 @@ export function EmbeddedAgentStatus({ state, onRetry }: EmbeddedAgentStatusProps
         aria-live="polite"
         data-testid="embedded-agent-status"
         className="m-0 rounded-md border border-border bg-muted/30 px-3 py-2 text-xs text-foreground"
+      >
+        {state.message}
+      </p>
+    );
+  }
+
+  if (state.status === 'empty') {
+    return (
+      <p
+        role="status"
+        aria-live="polite"
+        data-testid="embedded-agent-status"
+        className="m-0 rounded-md border border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground"
       >
         {state.message}
       </p>

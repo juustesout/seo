@@ -1,6 +1,6 @@
 # Editor-Native Designer — Product & UX Contract (ADR Phase R0)
 
-Status: **R0 done (recon + contract); R1 done (editor shell built); R1.2 done (editor context foundation); R2.1 done (embedded agent entry surface)**. This document is the product handle for
+Status: **R0 done (recon + contract); R1 done (editor shell built); R1.2 done (editor context foundation); R2.1 done (embedded agent entry surface); R3.1 done (context-aware image insertion, `docs/context-aware-image-insertion.md`)**. This document is the product handle for
 the R-series. `docs/editor-native-designer-roadmap.md` is the guiding brief and
 stays authoritative for intent; this document turns that intent into concrete
 product rules and records what the current UI actually is.
@@ -358,7 +358,7 @@ overshadows the Editor.
 | R1 | Editor Shell & Interaction Foundation | **Done** (R1.1 recon + shell build) |
 | R1.2 | Editor Context Foundation | **Done** (`docs/editor-context-foundation.md`) |
 | R2 | Embedded Designer Agent Shell | In progress (R2.1 entry surface done, `docs/embedded-agent-entry-surface.md`) |
-| R3 | First Vertical Slice, Image Insertion | Not started |
+| R3 | First Vertical Slice, Image Insertion | **R3.1 done** (`docs/context-aware-image-insertion.md`) |
 | R4 | In-Editor Proposal, Apply & Undo | Not started |
 | R5 | Contextual Designer Actions | Not started |
 | R6 | Designer Capabilities as Native Editor Tools | Not started |
@@ -370,23 +370,23 @@ overshadows the Editor.
 
 ## 15. Handoff to the next briefing
 
-R2.1 is done: the embedded Agent entry surface is mounted through the reserved
-`InlineAssistantSlot`, bound to `useEditorContext()`, and submits an instruction
-through the existing durable Designer run endpoint. It adds no route, no selector,
-no second editor state and no document mutation. Its interaction contract,
-limitations and R3.1 seams are in `docs/embedded-agent-entry-surface.md`; the key
-limitation is that the reused endpoint accepts only `instruction` plus
-`content_id` or `base_revision`, so the canonical document and the selection are
-captured locally but not yet transmitted, and a dirty document blocks submission
-with "Save now".
+R3.1 is done: "Zet hier een passende afbeelding." now works inside the Editor. The
+embedded Agent submits the instruction plus a bounded, validated editor context
+through the existing durable Designer run endpoint; the run resolves one existing
+project media asset and returns a typed `insert_image` operation inside the normal
+proposal envelope; the Agent surface shows the candidate inline and the Editor
+applies it as one undoable change through the existing `insertMedia` command. It
+adds no route, no second editor state and no backend document write (the apply
+endpoint refuses insertion proposals). The full contract, bounds, error table and
+limitations are in `docs/context-aware-image-insertion.md`; the key limitations
+are one candidate per request (no "choose another"), no replacement of an existing
+image block, and media-library-only sourcing (no generation/search).
 
-Next deliverable: **Phase R3.1 - Embedded Designer Image Insertion**, measured
-only by the §11 definition of done. R3.1 turns "Zet hier een passende afbeelding."
-into real editorial work: interpret the instruction, resolve the insertion
-location from the editor selection context, select an image, create the image
-block, and apply the validated result through `applyExternalDocument` with
-undo/recovery. It must not fake insertion where no real capability or target
-exists.
+Next deliverable: **Phase R4 - In-Editor Proposal, Apply & Undo**, generalizing the
+R3.1 preview/apply/undo surface into a review step for non-visual Designer
+proposals, still inside the Editor and still behind the revision-guarded apply
+choke point. R3.1 stays the reference slice: one action, one understandable result,
+in product language.
 
 ---
 
@@ -396,6 +396,7 @@ exists.
 - `docs/editor-shell-recon.md` — R1.1 shell recon and the settled R1 decisions.
 - `docs/editor-context-foundation.md` — R1.2 editor context contract and report.
 - `docs/embedded-agent-entry-surface.md` — R2.1 embedded agent contract and report.
+- `docs/context-aware-image-insertion.md` — R3.1 contract and report.
 - `docs/8e6-agent-architecture.md` — the Designer/Writer/Composer backend ADR
   whose infrastructure R0 keeps and hides.
 - `docs/content-studio-roadmap.md`, `docs/w10-magic-roadmap.md` — prior

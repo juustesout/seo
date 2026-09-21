@@ -8,11 +8,13 @@
  * open, and never mutates content.
  */
 import { useState } from 'react';
-import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import type { AgentRun } from '@seo/contracts';
+import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { Editor } from '@tiptap/core';
+import type { AgentRun, InsertImageOperation } from '@seo/contracts';
 import { tiptapEmptyDoc, type TipDoc } from '@seo/contracts';
 import { EditorContextProvider } from '../editor/EditorContext';
+import { createEditorExtensions } from '../editor/extensions';
 import { EmbeddedAgentEntry } from './EmbeddedAgentEntry';
 
 const { apiMock } = vi.hoisted(() => ({ apiMock: { api: vi.fn() } }));
@@ -129,14 +131,14 @@ describe('EmbeddedAgentEntry input', () => {
     apiMock.api.mockResolvedValueOnce({ run: succeeded(), reused: false });
     render(<Harness open />);
     const input = screen.getByTestId('embedded-agent-input');
-    fireEvent.change(input, { target: { value: 'Zet hier een passende afbeelding.' } });
+    fireEvent.change(input, { target: { value: 'Maak de intro korter.' } });
     fireEvent.keyDown(input, { key: 'Enter', shiftKey: true });
     expect(apiMock.api).not.toHaveBeenCalled();
     fireEvent.keyDown(input, { key: 'Enter' });
     await waitFor(() => expect(apiMock.api).toHaveBeenCalledTimes(1));
     expect(apiMock.api).toHaveBeenCalledWith(`/projects/${PROJECT}/designer/runs`, {
       method: 'POST',
-      body: { mode: 'intent', instruction: 'Zet hier een passende afbeelding.', content_id: CONTENT },
+      body: { mode: 'intent', instruction: 'Maak de intro korter.', content_id: CONTENT },
     });
   });
 
@@ -191,7 +193,7 @@ describe('EmbeddedAgentEntry submission outcomes', () => {
       reused: false,
     });
     render(<Harness open />);
-    fireEvent.change(screen.getByTestId('embedded-agent-input'), { target: { value: 'Add an image' } });
+    fireEvent.change(screen.getByTestId('embedded-agent-input'), { target: { value: 'Add a call to action' } });
     fireEvent.click(screen.getByTestId('embedded-agent-send'));
     await waitFor(() =>
       expect(screen.getByTestId('embedded-agent-status').textContent).toContain("isn't available yet"),
@@ -265,5 +267,131 @@ describe('EmbeddedAgentStatus clarification', () => {
       />,
     );
     expect(screen.getByTestId('embedded-agent-status').textContent).toContain('Which section should change?');
+  });
+});
+
+const editors: Editor[] = [];
+afterEach(() => {
+  while (editors.length > 0) editors.pop()!.destroy();
+});
+
+const IMAGE_DOC: TipDoc = {
+  type: 'doc',
+  content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Solar panels store energy.' }] }],
+};
+
+const INSERTION: InsertImageOperation = {
+  type: 'insert_image',
+  target: { kind: 'cursor', position: 3 },
+  image: { assetId: 'm1', url: 'https://cdn.test/solar.png', alt: 'Solar panels' },
+};
+
+function imageSucceeded(): AgentRun {
+  return run({
+    status: 'succeeded',
+    completedAt: '2026-01-01T00:00:01.000Z',
+    result: { version: 1, baseRevision: 'rev1:abc', document: { version: 1, blocks: [] }, insertion: INSERTION },
+  });
+}
+
+function makeImageEditor(): Editor {
+  const editor = new Editor({ extensions: createEditorExtensions({ nodeViews: false }), content: IMAGE_DOC });
+  editors.push(editor);
+  return editor;
+}
+
+function EditorHarness({ editor, doc = IMAGE_DOC }: { editor: Editor; doc?: TipDoc }) {
+  return (
+    <EditorContextProvider projectId={PROJECT} contentId={CONTENT} ready dirty={false} doc={doc} editor={editor}>
+      <EmbeddedAgentEntry open onOpenChange={() => {}} canEdit configured onSaveNow={() => {}} pollMs={5} />
+    </EditorContextProvider>
+  );
+}
+
+describe('EmbeddedAgentEntry image insertion (R3.1)', () => {
+  it('asks where to place the image instead of guessing when there is no target', async () => {
+    render(<Harness open />);
+    fireEvent.change(screen.getByTestId('embedded-agent-input'), { target: { value: 'Zet hier een passende afbeelding.' } });
+    fireEvent.click(screen.getByTestId('embedded-agent-send'));
+    await waitFor(() =>
+      expect(screen.getByTestId('embedded-agent-status').textContent).toContain('Where should I place the image?'),
+    );
+    expect(apiMock.api).not.toHaveBeenCalled();
+  });
+
+  it('sends the editor context, previews the candidate, and inserts once at the target', async () => {
+    const editor = makeImageEditor();
+    act(() => {
+      editor.commands.setTextSelection(3);
+    });
+    apiMock.api
+      .mockResolvedValueOnce({ run: run({ status: 'queued' }), reused: false })
+      .mockResolvedValueOnce(imageSucceeded());
+
+    render(<EditorHarness editor={editor} />);
+    fireEvent.change(screen.getByTestId('embedded-agent-input'), { target: { value: 'Zet hier een passende afbeelding.' } });
+    fireEvent.click(screen.getByTestId('embedded-agent-send'));
+
+    await waitFor(() => expect(screen.getByTestId('embedded-agent-image-candidate')).toBeTruthy());
+    const body = apiMock.api.mock.calls[0]![1]!.body as Record<string, unknown>;
+    expect(body.content_id).toBe(CONTENT);
+    expect(body.editor_context).toMatchObject({ target: { kind: 'cursor', position: 3 } });
+
+    const insert = screen.getByTestId('embedded-agent-insert');
+    fireEvent.click(insert);
+    fireEvent.click(insert);
+    await waitFor(() => expect(screen.getByTestId('embedded-agent-status').textContent).toContain('Image inserted'));
+
+    const json = JSON.stringify(editor.getJSON());
+    expect(json).toContain('"type":"image"');
+    expect(json).toContain('m1');
+    expect((json.match(/"type":"image"/g) ?? []).length).toBe(1);
+
+    act(() => {
+      editor.commands.undo();
+    });
+    expect(JSON.stringify(editor.getJSON())).not.toContain('"type":"image"');
+  });
+
+  it('refuses to insert a candidate once the document revision has moved on', async () => {
+    const editor = makeImageEditor();
+    act(() => {
+      editor.commands.setTextSelection(3);
+    });
+    apiMock.api
+      .mockResolvedValueOnce({ run: run({ status: 'queued' }), reused: false })
+      .mockResolvedValueOnce(imageSucceeded());
+
+    const { rerender } = render(<EditorHarness editor={editor} />);
+    fireEvent.change(screen.getByTestId('embedded-agent-input'), { target: { value: 'Zet hier een passende afbeelding.' } });
+    fireEvent.click(screen.getByTestId('embedded-agent-send'));
+    await waitFor(() => expect(screen.getByTestId('embedded-agent-image-candidate')).toBeTruthy());
+
+    // The document revision the request was generated against is no longer current.
+    rerender(<EditorHarness editor={editor} doc={tiptapEmptyDoc()} />);
+    fireEvent.click(screen.getByTestId('embedded-agent-insert'));
+
+    await waitFor(() => expect(screen.getByTestId('embedded-agent-status').textContent).toContain('document changed'));
+    expect(JSON.stringify(editor.getJSON())).not.toContain('"type":"image"');
+  });
+
+  it('reports a no-candidate image run without mutating the document', async () => {
+    const editor = makeImageEditor();
+    act(() => {
+      editor.commands.setTextSelection(3);
+    });
+    apiMock.api.mockResolvedValueOnce({
+      run: run({ status: 'failed', error: { code: 'image_insertion_no_candidate', message: 'none', retryable: false } }),
+      reused: false,
+    });
+
+    render(<EditorHarness editor={editor} />);
+    fireEvent.change(screen.getByTestId('embedded-agent-input'), { target: { value: 'Zet hier een passende afbeelding.' } });
+    fireEvent.click(screen.getByTestId('embedded-agent-send'));
+    await waitFor(() =>
+      expect(screen.getByTestId('embedded-agent-status').textContent).toContain("couldn't find a suitable image"),
+    );
+    expect(screen.queryByTestId('embedded-agent-insert')).toBeNull();
+    expect(JSON.stringify(editor.getJSON())).not.toContain('"type":"image"');
   });
 });

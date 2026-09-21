@@ -12,7 +12,7 @@
  */
 import { useEffect, useRef } from 'react';
 import { Button } from '@/components/ui/button';
-import { useEditorContextSnapshot } from '../editor/EditorContext';
+import { useEditorContext, useEditorContextSnapshot } from '../editor/EditorContext';
 import { embeddedAgentContextHint } from './embeddedAgent';
 import { EmbeddedAgentInput } from './EmbeddedAgentInput';
 import { EmbeddedAgentStatus } from './EmbeddedAgentStatus';
@@ -36,6 +36,7 @@ export function EmbeddedAgentEntry({
   pollMs,
 }: EmbeddedAgentEntryProps) {
   const snapshot = useEditorContextSnapshot();
+  const context = useEditorContext();
   const agent = useEmbeddedAgent({
     projectId: snapshot?.projectId ?? '',
     contentId: snapshot?.contentId ?? null,
@@ -46,6 +47,12 @@ export function EmbeddedAgentEntry({
     canEdit,
     configured,
     pollMs,
+    ...(context
+      ? {
+          buildImageInsertionContext: context.buildImageInsertionContext,
+          applyImageInsertion: context.applyImageInsertion,
+        }
+      : {}),
   });
 
   const triggerRef = useRef<HTMLSpanElement>(null);
@@ -79,7 +86,7 @@ export function EmbeddedAgentEntry({
             contextHint={contextHint}
             blockedReason={agent.blockedReason}
           />
-          <EmbeddedAgentStatus state={agent.state} onRetry={agent.retry} />
+          <EmbeddedAgentStatus state={agent.state} onRetry={agent.retry} onInsert={agent.insert} onCancel={close} />
         </>
       ) : (
         <div className="flex flex-wrap items-center gap-2">

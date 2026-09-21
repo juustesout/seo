@@ -426,6 +426,12 @@ describe('/api/projects/:projectId/designer/intent is proposal-only', () => {
 
 const PLAN_RUN = { mode: 'plan', plan: VALID_PLAN, base_revision: 'client-rev-1' };
 const INTENT_RUN = { mode: 'intent', instruction: 'Maak de intro korter.', content_id: CONTENT };
+const EDITOR_CONTEXT = {
+  revision: 'rev1:0123456789abcdef',
+  document: { version: 1, blocks: [{ type: 'paragraph', content: [{ type: 'text', text: 'Solar panels store energy.' }] }] },
+  target: { kind: 'cursor', position: 3 },
+  nearbyText: 'We install solar panels on residential roofs.',
+};
 
 describe('/api/projects/:projectId/designer/runs authorization', () => {
   it('rejects anonymous requests', async () => {
@@ -535,6 +541,37 @@ describe('/api/projects/:projectId/designer/runs validation', () => {
     expect(res.status).toBe(400);
     expect(res.json.error?.code).toBe('validation_error');
   });
+
+  it('rejects editor_context without content_id', async () => {
+    const res = await post(`/${PROJECT}/designer/runs`, 'editor-token', {
+      mode: 'intent',
+      instruction: 'Zet hier een passende afbeelding.',
+      base_revision: 'client-rev-1',
+      editor_context: EDITOR_CONTEXT,
+    });
+    expect(res.status).toBe(400);
+    expect(res.json.error?.code).toBe('validation_error');
+  });
+
+  it('rejects a malformed editor_context', async () => {
+    const res = await post(`/${PROJECT}/designer/runs`, 'editor-token', {
+      ...INTENT_RUN,
+      editor_context: { revision: '', target: { kind: 'cursor' } },
+    });
+    expect(res.status).toBe(400);
+    expect(res.json.error?.code).toBe('validation_error');
+  });
+
+  it('rejects editor_context in plan mode', async () => {
+    const res = await post(`/${PROJECT}/designer/runs`, 'editor-token', {
+      mode: 'plan',
+      plan: VALID_PLAN,
+      base_revision: 'client-rev-1',
+      editor_context: EDITOR_CONTEXT,
+    });
+    expect(res.status).toBe(400);
+    expect(res.json.error?.code).toBe('validation_error');
+  });
 });
 
 describe('/api/projects/:projectId/designer/runs content scoping', () => {
@@ -590,6 +627,27 @@ describe('/api/projects/:projectId/designer/runs delegation', () => {
     await post(`/${PROJECT}/designer/runs`, 'editor-token', PLAN_RUN);
     expect(svc.executeCalls).toHaveLength(0);
     expect(svc.applyCalls).toHaveLength(0);
+  });
+
+  it('forwards a validated editor_context into the intent submission', async () => {
+    await post(`/${PROJECT}/designer/runs`, 'editor-token', {
+      mode: 'intent',
+      instruction: 'Zet hier een passende afbeelding.',
+      content_id: CONTENT,
+      editor_context: EDITOR_CONTEXT,
+    });
+    expect(runs.submits).toEqual([
+      {
+        projectId: PROJECT,
+        userId: 'editor-user',
+        submission: {
+          mode: 'intent',
+          instruction: 'Zet hier een passende afbeelding.',
+          contentId: CONTENT,
+          editorContext: EDITOR_CONTEXT,
+        },
+      },
+    ]);
   });
 });
 

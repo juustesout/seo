@@ -11,12 +11,20 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ServiceContainer } from '../context.js';
 import {
   MARKETING_STORYBOARD_PLAN,
+  canonicalDocumentToEditorDocument,
   compileComposition,
   contentRevisionOf,
   isValidDesignerProposal,
   isWritableCompositionSlot,
 } from '@seo/contracts';
-import type { CanonicalDocument, DesignerIntent, DesignerPlan, DesignerPlanner, VisualDesignOperation } from '@seo/contracts';
+import type {
+  CanonicalDocument,
+  DesignerIntent,
+  DesignerPlan,
+  DesignerPlanner,
+  ImageInsertionContext,
+  VisualDesignOperation,
+} from '@seo/contracts';
 import { DesignerService } from './designerService.js';
 
 const mock = vi.hoisted(() => ({
@@ -349,6 +357,71 @@ describe('DesignerService.executeIntent', () => {
     mock.responses = [PLAN_JSON, fullFills()];
     await service.executeIntent(PID, intent({ contentId: '33333333-3333-4333-8333-333333333333' }));
     expect(mock.getCalls).toBe(1);
+    expect(mock.updates).toHaveLength(0);
+  });
+});
+
+describe('DesignerService editor-native image insertion (R3.1)', () => {
+  const canonical: CanonicalDocument = {
+    version: 1,
+    blocks: [{ type: 'paragraph', content: [{ type: 'text', text: 'Solar panels store energy.' }] }],
+  };
+  const editorDocument = canonicalDocumentToEditorDocument(canonical);
+
+  function imageContext(revision: string): ImageInsertionContext {
+    return {
+      revision,
+      document: canonical,
+      target: { kind: 'cursor', position: 3 },
+      nearbyText: 'We install solar panels on residential roofs.',
+    };
+  }
+
+  it('routes an editor-context intent to image insertion without invoking the planner', async () => {
+    mock.contentJson = editorDocument;
+    mock.media = [
+      {
+        id: 'm_solar',
+        filename: 'solar-panels.png',
+        mime_type: 'image/png',
+        url: 'https://cdn.test/solar-panels.png',
+        alt_text: 'Solar panels on a roof',
+        caption: '',
+        width: 1600,
+        height: 900,
+        usage_count: 0,
+      },
+    ];
+    const proposal = await service.executeIntent(
+      PID,
+      intent({
+        instruction: 'Zet hier een passende afbeelding.',
+        contentId: '33333333-3333-4333-8333-333333333333',
+        context: { selection: imageContext(contentRevisionOf(editorDocument)) },
+      }),
+    );
+    expect(proposal.insertion?.type).toBe('insert_image');
+    expect(proposal.insertion?.image.assetId).toBe('m_solar');
+    expect(proposal.baseRevision).toBe(contentRevisionOf(editorDocument));
+    expect(mock.chats).toHaveLength(0);
+    expect(mock.updates).toHaveLength(0);
+  });
+
+  it('refuses to apply a proposal that carries an editor insertion', async () => {
+    const insertion = {
+      type: 'insert_image' as const,
+      target: { kind: 'cursor' as const, position: 0 },
+      image: { assetId: 'm_solar', url: 'https://cdn.test/a.png', alt: 'Solar' },
+    };
+    const proposal = {
+      version: 1,
+      baseRevision: contentRevisionOf({ other: true }),
+      document: compiled.document,
+      insertion,
+    };
+    const err = await expectApiError(service.apply('p1', 'c1', proposal, 'u1'));
+    expect(err.status).toBe(422);
+    expect(err.code).toBe('designer_insertion_requires_editor');
     expect(mock.updates).toHaveLength(0);
   });
 });

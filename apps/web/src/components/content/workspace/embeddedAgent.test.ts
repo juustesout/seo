@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { AgentRun } from '@seo/contracts';
+import type { AgentRun, ImageInsertionContext, InsertImageOperation } from '@seo/contracts';
 import { ApiRequestError } from '../../../lib/api';
 import {
   embeddedAgentContextHint,
@@ -13,6 +13,19 @@ import {
 const PROJECT = '11111111-1111-4111-8111-111111111111';
 const CONTENT = '33333333-3333-4333-8333-333333333333';
 const RUN_ID = 'ar_22222222-2222-4222-8222-222222222222';
+
+const IMAGE_CONTEXT: ImageInsertionContext = {
+  revision: 'rev1:0123456789abcdef',
+  document: { version: 1, blocks: [{ type: 'paragraph', content: [{ type: 'text', text: 'Solar panels' }] }] },
+  target: { kind: 'cursor', position: 3 },
+  nearbyText: 'We install solar panels on roofs.',
+};
+
+const INSERTION: InsertImageOperation = {
+  type: 'insert_image',
+  target: { kind: 'cursor', position: 3 },
+  image: { assetId: 'm1', url: 'https://cdn.test/solar.png', alt: 'Solar panels' },
+};
 
 function run(over: Partial<AgentRun> = {}): AgentRun {
   return {
@@ -51,6 +64,37 @@ describe('embeddedAgentSubmission', () => {
       path: `/projects/${PROJECT}/designer/runs`,
       body: { mode: 'intent', instruction: 'Start', base_revision: 'rev1:new' },
     });
+  });
+
+  it('carries the editor context for an image insertion on an existing document', () => {
+    expect(
+      embeddedAgentSubmission({
+        projectId: PROJECT,
+        contentId: CONTENT,
+        revision: 'rev1:abc',
+        instruction: 'Zet hier een passende afbeelding.',
+        imageContext: IMAGE_CONTEXT,
+      }),
+    ).toEqual({
+      path: `/projects/${PROJECT}/designer/runs`,
+      body: {
+        mode: 'intent',
+        instruction: 'Zet hier een passende afbeelding.',
+        content_id: CONTENT,
+        editor_context: IMAGE_CONTEXT,
+      },
+    });
+  });
+
+  it('never attaches an editor context to a creation request', () => {
+    const submission = embeddedAgentSubmission({
+      projectId: PROJECT,
+      contentId: null,
+      revision: 'rev1:new',
+      instruction: 'Start',
+      imageContext: IMAGE_CONTEXT,
+    });
+    expect(submission?.body).not.toHaveProperty('editor_context');
   });
 
   it('refuses a blank instruction, a missing project or a creation without a revision', () => {
@@ -130,6 +174,31 @@ describe('embeddedAgentOutcomeFromRun', () => {
     const outcome = embeddedAgentOutcomeFromRun(run({ status: 'failed', error: { code: 'invalid_output', message: 'Nope.' } }));
     expect(outcome).toMatchObject({ kind: 'error', canRetry: false });
   });
+
+  it('surfaces a succeeded run carrying an insert_image operation as a reviewable candidate', () => {
+    const outcome = embeddedAgentOutcomeFromRun(
+      run({
+        status: 'succeeded',
+        result: { version: 1, baseRevision: 'rev1:abc', document: { version: 1, blocks: [] }, insertion: INSERTION },
+      }),
+    );
+    expect(outcome).toMatchObject({ kind: 'insertion', operation: INSERTION });
+  });
+
+  it('reports a no-candidate image run as an honest empty result', () => {
+    const outcome = embeddedAgentOutcomeFromRun(
+      run({ status: 'failed', error: { code: 'image_insertion_no_candidate', message: 'none', retryable: false } }),
+    );
+    expect(outcome).toEqual({ kind: 'empty', message: "I couldn't find a suitable image for this section." });
+  });
+
+  it('reports a stale editor context as a retryable error without internal copy', () => {
+    const outcome = embeddedAgentOutcomeFromRun(
+      run({ status: 'failed', error: { code: 'stale_editor_context', message: 'expected rev1:x actual rev1:y', retryable: true } }),
+    );
+    expect(outcome).toMatchObject({ kind: 'error', canRetry: true });
+    expect(outcome.message).toContain('document changed');
+  });
 });
 
 describe('embeddedAgentOutcomeFromError', () => {
@@ -163,5 +232,19 @@ describe('embeddedAgentOutcomeFromError', () => {
       message: 'Could not reach the Agent. Check your connection and try again.',
       canRetry: true,
     });
+  });
+
+  it('maps the typed image-insertion failures to product language', () => {
+    expect(embeddedAgentOutcomeFromError(new ApiRequestError('image_insertion_no_candidate', 'none', 422))).toEqual({
+      kind: 'empty',
+      message: "I couldn't find a suitable image for this section.",
+    });
+    expect(embeddedAgentOutcomeFromError(new ApiRequestError('stale_editor_context', 'expected/actual', 409))).toMatchObject({
+      kind: 'error',
+      canRetry: true,
+    });
+    expect(
+      embeddedAgentOutcomeFromError(new ApiRequestError('image_insertion_requires_saved_document', 'save first', 422)),
+    ).toMatchObject({ kind: 'error', canRetry: false });
   });
 });

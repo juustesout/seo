@@ -47,6 +47,7 @@ import {
   type DesignerIntent,
   type DesignerPlan,
   type DesignerProposal,
+  type ImageInsertionContext,
 } from '@seo/contracts';
 import { ApiError } from '../apiErrors.js';
 import type { ServiceContainer } from '../context.js';
@@ -92,6 +93,12 @@ export interface AgentRunIntentSubmission {
   instruction: string;
   contentId?: string;
   baseRevision?: string;
+  /**
+   * Validated R3.1 editor context (canonical snapshot + revision + insertion
+   * target). Carried opaquely through the durable intent as
+   * `context.selection`; the Designer only acts on it for image insertion.
+   */
+  editorContext?: ImageInsertionContext;
   brief?: DesignBrief;
   idempotencyKey?: string;
 }
@@ -169,6 +176,9 @@ export class AgentRunService {
       projectId,
       ...(submission.contentId !== undefined ? { contentId: submission.contentId } : {}),
       ...(submission.brief !== undefined ? { brief: submission.brief } : {}),
+      ...(submission.editorContext !== undefined
+        ? { context: { selection: submission.editorContext } }
+        : {}),
     };
     const input = {
       mode: 'intent' as const,

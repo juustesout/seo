@@ -105,6 +105,18 @@ export interface VisualAssetSelectionResult {
 }
 
 /**
+ * One candidate ranked against a bounded text query, with the score and the
+ * metadata tokens that produced it. `score` is a match score over textual
+ * metadata, never a claim about the image's visual content.
+ */
+export interface RankedVisualAssetCandidate {
+  candidate: VisualAssetCandidate;
+  score: number;
+  matched: string[];
+  rationale: string;
+}
+
+/**
  * Caller-supplied selection options. `targets` names specific canonical block
  * ids (an explicit request); when absent, every image block with an id is a
  * candidate target. `minScore` overrides the default relevance floor.
@@ -432,6 +444,41 @@ function compareCandidates(a: VisualAssetCandidate, b: VisualAssetCandidate, sco
   return a.mediaId < b.mediaId ? -1 : a.mediaId > b.mediaId ? 1 : 0;
 }
 
+/**
+ * Ranks the given project assets against one bounded text query, best first,
+ * using only real metadata (alt, caption, filename). Invalid, unsupported-MIME
+ * and over-cap candidates are dropped rather than scored. Pure and deterministic:
+ * the same query + candidates always produce the same order, and the ranking is
+ * shared by the image-block selection and the context-aware image insertion so
+ * the two never diverge.
+ */
+export function rankVisualAssetCandidates(
+  queryText: string,
+  candidates: readonly VisualAssetCandidate[],
+): RankedVisualAssetCandidate[] {
+  const usable: VisualAssetCandidate[] = [];
+  for (const candidate of candidates) {
+    if (!isValidVisualAssetCandidate(candidate)) continue;
+    if (!isSelectableVisualMimeType(candidate.mimeType)) continue;
+    usable.push(candidate);
+    if (usable.length >= VISUAL_ASSET_MAX_CANDIDATES) break;
+  }
+  const queryTokens = tokenize(queryText);
+  const scores = new Map<string, number>();
+  for (const candidate of usable) scores.set(candidate.mediaId, matchScore(queryTokens, candidate));
+  return [...usable]
+    .sort((a, b) => compareCandidates(a, b, scores))
+    .map((candidate) => {
+      const score = scores.get(candidate.mediaId) ?? 0;
+      return {
+        candidate,
+        score,
+        matched: matchedTokens(queryTokens, candidate),
+        rationale: rationaleFor(score, matchedTokens(queryTokens, candidate)),
+      };
+    });
+}
+
 // ---------------------------------------------------------------------------
 // Selection
 // ---------------------------------------------------------------------------
@@ -493,26 +540,21 @@ export function selectVisualAssets(
       continue;
     }
 
-    const queryTokens = tokenize(target.context);
-    const scores = new Map<string, number>();
-    for (const candidate of pool) scores.set(candidate.mediaId, matchScore(queryTokens, candidate));
-    const ranked = [...pool].sort((a, b) => compareCandidates(a, b, scores));
+    const ranked = rankVisualAssetCandidates(target.context, pool);
     const best = ranked[0];
-    const bestScore = best ? (scores.get(best.mediaId) ?? 0) : 0;
-    if (!best || bestScore < minScore) {
+    if (!best || best.score < minScore) {
       unmatched.push({ targetBlockId: target.blockId, reason: 'below_threshold' });
       continue;
     }
 
-    const tokens = matchedTokens(queryTokens, best);
     selections.push({
-      assetId: best.mediaId,
+      assetId: best.candidate.mediaId,
       targetBlockId: target.blockId,
       role: target.role,
-      score: bestScore,
-      rationale: rationaleFor(bestScore, tokens),
+      score: best.score,
+      rationale: best.rationale,
     });
-    if (best.mediaId !== ownAssigned) taken.add(best.mediaId);
+    if (best.candidate.mediaId !== ownAssigned) taken.add(best.candidate.mediaId);
   }
 
   return { selections, unmatched };

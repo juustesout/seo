@@ -38,8 +38,9 @@ import {
   isValidDesignerPlan,
   isValidDesignerProposal,
   isAgentRunId,
+  isValidImageInsertionContext,
 } from '@seo/contracts';
-import type { DesignerIntent, DesignerPlan } from '@seo/contracts';
+import type { DesignerIntent, DesignerPlan, ImageInsertionContext } from '@seo/contracts';
 import { requireAuth } from '../middleware.js';
 import { asyncHandler } from '../asyncHandler.js';
 import { ApiError } from '../../apiErrors.js';
@@ -74,11 +75,13 @@ const applySchema = z
   .strict();
 
 /**
- * Natural-language intent. `context` is deliberately not accepted: the contract
- * leaves `selection` unbounded/opaque and the planner prompt ignores it, so
- * exposing it would only add transport and payload risk. `base_revision` is
- * accepted only without `content_id` (the server derives it from stored content),
- * mirroring the service's honest revision semantics.
+ * Natural-language intent. `context` is deliberately not accepted here: the
+ * contract leaves `selection` unbounded/opaque and the planner prompt ignores
+ * it, so exposing it would only add transport and payload risk. The durable
+ * `/runs` intent path instead takes the bounded, validated `editor_context`
+ * (R3.1) when the caller is the Editor. `base_revision` is accepted only
+ * without `content_id` (the server derives it from stored content), mirroring
+ * the service's honest revision semantics.
  */
 const intentSchema = z
   .object({
@@ -106,10 +109,14 @@ const intentSchema = z
   });
 
 /**
- * Durable run submission (Phase 4.1). `plan` mode accepts a validated plan;
- * `intent` mode accepts natural language. `_id` is always resolved server-side
- * and `base_revision` may not accompany `content_id`, mirroring the intent
- * route's honest revision semantics.
+ * Durable run submission (Phase 4.1, extended R3.1). `plan` mode accepts a
+ * validated plan; `intent` mode accepts natural language. `_id` is always
+ * resolved server-side and `base_revision` may not accompany `content_id`,
+ * mirroring the intent route's honest revision semantics. `editor_context` is
+ * the R3.1 editor-native seam: a validated `ImageInsertionContext` (canonical
+ * snapshot + revision + insertion target) that lets the run resolve a
+ * context-aware image insertion. It is bounded by its own contract validator and
+ * requires `content_id` so the server can re-derive and check the revision.
  */
 const runSchema = z
   .object({
@@ -118,6 +125,7 @@ const runSchema = z
     instruction: z.string().trim().min(1).max(DESIGNER_INTENT_INSTRUCTION_MAX_CHARS).optional(),
     content_id: z.string().uuid().optional(),
     base_revision: z.string().min(1).max(DESIGNER_BASE_REVISION_MAX_CHARS).optional(),
+    editor_context: z.unknown().optional(),
     brief: briefSchema.optional(),
     idempotency_key: z.string().trim().min(1).max(AGENT_RUN_IDEMPOTENCY_KEY_MAX_CHARS).optional(),
   })
@@ -147,6 +155,23 @@ const runSchema = z
           code: z.ZodIssueCode.custom,
           message: 'plan is only valid for plan mode.',
           path: ['plan'],
+        });
+      }
+    }
+    if (value.editor_context !== undefined) {
+      if (!isValidImageInsertionContext(value.editor_context)) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Invalid editor context.', path: ['editor_context'] });
+      } else if (value.mode !== 'intent') {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'editor_context is only valid for intent mode.',
+          path: ['editor_context'],
+        });
+      } else if (value.content_id === undefined) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'editor_context requires content_id; the revision is derived from stored content.',
+          path: ['content_id'],
         });
       }
     }
@@ -252,7 +277,14 @@ designerRouter.post(
     const submission: AgentRunSubmission =
       body.mode === 'plan'
         ? { mode: 'plan', plan: body.plan as DesignerPlan, ...common }
-        : { mode: 'intent', instruction: body.instruction!, ...common };
+        : {
+            mode: 'intent',
+            instruction: body.instruction!,
+            ...common,
+            ...(body.editor_context !== undefined
+              ? { editorContext: body.editor_context as ImageInsertionContext }
+              : {}),
+          };
 
     const result = await new AgentRunService(container).submitDesignRun(projectId, user!.sub, submission);
     res.status(202).json({ data: { run: result.run, reused: result.reused } });

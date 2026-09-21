@@ -18,19 +18,27 @@
  * wrong document.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { type AgentRun } from '@seo/contracts';
+import {
+  isImageInsertionInstruction,
+  type AgentRun,
+  type ImageInsertionContext,
+  type InsertImageOperation,
+} from '@seo/contracts';
 import { api } from '../../../lib/api';
 import {
   CLOSED_EMBEDDED_AGENT,
+  IMAGE_INSERTION_CLARIFICATION_MESSAGE,
   embeddedAgentOutcomeFromError,
   embeddedAgentOutcomeFromRun,
   embeddedAgentRunPath,
   embeddedAgentSubmission,
   type EmbeddedAgentState,
 } from './embeddedAgent';
+import type { ImageInsertionApplyResult } from '../editor/imageInsertion';
 
 export const EMBEDDED_AGENT_DEFAULT_POLL_MS = 2000;
 export const EMBEDDED_AGENT_MAX_POLLS = 60;
+const UNAVAILABLE_INSERT_MESSAGE = "This action isn't available yet.";
 
 export interface UseEmbeddedAgentOptions {
   projectId: string;
@@ -42,6 +50,10 @@ export interface UseEmbeddedAgentOptions {
   canEdit: boolean;
   configured: boolean;
   pollMs?: number;
+  /** Builds the bounded image-insertion context from the live editor (R3.1). */
+  buildImageInsertionContext?: () => ImageInsertionContext | null;
+  /** Applies a returned insert_image operation through the editor (R3.1). */
+  applyImageInsertion?: (operation: InsertImageOperation, expectedRevision: string) => ImageInsertionApplyResult;
 }
 
 export interface EmbeddedAgentController {
@@ -50,6 +62,8 @@ export interface EmbeddedAgentController {
   setInstruction: (value: string) => void;
   submit: () => void;
   retry: () => void;
+  /** Confirms and applies the current image-insertion candidate. */
+  insert: () => void;
   close: () => void;
   canSubmit: boolean;
   /** Why submission is unavailable, in product language; null when it is available. */
@@ -67,6 +81,8 @@ export function useEmbeddedAgent(options: UseEmbeddedAgentOptions): EmbeddedAgen
     canEdit,
     configured,
     pollMs = EMBEDDED_AGENT_DEFAULT_POLL_MS,
+    buildImageInsertionContext,
+    applyImageInsertion,
   } = options;
 
   const [state, setState] = useState<EmbeddedAgentState>(CLOSED_EMBEDDED_AGENT);
@@ -78,7 +94,9 @@ export function useEmbeddedAgent(options: UseEmbeddedAgentOptions): EmbeddedAgen
   const identityRef = useRef(identity);
   const epochRef = useRef(0);
   const submittedRef = useRef('');
+  const submittedContextRef = useRef<ImageInsertionContext | null>(null);
   const submittingRef = useRef(false);
+  const applyingRef = useRef(false);
 
   // Reset on a document identity change so a response for the previous document
   // can never be shown against the new one.
@@ -87,7 +105,9 @@ export function useEmbeddedAgent(options: UseEmbeddedAgentOptions): EmbeddedAgen
     identityRef.current = identity;
     epochRef.current += 1;
     submittingRef.current = false;
+    applyingRef.current = false;
     submittedRef.current = '';
+    submittedContextRef.current = null;
     setActiveRunId(null);
     setPollAttempt(0);
     setInstruction('');
@@ -115,6 +135,10 @@ export function useEmbeddedAgent(options: UseEmbeddedAgentOptions): EmbeddedAgen
     setActiveRunId(null);
     if (outcome.kind === 'completed') {
       setState({ status: 'completed', instruction: text, message: outcome.message });
+    } else if (outcome.kind === 'insertion') {
+      setState({ status: 'insertion', instruction: text, message: outcome.message, operation: outcome.operation });
+    } else if (outcome.kind === 'empty') {
+      setState({ status: 'empty', instruction: text, message: outcome.message });
     } else if (outcome.kind === 'clarification') {
       setState({ status: 'clarification', instruction: text, message: outcome.message });
     } else if (outcome.kind === 'unsupported') {
@@ -139,15 +163,42 @@ export function useEmbeddedAgent(options: UseEmbeddedAgentOptions): EmbeddedAgen
 
   const submit = useCallback(() => {
     if (submittingRef.current) return;
-    const submission = embeddedAgentSubmission({ projectId, contentId, revision, instruction });
-    if (!submission || !canSubmit) return;
-    submittingRef.current = true;
+    if (!canSubmit) return;
     const text = instruction.trim();
-    submittedRef.current = text;
+    const wantsImage = isImageInsertionInstruction(text);
+    let imageContext: ImageInsertionContext | null = null;
+    if (wantsImage) {
+      imageContext = contentId ? buildImageInsertionContext?.() ?? null : null;
+      if (!imageContext) {
+        // No reliable insertion point (or the document is not persisted yet).
+        // Ask instead of inserting at an arbitrary position.
+        epochRef.current += 1;
+        applyingRef.current = false;
+        submittedRef.current = text;
+        submittedContextRef.current = null;
+        setActiveRunId(null);
+        setPollAttempt(0);
+        setState({
+          status: 'clarification',
+          instruction: text,
+          message: contentId
+            ? IMAGE_INSERTION_CLARIFICATION_MESSAGE
+            : 'Save this draft first so I can place an image in it.',
+        });
+        return;
+      }
+    }
+    const submission = embeddedAgentSubmission({ projectId, contentId, revision, instruction, imageContext });
+    if (!submission) return;
+    submittingRef.current = true;
+    applyingRef.current = false;
+    const submitted = instruction.trim();
+    submittedRef.current = submitted;
+    submittedContextRef.current = imageContext;
     const epoch = (epochRef.current += 1);
     setActiveRunId(null);
     setPollAttempt(0);
-    setState({ status: 'submitting', instruction: text });
+    setState({ status: 'submitting', instruction: submitted });
     void (async () => {
       try {
         const result = await api<{ run: AgentRun; reused: boolean }>(submission.path, {
@@ -160,17 +211,45 @@ export function useEmbeddedAgent(options: UseEmbeddedAgentOptions): EmbeddedAgen
         if (epoch !== epochRef.current) return;
         const outcome = embeddedAgentOutcomeFromError(error);
         if (outcome.kind === 'unsupported') {
-          setState({ status: 'unsupported', instruction: text, message: outcome.message });
+          setState({ status: 'unsupported', instruction: submitted, message: outcome.message });
+        } else if (outcome.kind === 'empty') {
+          setState({ status: 'empty', instruction: submitted, message: outcome.message });
         } else if (outcome.kind === 'error') {
-          setState({ status: 'error', instruction: text, message: outcome.message, canRetry: outcome.canRetry });
+          setState({ status: 'error', instruction: submitted, message: outcome.message, canRetry: outcome.canRetry });
         } else {
-          setState({ status: 'completed', instruction: text, message: outcome.message });
+          setState({ status: 'completed', instruction: submitted, message: outcome.message });
         }
       } finally {
         submittingRef.current = false;
       }
     })();
-  }, [projectId, contentId, revision, instruction, canSubmit, applyRun]);
+  }, [projectId, contentId, revision, instruction, canSubmit, applyRun, buildImageInsertionContext]);
+
+  const insert = useCallback(() => {
+    if (state.status !== 'insertion' || applyingRef.current) return;
+    applyingRef.current = true;
+    const text = state.instruction;
+    const expectedRevision = submittedContextRef.current?.revision ?? '';
+    const result = applyImageInsertion?.(state.operation, expectedRevision);
+    if (!result) {
+      setState({ status: 'error', instruction: text, message: UNAVAILABLE_INSERT_MESSAGE, canRetry: false });
+      return;
+    }
+    if (result.ok) {
+      setState({ status: 'applied', instruction: text, message: 'Image inserted. Undo removes it.' });
+      return;
+    }
+    applyingRef.current = false;
+    setState({
+      status: 'error',
+      instruction: text,
+      message:
+        result.reason === 'stale-revision'
+          ? 'The document changed while I was finding the image. Please run the request again.'
+          : "I couldn't place the image there. Put the cursor where you want it and try again.",
+      canRetry: false,
+    });
+  }, [state, applyImageInsertion]);
 
   // Poll the active run while it is still working. The epoch captured at schedule
   // time invalidates a slow response after a document switch, close or resubmit.
@@ -207,6 +286,8 @@ export function useEmbeddedAgent(options: UseEmbeddedAgentOptions): EmbeddedAgen
           setActiveRunId(null);
           if (outcome.kind === 'unsupported') {
             setState({ status: 'unsupported', instruction: submittedRef.current, message: outcome.message });
+          } else if (outcome.kind === 'empty') {
+            setState({ status: 'empty', instruction: submittedRef.current, message: outcome.message });
           } else if (outcome.kind === 'error') {
             setState({ status: 'error', instruction: submittedRef.current, message: outcome.message, canRetry: outcome.canRetry });
           } else {
@@ -221,6 +302,8 @@ export function useEmbeddedAgent(options: UseEmbeddedAgentOptions): EmbeddedAgen
   const close = useCallback(() => {
     epochRef.current += 1;
     submittingRef.current = false;
+    applyingRef.current = false;
+    submittedContextRef.current = null;
     setActiveRunId(null);
     setPollAttempt(0);
     setState(CLOSED_EMBEDDED_AGENT);
@@ -230,5 +313,5 @@ export function useEmbeddedAgent(options: UseEmbeddedAgentOptions): EmbeddedAgen
     submit();
   }, [submit]);
 
-  return { state, instruction, setInstruction, submit, retry, close, canSubmit, blockedReason };
+  return { state, instruction, setInstruction, submit, retry, insert, close, canSubmit, blockedReason };
 }
