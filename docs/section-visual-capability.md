@@ -222,9 +222,7 @@ Files changed:
 Tests / checks:
 
 - `pnpm --filter @seo/contracts build` + `test` (394).
-- `pnpm --filter @seo/api typecheck` + `test` (1587 passed; one pre-existing,
-  time-dependent `opportunityService` freshness test unrelated to this change
-  fails because it hardcodes a snapshot date against the wall clock).
+- `pnpm --filter @seo/api typecheck` + `test` (1588).
 - `pnpm --filter @seo/web typecheck` + `test` (407) + production build.
 
 Compatibility notes:
