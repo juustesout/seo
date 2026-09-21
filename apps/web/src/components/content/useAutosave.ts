@@ -7,6 +7,12 @@ interface UseAutosaveOptions {
   delayMs?: number;
   /** Serialize the current document+metadata to a canonical string. */
   makeSnapshot: () => string;
+  /**
+   * A value that changes whenever the workspace changes, used only to schedule
+   * the debounce. It is read from a ref, so status transitions never restart the
+   * timer (that was the source of the old self-trigger loop).
+   */
+  snapshotKey: string;
   /** Persist one snapshot (parsed back to an object by the caller). */
   persist: (snapshot: string) => Promise<void>;
 }
@@ -14,9 +20,11 @@ interface UseAutosaveOptions {
 /**
  * Debounced autosave with a single in-flight request. A newer edit that lands
  * while a save is running is saved again right after it completes, so an older
- * save never overwrites newer edits and requests never overlap.
+ * save never overwrites newer edits and requests never overlap. `dirty` is
+ * derived from the same baseline as the save decision, so the two can never
+ * disagree.
  */
-export function useAutosave({ enabled, delayMs = 1600, makeSnapshot, persist }: UseAutosaveOptions) {
+export function useAutosave({ enabled, delayMs = 1600, makeSnapshot, snapshotKey, persist }: UseAutosaveOptions) {
   const [status, setStatus] = useState<AutosaveStatus>('saved');
 
   const makeRef = useRef(makeSnapshot);
@@ -39,7 +47,7 @@ export function useAutosave({ enabled, delayMs = 1600, makeSnapshot, persist }: 
   const doSave = async () => {
     clearTimer();
     const payload = makeRef.current();
-    if (baselineRef.current === payload) {
+    if (baselineRef.current === null || baselineRef.current === payload) {
       setStatus('saved');
       return;
     }
@@ -53,7 +61,7 @@ export function useAutosave({ enabled, delayMs = 1600, makeSnapshot, persist }: 
       await persistRef.current(payload);
       baselineRef.current = payload;
       busyRef.current = false;
-      if (rerunRef.current) {
+      if (rerunRef.current || makeRef.current() !== payload) {
         rerunRef.current = false;
         void doSave();
       } else {
@@ -66,24 +74,26 @@ export function useAutosave({ enabled, delayMs = 1600, makeSnapshot, persist }: 
     }
   };
 
-  // Debounce: only lifecycle/config changes restart the timer. The callback
-  // props are stored in refs above because they are intentionally recreated by
-  // the Content workspace on every render. Including makeSnapshot here causes
-  // status updates (unsaved -> saving -> saved) to schedule another save, which
-  // can create a self-sustaining save loop.
+  // Debounce: a workspace change or lifecycle/config change (re)schedules the
+  // save. `snapshotKey` is the value form of the snapshot, so status updates
+  // (unsaved -> saving -> saved) do not restart the timer. The baseline guard
+  // means an untouched, freshly opened document is never persisted.
   useEffect(() => {
-    if (!enabled) {
+    if (!enabled || baselineRef.current === null) {
       clearTimer();
       return;
     }
-    if (baselineRef.current === makeRef.current()) return;
-    setStatus((s) => (s === 'saving' ? s : 'unsaved'));
+    if (baselineRef.current === snapshotKey) {
+      setStatus((current) => (current === 'saving' ? current : 'saved'));
+      return;
+    }
+    setStatus((current) => (current === 'saving' ? current : 'unsaved'));
     clearTimer();
     timerRef.current = window.setTimeout(() => void doSave(), delayMs);
     return clearTimer;
     // makeSnapshot/persist are deliberately read from refs.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [enabled, delayMs]);
+  }, [enabled, snapshotKey, delayMs]);
 
   const setBaseline = (snapshot: string) => {
     baselineRef.current = snapshot;
@@ -93,5 +103,9 @@ export function useAutosave({ enabled, delayMs = 1600, makeSnapshot, persist }: 
   /** Immediate save, used by explicit Save / Publish actions. */
   const saveNow = () => void doSave();
 
-  return { status, setBaseline, saveNow };
+  // Read through the ref so a stale render can never report the wrong state: the
+  // comparison uses the same source `doSave` compares against.
+  const dirty = baselineRef.current !== null && baselineRef.current !== makeRef.current();
+
+  return { status, dirty, setBaseline, saveNow };
 }

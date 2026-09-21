@@ -1,6 +1,6 @@
 # Editor-Native Designer — Product & UX Contract (ADR Phase R0)
 
-Status: **R0 done (recon + contract); R1 done (editor shell built)**. This document is the product handle for
+Status: **R0 done (recon + contract); R1 done (editor shell built); R1.2 done (editor context foundation)**. This document is the product handle for
 the R-series. `docs/editor-native-designer-roadmap.md` is the guiding brief and
 stays authoritative for intent; this document turns that intent into concrete
 product rules and records what the current UI actually is.
@@ -356,6 +356,7 @@ overshadows the Editor.
 | --- | --- | --- |
 | R0 | Product Reset & Experience Contract | **Done** (this document) |
 | R1 | Editor Shell & Interaction Foundation | **Done** (R1.1 recon + shell build) |
+| R1.2 | Editor Context Foundation | **Done** (`docs/editor-context-foundation.md`) |
 | R2 | Embedded Designer Agent Shell | Not started |
 | R3 | First Vertical Slice, Image Insertion | Not started |
 | R4 | In-Editor Proposal, Apply & Undo | Not started |
@@ -369,22 +370,26 @@ overshadows the Editor.
 
 ## 15. Handoff to the next briefing
 
-Next deliverable: **Phase R2 — Embedded Designer Agent Shell**. The R1 shell is
+Next deliverable: **Phase R2.1 - Embedded Agent Entry Surface**. The R1 shell is
 in place (`EditorWorkspace`, one `DocumentHeader`, merged `ContextualToolbar`,
 `IntelligenceRail`, lifted `EditorSelectionContext`, in-editor `PreviewPane`, a
 reserved `InlineAssistantSlot`, a workspace keymap and an on-demand insert rail),
-so the agent can land in that fixed place instead of becoming another panel. R2
-must build on the R1.1 recon (`docs/editor-shell-recon.md`); it must not add a
-route or bolt on a parallel surface.
+and R1.2 added the normalized editor context (`useEditorContext()`,
+`applyExternalDocument`) documented in `docs/editor-context-foundation.md`. R2.1
+can build the embedded agent against that context instead of inspecting Tiptap or
+becoming another panel. It must not add a route, must not start image insertion
+(that is R3.1), and must not reopen editor architecture.
 
-After R2 comes the first real build slice: **Phase R3.1 — Embedded Designer Image
-Insertion**, measured only by the §11 definition of done.
+After R2.1 comes the first real build slice: **Phase R3.1 - Embedded Designer
+Image Insertion**, measured only by the §11 definition of done.
 
 ---
 
 ## See also
 
 - `docs/editor-native-designer-roadmap.md` — the guiding brief (Dutch, verbatim).
+- `docs/editor-shell-recon.md` — R1.1 shell recon and the settled R1 decisions.
+- `docs/editor-context-foundation.md` — R1.2 editor context contract and report.
 - `docs/8e6-agent-architecture.md` — the Designer/Writer/Composer backend ADR
   whose infrastructure R0 keeps and hides.
 - `docs/content-studio-roadmap.md`, `docs/w10-magic-roadmap.md` — prior

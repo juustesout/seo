@@ -13,8 +13,18 @@ export {
   resolveElementType,
 } from './elementRegistry';
 export { getElementSettingsRenderer, renderElementSettings } from './settingsRegistry';
-export { readCanvasSelection } from './selection';
+export { readCanvasSelection, readSelectionSnapshot } from './selection';
 export { EditorSelectionProvider, useEditorSelection } from './EditorSelectionContext';
+export { EditorContextProvider, useEditorContext, useEditorContextSnapshot } from './EditorContext';
+export { buildEditorContextSnapshot, EMPTY_EDITOR_SELECTION } from './editorContext';
+export type {
+  EditorContextSnapshot,
+  EditorDocumentSnapshot,
+  EditorSelectionKind,
+  EditorSelectionSnapshot,
+  ExternalEditorDocumentInput,
+  ExternalEditorDocumentResult,
+} from './editorContext';
 export { createEditorExtensions } from './extensions';
 export { sanitizeEditorDoc } from './sanitizeDoc';
 export {

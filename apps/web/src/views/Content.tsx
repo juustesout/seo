@@ -79,6 +79,23 @@ type DetailRow = ContentRow & { content_json: unknown; content_html: string | nu
 const ROLE_RANK: Record<string, number> = { viewer: 0, editor: 1, admin: 2, owner: 3 };
 
 /**
+ * Freezes the whole workspace into one canonical JSON string. Snapshots are
+ * strings rather than objects on purpose: autosave needs a cheap equality check
+ * (baseline vs current) and exactly one immutable payload to persist, so the
+ * workspace is serialized once per change instead of compared by reference.
+ */
+function workspaceSnapshotOf(
+  title: string,
+  status: string,
+  doc: TipDoc,
+  targetKeyword: string,
+  metaTitle: string,
+  metaDescription: string,
+): string {
+  return JSON.stringify({ t: title, s: status, d: doc, k: targetKeyword, mt: metaTitle, md: metaDescription });
+}
+
+/**
  * Orchestrates the Content Studio list, the editor workspace and the read-only
  * viewer render.
  *
@@ -191,12 +208,13 @@ export function Content({
 
   const workspaceReady = creating || (editingId !== null && detail.data?.id === editingId);
 
-  // Snapshots are canonical JSON strings rather than objects on purpose:
-  // useAutosave needs a cheap equality check (baseline vs current) and exactly
-  // one immutable payload to persist, so the whole workspace is frozen into a
-  // string instead of compared by reference.
-  const snapshotOf = (t: string, s: string, d: TipDoc, k: string, mt: string, md: string) =>
-    JSON.stringify({ t, s, d, k, mt, md });
+  // Snapshots are canonical JSON strings: useAutosave needs a cheap equality
+  // check (baseline vs current) and one immutable payload to persist, and the
+  // editor context uses the same value as its change key.
+  const workspaceSnapshot = useMemo(
+    () => workspaceSnapshotOf(title, status, doc, targetKeyword, metaTitle, metaDescription),
+    [title, status, doc, targetKeyword, metaTitle, metaDescription],
+  );
 
   // Persist one snapshot: PATCH the row being edited or POST a brand-new row,
   // then adopt the server id (first save of a new document) and nudge the list.
@@ -228,7 +246,8 @@ export function Content({
     enabled: workspaceReady && canEdit,
     delayMs: 1600,
     makeSnapshot: () =>
-      snapshotOf(live.current.title, live.current.status, live.current.doc, live.current.targetKeyword, live.current.metaTitle, live.current.metaDescription),
+      workspaceSnapshotOf(live.current.title, live.current.status, live.current.doc, live.current.targetKeyword, live.current.metaTitle, live.current.metaDescription),
+    snapshotKey: workspaceSnapshot,
     persist: commit,
   });
 
@@ -253,7 +272,7 @@ export function Content({
     setMetaDescription(md);
     setSlug(row.slug ?? null);
     setSavedAt(row.updated_at ?? null);
-    auto.setBaseline(snapshotOf(live.current.title, live.current.status, next, kw, mt, md));
+    auto.setBaseline(workspaceSnapshotOf(live.current.title, live.current.status, next, kw, mt, md));
   }, [editingId, detail.data]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Seed a brand-new document so opening the editor never auto-creates a row.
@@ -263,7 +282,7 @@ export function Content({
     live.current = { ...live.current, doc: next };
     setDoc(next);
     auto.setBaseline(
-      snapshotOf(live.current.title, live.current.status, next, live.current.targetKeyword, live.current.metaTitle, live.current.metaDescription),
+      workspaceSnapshotOf(live.current.title, live.current.status, next, live.current.targetKeyword, live.current.metaTitle, live.current.metaDescription),
     );
   }, [creating]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -574,7 +593,10 @@ export function Content({
     );
   }
 
-  if (editingId && !detail.data) {
+  // Wait for the row that matches the open id. Rendering with stale data would
+  // pair the new document identity with the previous document's content and
+  // selection, which the editor context must never expose.
+  if (editingId && detail.data?.id !== editingId) {
     return (
       <div className="grid gap-5">
         <PageHeader title="Content Studio" description="Loading…" />
@@ -643,6 +665,7 @@ export function Content({
     <EditorWorkspace
       doc={doc}
       editor={editor}
+      context={{ projectId, contentId: editingId, dirty: auto.dirty, ready: workspaceReady }}
       header={{
         title,
         onTitleChange: setTitle,

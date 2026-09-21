@@ -17,6 +17,7 @@ function Harness({ onSaveNow = () => {} }: { onSaveNow?: () => void }) {
     <EditorWorkspace
       doc={DOC}
       editor={editor}
+      context={{ projectId: 'p1', contentId: 'c1', dirty: false, ready: true }}
       header={{
         title: 'My article',
         onTitleChange: () => {},

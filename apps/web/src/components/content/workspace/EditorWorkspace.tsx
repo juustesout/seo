@@ -17,6 +17,7 @@ import { RichTextEditor, type RichTextEditorHandle } from '../RichTextEditor';
 import type { EditorAiActions } from '../EditorAiBubbleMenu';
 import type { ContentAiToolbar } from '../ContentToolbar';
 import { EditorSelectionProvider } from '../editor/EditorSelectionContext';
+import { EditorContextProvider } from '../editor/EditorContext';
 import { EditorShell } from '../editor/EditorShell';
 import { ContextualToolbar } from './ContextualToolbar';
 import { DocumentHeader, type DocumentHeaderProps } from './DocumentHeader';
@@ -28,6 +29,13 @@ export interface EditorWorkspaceProps {
   /** Live document, used only for the preview render. */
   doc: TipDoc;
   editor: Editor | null;
+  /** Identity and document state exposed through the shared editor context. */
+  context: {
+    projectId: string;
+    contentId: string | null;
+    dirty: boolean;
+    ready: boolean;
+  };
   header: Omit<DocumentHeaderProps, 'previewOpen' | 'onTogglePreview' | 'railOpen' | 'onToggleRail'>;
   toolbarAi?: ContentAiToolbar;
   writing: {
@@ -49,6 +57,7 @@ export interface EditorWorkspaceProps {
 export function EditorWorkspace({
   doc,
   editor,
+  context,
   header,
   toolbarAi,
   writing,
@@ -86,43 +95,52 @@ export function EditorWorkspace({
   }, [onSaveNow]);
 
   return (
-    <EditorSelectionProvider>
-      <div className="grid gap-3" data-testid="editor-workspace">
-        {banners}
-        <DocumentHeader
-          {...header}
-          previewOpen={preview}
-          onTogglePreview={() => setPreview((value) => !value)}
-          railOpen={railOpen}
-          onToggleRail={() => setRailOpen((value) => !value)}
-        />
-        <div className="mt-1 grid grid-cols-1 items-start gap-3.5 lg:grid-cols-[minmax(0,1fr)_280px]">
-          <div className="min-w-0">
-            <div className={preview ? 'hidden' : undefined}>
-              <EditorShell
-                editor={editor}
-                showRail={railOpen}
-                toolbar={<ContextualToolbar editor={editor} ai={toolbarAi} />}
-              >
-                <RichTextEditor
-                  key={writing.editorKey}
-                  ref={writing.editorRef}
-                  initialDoc={writing.initialDoc}
-                  onDocChange={writing.onDocChange}
-                  onEditor={writing.onEditor}
-                  aiActions={writing.aiActions}
-                />
-              </EditorShell>
+    <EditorContextProvider
+      projectId={context.projectId}
+      contentId={context.contentId}
+      ready={context.ready}
+      dirty={context.dirty}
+      doc={doc}
+      editor={editor}
+    >
+      <EditorSelectionProvider>
+        <div className="grid gap-3" data-testid="editor-workspace">
+          {banners}
+          <DocumentHeader
+            {...header}
+            previewOpen={preview}
+            onTogglePreview={() => setPreview((value) => !value)}
+            railOpen={railOpen}
+            onToggleRail={() => setRailOpen((value) => !value)}
+          />
+          <div className="mt-1 grid grid-cols-1 items-start gap-3.5 lg:grid-cols-[minmax(0,1fr)_280px]">
+            <div className="min-w-0">
+              <div className={preview ? 'hidden' : undefined}>
+                <EditorShell
+                  editor={editor}
+                  showRail={railOpen}
+                  toolbar={<ContextualToolbar editor={editor} ai={toolbarAi} />}
+                >
+                  <RichTextEditor
+                    key={writing.editorKey}
+                    ref={writing.editorRef}
+                    initialDoc={writing.initialDoc}
+                    onDocChange={writing.onDocChange}
+                    onEditor={writing.onEditor}
+                    aiActions={writing.aiActions}
+                  />
+                </EditorShell>
+              </div>
+              {preview && <PreviewPane doc={doc} />}
+              <InlineAssistantSlot configured={assistant.configured} busy={assistant.busy} />
+              {review}
             </div>
-            {preview && <PreviewPane doc={doc} />}
-            <InlineAssistantSlot configured={assistant.configured} busy={assistant.busy} />
-            {review}
+            <IntelligenceRail {...rail} />
           </div>
-          <IntelligenceRail {...rail} />
+          {secondary}
+          {knowledge}
         </div>
-        {secondary}
-        {knowledge}
-      </div>
-    </EditorSelectionProvider>
+      </EditorSelectionProvider>
+    </EditorContextProvider>
   );
 }
