@@ -141,7 +141,10 @@ describe('getOpportunities', () => {
   });
 
   it('reads the exact-set snapshot and echoes its domain and competitors', async () => {
-    const container = containerWith([snapshotRow(PROJECT, NOW.toISOString(), [gap({ keyword: 'blue widgets' })])]);
+    // Freshness is derived against the wall clock, so this fixture is anchored to
+    // now; a hardcoded date would silently expire once it aged past the fresh window.
+    const fetchedAt = new Date().toISOString();
+    const container = containerWith([snapshotRow(PROJECT, fetchedAt, [gap({ keyword: 'blue widgets' })])]);
     const result = await getOpportunities(container, PROJECT, set, {}, 'example.com');
     expect(result.snapshot?.freshness.state).toBe('fresh');
     expect(result.snapshot?.domain).toBe('example.com');
