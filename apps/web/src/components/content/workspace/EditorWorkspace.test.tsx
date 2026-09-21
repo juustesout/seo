@@ -107,12 +107,20 @@ describe('EditorWorkspace', () => {
     expect(screen.queryByTestId('preview-pane')).toBeNull();
   });
 
-  it('exposes one reserved, keyboard-reachable AI place', () => {
+  it('exposes one reserved AI place, opened with Ctrl/Cmd+K', () => {
     render(<Harness />);
-    const slot = screen.getByTestId('inline-assistant');
-    expect(slot).toBeTruthy();
+    expect(screen.getByTestId('inline-assistant')).toBeTruthy();
+    expect(screen.queryByTestId('embedded-agent-input')).toBeNull();
     fireEvent.keyDown(window, { key: 'k', ctrlKey: true });
-    expect(document.activeElement).toBe(slot);
+    expect(document.activeElement).toBe(screen.getByTestId('embedded-agent-input'));
+  });
+
+  it('closes the Agent with Escape while focus is inside it', () => {
+    render(<Harness />);
+    fireEvent.keyDown(window, { key: 'k', ctrlKey: true });
+    expect(document.activeElement).toBe(screen.getByTestId('embedded-agent-input'));
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(screen.queryByTestId('embedded-agent-input')).toBeNull();
   });
 });
 

@@ -21,6 +21,7 @@ import { EditorContextProvider } from '../editor/EditorContext';
 import { EditorShell } from '../editor/EditorShell';
 import { ContextualToolbar } from './ContextualToolbar';
 import { DocumentHeader, type DocumentHeaderProps } from './DocumentHeader';
+import { EmbeddedAgentEntry } from './EmbeddedAgentEntry';
 import { InlineAssistantSlot } from './InlineAssistantSlot';
 import { PreviewPane } from './PreviewPane';
 import { IntelligenceRail, type IntelligenceRailProps } from './IntelligenceRail';
@@ -46,7 +47,7 @@ export interface EditorWorkspaceProps {
     onEditor: (editor: Editor | null) => void;
     aiActions?: EditorAiActions;
   };
-  assistant: { configured: boolean; busy: boolean };
+  assistant: { configured: boolean; busy: boolean; pollMs?: number };
   banners?: ReactNode;
   review?: ReactNode;
   rail: IntelligenceRailProps;
@@ -70,6 +71,7 @@ export function EditorWorkspace({
 }: EditorWorkspaceProps) {
   const [preview, setPreview] = useState(false);
   const [railOpen, setRailOpen] = useState(false);
+  const [assistantOpen, setAssistantOpen] = useState(false);
 
   const onSaveNow = header.onSaveNow;
 
@@ -83,16 +85,23 @@ export function EditorWorkspace({
       }
       if (mod && event.key.toLowerCase() === 'k') {
         event.preventDefault();
-        document.getElementById('inline-assistant')?.focus();
+        setAssistantOpen(true);
         return;
       }
       if (event.key === 'Escape') {
+        // Escape only dismisses the Agent while focus is inside it, so it never
+        // steals the key from the document or the composition surface.
+        const slot = document.getElementById('inline-assistant');
+        if (assistantOpen && slot?.contains(document.activeElement)) {
+          setAssistantOpen(false);
+          return;
+        }
         setPreview(false);
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [onSaveNow]);
+  }, [onSaveNow, assistantOpen]);
 
   return (
     <EditorContextProvider
@@ -132,7 +141,16 @@ export function EditorWorkspace({
                 </EditorShell>
               </div>
               {preview && <PreviewPane doc={doc} />}
-              <InlineAssistantSlot configured={assistant.configured} busy={assistant.busy} />
+              <InlineAssistantSlot configured={assistant.configured} busy={assistant.busy}>
+                <EmbeddedAgentEntry
+                  open={assistantOpen}
+                  onOpenChange={setAssistantOpen}
+                  canEdit={header.canEdit}
+                  configured={assistant.configured}
+                  onSaveNow={onSaveNow}
+                  pollMs={assistant.pollMs}
+                />
+              </InlineAssistantSlot>
               {review}
             </div>
             <IntelligenceRail {...rail} />
