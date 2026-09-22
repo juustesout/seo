@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { AgentRun, ImageInsertionContext, InsertImageOperation } from '@seo/contracts';
+import type { AgentRun, DocumentOperationBatch, ImageInsertionContext, InsertImageOperation } from '@seo/contracts';
 import { ApiRequestError } from '../../../lib/api';
 import {
   EMBEDDED_AGENT_IMAGE_SOURCE_POLICY,
@@ -492,6 +492,68 @@ describe('embeddedAgent confirmed generation (R4.5B)', () => {
   it('labels the generating provider without exposing internal ids as the message', () => {
     expect(imageGenerationLabel('openai', 'dall-e-3')).toContain('OpenAI');
     expect(imageGenerationLabel('openai', 'dall-e-3')).toContain('dall-e-3');
+  });
+});
+
+const OPERATION_BATCH: DocumentOperationBatch = {
+  version: 1,
+  baseRevision: 'rev1:0123456789abcdef',
+  operations: [
+    { type: 'insert_section', ref: 'section-1', section: { kind: 'hero' }, position: { mode: 'document_start' } },
+    { type: 'insert_text', target: { mode: 'ref', ref: 'section-1' }, block: { type: 'heading', level: 1, text: 'Halleluja' } },
+    {
+      type: 'insert_image',
+      target: { mode: 'ref', ref: 'section-1' },
+      image: { assetId: 'm1', url: 'https://cdn.test/amsterdam.png', alt: 'Amsterdam' },
+    },
+  ],
+};
+
+describe('embeddedAgent document operations (Part B)', () => {
+  it('surfaces a succeeded run carrying an operation batch as a reviewable candidate', () => {
+    const outcome = embeddedAgentOutcomeFromRun(
+      run({
+        status: 'succeeded',
+        result: { version: 1, baseRevision: 'rev1:abc', document: { version: 1, blocks: [] }, operations: OPERATION_BATCH },
+      }),
+    );
+    expect(outcome).toMatchObject({ kind: 'operations', operations: OPERATION_BATCH });
+    expect(outcome.message).toContain('hero');
+    expect(outcome.message).toContain('Halleluja');
+  });
+
+  it('describes a plain section batch without inventing a title', () => {
+    const batch: DocumentOperationBatch = {
+      version: 1,
+      baseRevision: 'rev1:abc',
+      operations: [
+        { type: 'insert_section', ref: 'section-1', section: { kind: 'section' }, position: { mode: 'document_end' } },
+      ],
+    };
+    const outcome = embeddedAgentOutcomeFromRun(
+      run({
+        status: 'succeeded',
+        result: { version: 1, baseRevision: 'rev1:abc', document: { version: 1, blocks: [] }, operations: batch },
+      }),
+    );
+    expect(outcome.kind).toBe('operations');
+    expect(outcome.message).toContain('section');
+    expect(outcome.message).not.toContain('"');
+  });
+
+  it('maps the typed section-creation failures to product language', () => {
+    expect(
+      embeddedAgentOutcomeFromError(new ApiRequestError('section_heading_unresolved', 'no title', 422)),
+    ).toMatchObject({ kind: 'clarification' });
+    expect(
+      embeddedAgentOutcomeFromError(new ApiRequestError('section_creation_needs_content', 'empty', 422)),
+    ).toMatchObject({ kind: 'clarification' });
+    expect(
+      embeddedAgentOutcomeFromError(new ApiRequestError('section_creation_requires_saved_document', 'save first', 422)),
+    ).toMatchObject({ kind: 'error', canRetry: false });
+    expect(
+      embeddedAgentOutcomeFromError(new ApiRequestError('designer_operations_require_editor', 'editor only', 422)),
+    ).toMatchObject({ kind: 'error', canRetry: false });
   });
 });
 

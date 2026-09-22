@@ -56,6 +56,7 @@ export function EmbeddedAgentEntry({
       ? {
           buildImageInsertionContext: context.buildImageInsertionContext,
           applyImageInsertion: context.applyImageInsertion,
+          applyDocumentOperations: context.applyDocumentOperations,
         }
       : {}),
     onInserted: () => {
@@ -99,6 +100,7 @@ export function EmbeddedAgentEntry({
             state={agent.state}
             onRetry={agent.retry}
             onInsert={agent.insert}
+            onApplyOperations={agent.applyOperations}
             onGenerate={agent.generate}
             onCancel={close}
           />

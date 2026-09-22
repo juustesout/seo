@@ -90,6 +90,11 @@ export type ExternalEditorDocumentResult =
   | { ok: true }
   | { ok: false; reason: 'no-editor' | 'not-ready' | 'stale-revision' | 'unrepresentable' | 'apply-failed' };
 
+/** Why an operation batch could not be applied by the editor. */
+export type DocumentOperationApplyResult =
+  | { ok: true }
+  | { ok: false; reason: 'no-editor' | 'not-ready' | 'stale-revision' | 'unrepresentable' | 'apply-failed' };
+
 export interface BuildEditorContextInput {
   projectId: string;
   contentId: string | null;

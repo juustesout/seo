@@ -20,6 +20,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   type AgentRun,
+  type DocumentOperationBatch,
   type ImageInsertionContext,
   type InsertImageOperation,
 } from '@seo/contracts';
@@ -35,6 +36,7 @@ import {
   embeddedAgentWantsImageContext,
   type EmbeddedAgentState,
 } from './embeddedAgent';
+import type { DocumentOperationApplyResult } from '../editor/editorContext';
 import type { ImageInsertionApplyResult } from '../editor/imageInsertion';
 
 export const EMBEDDED_AGENT_DEFAULT_POLL_MS = 2000;
@@ -55,6 +57,8 @@ export interface UseEmbeddedAgentOptions {
   buildImageInsertionContext?: () => ImageInsertionContext | null;
   /** Applies a returned insert_image operation through the editor (R3.1). */
   applyImageInsertion?: (operation: InsertImageOperation, expectedRevision: string) => ImageInsertionApplyResult;
+  /** Applies a returned document operation batch through the editor (Part B). */
+  applyDocumentOperations?: (batch: DocumentOperationBatch, expectedRevision: string) => DocumentOperationApplyResult;
   /** Called after an insertion is applied so the host can reveal the result. */
   onInserted?: () => void;
 }
@@ -67,6 +71,8 @@ export interface EmbeddedAgentController {
   retry: () => void;
   /** Confirms and applies the current image-insertion candidate. */
   insert: () => void;
+  /** Confirms and applies the current document operation batch (Part B). */
+  applyOperations: () => void;
   /** R4.5B: confirms and runs the offered AI image generation. */
   generate: () => void;
   close: () => void;
@@ -88,6 +94,7 @@ export function useEmbeddedAgent(options: UseEmbeddedAgentOptions): EmbeddedAgen
     pollMs = EMBEDDED_AGENT_DEFAULT_POLL_MS,
     buildImageInsertionContext,
     applyImageInsertion,
+    applyDocumentOperations,
     onInserted,
   } = options;
 
@@ -143,6 +150,8 @@ export function useEmbeddedAgent(options: UseEmbeddedAgentOptions): EmbeddedAgen
       setState({ status: 'completed', instruction: text, message: outcome.message });
     } else if (outcome.kind === 'insertion') {
       setState({ status: 'insertion', instruction: text, message: outcome.message, operation: outcome.operation });
+    } else if (outcome.kind === 'operations') {
+      setState({ status: 'operations', instruction: text, message: outcome.message, operations: outcome.operations });
     } else if (outcome.kind === 'generation_required') {
       setState({
         status: 'generation',
@@ -312,6 +321,38 @@ export function useEmbeddedAgent(options: UseEmbeddedAgentOptions): EmbeddedAgen
     });
   }, [state, applyImageInsertion, onInserted]);
 
+  /**
+   * Part B: applies a returned document operation batch (e.g. a new hero with a
+   * heading and image) as one undoable editor transaction. Guarded so a second
+   * click cannot apply twice, and blocked honestly when the document changed.
+   */
+  const applyOperations = useCallback(() => {
+    if (state.status !== 'operations' || applyingRef.current) return;
+    applyingRef.current = true;
+    const text = state.instruction;
+    const expectedRevision = submittedContextRef.current?.revision ?? '';
+    const result = applyDocumentOperations?.(state.operations, expectedRevision);
+    if (!result) {
+      setState({ status: 'error', instruction: text, message: UNAVAILABLE_INSERT_MESSAGE, canRetry: false });
+      return;
+    }
+    if (result.ok) {
+      setState({ status: 'applied', instruction: text, message: 'Added to the document. Undo removes it.' });
+      onInserted?.();
+      return;
+    }
+    applyingRef.current = false;
+    setState({
+      status: 'error',
+      instruction: text,
+      message:
+        result.reason === 'stale-revision'
+          ? 'The document changed while I was preparing that. Please run the request again.'
+          : "I couldn't add that to the document. Save your changes and try again.",
+      canRetry: false,
+    });
+  }, [state, applyDocumentOperations, onInserted]);
+
   // Poll the active run while it is still working. The epoch captured at schedule
   // time invalidates a slow response after a document switch, close or resubmit.
   useEffect(() => {
@@ -376,5 +417,5 @@ export function useEmbeddedAgent(options: UseEmbeddedAgentOptions): EmbeddedAgen
     submit();
   }, [submit]);
 
-  return { state, instruction, setInstruction, submit, retry, insert, generate, close, canSubmit, blockedReason };
+  return { state, instruction, setInstruction, submit, retry, insert, applyOperations, generate, close, canSubmit, blockedReason };
 }

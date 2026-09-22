@@ -418,7 +418,7 @@ export function resolveImageInsertionRange(
  * change is kept out of history so a single undo still removes the image. Pure
  * best-effort: a miss leaves the caret untouched.
  */
-function selectInsertedImage(editor: Editor, mediaId: string): void {
+export function selectInsertedImage(editor: Editor, mediaId: string): void {
   const { doc, selection } = editor.state;
   let best = -1;
   let bestDistance = Number.POSITIVE_INFINITY;

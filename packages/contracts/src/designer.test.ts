@@ -248,6 +248,27 @@ describe('isValidDesignerProposal', () => {
       }),
     ).toBe(false);
   });
+
+  it('accepts a valid operation batch and rejects a malformed or combined one', () => {
+    const operations = {
+      version: 1,
+      baseRevision: 'rev1:abc',
+      operations: [
+        { type: 'insert_section', ref: 's1', section: { kind: 'hero' }, position: { mode: 'document_start' } },
+        { type: 'insert_text', target: { mode: 'ref', ref: 's1' }, block: { type: 'heading', level: 1, text: 'Halleluja' } },
+      ],
+    };
+    expect(isValidDesignerProposal({ ...validProposal, operations })).toBe(true);
+    expect(
+      isValidDesignerProposal({ ...validProposal, operations: { version: 1, baseRevision: 'rev1:abc', operations: [] } }),
+    ).toBe(false);
+    const insertion = {
+      type: 'insert_image',
+      target: { kind: 'cursor', position: 2 },
+      image: { assetId: 'm_solar', url: 'https://x.test/a.png', alt: 'Solar' },
+    };
+    expect(isValidDesignerProposal({ ...validProposal, operations, insertion })).toBe(false);
+  });
 });
 
 describe('contentRevisionOf', () => {

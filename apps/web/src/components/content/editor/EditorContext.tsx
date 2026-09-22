@@ -16,16 +16,21 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import type { Editor } from '@tiptap/react';
 import {
+  applyDocumentOperations as executeDocumentOperations,
   canonicalDocumentToEditorDocument,
   contentRevisionOf,
   isValidCanonicalDoc,
+  type CanonicalDocument,
+  type DocumentOperationBatch,
   type ImageInsertionContext,
   type InsertImageOperation,
   type TipDoc,
 } from '@seo/contracts';
+import { canonicalFromEditorDocument } from '../editorDraft';
 import {
   buildEditorContextSnapshot,
   EMPTY_EDITOR_SELECTION,
+  type DocumentOperationApplyResult,
   type EditorContextSnapshot,
   type EditorSelectionSnapshot,
   type ExternalEditorDocumentInput,
@@ -35,6 +40,7 @@ import {
   applyImageInsertionOperation,
   imageInsertionContextFromSnapshot,
   readEditorImageSemantics,
+  selectInsertedImage,
   type ImageInsertionApplyResult,
 } from './imageInsertion';
 import { readSelectionSnapshot } from './selection';
@@ -58,6 +64,13 @@ export interface EditorContextValue {
    * transaction, guarded by the revision the request was generated against.
    */
   applyImageInsertion: (operation: InsertImageOperation, expectedRevision: string) => ImageInsertionApplyResult;
+  /**
+   * Applies a document operation batch as one undoable editor transaction,
+   * guarded by the revision the batch was generated against. The whole batch is
+   * applied through a single document replacement, so it takes one autosave and
+   * one undo, and a returned image (if any) is selected for its properties.
+   */
+  applyDocumentOperations: (batch: DocumentOperationBatch, expectedRevision: string) => DocumentOperationApplyResult;
 }
 
 const EditorContext = createContext<EditorContextValue | null>(null);
@@ -143,9 +156,50 @@ export function EditorContextProvider({
     [ready, editor, doc],
   );
 
+  const applyDocumentOperations = useCallback(
+    (batch: DocumentOperationBatch, expectedRevision: string): DocumentOperationApplyResult => {
+      if (!ready) return { ok: false, reason: 'not-ready' };
+      if (!editor || editor.isDestroyed) return { ok: false, reason: 'no-editor' };
+      if (contentRevisionOf(doc) !== expectedRevision || batch.baseRevision !== expectedRevision) {
+        return { ok: false, reason: 'stale-revision' };
+      }
+      let base: CanonicalDocument;
+      try {
+        base = canonicalFromEditorDocument(doc);
+      } catch {
+        return { ok: false, reason: 'unrepresentable' };
+      }
+      let next: CanonicalDocument;
+      try {
+        next = executeDocumentOperations(base, batch);
+      } catch {
+        return { ok: false, reason: 'apply-failed' };
+      }
+      try {
+        // One replacement transaction: undoable, emits a single update and
+        // therefore reuses the existing onDocChange + autosave boundary.
+        if (!editor.commands.setContent(canonicalDocumentToEditorDocument(next), true)) {
+          return { ok: false, reason: 'apply-failed' };
+        }
+      } catch {
+        return { ok: false, reason: 'apply-failed' };
+      }
+      const imageOperation = [...batch.operations].reverse().find((operation) => operation.type === 'insert_image');
+      if (imageOperation?.type === 'insert_image' && imageOperation.image.assetId) {
+        try {
+          selectInsertedImage(editor, imageOperation.image.assetId);
+        } catch {
+          // Selection is a presentation nicety; the batch itself succeeded.
+        }
+      }
+      return { ok: true };
+    },
+    [ready, editor, doc],
+  );
+
   const value = useMemo<EditorContextValue>(
-    () => ({ snapshot, applyExternalDocument, buildImageInsertionContext, applyImageInsertion }),
-    [snapshot, applyExternalDocument, buildImageInsertionContext, applyImageInsertion],
+    () => ({ snapshot, applyExternalDocument, buildImageInsertionContext, applyImageInsertion, applyDocumentOperations }),
+    [snapshot, applyExternalDocument, buildImageInsertionContext, applyImageInsertion, applyDocumentOperations],
   );
 
   return <EditorContext.Provider value={value}>{children}</EditorContext.Provider>;

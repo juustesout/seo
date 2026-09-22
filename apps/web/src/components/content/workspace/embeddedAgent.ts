@@ -22,9 +22,11 @@
 import {
   IMAGE_SOURCE_POLICY_DEFAULT,
   isImageInsertionInstruction,
+  isValidDocumentOperationBatch,
   isValidInsertImageOperation,
   resolveVisualDesignIntent,
   type AgentRun,
+  type DocumentOperationBatch,
   type ImageInsertionContext,
   type ImageSourcePolicy,
   type InsertImageOperation,
@@ -44,6 +46,7 @@ export type EmbeddedAgentOutcome =
   | { kind: 'working'; message: string }
   | { kind: 'completed'; message: string }
   | { kind: 'insertion'; message: string; operation: InsertImageOperation }
+  | { kind: 'operations'; message: string; operations: DocumentOperationBatch }
   | { kind: 'generation_required'; message: string; provider: string; model: string }
   | { kind: 'empty'; message: string }
   | { kind: 'clarification'; message: string }
@@ -65,6 +68,7 @@ export type EmbeddedAgentState =
   | { status: 'working'; instruction: string; message: string }
   | { status: 'completed'; instruction: string; message: string }
   | { status: 'insertion'; instruction: string; message: string; operation: InsertImageOperation }
+  | { status: 'operations'; instruction: string; message: string; operations: DocumentOperationBatch }
   | {
       status: 'generation';
       instruction: string;
@@ -231,8 +235,20 @@ function imageInsertionOutcome(code: string | null | undefined): EmbeddedAgentOu
     case 'stale_editor_context':
       return { kind: 'error', message: STALE_IMAGE_CONTEXT_MESSAGE, canRetry: true };
     case 'image_insertion_requires_saved_document':
+    case 'section_creation_requires_saved_document':
     case 'designer_insertion_requires_editor':
+    case 'designer_operations_require_editor':
       return { kind: 'error', message: 'Save the document before asking for an image.', canRetry: false };
+    case 'section_heading_unresolved':
+      return {
+        kind: 'clarification',
+        message: 'What title should the section have? Put it in quotes, for example: add a hero section with the title "Welcome".',
+      };
+    case 'section_creation_needs_content':
+      return {
+        kind: 'clarification',
+        message: 'What should the section contain? Give me a title, an image, or both.',
+      };
     case 'section_target_unresolved':
       return { kind: 'clarification', message: SECTION_TARGET_UNRESOLVED_MESSAGE };
     case 'section_image_already_present':
@@ -368,6 +384,20 @@ function insertionCandidateMessage(role: VisualAssetRole | undefined): string {
   return 'I found a suitable image. Insert it where you asked?';
 }
 
+/** Product-language description of a reviewable structure batch. */
+function operationsCandidateMessage(batch: DocumentOperationBatch): string {
+  const section = batch.operations.find((operation) => operation.type === 'insert_section');
+  const heading = batch.operations.find((operation) => operation.type === 'insert_text');
+  const hasImage = batch.operations.some((operation) => operation.type === 'insert_image');
+  const kindLabel =
+    section && section.type === 'insert_section' && section.section.kind === 'hero' ? 'hero section' : 'section';
+  const title = heading && heading.type === 'insert_text' && heading.block.type === 'heading' ? heading.block.text : null;
+  const parts = [`I'll add a ${kindLabel}`];
+  if (title) parts.push(`titled "${title}"`);
+  if (hasImage) parts.push('with an image');
+  return `${parts.join(' ')}. Apply it?`;
+}
+
 /**
  * Maps a durable run snapshot to a product outcome. Terminal results are
  * grounded in the actual run: a succeeded run produced a proposal (never an
@@ -396,6 +426,10 @@ export function embeddedAgentOutcomeFromRun(run: AgentRun): EmbeddedAgentOutcome
         message: insertionCandidateMessage(insertion.visual?.role),
         operation: insertion,
       };
+    }
+    const operations = run.result?.operations;
+    if (operations && isValidDocumentOperationBatch(operations)) {
+      return { kind: 'operations', message: operationsCandidateMessage(operations), operations };
     }
     return { kind: 'completed', message: completedMessage(run) };
   }

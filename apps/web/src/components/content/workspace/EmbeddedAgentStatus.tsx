@@ -15,13 +15,15 @@ export interface EmbeddedAgentStatusProps {
   onRetry: () => void;
   /** Confirms the current image candidate; required to render the candidate actions. */
   onInsert?: () => void;
+  /** Confirms the current document operation batch; required to render its actions. */
+  onApplyOperations?: () => void;
   /** R4.5B: confirms the offered AI image generation; required to render its action. */
   onGenerate?: () => void;
   /** Dismisses the current result without changing the document. */
   onCancel?: () => void;
 }
 
-export function EmbeddedAgentStatus({ state, onRetry, onInsert, onGenerate, onCancel }: EmbeddedAgentStatusProps) {
+export function EmbeddedAgentStatus({ state, onRetry, onInsert, onApplyOperations, onGenerate, onCancel }: EmbeddedAgentStatusProps) {
   if (state.status === 'closed' || state.status === 'idle') return null;
 
   if (state.status === 'submitting') {
@@ -123,6 +125,50 @@ export function EmbeddedAgentStatus({ state, onRetry, onInsert, onGenerate, onCa
             data-testid="embedded-agent-insert"
           >
             Insert image
+          </Button>
+          <Button type="button" size="sm" variant="ghost" onClick={onCancel}>
+            Cancel
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
+  if (state.status === 'operations') {
+    const section = state.operations.operations.find((operation) => operation.type === 'insert_section');
+    const heading = state.operations.operations.find((operation) => operation.type === 'insert_text');
+    const image = state.operations.operations.find((operation) => operation.type === 'insert_image');
+    const kindLabel =
+      section && section.type === 'insert_section' && section.section.kind === 'hero' ? 'Hero section' : 'Section';
+    const title =
+      heading && heading.type === 'insert_text' && heading.block.type === 'heading' ? heading.block.text : null;
+    return (
+      <div
+        role="status"
+        aria-live="polite"
+        data-testid="embedded-agent-operations"
+        className="grid gap-2 rounded-md border border-border bg-muted/30 px-3 py-2 text-xs"
+      >
+        <p className="m-0 font-medium text-foreground">{kindLabel}</p>
+        <p className="m-0 text-muted-foreground">{state.message}</p>
+        {title && <p className="m-0 text-muted-foreground">Title: {title}</p>}
+        {image && image.type === 'insert_image' && (
+          <img
+            src={image.image.url}
+            alt={image.image.alt}
+            data-testid="embedded-agent-image-preview"
+            className="max-h-40 w-full rounded object-cover"
+          />
+        )}
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            type="button"
+            size="sm"
+            onClick={onApplyOperations}
+            disabled={!onApplyOperations}
+            data-testid="embedded-agent-apply"
+          >
+            Apply to document
           </Button>
           <Button type="button" size="sm" variant="ghost" onClick={onCancel}>
             Cancel

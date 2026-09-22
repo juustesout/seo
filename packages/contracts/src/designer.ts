@@ -41,6 +41,10 @@ import {
   type DesignerAcquisition,
 } from './mediaSource.js';
 import {
+  isValidDocumentOperationBatch,
+  type DocumentOperationBatch,
+} from './documentOperations.js';
+import {
   isValidVisualAssetSelectionRequest,
   type VisualAssetSelectionRequest,
 } from './visualAssetSelection.js';
@@ -322,6 +326,14 @@ export interface DesignerProposal {
    * `insertion` proposal.
    */
   acquisition?: DesignerAcquisition;
+  /**
+   * Part B: an ordered operation batch that creates structure (a hero/section,
+   * a heading, an image) relative to `document`. Like `insertion`, it is a
+   * suggestion the editor applies as its own undoable transaction; `apply`
+   * refuses it so a batch can never masquerade as an applied change. It is
+   * mutually exclusive with `insertion` and `acquisition`.
+   */
+  operations?: DocumentOperationBatch;
 }
 
 // ---------------------------------------------------------------------------
@@ -393,7 +405,7 @@ export function stableJsonStringify(value: unknown): string {
 
 const BRIEF_KEYS: ReadonlySet<string> = new Set(['goal', 'format', 'audience', 'topic', 'constraints']);
 const PLAN_KEYS: ReadonlySet<string> = new Set(['version', 'brief', 'steps']);
-const PROPOSAL_KEYS: ReadonlySet<string> = new Set(['version', 'baseRevision', 'document', 'plan', 'review', 'visual', 'insertion', 'acquisition']);
+const PROPOSAL_KEYS: ReadonlySet<string> = new Set(['version', 'baseRevision', 'document', 'plan', 'review', 'visual', 'insertion', 'acquisition', 'operations']);
 const REVIEW_KEYS: ReadonlySet<string> = new Set(['ok', 'errors', 'warnings', 'score']);
 const REVIEW_ISSUE_KEYS: ReadonlySet<string> = new Set(['code', 'message', 'step']);
 const STEP_TASK_KEYS: ReadonlySet<string> = new Set(['kind', 'task']);
@@ -592,9 +604,15 @@ export function isValidDesignerProposal(value: unknown): value is DesignerPropos
   if (value.visual !== undefined && !isValidVisualDesignProposal(value.visual)) return false;
   if (value.insertion !== undefined && !isValidInsertImageOperation(value.insertion)) return false;
   if (value.acquisition !== undefined && !isValidDesignerAcquisition(value.acquisition)) return false;
+  if (value.operations !== undefined && !isValidDocumentOperationBatch(value.operations)) return false;
   // A generation request describes a future image, so it can never carry an
   // insertion at the same time.
   if (value.acquisition !== undefined && value.insertion !== undefined) return false;
+  // An operation batch is a different mutation mechanism than a single insertion
+  // or a generation request, so at most one can be present.
+  if (value.operations !== undefined && (value.insertion !== undefined || value.acquisition !== undefined)) {
+    return false;
+  }
   return true;
 }
 

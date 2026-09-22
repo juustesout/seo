@@ -58,6 +58,7 @@ import {
   isValidDesignerPlan,
   isValidDesignerProposal,
   resolveDesignerRevisionTargets,
+  sectionCreationFromInstruction,
   selectVisualAssets,
   visualDesignProposalFromSelections,
   withDesignSystemRef,
@@ -78,6 +79,7 @@ import { CompositionPlannerService } from './compositionPlannerService.js';
 import { ContentService } from './contentService.js';
 import { DesignerPlannerContextService } from './designerPlannerContextService.js';
 import { ImageInsertionService, imageInsertionContextOf } from './imageInsertionService.js';
+import { SectionCreationService } from './sectionCreationService.js';
 import { MediaService } from './mediaService.js';
 import { getCosmosContext } from './cosmosService.js';
 
@@ -410,6 +412,10 @@ export class DesignerService {
     }
     const insertionContext = imageInsertionContextOf(intent);
     if (insertionContext) {
+      const sectionRequest = sectionCreationFromInstruction(intent.instruction);
+      if (sectionRequest) {
+        return new SectionCreationService(this.container).buildProposal(projectId, intent, insertionContext, sectionRequest);
+      }
       return new ImageInsertionService(this.container).buildProposal(projectId, intent, insertionContext);
     }
     const plan = await runDesignerPlanner(this.planner, intent);
@@ -444,6 +450,13 @@ export class DesignerService {
         422,
         'designer_acquisition_requires_confirmation',
         'This proposal asks for a confirmed image generation and cannot be applied directly.',
+      );
+    }
+    if (proposal.operations) {
+      throw new ApiError(
+        422,
+        'designer_operations_require_editor',
+        'This proposal changes document structure through the editor and cannot be applied directly.',
       );
     }
 

@@ -2,10 +2,10 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { act, render, renderHook, screen, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { Editor } from '@tiptap/core';
-import { CANONICAL_DOCUMENT_VERSION, contentRevisionOf, type CanonicalDocument, type TipDoc } from '@seo/contracts';
+import { CANONICAL_DOCUMENT_VERSION, contentRevisionOf, type CanonicalDocument, type DocumentOperationBatch, type TipDoc } from '@seo/contracts';
 import { createEditorExtensions } from './extensions';
 import { EditorContextProvider, useEditorContext } from './EditorContext';
-import type { ExternalEditorDocumentResult } from './editorContext';
+import type { DocumentOperationApplyResult, ExternalEditorDocumentResult } from './editorContext';
 
 const editors: Editor[] = [];
 
@@ -211,6 +211,87 @@ describe('EditorContextProvider applyExternalDocument', () => {
         canonical: APPLIED,
         expectedRevision: contentRevisionOf(DOC),
       });
+    });
+    expect(notReadyOutcome).toEqual({ ok: false, reason: 'not-ready' });
+  });
+});
+
+describe('EditorContextProvider applyDocumentOperations', () => {
+  const batch = (over: Partial<DocumentOperationBatch> = {}): DocumentOperationBatch => ({
+    version: 1,
+    baseRevision: contentRevisionOf(DOC),
+    operations: [
+      { type: 'insert_section', ref: 's1', section: { kind: 'hero' }, position: { mode: 'document_start' } },
+      { type: 'insert_text', target: { mode: 'ref', ref: 's1' }, block: { type: 'heading', level: 1, text: 'Halleluja' } },
+      {
+        type: 'insert_image',
+        target: { mode: 'ref', ref: 's1' },
+        image: { assetId: 'm1', url: 'https://cdn.test/amsterdam.png', alt: 'Amsterdam' },
+      },
+    ],
+    ...over,
+  });
+
+  it('applies a whole batch in one editor update and keeps the existing content', () => {
+    const editor = makeEditor(DOC);
+    const { result } = renderHook(() => useEditorContext(), { wrapper: wrapperFor(editor, DOC) });
+
+    let outcome: DocumentOperationApplyResult | undefined;
+    act(() => {
+      outcome = result.current!.applyDocumentOperations(batch(), contentRevisionOf(DOC));
+    });
+
+    expect(outcome).toEqual({ ok: true });
+    expect(editor.getText()).toContain('Halleluja');
+    expect(editor.getText()).toContain('Hello world');
+  });
+
+  it('rejects a stale revision without touching the editor', () => {
+    const editor = makeEditor(DOC);
+    const { result } = renderHook(() => useEditorContext(), { wrapper: wrapperFor(editor, DOC) });
+
+    let outcome: { ok: boolean; reason?: string } | undefined;
+    act(() => {
+      outcome = result.current!.applyDocumentOperations(batch({ baseRevision: 'rev1:0000000000000000' }), 'rev1:0000000000000000');
+    });
+
+    expect(outcome).toEqual({ ok: false, reason: 'stale-revision' });
+    expect(editor.getText()).toBe('Hello world');
+  });
+
+  it('rejects an unresolvable batch without a partial write', () => {
+    const editor = makeEditor(DOC);
+    const { result } = renderHook(() => useEditorContext(), { wrapper: wrapperFor(editor, DOC) });
+
+    let outcome: { ok: boolean; reason?: string } | undefined;
+    act(() => {
+      outcome = result.current!.applyDocumentOperations(
+        batch({
+          operations: [
+            { type: 'insert_text', target: { mode: 'ref', ref: 'missing' }, block: { type: 'paragraph', text: 'x' } },
+          ],
+        }),
+        contentRevisionOf(DOC),
+      );
+    });
+
+    expect(outcome).toEqual({ ok: false, reason: 'apply-failed' });
+    expect(editor.getText()).toBe('Hello world');
+  });
+
+  it('reports no editor and a not-ready context', () => {
+    const noEditor = renderHook(() => useEditorContext(), { wrapper: wrapperFor(null, DOC) });
+    let outcome: { ok: boolean; reason?: string } | undefined;
+    act(() => {
+      outcome = noEditor.result.current!.applyDocumentOperations(batch(), contentRevisionOf(DOC));
+    });
+    expect(outcome).toEqual({ ok: false, reason: 'no-editor' });
+
+    const editor = makeEditor(DOC);
+    const notReady = renderHook(() => useEditorContext(), { wrapper: wrapperFor(editor, DOC, false) });
+    let notReadyOutcome: { ok: boolean; reason?: string } | undefined;
+    act(() => {
+      notReadyOutcome = notReady.result.current!.applyDocumentOperations(batch(), contentRevisionOf(DOC));
     });
     expect(notReadyOutcome).toEqual({ ok: false, reason: 'not-ready' });
   });

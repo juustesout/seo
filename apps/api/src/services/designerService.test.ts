@@ -439,6 +439,77 @@ describe('DesignerService editor-native image insertion (R3.1)', () => {
   });
 });
 
+describe('DesignerService editor-native section creation (Part B)', () => {
+  const canonical: CanonicalDocument = {
+    version: 1,
+    blocks: [{ type: 'paragraph', content: [{ type: 'text', text: 'Solar panels store energy.' }] }],
+  };
+  const editorDocument = canonicalDocumentToEditorDocument(canonical);
+
+  function sectionContext(revision: string): ImageInsertionContext {
+    return {
+      revision,
+      document: canonical,
+      target: { kind: 'cursor', position: 3 },
+      nearbyText: 'We install solar panels on residential roofs.',
+    };
+  }
+
+  it('routes a hero-section creation intent to a document operation batch', async () => {
+    mock.contentJson = editorDocument;
+    mock.media = [
+      {
+        id: 'm_amsterdam',
+        filename: 'amsterdam.png',
+        mime_type: 'image/png',
+        url: 'https://cdn.test/amsterdam.png',
+        alt_text: 'Amsterdam canal houses',
+        caption: '',
+        width: 1600,
+        height: 900,
+        usage_count: 0,
+      },
+    ];
+    const proposal = await service.executeIntent(
+      PID,
+      intent({
+        instruction: "add a hero section with the title 'Halleluja' and a background image of Amsterdam",
+        contentId: '33333333-3333-4333-8333-333333333333',
+        context: { selection: sectionContext(contentRevisionOf(editorDocument)) },
+      }),
+    );
+    expect(proposal.operations?.operations.map((operation) => operation.type)).toEqual([
+      'insert_section',
+      'insert_text',
+      'insert_image',
+    ]);
+    expect(proposal.insertion).toBeUndefined();
+    expect(mock.chats).toHaveLength(0);
+    expect(mock.updates).toHaveLength(0);
+  });
+
+  it('refuses to apply a proposal that carries a document operation batch', async () => {
+    const operations = {
+      version: 1,
+      baseRevision: contentRevisionOf({ other: true }),
+      operations: [
+        { type: 'insert_section', ref: 's1', section: { kind: 'hero' }, position: { mode: 'document_start' } },
+        { type: 'insert_text', target: { mode: 'ref', ref: 's1' }, block: { type: 'heading', level: 1, text: 'X' } },
+      ],
+    };
+    const proposal = {
+      version: 1,
+      baseRevision: contentRevisionOf({ other: true }),
+      document: compiled.document,
+      operations,
+    };
+    const err = await expectApiError(service.apply('p1', 'c1', proposal, 'u1'));
+    expect(err.status).toBe(422);
+    expect(err.code).toBe('designer_operations_require_editor');
+    expect(mock.updates).toHaveLength(0);
+  });
+});
+
 describe('DesignerService.apply', () => {
   it('applies a proposal when the content revision still matches', async () => {
     mock.contentJson = { type: 'doc', content: [{ type: 'paragraph' }] };

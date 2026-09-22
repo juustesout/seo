@@ -39,6 +39,7 @@ import {
   resolveSectionVisual,
   resolveVisualDesignIntent,
   selectImageInsertionCandidate,
+  type CanonicalDocument,
   type DesignerIntent,
   type DesignerProposal,
   type ImageInsertionBackgroundHostRegion,
@@ -139,6 +140,30 @@ function backgroundHostTargetFor(
   return context.sectionTarget ?? null;
 }
 
+/**
+ * The inputs a multi-step image acquisition needs. `scope` is the product-language
+ * region the no-candidate message names; `baseRevision`/`baseDocument` anchor a
+ * possible `generation_required` proposal.
+ */
+export interface ImageAcquisitionInput {
+  projectId: string;
+  context: ImageInsertionContext;
+  visual: VisualDesignIntent;
+  subject?: string;
+  baseRevision: string;
+  baseDocument: CanonicalDocument;
+  scope: string;
+}
+
+/**
+ * The outcome of acquiring one image: either a usable library-backed candidate,
+ * or a `generation_required` proposal that asks for confirmation. The shared seam
+ * keeps the local -> external -> generation policy in one place for every caller.
+ */
+export type ImageAcquisitionResult =
+  | { status: 'image'; image: ImageInsertionCandidate; rationale?: string }
+  | { status: 'generation_required'; proposal: DesignerProposal };
+
 export class ImageInsertionService {
   constructor(private readonly container: ServiceContainer) {}
 
@@ -214,11 +239,58 @@ export class ImageInsertionService {
     const operationTarget = located ? located.target : context.target;
     const effectiveContext = located ? located.context : context;
 
-    const mediaService = new MediaService(this.container.sb, new SupabaseStorageStore(this.container.sb));
-    const media = await mediaService.list(projectId);
-    const selection = selectImageInsertionCandidate(effectiveContext, media.map(toVisualCandidate), {
+    const scope = section ? 'this section' : hero ? 'this hero' : background ? 'this background' : 'this text';
+    const acquisition = await this.acquireImage({
+      projectId,
+      context: effectiveContext,
       visual,
       ...(instructionSubject ? { subject: instructionSubject } : {}),
+      baseRevision,
+      baseDocument: editorDocumentToCanonical(content.content_json),
+      scope,
+    });
+    if (acquisition.status === 'generation_required') return acquisition.proposal;
+
+    const image = acquisition.image;
+    const rationale = acquisition.rationale;
+    const operation: InsertImageOperation = {
+      type: 'insert_image',
+      target: operationTarget,
+      image,
+      visual,
+      ...(rationale ? { rationale } : {}),
+    };
+    if (!isValidInsertImageOperation(operation)) {
+      throw new ApiError(500, 'image_insertion_operation_invalid', 'The Agent produced an invalid image operation.');
+    }
+
+    const proposal: DesignerProposal = {
+      version: DESIGNER_PROPOSAL_VERSION,
+      baseRevision,
+      document: editorDocumentToCanonical(content.content_json),
+      insertion: operation,
+    };
+    if (!isValidDesignerProposal(proposal)) {
+      throw new ApiError(500, 'designer_proposal_invalid', 'The Agent produced an invalid proposal.');
+    }
+    return proposal;
+  }
+
+  /**
+   * Acquires one image for a resolved visual, local-first: the project library,
+   * then (when the caller allowed it) an external stock search, then a confirmed
+   * generation. Never invents an image: it returns a `generation_required`
+   * proposal when generation is offered but unconfirmed, and throws an honest
+   * `ApiError` when nothing can be used. Shared by the single-insertion and
+   * batch-building paths so the policy lives in exactly one place.
+   */
+  async acquireImage(input: ImageAcquisitionInput): Promise<ImageAcquisitionResult> {
+    const { projectId, context, visual, subject, baseRevision, baseDocument, scope } = input;
+    const mediaService = new MediaService(this.container.sb, new SupabaseStorageStore(this.container.sb));
+    const media = await mediaService.list(projectId);
+    const selection = selectImageInsertionCandidate(context, media.map(toVisualCandidate), {
+      visual,
+      ...(subject ? { subject } : {}),
     });
 
     let image: ImageInsertionCandidate | null = null;
@@ -248,11 +320,11 @@ export class ImageInsertionService {
       try {
         image = await acquireExternalImage({
           provider: this.container.registry?.getMedia('unsplash'),
-          context: effectiveContext,
-          ...(instructionSubject ? { subject: instructionSubject } : {}),
+          context,
+          ...(subject ? { subject } : {}),
           visual,
           projectId,
-          persist: (input) => mediaService.importExternal(projectId, null, input),
+          persist: (input2) => mediaService.importExternal(projectId, null, input2),
         });
         rationale = 'Selected a stock photo for the surrounding text.';
       } catch (err) {
@@ -278,7 +350,7 @@ export class ImageInsertionService {
         const acquisitionProposal: DesignerProposal = {
           version: DESIGNER_PROPOSAL_VERSION,
           baseRevision,
-          document: editorDocumentToCanonical(content.content_json),
+          document: baseDocument,
           acquisition: {
             kind: 'generation_required',
             provider: 'openai',
@@ -288,53 +360,31 @@ export class ImageInsertionService {
         if (!isValidDesignerProposal(acquisitionProposal)) {
           throw new ApiError(500, 'designer_proposal_invalid', 'The Agent produced an invalid proposal.');
         }
-        return acquisitionProposal;
+        return { status: 'generation_required', proposal: acquisitionProposal };
       }
       // R4.5B case 4: the user explicitly confirmed generation for this run.
       image = await acquireGeneratedImage({
         projectId,
-        context: effectiveContext,
-        ...(instructionSubject ? { subject: instructionSubject } : {}),
+        context,
+        ...(subject ? { subject } : {}),
         visual,
         apiKey: credentials.apiKey,
         baseUrl: this.container.config.env.OPENAI_BASE_URL,
         model: this.container.config.env.OPENAI_IMAGE_MODEL,
-        persist: (input) => mediaService.importExternal(projectId, null, input),
+        persist: (input2) => mediaService.importExternal(projectId, null, input2),
       });
       rationale = 'Generated an image for the surrounding text.';
     }
 
     if (!image) {
       if (externalError) throw externalError;
-      const scope = section ? 'this section' : hero ? 'this hero' : background ? 'this background' : 'this text';
       throw new ApiError(
         422,
         'image_insertion_no_candidate',
         `No existing image in this project matches ${scope} closely enough.`,
       );
     }
-
-    const operation: InsertImageOperation = {
-      type: 'insert_image',
-      target: operationTarget,
-      image,
-      visual,
-      ...(rationale ? { rationale } : {}),
-    };
-    if (!isValidInsertImageOperation(operation)) {
-      throw new ApiError(500, 'image_insertion_operation_invalid', 'The Agent produced an invalid image operation.');
-    }
-
-    const proposal: DesignerProposal = {
-      version: DESIGNER_PROPOSAL_VERSION,
-      baseRevision,
-      document: editorDocumentToCanonical(content.content_json),
-      insertion: operation,
-    };
-    if (!isValidDesignerProposal(proposal)) {
-      throw new ApiError(500, 'designer_proposal_invalid', 'The Agent produced an invalid proposal.');
-    }
-    return proposal;
+    return { status: 'image', image, ...(rationale ? { rationale } : {}) };
   }
 
   /**

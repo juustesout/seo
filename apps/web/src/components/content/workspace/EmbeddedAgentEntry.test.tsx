@@ -11,8 +11,8 @@ import { useState } from 'react';
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { Editor } from '@tiptap/core';
-import type { AgentRun, InsertImageOperation } from '@seo/contracts';
-import { tiptapEmptyDoc, type TipDoc } from '@seo/contracts';
+import type { AgentRun, DocumentOperationBatch, InsertImageOperation } from '@seo/contracts';
+import { contentRevisionOf, tiptapEmptyDoc, type TipDoc } from '@seo/contracts';
 import { EditorContextProvider } from '../editor/EditorContext';
 import { createEditorExtensions } from '../editor/extensions';
 import { EmbeddedAgentEntry } from './EmbeddedAgentEntry';
@@ -824,6 +824,95 @@ describe('EmbeddedAgentEntry background visuals (R4.4)', () => {
     await waitFor(() =>
       expect(screen.getByTestId('embedded-agent-status').textContent).toContain('section or hero for the background'),
     );
+    expect(JSON.stringify(editor.getJSON())).not.toContain('"type":"image"');
+  });
+});
+
+describe('EmbeddedAgentEntry document operations (Part B)', () => {
+  const OPERATION_INSTRUCTION = 'Please add a hero section with a title "Halleluja" and background image of Amsterdam';
+
+  function operationBatch(): DocumentOperationBatch {
+    return {
+      version: 1,
+      baseRevision: contentRevisionOf(IMAGE_DOC),
+      operations: [
+        { type: 'insert_section', ref: 'section-1', section: { kind: 'hero' }, position: { mode: 'document_start' } },
+        {
+          type: 'insert_text',
+          target: { mode: 'ref', ref: 'section-1' },
+          block: { type: 'heading', level: 1, text: 'Halleluja' },
+        },
+        {
+          type: 'insert_image',
+          target: { mode: 'ref', ref: 'section-1' },
+          image: { assetId: 'm1', url: 'https://cdn.test/amsterdam.png', alt: 'Amsterdam' },
+        },
+      ],
+    };
+  }
+
+  function operationsSucceeded(): AgentRun {
+    return run({
+      status: 'succeeded',
+      completedAt: '2026-01-01T00:00:01.000Z',
+      result: {
+        version: 1,
+        baseRevision: contentRevisionOf(IMAGE_DOC),
+        document: { version: 1, blocks: [] },
+        operations: operationBatch(),
+      },
+    });
+  }
+
+  it('applies a hero, title and image batch as one undoable editor edit', async () => {
+    const editor = makeImageEditor();
+    apiMock.api
+      .mockResolvedValueOnce({ run: run({ status: 'queued' }), reused: false })
+      .mockResolvedValueOnce(operationsSucceeded());
+
+    render(<EditorHarness editor={editor} />);
+    fireEvent.change(screen.getByTestId('embedded-agent-input'), { target: { value: OPERATION_INSTRUCTION } });
+    fireEvent.click(screen.getByTestId('embedded-agent-send'));
+
+    const body = apiMock.api.mock.calls[0]![1]!.body as Record<string, unknown>;
+    expect(body.instruction).toBe(OPERATION_INSTRUCTION);
+    expect(body.editor_context).toBeDefined();
+
+    await waitFor(() => expect(screen.getByTestId('embedded-agent-operations')).toBeTruthy());
+    expect(screen.getByTestId('embedded-agent-operations').textContent).toContain('Halleluja');
+    expect(JSON.stringify(editor.getJSON())).not.toContain('"type":"image"');
+
+    const apply = screen.getByTestId('embedded-agent-apply');
+    fireEvent.click(apply);
+    fireEvent.click(apply);
+    await waitFor(() => expect(screen.getByTestId('embedded-agent-status').textContent).toContain('Added to the document'));
+
+    const json = JSON.stringify(editor.getJSON());
+    expect(json).toContain('Halleluja');
+    expect(json).toContain('"type":"image"');
+    expect((json.match(/"type":"image"/g) ?? []).length).toBe(1);
+
+    act(() => {
+      editor.commands.undo();
+    });
+    expect(JSON.stringify(editor.getJSON())).not.toContain('"type":"image"');
+  });
+
+  it('refuses to apply a batch once the document revision has moved on', async () => {
+    const editor = makeImageEditor();
+    apiMock.api
+      .mockResolvedValueOnce({ run: run({ status: 'queued' }), reused: false })
+      .mockResolvedValueOnce(operationsSucceeded());
+
+    const { rerender } = render(<EditorHarness editor={editor} />);
+    fireEvent.change(screen.getByTestId('embedded-agent-input'), { target: { value: OPERATION_INSTRUCTION } });
+    fireEvent.click(screen.getByTestId('embedded-agent-send'));
+    await waitFor(() => expect(screen.getByTestId('embedded-agent-operations')).toBeTruthy());
+
+    rerender(<EditorHarness editor={editor} doc={tiptapEmptyDoc()} />);
+    fireEvent.click(screen.getByTestId('embedded-agent-apply'));
+
+    await waitFor(() => expect(screen.getByTestId('embedded-agent-status').textContent).toContain('document changed'));
     expect(JSON.stringify(editor.getJSON())).not.toContain('"type":"image"');
   });
 });
