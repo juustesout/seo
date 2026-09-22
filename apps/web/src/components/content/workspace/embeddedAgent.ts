@@ -44,6 +44,7 @@ export type EmbeddedAgentOutcome =
   | { kind: 'working'; message: string }
   | { kind: 'completed'; message: string }
   | { kind: 'insertion'; message: string; operation: InsertImageOperation }
+  | { kind: 'generation_required'; message: string; provider: string; model: string }
   | { kind: 'empty'; message: string }
   | { kind: 'clarification'; message: string }
   | { kind: 'unsupported'; message: string }
@@ -64,6 +65,13 @@ export type EmbeddedAgentState =
   | { status: 'working'; instruction: string; message: string }
   | { status: 'completed'; instruction: string; message: string }
   | { status: 'insertion'; instruction: string; message: string; operation: InsertImageOperation }
+  | {
+      status: 'generation';
+      instruction: string;
+      message: string;
+      provider: string;
+      model: string;
+    }
   | { status: 'applied'; instruction: string; message: string }
   | { status: 'empty'; instruction: string; message: string }
   | { status: 'clarification'; instruction: string; message: string }
@@ -114,20 +122,43 @@ const PROVIDER_NOT_CONFIGURED_MESSAGE =
 const ASSET_PERSISTENCE_FAILED_MESSAGE = "I found an image but couldn't save it to the library. Try again in a moment.";
 const EXTERNAL_IMAGE_UNUSABLE_MESSAGE = "I couldn't use that image. Try again.";
 
+/** R4.5B: confirmed AI image generation outcomes. */
+const GENERATION_NOT_CONFIGURED_MESSAGE =
+  "AI image generation isn't set up yet. Add an image to the library or ask an admin to configure an image provider.";
+const GENERATION_FAILED_MESSAGE = "I couldn't generate that image. Try again in a moment.";
+const GENERATED_IMAGE_UNUSABLE_MESSAGE = "The generated image couldn't be used. Try again.";
+
+/**
+ * R4.5B: product copy for the generation confirmation offer. It states plainly
+ * that an AI image is available and that it only runs on an explicit action, so
+ * the user is never surprised by a charge or a silent generation.
+ */
+export const GENERATION_REQUIRED_MESSAGE =
+  "I couldn't find a suitable image for this text. I can create one with AI, but it only runs if you confirm it.";
+
+/** Short, non-technical label for the generating provider/model. */
+export function imageGenerationLabel(provider: string, model: string): string {
+  if (provider === 'openai') return model ? `OpenAI (${model})` : 'OpenAI';
+  return model ? `${provider} (${model})` : provider;
+}
+
 /** Shown when the user asked for an image but there is no reliable insertion point. */
 export const IMAGE_INSERTION_CLARIFICATION_MESSAGE =
   'Where should I place the image? Put the cursor where you want it, or select a paragraph.';
 
 /**
- * R4.5A: the source policy the editor sends with an explicit image request. The
- * call is local-first (the project library is always tried first), and external
- * stock search is enabled so the backend may fall back when nothing local
- * matches. Generation stays off until the user explicitly confirms it (R4.5B).
- * The API validates this server-side; the client is never the only guard.
+ * R4.5A/R4.5B: the source policy the editor sends with an explicit image request.
+ * The call is local-first (the project library is always tried first), external
+ * stock search is enabled, and AI generation is *offered* but never automatic:
+ * `requireGenerationConfirmation` is true, so the first run can only return a
+ * `generation_required` proposal and the confirmed rerun sets
+ * `generationConfirmed` to actually generate. The API validates this server-side;
+ * the client is never the only guard.
  */
 export const EMBEDDED_AGENT_IMAGE_SOURCE_POLICY: ImageSourcePolicy = {
   ...IMAGE_SOURCE_POLICY_DEFAULT,
   allowExternalSearch: true,
+  allowGeneration: true,
 };
 
 /** Human-readable role labels the inline candidate can show. */
@@ -225,6 +256,14 @@ function imageInsertionOutcome(code: string | null | undefined): EmbeddedAgentOu
     case 'external_image_too_large':
     case 'external_image_untrusted_source':
       return { kind: 'empty', message: EXTERNAL_IMAGE_UNUSABLE_MESSAGE };
+    // R4.5B: confirmed AI generation. Not configured is a capability note; a
+    // failed generation or an unusable result is recoverable.
+    case 'image_generation_not_configured':
+      return { kind: 'unsupported', message: GENERATION_NOT_CONFIGURED_MESSAGE };
+    case 'image_generation_failed':
+      return { kind: 'error', message: GENERATION_FAILED_MESSAGE, canRetry: true };
+    case 'generated_image_too_large':
+      return { kind: 'empty', message: GENERATED_IMAGE_UNUSABLE_MESSAGE };
     default:
       return null;
   }
@@ -341,6 +380,15 @@ export function embeddedAgentOutcomeFromRun(run: AgentRun): EmbeddedAgentOutcome
     return { kind: 'working', message: 'The Agent is working on your request…' };
   }
   if (run.status === 'succeeded') {
+    const acquisition = run.result?.acquisition;
+    if (acquisition?.kind === 'generation_required') {
+      return {
+        kind: 'generation_required',
+        message: GENERATION_REQUIRED_MESSAGE,
+        provider: acquisition.provider,
+        model: acquisition.model,
+      };
+    }
     const insertion = run.result?.insertion;
     if (isValidInsertImageOperation(insertion)) {
       return {

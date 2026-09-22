@@ -60,9 +60,29 @@ vi.mock('./mediaService.js', () => ({
 }));
 
 const acquireCalls: unknown[] = [];
+const generateCalls: unknown[] = [];
+const generation = vi.hoisted(() => ({
+  configured: true,
+  apiKey: 'sk-test-key' as string | null,
+  keySource: 'project' as const,
+  externalError: null as { status: number; code: string } | null,
+}));
+
+vi.mock('./aiService.js', () => ({
+  AIService: class {
+    async resolveImageGeneration() {
+      return { configured: generation.configured, apiKey: generation.apiKey, keySource: generation.keySource };
+    }
+  },
+}));
+
 vi.mock('./externalImageAcquisition.js', () => ({
   acquireExternalImage: async (params: unknown) => {
     acquireCalls.push(params);
+    if (generation.externalError) {
+      const { ApiError } = await import('../apiErrors.js');
+      throw new ApiError(generation.externalError.status, generation.externalError.code, 'external failure');
+    }
     return {
       assetId: 'm_external',
       url: 'https://cdn.test/stock.png',
@@ -72,6 +92,21 @@ vi.mock('./externalImageAcquisition.js', () => ({
       source: 'unsplash',
       width: 1200,
       height: 800,
+    };
+  },
+}));
+
+vi.mock('./imageGenerationAcquisition.js', () => ({
+  imageGenerationModel: (override?: string) => (override && override.trim() ? override : 'dall-e-3'),
+  acquireGeneratedImage: async (params: unknown) => {
+    generateCalls.push(params);
+    return {
+      assetId: 'm_generated',
+      url: 'https://cdn.test/generated.png',
+      alt: 'Generated image',
+      source: 'openai_generated',
+      width: 1024,
+      height: 1024,
     };
   },
 }));
@@ -109,7 +144,7 @@ function intent(over: Partial<DesignerIntent> = {}): DesignerIntent {
   };
 }
 
-const container = { sb: {} } as unknown as ServiceContainer;
+const container = { sb: {}, config: { env: {} } } as unknown as ServiceContainer;
 const service = new ImageInsertionService(container);
 
 async function expectApiError(promise: Promise<unknown>) {
@@ -125,6 +160,11 @@ beforeEach(() => {
   mock.contentJson = editorDocument;
   mock.getCalls = 0;
   mock.mediaListCalls = [];
+  acquireCalls.length = 0;
+  generateCalls.length = 0;
+  generation.configured = true;
+  generation.apiKey = 'sk-test-key';
+  generation.externalError = null;
   mock.media = [
     {
       id: 'm_solar',
@@ -243,6 +283,108 @@ describe('ImageInsertionService.buildProposal', () => {
     );
     expect(err.code).toBe('image_insertion_no_candidate');
     expect(acquireCalls).toHaveLength(0);
+  });
+
+  it('returns a successful generation_required proposal when generation is available but unconfirmed (R4.5B)', async () => {
+    const proposal = await service.buildProposal(
+      PROJECT_ID,
+      intent(),
+      context({
+        nearbyText: 'quarterly finance report',
+        sourcePolicy: { allowExternalSearch: false, allowGeneration: true, requireGenerationConfirmation: true },
+      }),
+    );
+    expect(proposal.insertion).toBeUndefined();
+    expect(proposal.acquisition).toEqual({ kind: 'generation_required', provider: 'openai', model: 'dall-e-3' });
+    expect(proposal.baseRevision).toBe(contentRevisionOf(editorDocument));
+    expect(proposal.document).toEqual(editorDocumentToCanonical(editorDocument));
+    // Nothing is generated (or spent) before the user confirms.
+    expect(generateCalls).toHaveLength(0);
+  });
+
+  it('generates and inserts when the caller explicitly confirmed (R4.5B)', async () => {
+    const proposal = await service.buildProposal(
+      PROJECT_ID,
+      intent(),
+      context({
+        nearbyText: 'quarterly finance report',
+        generationConfirmed: true,
+        sourcePolicy: { allowExternalSearch: false, allowGeneration: true, requireGenerationConfirmation: true },
+      }),
+    );
+    expect(generateCalls).toHaveLength(1);
+    expect(proposal.acquisition).toBeUndefined();
+    expect(proposal.insertion?.image).toMatchObject({
+      assetId: 'm_generated',
+      source: 'openai_generated',
+      url: 'https://cdn.test/generated.png',
+    });
+    expect((generateCalls[0] as { apiKey: string }).apiKey).toBe('sk-test-key');
+  });
+
+  it('reports honestly when generation is not configured (R4.5B)', async () => {
+    generation.configured = false;
+    generation.apiKey = null;
+    const err = await expectApiError(
+      service.buildProposal(
+        PROJECT_ID,
+        intent(),
+        context({
+          nearbyText: 'quarterly finance report',
+          generationConfirmed: true,
+          sourcePolicy: { allowExternalSearch: false, allowGeneration: true, requireGenerationConfirmation: true },
+        }),
+      ),
+    );
+    expect(err.status).toBe(422);
+    expect(err.code).toBe('image_generation_not_configured');
+    expect(generateCalls).toHaveLength(0);
+  });
+
+  it('never generates when the policy does not allow it, even if the client claims confirmation (R4.5B)', async () => {
+    const err = await expectApiError(
+      service.buildProposal(
+        PROJECT_ID,
+        intent(),
+        context({
+          nearbyText: 'quarterly finance report',
+          generationConfirmed: true,
+          sourcePolicy: { allowExternalSearch: false, allowGeneration: false, requireGenerationConfirmation: true },
+        }),
+      ),
+    );
+    expect(err.code).toBe('image_insertion_no_candidate');
+    expect(generateCalls).toHaveLength(0);
+  });
+
+  it('offers a confirmed generation when external search was allowed but failed (R4.5B)', async () => {
+    generation.externalError = { status: 422, code: 'provider_not_configured' };
+    const proposal = await service.buildProposal(
+      PROJECT_ID,
+      intent(),
+      context({
+        nearbyText: 'quarterly finance report',
+        sourcePolicy: { allowExternalSearch: true, allowGeneration: true, requireGenerationConfirmation: true },
+      }),
+    );
+    expect(acquireCalls).toHaveLength(1);
+    expect(proposal.acquisition?.kind).toBe('generation_required');
+    expect(generateCalls).toHaveLength(0);
+  });
+
+  it('surfaces the external failure when generation is not allowed (R4.5B)', async () => {
+    generation.externalError = { status: 422, code: 'provider_not_configured' };
+    const err = await expectApiError(
+      service.buildProposal(
+        PROJECT_ID,
+        intent(),
+        context({
+          nearbyText: 'quarterly finance report',
+          sourcePolicy: { allowExternalSearch: true, allowGeneration: false, requireGenerationConfirmation: true },
+        }),
+      ),
+    );
+    expect(err.code).toBe('provider_not_configured');
   });
 });
 

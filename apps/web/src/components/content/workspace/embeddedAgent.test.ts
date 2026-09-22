@@ -9,6 +9,7 @@ import {
   embeddedAgentRunPath,
   embeddedAgentSubmission,
   embeddedAgentWantsImageContext,
+  imageGenerationLabel,
   visualIntentLabel,
   visualRoleLabel,
   type EmbeddedAgentSubmissionInput,
@@ -429,10 +430,10 @@ describe('embeddedAgent background visuals (R4.4)', () => {
 });
 
 describe('embeddedAgent external image acquisition (R4.5A)', () => {
-  it('sends a conservative policy that allows local-first external search but not generation', () => {
+  it('sends a policy that allows local-first external search and offers generation only on confirmation', () => {
     expect(EMBEDDED_AGENT_IMAGE_SOURCE_POLICY).toEqual({
       allowExternalSearch: true,
-      allowGeneration: false,
+      allowGeneration: true,
       requireGenerationConfirmation: true,
     });
   });
@@ -455,6 +456,42 @@ describe('embeddedAgent external image acquisition (R4.5A)', () => {
     expect(
       embeddedAgentOutcomeFromError(new ApiRequestError('external_image_untrusted_source', 'blocked', 422)),
     ).toMatchObject({ kind: 'empty' });
+  });
+});
+
+describe('embeddedAgent confirmed generation (R4.5B)', () => {
+  it('surfaces a succeeded generation_required proposal as an explicit confirmation offer', () => {
+    const outcome = embeddedAgentOutcomeFromRun(
+      run({
+        status: 'succeeded',
+        result: {
+          version: 1,
+          baseRevision: 'rev1:abc',
+          document: { version: 1, blocks: [] },
+          acquisition: { kind: 'generation_required', provider: 'openai', model: 'dall-e-3' },
+        },
+      }),
+    );
+    expect(outcome).toMatchObject({ kind: 'generation_required', provider: 'openai', model: 'dall-e-3' });
+    expect(outcome).not.toHaveProperty('operation');
+  });
+
+  it('maps generation failures to honest product copy', () => {
+    expect(
+      embeddedAgentOutcomeFromError(new ApiRequestError('image_generation_not_configured', 'no key', 422)),
+    ).toMatchObject({ kind: 'unsupported' });
+    expect(embeddedAgentOutcomeFromError(new ApiRequestError('image_generation_failed', 'boom', 502))).toMatchObject({
+      kind: 'error',
+      canRetry: true,
+    });
+    expect(embeddedAgentOutcomeFromError(new ApiRequestError('generated_image_too_large', 'too big', 422))).toMatchObject({
+      kind: 'empty',
+    });
+  });
+
+  it('labels the generating provider without exposing internal ids as the message', () => {
+    expect(imageGenerationLabel('openai', 'dall-e-3')).toContain('OpenAI');
+    expect(imageGenerationLabel('openai', 'dall-e-3')).toContain('dall-e-3');
   });
 });
 

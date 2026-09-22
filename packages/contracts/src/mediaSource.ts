@@ -129,3 +129,56 @@ export function isValidImageSourcePolicy(value: unknown): value is ImageSourcePo
     typeof value.requireGenerationConfirmation === 'boolean'
   );
 }
+
+// ---------------------------------------------------------------------------
+// Confirmed generation acquisition (R4.5B)
+// ---------------------------------------------------------------------------
+
+/**
+ * Providers that may generate an image. Fixed server-side and never chosen by
+ * the client; the first version supports OpenAI only.
+ */
+export const IMAGE_GENERATION_PROVIDERS = ['openai'] as const;
+export type ImageGenerationProvider = (typeof IMAGE_GENERATION_PROVIDERS)[number];
+
+/** Currently one acquisition state: the user must confirm an AI generation. */
+export const DESIGNER_ACQUISITION_KINDS = ['generation_required'] as const;
+export type DesignerAcquisitionKind = (typeof DESIGNER_ACQUISITION_KINDS)[number];
+
+/** Bound for the model id shown alongside the confirmation request. */
+export const DESIGNER_ACQUISITION_MODEL_MAX_CHARS = 100;
+
+/**
+ * A *successful* Designer proposal state that asks the user to confirm an AI
+ * image generation. It carries no image, is never an error, and states the
+ * provider/model explicitly (no cost, no credentials, no secret configuration).
+ * The confirmed follow-up run performs the actual generation.
+ */
+export interface DesignerAcquisition {
+  kind: DesignerAcquisitionKind;
+  provider: ImageGenerationProvider;
+  model: string;
+}
+
+/** True when `value` is a supported generation provider id. */
+export function isImageGenerationProvider(value: unknown): value is ImageGenerationProvider {
+  return typeof value === 'string' && (IMAGE_GENERATION_PROVIDERS as readonly string[]).includes(value);
+}
+
+/** True when `value` is a well-formed generation_required acquisition. */
+export function isValidDesignerAcquisition(value: unknown): value is DesignerAcquisition {
+  if (!isPlainObject(value)) return false;
+  if (!hasOnlyKeys(value, ['kind', 'provider', 'model'])) return false;
+  if (value.kind !== 'generation_required') return false;
+  if (!isImageGenerationProvider(value.provider)) return false;
+  return (
+    typeof value.model === 'string' &&
+    value.model.length > 0 &&
+    value.model.length <= DESIGNER_ACQUISITION_MODEL_MAX_CHARS
+  );
+}
+
+/** True when `value` only contains keys from `allowed`. */
+function hasOnlyKeys(value: PlainRecord, allowed: readonly string[]): boolean {
+  return Object.keys(value).every((key) => allowed.includes(key));
+}

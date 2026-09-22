@@ -424,6 +424,19 @@ describe('DesignerService editor-native image insertion (R3.1)', () => {
     expect(err.code).toBe('designer_insertion_requires_editor');
     expect(mock.updates).toHaveLength(0);
   });
+
+  it('refuses to apply a proposal that asks for a confirmed generation (R4.5B)', async () => {
+    const proposal = {
+      version: 1,
+      baseRevision: contentRevisionOf({ other: true }),
+      document: compiled.document,
+      acquisition: { kind: 'generation_required' as const, provider: 'openai' as const, model: 'dall-e-3' },
+    };
+    const err = await expectApiError(service.apply('p1', 'c1', proposal, 'u1'));
+    expect(err.status).toBe(422);
+    expect(err.code).toBe('designer_acquisition_requires_confirmation');
+    expect(mock.updates).toHaveLength(0);
+  });
 });
 
 describe('DesignerService.apply', () => {

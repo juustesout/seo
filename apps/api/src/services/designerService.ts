@@ -439,6 +439,13 @@ export class DesignerService {
         'This proposal inserts an image through the editor and cannot be applied directly.',
       );
     }
+    if (proposal.acquisition) {
+      throw new ApiError(
+        422,
+        'designer_acquisition_requires_confirmation',
+        'This proposal asks for a confirmed image generation and cannot be applied directly.',
+      );
+    }
 
     const content = new ContentService(this.container.sb);
     const current = await content.get(projectId, contentId);

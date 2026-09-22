@@ -37,6 +37,10 @@ import {
   type InsertImageOperation,
 } from './imageInsertion.js';
 import {
+  isValidDesignerAcquisition,
+  type DesignerAcquisition,
+} from './mediaSource.js';
+import {
   isValidVisualAssetSelectionRequest,
   type VisualAssetSelectionRequest,
 } from './visualAssetSelection.js';
@@ -311,6 +315,13 @@ export interface DesignerProposal {
    * masquerade as an applied change.
    */
   insertion?: InsertImageOperation;
+  /**
+   * R4.5B: a successful proposal state asking the user to confirm an AI image
+   * generation. It carries no image and is mutually exclusive with `insertion`:
+   * the confirmed follow-up run performs the generation and returns a normal
+   * `insertion` proposal.
+   */
+  acquisition?: DesignerAcquisition;
 }
 
 // ---------------------------------------------------------------------------
@@ -382,7 +393,7 @@ export function stableJsonStringify(value: unknown): string {
 
 const BRIEF_KEYS: ReadonlySet<string> = new Set(['goal', 'format', 'audience', 'topic', 'constraints']);
 const PLAN_KEYS: ReadonlySet<string> = new Set(['version', 'brief', 'steps']);
-const PROPOSAL_KEYS: ReadonlySet<string> = new Set(['version', 'baseRevision', 'document', 'plan', 'review', 'visual', 'insertion']);
+const PROPOSAL_KEYS: ReadonlySet<string> = new Set(['version', 'baseRevision', 'document', 'plan', 'review', 'visual', 'insertion', 'acquisition']);
 const REVIEW_KEYS: ReadonlySet<string> = new Set(['ok', 'errors', 'warnings', 'score']);
 const REVIEW_ISSUE_KEYS: ReadonlySet<string> = new Set(['code', 'message', 'step']);
 const STEP_TASK_KEYS: ReadonlySet<string> = new Set(['kind', 'task']);
@@ -580,6 +591,10 @@ export function isValidDesignerProposal(value: unknown): value is DesignerPropos
   if (value.review !== undefined && !isValidDesignerReview(value.review)) return false;
   if (value.visual !== undefined && !isValidVisualDesignProposal(value.visual)) return false;
   if (value.insertion !== undefined && !isValidInsertImageOperation(value.insertion)) return false;
+  if (value.acquisition !== undefined && !isValidDesignerAcquisition(value.acquisition)) return false;
+  // A generation request describes a future image, so it can never carry an
+  // insertion at the same time.
+  if (value.acquisition !== undefined && value.insertion !== undefined) return false;
   return true;
 }
 

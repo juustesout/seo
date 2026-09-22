@@ -184,9 +184,28 @@ export class AIService {
     };
   }
 
+  /**
+   * Effective credential for editor image generation. Reuses the exact same
+   * BYOK precedence as every other AI call (account -> project -> server env),
+   * so a project never needs a second key, but returns the raw key for a
+   * server-side generation call only. The key is never sent to the browser.
+   */
+  async resolveImageGeneration(
+    projectId: string,
+  ): Promise<{ configured: boolean; apiKey: string | null; keySource: AiKeySource }> {
+    const row = await this.readProjectRow(projectId);
+    // Image generation is always an OpenAI capability, so the account lookup
+    // targets OpenAI regardless of the project's chat provider.
+    const accountKey = await this.accountApiKey(row.account_id, DEFAULT_PROVIDER);
+    const projectKey = await this.projectApiKey(projectId);
+    const envKey = this.container.config.env.OPENAI_API_KEY ?? null;
+    const effectiveKey = accountKey ?? projectKey ?? envKey;
+    const keySource: AiKeySource = accountKey ? 'account' : projectKey ? 'project' : envKey ? 'env' : 'none';
+    return { configured: Boolean(effectiveKey), apiKey: effectiveKey, keySource };
+  }
+
   /** Full non-secret status the UI / future REST + MCP rely on. */
-  async status(projectId: string): Promise<ProjectAiStatusDto> {
-    const settings = await this.readSettings(projectId);
+  async status(projectId: string): Promise<ProjectAiStatusDto> {    const settings = await this.readSettings(projectId);
     const resolved = await this.resolve(projectId);
     const provider = resolved.provider;
     const chatModel = settings.chatModel ?? provider.models().find((m) => m.kind === 'chat')?.id ?? DEFAULT_CHAT_MODEL;

@@ -307,6 +307,14 @@ export interface ImageInsertionContext {
    * API edge so the client is never the only guard.
    */
   sourcePolicy?: ImageSourcePolicy;
+  /**
+   * R4.5B: the user's explicit authorization to generate an image for *this*
+   * run. Only honored when the source policy permits generation and requires
+   * confirmation; the server validates the effective combination and never
+   * trusts this flag alone. Absent/false means the caller has not confirmed, so
+   * no generation happens and a `generation_required` proposal is returned.
+   */
+  generationConfirmed?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -352,6 +360,7 @@ const CONTEXT_KEYS: ReadonlySet<string> = new Set([
   'language',
   'targetNodeType',
   'sourcePolicy',
+  'generationConfirmed',
 ]);
 
 const TARGET_KIND_SET: ReadonlySet<string> = new Set(IMAGE_INSERTION_TARGET_KINDS);
@@ -512,6 +521,7 @@ export function isValidImageInsertionContext(value: unknown): value is ImageInse
   if (!isOptionalBoundedString(value.sectionHeading, IMAGE_INSERTION_TITLE_MAX_CHARS)) return false;
   if (!isOptionalBoundedString(value.targetNodeType, IMAGE_INSERTION_NODE_TYPE_MAX_CHARS)) return false;
   if (value.sourcePolicy !== undefined && !isValidImageSourcePolicy(value.sourcePolicy)) return false;
+  if (value.generationConfirmed !== undefined && typeof value.generationConfirmed !== 'boolean') return false;
   return isOptionalBoundedString(value.language, IMAGE_INSERTION_LANGUAGE_MAX_CHARS);
 }
 

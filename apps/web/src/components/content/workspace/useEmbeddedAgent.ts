@@ -65,6 +65,8 @@ export interface EmbeddedAgentController {
   retry: () => void;
   /** Confirms and applies the current image-insertion candidate. */
   insert: () => void;
+  /** R4.5B: confirms and runs the offered AI image generation. */
+  generate: () => void;
   close: () => void;
   canSubmit: boolean;
   /** Why submission is unavailable, in product language; null when it is available. */
@@ -138,6 +140,14 @@ export function useEmbeddedAgent(options: UseEmbeddedAgentOptions): EmbeddedAgen
       setState({ status: 'completed', instruction: text, message: outcome.message });
     } else if (outcome.kind === 'insertion') {
       setState({ status: 'insertion', instruction: text, message: outcome.message, operation: outcome.operation });
+    } else if (outcome.kind === 'generation_required') {
+      setState({
+        status: 'generation',
+        instruction: text,
+        message: outcome.message,
+        provider: outcome.provider,
+        model: outcome.model,
+      });
     } else if (outcome.kind === 'empty') {
       setState({ status: 'empty', instruction: text, message: outcome.message });
     } else if (outcome.kind === 'clarification') {
@@ -162,74 +172,115 @@ export function useEmbeddedAgent(options: UseEmbeddedAgentOptions): EmbeddedAgen
   const busy = state.status === 'submitting' || state.status === 'working';
   const canSubmit = !blockedReason && instruction.trim().length > 0 && !busy;
 
-  const submit = useCallback(() => {
-    if (submittingRef.current) return;
-    if (!canSubmit) return;
-    const text = instruction.trim();
-    const wantsImage = embeddedAgentWantsImageContext(text);
-    let imageContext: ImageInsertionContext | null = null;
-    if (wantsImage) {
-      imageContext = contentId ? buildImageInsertionContext?.() ?? null : null;
-      if (imageContext) {
-        imageContext = { ...imageContext, sourcePolicy: EMBEDDED_AGENT_IMAGE_SOURCE_POLICY };
-      }
-      if (!imageContext) {
-        // No reliable insertion point (or the document is not persisted yet).
-        // Ask instead of inserting at an arbitrary position.
-        epochRef.current += 1;
-        applyingRef.current = false;
-        submittedRef.current = text;
-        submittedContextRef.current = null;
-        setActiveRunId(null);
-        setPollAttempt(0);
-        setState({
-          status: 'clarification',
-          instruction: text,
-          message: contentId
-            ? IMAGE_INSERTION_CLARIFICATION_MESSAGE
-            : 'Save this draft first so I can place an image in it.',
-        });
-        return;
-      }
-    }
-    const submission = embeddedAgentSubmission({ projectId, contentId, revision, instruction, imageContext });
-    if (!submission) return;
-    submittingRef.current = true;
-    applyingRef.current = false;
-    const submitted = instruction.trim();
-    submittedRef.current = submitted;
-    submittedContextRef.current = imageContext;
-    const epoch = (epochRef.current += 1);
-    setActiveRunId(null);
-    setPollAttempt(0);
-    setState({ status: 'submitting', instruction: submitted });
-    void (async () => {
-      try {
-        const result = await api<{ run: AgentRun; reused: boolean }>(submission.path, {
-          method: 'POST',
-          body: submission.body,
-        });
-        if (epoch !== epochRef.current) return;
-        applyRun(result.run);
-      } catch (error) {
-        if (epoch !== epochRef.current) return;
-        const outcome = embeddedAgentOutcomeFromError(error);
-        if (outcome.kind === 'unsupported') {
-          setState({ status: 'unsupported', instruction: submitted, message: outcome.message });
-        } else if (outcome.kind === 'empty') {
-          setState({ status: 'empty', instruction: submitted, message: outcome.message });
-        } else if (outcome.kind === 'clarification') {
-          setState({ status: 'clarification', instruction: submitted, message: outcome.message });
-        } else if (outcome.kind === 'error') {
-          setState({ status: 'error', instruction: submitted, message: outcome.message, canRetry: outcome.canRetry });
-        } else {
-          setState({ status: 'completed', instruction: submitted, message: outcome.message });
+  /**
+   * Starts one durable Designer run for `text`. `generationConfirmed` marks the
+   * R4.5B follow-up: the image context then carries `generationConfirmed: true`
+   * so the backend may actually generate. It is the single submission path for
+   * both the first request and the confirmed generation.
+   */
+  const runInstruction = useCallback(
+    (rawText: string, generationConfirmed: boolean) => {
+      if (submittingRef.current) return;
+      const text = rawText.trim();
+      if (!text) return;
+      const wantsImage = generationConfirmed || embeddedAgentWantsImageContext(text);
+      let imageContext: ImageInsertionContext | null = null;
+      if (wantsImage) {
+        imageContext = contentId ? buildImageInsertionContext?.() ?? null : null;
+        if (imageContext) {
+          imageContext = generationConfirmed
+            ? { ...imageContext, sourcePolicy: EMBEDDED_AGENT_IMAGE_SOURCE_POLICY, generationConfirmed: true }
+            : { ...imageContext, sourcePolicy: EMBEDDED_AGENT_IMAGE_SOURCE_POLICY };
         }
-      } finally {
-        submittingRef.current = false;
+        if (!imageContext) {
+          // No reliable insertion point (or the document is not persisted yet).
+          // Ask instead of inserting at an arbitrary position.
+          epochRef.current += 1;
+          applyingRef.current = false;
+          submittedRef.current = text;
+          submittedContextRef.current = null;
+          setActiveRunId(null);
+          setPollAttempt(0);
+          setState({
+            status: 'clarification',
+            instruction: text,
+            message: contentId
+              ? IMAGE_INSERTION_CLARIFICATION_MESSAGE
+              : 'Save this draft first so I can place an image in it.',
+          });
+          return;
+        }
       }
-    })();
-  }, [projectId, contentId, revision, instruction, canSubmit, applyRun, buildImageInsertionContext]);
+      const submission = embeddedAgentSubmission({ projectId, contentId, revision, instruction: text, imageContext });
+      if (!submission) return;
+      submittingRef.current = true;
+      applyingRef.current = false;
+      submittedRef.current = text;
+      submittedContextRef.current = imageContext;
+      const epoch = (epochRef.current += 1);
+      setActiveRunId(null);
+      setPollAttempt(0);
+      setState({ status: 'submitting', instruction: text });
+      void (async () => {
+        try {
+          const result = await api<{ run: AgentRun; reused: boolean }>(submission.path, {
+            method: 'POST',
+            body: submission.body,
+          });
+          if (epoch !== epochRef.current) return;
+          applyRun(result.run);
+        } catch (error) {
+          if (epoch !== epochRef.current) return;
+          const outcome = embeddedAgentOutcomeFromError(error);
+          if (outcome.kind === 'unsupported') {
+            setState({ status: 'unsupported', instruction: text, message: outcome.message });
+          } else if (outcome.kind === 'empty') {
+            setState({ status: 'empty', instruction: text, message: outcome.message });
+          } else if (outcome.kind === 'clarification') {
+            setState({ status: 'clarification', instruction: text, message: outcome.message });
+          } else if (outcome.kind === 'generation_required') {
+            setState({
+              status: 'generation',
+              instruction: text,
+              message: outcome.message,
+              provider: outcome.provider,
+              model: outcome.model,
+            });
+          } else if (outcome.kind === 'insertion') {
+            setState({ status: 'insertion', instruction: text, message: outcome.message, operation: outcome.operation });
+          } else if (outcome.kind === 'error') {
+            setState({ status: 'error', instruction: text, message: outcome.message, canRetry: outcome.canRetry });
+          } else {
+            setState({ status: 'completed', instruction: text, message: outcome.message });
+          }
+        } finally {
+          submittingRef.current = false;
+        }
+      })();
+    },
+    [projectId, contentId, revision, applyRun, buildImageInsertionContext],
+  );
+
+  const submit = useCallback(() => {
+    if (!canSubmit) return;
+    runInstruction(instruction.trim(), false);
+  }, [canSubmit, instruction, runInstruction]);
+
+  /**
+   * R4.5B: the explicit confirmation action for an offered AI generation. It
+   * re-runs the same instruction with generation enabled and confirmed, so the
+   * backend may actually generate. Guarded so a second click cannot start a
+   * parallel generation, and blocked (with an honest reason) if the document
+   * changed since the offer.
+   */
+  const generate = useCallback(() => {
+    if (state.status !== 'generation') return;
+    if (blockedReason) {
+      setState({ status: 'error', instruction: state.instruction, message: blockedReason, canRetry: false });
+      return;
+    }
+    runInstruction(state.instruction, true);
+  }, [state, blockedReason, runInstruction]);
 
   const insert = useCallback(() => {
     if (state.status !== 'insertion' || applyingRef.current) return;
@@ -321,5 +372,5 @@ export function useEmbeddedAgent(options: UseEmbeddedAgentOptions): EmbeddedAgen
     submit();
   }, [submit]);
 
-  return { state, instruction, setInstruction, submit, retry, insert, close, canSubmit, blockedReason };
+  return { state, instruction, setInstruction, submit, retry, insert, generate, close, canSubmit, blockedReason };
 }

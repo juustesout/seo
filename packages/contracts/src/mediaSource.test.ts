@@ -8,14 +8,17 @@
  */
 import { describe, expect, it } from 'vitest';
 import {
+  IMAGE_GENERATION_PROVIDERS,
   IMAGE_SOURCE_KINDS,
   IMAGE_SOURCE_POLICY_DEFAULT,
   MEDIA_SOURCE_META_MAX_CHARS,
   MEDIA_SOURCE_META_MAX_KEYS,
   MEDIA_SOURCES,
   imageSourceKindOf,
+  isImageGenerationProvider,
   isImageSourceKind,
   isMediaSource,
+  isValidDesignerAcquisition,
   isValidImageSourcePolicy,
   isValidMediaAttribution,
   isValidMediaSourceMeta,
@@ -122,5 +125,31 @@ describe('image source policy', () => {
       }),
     ).toBe(false);
     expect(isValidImageSourcePolicy(null)).toBe(false);
+  });
+});
+
+describe('generation acquisition', () => {
+  it('accepts a well-formed generation_required acquisition', () => {
+    expect(isValidDesignerAcquisition({ kind: 'generation_required', provider: 'openai', model: 'dall-e-3' })).toBe(true);
+  });
+
+  it('only supports the fixed set of generation providers', () => {
+    expect(IMAGE_GENERATION_PROVIDERS).toEqual(['openai']);
+    expect(isImageGenerationProvider('openai')).toBe(true);
+    expect(isImageGenerationProvider('midjourney')).toBe(false);
+    expect(isValidDesignerAcquisition({ kind: 'generation_required', provider: 'midjourney', model: 'x' })).toBe(false);
+  });
+
+  it('rejects a malformed kind, a missing/empty/overlong model and extra keys', () => {
+    expect(isValidDesignerAcquisition({ kind: 'generation_started', provider: 'openai', model: 'dall-e-3' })).toBe(false);
+    expect(isValidDesignerAcquisition({ kind: 'generation_required', provider: 'openai' })).toBe(false);
+    expect(isValidDesignerAcquisition({ kind: 'generation_required', provider: 'openai', model: '' })).toBe(false);
+    expect(
+      isValidDesignerAcquisition({ kind: 'generation_required', provider: 'openai', model: 'x'.repeat(101) }),
+    ).toBe(false);
+    expect(
+      isValidDesignerAcquisition({ kind: 'generation_required', provider: 'openai', model: 'dall-e-3', cost: 1 }),
+    ).toBe(false);
+    expect(isValidDesignerAcquisition(null)).toBe(false);
   });
 });

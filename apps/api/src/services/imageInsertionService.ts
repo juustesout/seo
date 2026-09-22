@@ -7,12 +7,15 @@
  * `insert_image` operation wrapped in the existing Designer proposal envelope.
  *
  * Boundaries kept deliberately:
- *   - It only ever ranks existing project media (the media library is the
- *     simplest already-supported source); it never generates, downloads or
- *     invents an image, and never inserts a placeholder.
+ *   - It ranks existing project media first, then (only when the caller's
+ *     policy allows it) an external stock search, and finally - only when the
+ *     policy allows it *and* the user explicitly confirmed for this run - a
+ *     generated image. Generation is never a silent fallback: the first run
+ *     returns a `generation_required` proposal and the confirmed rerun spends.
  *   - It never writes `seo_content`: the editor applies the operation as its own
  *     undoable transaction. `DesignerService.apply` refuses a proposal carrying
- *     an `insertion`, so a suggestion can never masquerade as an applied change.
+ *     an `insertion` or an `acquisition`, so a suggestion can never masquerade as
+ *     an applied change.
  *   - It reuses the validated revision scheme (`contentRevisionOf`) and refuses a
  *     proposal when the stored document no longer matches the context the editor
  *     transmitted (`stale_editor_context`).
@@ -50,9 +53,11 @@ import {
 import { ApiError } from '../apiErrors.js';
 import type { ServiceContainer } from '../context.js';
 import { SupabaseStorageStore } from '../infra/mediaStorage.js';
+import { AIService } from './aiService.js';
 import { ContentService } from './contentService.js';
 import { MediaService } from './mediaService.js';
 import { acquireExternalImage } from './externalImageAcquisition.js';
+import { acquireGeneratedImage, imageGenerationModel } from './imageGenerationAcquisition.js';
 
 /**
  * Reads the typed image-insertion context out of the opaque intent `selection`
@@ -210,6 +215,7 @@ export class ImageInsertionService {
 
     let image: ImageInsertionCandidate | null = null;
     let rationale: string | undefined;
+    let externalError: ApiError | null = null;
     if (selection) {
       const item = media.find((entry) => entry.id === selection.candidate.mediaId);
       if (!item) {
@@ -229,17 +235,67 @@ export class ImageInsertionService {
       // R4.5A: local-first fallback. Only reached when the library has no
       // suitable asset and the caller explicitly allowed external search; the
       // acquired asset is persisted as a normal library row before insertion.
-      image = await acquireExternalImage({
-        provider: this.container.registry?.getMedia('unsplash'),
+      // A failure is remembered, not fatal, so a permitted generation can still
+      // offer a confirmed source below.
+      try {
+        image = await acquireExternalImage({
+          provider: this.container.registry?.getMedia('unsplash'),
+          context: effectiveContext,
+          visual,
+          projectId,
+          persist: (input) => mediaService.importExternal(projectId, null, input),
+        });
+        rationale = 'Selected a stock photo for the surrounding text.';
+      } catch (err) {
+        if (!(err instanceof ApiError)) throw err;
+        externalError = err;
+      }
+    }
+
+    const policy = context.sourcePolicy;
+    if (!image && policy?.allowGeneration) {
+      const credentials = await new AIService(this.container).resolveImageGeneration(projectId);
+      if (!credentials.configured) {
+        throw new ApiError(
+          422,
+          'image_generation_not_configured',
+          'Image generation is not configured. Add an OpenAI API key to enable it.',
+        );
+      }
+      if (policy.requireGenerationConfirmation && !context.generationConfirmed) {
+        // R4.5B case 3: generation is available but the user has not confirmed
+        // it. Return a *successful* proposal asking for that explicit action; the
+        // confirmed rerun performs the generation. Nothing is spent here.
+        const acquisitionProposal: DesignerProposal = {
+          version: DESIGNER_PROPOSAL_VERSION,
+          baseRevision,
+          document: editorDocumentToCanonical(content.content_json),
+          acquisition: {
+            kind: 'generation_required',
+            provider: 'openai',
+            model: imageGenerationModel(this.container.config.env.OPENAI_IMAGE_MODEL),
+          },
+        };
+        if (!isValidDesignerProposal(acquisitionProposal)) {
+          throw new ApiError(500, 'designer_proposal_invalid', 'The Agent produced an invalid proposal.');
+        }
+        return acquisitionProposal;
+      }
+      // R4.5B case 4: the user explicitly confirmed generation for this run.
+      image = await acquireGeneratedImage({
+        projectId,
         context: effectiveContext,
         visual,
-        projectId,
+        apiKey: credentials.apiKey,
+        baseUrl: this.container.config.env.OPENAI_BASE_URL,
+        model: this.container.config.env.OPENAI_IMAGE_MODEL,
         persist: (input) => mediaService.importExternal(projectId, null, input),
       });
-      rationale = 'Selected a stock photo for the surrounding text.';
+      rationale = 'Generated an image for the surrounding text.';
     }
 
     if (!image) {
+      if (externalError) throw externalError;
       const scope = section ? 'this section' : hero ? 'this hero' : background ? 'this background' : 'this text';
       throw new ApiError(
         422,

@@ -366,9 +366,11 @@ describe('EmbeddedAgentEntry image insertion (R3.1)', () => {
     expect(body.content_id).toBe(CONTENT);
     expect(body.editor_context).toMatchObject({
       target: { kind: 'cursor', position: 3 },
-      // R4.5A: an explicit image request opts into local-first external search.
-      sourcePolicy: { allowExternalSearch: true, allowGeneration: false, requireGenerationConfirmation: true },
+      // R4.5A/R4.5B: an explicit image request opts into local-first external
+      // search and offers generation, which still needs an explicit confirm.
+      sourcePolicy: { allowExternalSearch: true, allowGeneration: true, requireGenerationConfirmation: true },
     });
+    expect((body.editor_context as Record<string, unknown>).generationConfirmed).toBeUndefined();
 
     const insert = screen.getByTestId('embedded-agent-insert');
     fireEvent.click(insert);
@@ -457,6 +459,89 @@ describe('EmbeddedAgentEntry image insertion (R3.1)', () => {
     );
     expect(screen.queryByTestId('embedded-agent-insert')).toBeNull();
     expect(JSON.stringify(editor.getJSON())).not.toContain('"type":"image"');
+  });
+});
+
+describe('EmbeddedAgentEntry confirmed generation (R4.5B)', () => {
+  function generationRequired(): AgentRun {
+    return run({
+      status: 'succeeded',
+      completedAt: '2026-01-01T00:00:01.000Z',
+      result: {
+        version: 1,
+        baseRevision: 'rev1:abc',
+        document: { version: 1, blocks: [] },
+        acquisition: { kind: 'generation_required', provider: 'openai', model: 'dall-e-3' },
+      },
+    });
+  }
+
+  function generatedSucceeded(): AgentRun {
+    const insertion: InsertImageOperation = {
+      ...INSERTION,
+      image: { assetId: 'm-gen', url: 'https://cdn.test/generated.png', alt: 'Generated image', source: 'openai_generated' },
+    };
+    return run({
+      status: 'succeeded',
+      completedAt: '2026-01-01T00:00:01.000Z',
+      result: { version: 1, baseRevision: 'rev1:abc', document: { version: 1, blocks: [] }, insertion },
+    });
+  }
+
+  it('offers AI generation and only runs it on the explicit confirmed rerun', async () => {
+    const editor = makeImageEditor();
+    act(() => {
+      editor.commands.setTextSelection(3);
+    });
+    apiMock.api
+      .mockResolvedValueOnce({ run: generationRequired(), reused: false })
+      .mockResolvedValueOnce({ run: generatedSucceeded(), reused: false });
+
+    render(<EditorHarness editor={editor} />);
+    fireEvent.change(screen.getByTestId('embedded-agent-input'), { target: { value: 'Zet hier een passende afbeelding.' } });
+    fireEvent.click(screen.getByTestId('embedded-agent-send'));
+
+    await waitFor(() => expect(screen.getByTestId('embedded-agent-generation')).toBeTruthy());
+    expect(screen.queryByTestId('embedded-agent-insert')).toBeNull();
+    expect(screen.getByTestId('embedded-agent-generation-provider').textContent).toContain('OpenAI');
+    const firstBody = apiMock.api.mock.calls[0]![1]!.body as Record<string, unknown>;
+    expect((firstBody.editor_context as Record<string, unknown>).generationConfirmed).toBeUndefined();
+
+    fireEvent.click(screen.getByTestId('embedded-agent-generate'));
+    await waitFor(() => expect(screen.getByTestId('embedded-agent-image-candidate')).toBeTruthy());
+
+    expect(apiMock.api).toHaveBeenCalledTimes(2);
+    const secondBody = apiMock.api.mock.calls[1]![1]!.body as Record<string, unknown>;
+    expect(secondBody.instruction).toBe('Zet hier een passende afbeelding.');
+    expect(secondBody.editor_context).toMatchObject({
+      generationConfirmed: true,
+      sourcePolicy: { allowExternalSearch: true, allowGeneration: true, requireGenerationConfirmation: true },
+    });
+    expect(screen.getByTestId('embedded-agent-image-source').textContent).toContain('AI-generated');
+    // Still no document change until the user inserts the candidate.
+    expect(JSON.stringify(editor.getJSON())).not.toContain('"type":"image"');
+  });
+
+  it('ignores a second Generate click while the confirmed run is in flight', async () => {
+    const editor = makeImageEditor();
+    act(() => {
+      editor.commands.setTextSelection(3);
+    });
+    apiMock.api.mockResolvedValueOnce({ run: generationRequired(), reused: false }).mockReturnValueOnce(
+      new Promise(() => undefined),
+    );
+
+    render(<EditorHarness editor={editor} />);
+    fireEvent.change(screen.getByTestId('embedded-agent-input'), { target: { value: 'Zet hier een passende afbeelding.' } });
+    fireEvent.click(screen.getByTestId('embedded-agent-send'));
+    await waitFor(() => expect(screen.getByTestId('embedded-agent-generate')).toBeTruthy());
+
+    const generate = screen.getByTestId('embedded-agent-generate');
+    fireEvent.click(generate);
+    fireEvent.click(generate);
+    await waitFor(() => expect(apiMock.api).toHaveBeenCalledTimes(2));
+    // Only the first offer + the single confirmed run were sent.
+    expect(apiMock.api).toHaveBeenCalledTimes(2);
   });
 });
 

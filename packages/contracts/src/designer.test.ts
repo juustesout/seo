@@ -222,6 +222,32 @@ describe('isValidDesignerProposal', () => {
     ).toBe(false);
     expect(isValidDesignerProposal({ ...validProposal, visual: 'nope' })).toBe(false);
   });
+
+  it('accepts a generation_required acquisition without an insertion', () => {
+    const acquisition = { kind: 'generation_required', provider: 'openai', model: 'dall-e-3' };
+    expect(isValidDesignerProposal({ ...validProposal, acquisition })).toBe(true);
+  });
+
+  it('rejects a malformed acquisition or one combined with an insertion', () => {
+    const insertion = {
+      type: 'insert_image',
+      target: { kind: 'cursor', position: 2 },
+      image: { assetId: 'm_solar', url: 'https://x.test/a.png', alt: 'Solar' },
+    };
+    expect(isValidDesignerProposal({ ...validProposal, insertion })).toBe(true);
+    expect(
+      isValidDesignerProposal({ ...validProposal, acquisition: { kind: 'generation_required', provider: 'openai' } }),
+    ).toBe(false);
+    expect(isValidDesignerProposal({ ...validProposal, acquisition: { kind: 'other', provider: 'openai', model: 'x' } })).toBe(false);
+    expect(isValidDesignerProposal({ ...validProposal, acquisition: 'nope' })).toBe(false);
+    expect(
+      isValidDesignerProposal({
+        ...validProposal,
+        acquisition: { kind: 'generation_required', provider: 'openai', model: 'dall-e-3' },
+        insertion,
+      }),
+    ).toBe(false);
+  });
 });
 
 describe('contentRevisionOf', () => {

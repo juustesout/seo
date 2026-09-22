@@ -86,7 +86,13 @@ export function EmbeddedAgentEntry({
             contextHint={contextHint}
             blockedReason={agent.blockedReason}
           />
-          <EmbeddedAgentStatus state={agent.state} onRetry={agent.retry} onInsert={agent.insert} onCancel={close} />
+          <EmbeddedAgentStatus
+            state={agent.state}
+            onRetry={agent.retry}
+            onInsert={agent.insert}
+            onGenerate={agent.generate}
+            onCancel={close}
+          />
         </>
       ) : (
         <div className="flex flex-wrap items-center gap-2">

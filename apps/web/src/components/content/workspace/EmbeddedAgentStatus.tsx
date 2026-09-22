@@ -8,18 +8,20 @@
  * "Insert image" confirmation, never an automatic document change.
  */
 import { Button } from '@/components/ui/button';
-import { visualIntentLabel, visualRoleLabel, type EmbeddedAgentState } from './embeddedAgent';
+import { imageGenerationLabel, visualIntentLabel, visualRoleLabel, type EmbeddedAgentState } from './embeddedAgent';
 
 export interface EmbeddedAgentStatusProps {
   state: EmbeddedAgentState;
   onRetry: () => void;
   /** Confirms the current image candidate; required to render the candidate actions. */
   onInsert?: () => void;
+  /** R4.5B: confirms the offered AI image generation; required to render its action. */
+  onGenerate?: () => void;
   /** Dismisses the current result without changing the document. */
   onCancel?: () => void;
 }
 
-export function EmbeddedAgentStatus({ state, onRetry, onInsert, onCancel }: EmbeddedAgentStatusProps) {
+export function EmbeddedAgentStatus({ state, onRetry, onInsert, onGenerate, onCancel }: EmbeddedAgentStatusProps) {
   if (state.status === 'closed' || state.status === 'idle') return null;
 
   if (state.status === 'submitting') {
@@ -35,6 +37,37 @@ export function EmbeddedAgentStatus({ state, onRetry, onInsert, onCancel }: Embe
       <p role="status" aria-live="polite" data-testid="embedded-agent-status" className="m-0 text-xs text-muted-foreground">
         {state.message}
       </p>
+    );
+  }
+
+  if (state.status === 'generation') {
+    return (
+      <div
+        role="status"
+        aria-live="polite"
+        data-testid="embedded-agent-generation"
+        className="grid gap-2 rounded-md border border-border bg-muted/30 px-3 py-2 text-xs"
+      >
+        <p className="m-0 font-medium text-foreground">Create an image with AI</p>
+        <p className="m-0 text-muted-foreground">{state.message}</p>
+        <p className="m-0 text-muted-foreground" data-testid="embedded-agent-generation-provider">
+          {imageGenerationLabel(state.provider, state.model)}
+        </p>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            type="button"
+            size="sm"
+            onClick={onGenerate}
+            disabled={!onGenerate}
+            data-testid="embedded-agent-generate"
+          >
+            Generate image
+          </Button>
+          <Button type="button" size="sm" variant="ghost" onClick={onCancel}>
+            Cancel
+          </Button>
+        </div>
+      </div>
     );
   }
 
@@ -66,6 +99,11 @@ export function EmbeddedAgentStatus({ state, onRetry, onInsert, onCancel }: Embe
         {image.source === 'unsplash' && (
           <p className="m-0 text-muted-foreground" data-testid="embedded-agent-image-source">
             Stock photo from Unsplash{image.credit ? ` - ${image.credit}` : ''}
+          </p>
+        )}
+        {image.source === 'openai_generated' && (
+          <p className="m-0 text-muted-foreground" data-testid="embedded-agent-image-source">
+            AI-generated image
           </p>
         )}
         {image.sourceUrl && (
