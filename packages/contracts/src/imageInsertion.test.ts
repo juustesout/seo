@@ -124,6 +124,14 @@ describe('candidate and operation validation', () => {
     expect(isValidImageInsertionCandidate({ assetId: 'm_solar', url: 'https://x.test/a.png', alt: 'x'.repeat(501) })).toBe(false);
   });
 
+  it('accepts a runtime source kind on the candidate and rejects an unknown one (R4.5A)', () => {
+    const base = { assetId: 'm_solar', url: 'https://x.test/a.png', alt: 'Solar' };
+    expect(isValidImageInsertionCandidate({ ...base, source: 'project_media' })).toBe(true);
+    expect(isValidImageInsertionCandidate({ ...base, source: 'unsplash' })).toBe(true);
+    expect(isValidImageInsertionCandidate({ ...base, source: 'upload' })).toBe(false);
+    expect(isValidImageInsertionCandidate({ ...base, source: 'nope' })).toBe(false);
+  });
+
   it('validates the insert_image operation shape', () => {
     const op = { type: 'insert_image', target: { kind: 'cursor', position: 2 }, image: { assetId: 'm_solar', url: 'https://x.test/a.png', alt: 'Solar' }, rationale: 'Matched metadata on "solar".' };
     expect(isValidInsertImageOperation(op)).toBe(true);
@@ -245,6 +253,24 @@ describe('context validation', () => {
   it('accepts an optional bounded target node type and rejects an unbounded one', () => {
     expect(isValidImageInsertionContext(context({ targetNodeType: 'compositionHero' }))).toBe(true);
     expect(isValidImageInsertionContext({ ...context(), targetNodeType: 'x'.repeat(101) })).toBe(false);
+  });
+
+  it('accepts a validated source policy and rejects malformed policy objects (R4.5A)', () => {
+    expect(
+      isValidImageInsertionContext(
+        context({ sourcePolicy: { allowExternalSearch: true, allowGeneration: false, requireGenerationConfirmation: true } }),
+      ),
+    ).toBe(true);
+    // Missing a required field, or carrying an extra key, is not a policy.
+    expect(
+      isValidImageInsertionContext({ ...context(), sourcePolicy: { allowExternalSearch: true } }),
+    ).toBe(false);
+    expect(
+      isValidImageInsertionContext({
+        ...context(),
+        sourcePolicy: { allowExternalSearch: true, allowGeneration: false, requireGenerationConfirmation: true, extra: 1 },
+      }),
+    ).toBe(false);
   });
 
   it('accepts a section hint alongside the real caret target (R4.2)', () => {

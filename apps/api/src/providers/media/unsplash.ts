@@ -1,15 +1,17 @@
 /**
  * Unsplash stock-image search media provider (MediaProvider.search).
  *
- * Requires UNSPLASH_ACCESS_KEY (server-side env). Results point to Unsplash
- * URLs and are meant to be hotlinked with attribution in the article metadata.
+ * Requires UNSPLASH_ACCESS_KEY (server-side env). Results carry the Unsplash
+ * photo URL plus bounded attribution (author, author profile, photo page) so the
+ * acquisition layer can download the asset inside a host allowlist and store it
+ * as ordinary project media with credit.
  *
- * The provider deliberately returns remote Unsplash URLs instead of proxying
- * or re-uploading bytes: Unsplash's license terms allow hotlinking with
- * attribution, and storing derived copies would create a second source of
- * truth for the same asset. If the key is absent the provider reports "not
- * configured" (isConfigured false / search throws) - no placeholder image is
- * ever fabricated.
+ * The provider itself stays read-only: it performs a search and returns metadata,
+ * it never downloads or persists bytes - that is the acquisition service's job,
+ * so the provider can be reused by other flows without side effects.
+ *
+ * If the key is absent the provider reports "not configured" (isConfigured
+ * false / search throws) - no placeholder image is ever fabricated.
  */
 
 import type {
@@ -79,15 +81,21 @@ export class UnsplashMediaProvider implements MediaProvider {
         height?: number;
         description?: string | null;
         alt_description?: string | null;
+        links?: { html?: string };
+        user?: { name?: string; links?: { html?: string } };
       }>;
     };
     return (json.results ?? []).map((r) => ({
       id: r.id,
+      sourceAssetId: r.id,
       url: r.urls?.regular ?? r.urls?.raw ?? '',
       thumbUrl: r.urls?.small ?? r.urls?.regular,
       width: r.width,
       height: r.height,
       description: r.description ?? r.alt_description ?? undefined,
+      ...(r.user?.name ? { author: r.user.name } : {}),
+      ...(r.user?.links?.html ? { authorUrl: r.user.links.html } : {}),
+      ...(r.links?.html ? { sourceUrl: r.links.html } : {}),
       source: 'unsplash',
     }));
   }

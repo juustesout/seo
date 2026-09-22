@@ -50,11 +50,29 @@ vi.mock('./contentService.js', () => ({
 }));
 
 vi.mock('./mediaService.js', () => ({
+  MEDIA_MAX_BYTES: 8 * 1024 * 1024,
   MediaService: class {
     async list(projectId: string) {
       mock.mediaListCalls.push(projectId);
       return mock.media;
     }
+  },
+}));
+
+const acquireCalls: unknown[] = [];
+vi.mock('./externalImageAcquisition.js', () => ({
+  acquireExternalImage: async (params: unknown) => {
+    acquireCalls.push(params);
+    return {
+      assetId: 'm_external',
+      url: 'https://cdn.test/stock.png',
+      alt: 'Stock office desk',
+      credit: 'Photo by Ada on Unsplash',
+      sourceUrl: 'https://unsplash.com/photos/u1',
+      source: 'unsplash',
+      width: 1200,
+      height: 800,
+    };
   },
 }));
 
@@ -197,6 +215,34 @@ describe('ImageInsertionService.buildProposal', () => {
     );
     expect(err.status).toBe(422);
     expect(err.code).toBe('image_insertion_no_candidate');
+  });
+
+  it('falls back to external acquisition when the caller allowed it (R4.5A)', async () => {
+    acquireCalls.length = 0;
+    const proposal = await service.buildProposal(
+      PROJECT_ID,
+      intent(),
+      context({
+        nearbyText: 'quarterly finance report',
+        sourcePolicy: { allowExternalSearch: true, allowGeneration: false, requireGenerationConfirmation: true },
+      }),
+    );
+    expect(acquireCalls).toHaveLength(1);
+    expect(proposal.insertion?.image).toMatchObject({
+      assetId: 'm_external',
+      source: 'unsplash',
+      credit: 'Photo by Ada on Unsplash',
+      sourceUrl: 'https://unsplash.com/photos/u1',
+    });
+  });
+
+  it('never calls external acquisition when the policy does not allow it (R4.5A)', async () => {
+    acquireCalls.length = 0;
+    const err = await expectApiError(
+      service.buildProposal(PROJECT_ID, intent(), context({ nearbyText: 'quarterly finance report' })),
+    );
+    expect(err.code).toBe('image_insertion_no_candidate');
+    expect(acquireCalls).toHaveLength(0);
   });
 });
 

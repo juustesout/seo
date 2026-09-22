@@ -755,6 +755,26 @@ begin
   returning id into v_media_b;
   if v_media_a is null or v_media_b is null then raise exception 'smoke: media rows were not created'; end if;
 
+  if (select source from public.seo_media where id = v_media_a) <> 'upload' then
+    raise exception 'smoke: media source default was not upload';
+  end if;
+  if (select source_meta from public.seo_media where id = v_media_a) <> '{}'::jsonb then
+    raise exception 'smoke: media source_meta default was not an empty object';
+  end if;
+  begin
+    update public.seo_media set source = 'remote_hotlink' where id = v_media_b;
+    raise exception 'smoke: invalid media source was unexpectedly accepted';
+  exception when check_violation then
+    null;
+  end;
+  update public.seo_media
+    set source = 'unsplash',
+        source_meta = jsonb_build_object('provider', 'unsplash', 'sourceAssetId', 'abc123', 'author', 'Ada')
+    where id = v_media_b;
+  if (select source from public.seo_media where id = v_media_b) <> 'unsplash' then
+    raise exception 'smoke: external media provenance was not recorded';
+  end if;
+
   insert into public.seo_content_media (content_id, media_id) values (v_content, v_media_a);
 
   begin

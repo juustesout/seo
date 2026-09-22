@@ -26,6 +26,7 @@ import {
 import { api } from '../../../lib/api';
 import {
   CLOSED_EMBEDDED_AGENT,
+  EMBEDDED_AGENT_IMAGE_SOURCE_POLICY,
   IMAGE_INSERTION_CLARIFICATION_MESSAGE,
   embeddedAgentOutcomeFromError,
   embeddedAgentOutcomeFromRun,
@@ -169,6 +170,9 @@ export function useEmbeddedAgent(options: UseEmbeddedAgentOptions): EmbeddedAgen
     let imageContext: ImageInsertionContext | null = null;
     if (wantsImage) {
       imageContext = contentId ? buildImageInsertionContext?.() ?? null : null;
+      if (imageContext) {
+        imageContext = { ...imageContext, sourcePolicy: EMBEDDED_AGENT_IMAGE_SOURCE_POLICY };
+      }
       if (!imageContext) {
         // No reliable insertion point (or the document is not persisted yet).
         // Ask instead of inserting at an arbitrary position.

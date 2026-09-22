@@ -36,7 +36,17 @@ describe('UnsplashMediaProvider', () => {
     const fetchFn = async (_url: Parameters<typeof fetch>[0], _init?: RequestInit) =>
       new Response(
         JSON.stringify({
-          results: [{ id: 'u1', urls: { regular: 'https://u/reg.jpg', small: 'https://u/sm.jpg' }, width: 4000, height: 3000, alt_description: 'office desk' }],
+          results: [
+            {
+              id: 'u1',
+              urls: { regular: 'https://u/reg.jpg', small: 'https://u/sm.jpg' },
+              width: 4000,
+              height: 3000,
+              alt_description: 'office desk',
+              links: { html: 'https://unsplash.com/photos/u1' },
+              user: { name: 'Ada', links: { html: 'https://unsplash.com/@ada' } },
+            },
+          ],
         }),
         { status: 200, headers: { 'content-type': 'application/json' } },
       );
@@ -45,6 +55,14 @@ describe('UnsplashMediaProvider', () => {
     );
     const results = await p.search({ query: 'seo', limit: 1 });
     expect(results).toHaveLength(1);
-    expect(results[0]).toMatchObject({ id: 'u1', url: 'https://u/reg.jpg', source: 'unsplash' });
+    expect(results[0]).toMatchObject({
+      id: 'u1',
+      sourceAssetId: 'u1',
+      url: 'https://u/reg.jpg',
+      source: 'unsplash',
+      author: 'Ada',
+      authorUrl: 'https://unsplash.com/@ada',
+      sourceUrl: 'https://unsplash.com/photos/u1',
+    });
   });
 });

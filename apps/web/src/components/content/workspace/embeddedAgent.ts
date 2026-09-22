@@ -20,11 +20,13 @@
  * is pure: no React, no network.
  */
 import {
+  IMAGE_SOURCE_POLICY_DEFAULT,
   isImageInsertionInstruction,
   isValidInsertImageOperation,
   resolveVisualDesignIntent,
   type AgentRun,
   type ImageInsertionContext,
+  type ImageSourcePolicy,
   type InsertImageOperation,
   type VisualAssetRole,
   type VisualIntent,
@@ -105,9 +107,28 @@ const VISUAL_UNSUPPORTED_MESSAGE =
 const VISUAL_PLACEMENT_UNSUPPORTED_MESSAGE =
   "That placement isn't supported here yet. I can add a contained section image, a full-width hero image or a full-width background.";
 
+/** R4.5A: external image acquisition outcomes. */
+const EXTERNAL_SEARCH_UNAVAILABLE_MESSAGE = "I couldn't reach the external image library. Try again in a moment.";
+const PROVIDER_NOT_CONFIGURED_MESSAGE =
+  'External image search is not set up yet. Add an image to the library or ask an admin to configure a stock-image source.';
+const ASSET_PERSISTENCE_FAILED_MESSAGE = "I found an image but couldn't save it to the library. Try again in a moment.";
+const EXTERNAL_IMAGE_UNUSABLE_MESSAGE = "I couldn't use that image. Try again.";
+
 /** Shown when the user asked for an image but there is no reliable insertion point. */
 export const IMAGE_INSERTION_CLARIFICATION_MESSAGE =
   'Where should I place the image? Put the cursor where you want it, or select a paragraph.';
+
+/**
+ * R4.5A: the source policy the editor sends with an explicit image request. The
+ * call is local-first (the project library is always tried first), and external
+ * stock search is enabled so the backend may fall back when nothing local
+ * matches. Generation stays off until the user explicitly confirms it (R4.5B).
+ * The API validates this server-side; the client is never the only guard.
+ */
+export const EMBEDDED_AGENT_IMAGE_SOURCE_POLICY: ImageSourcePolicy = {
+  ...IMAGE_SOURCE_POLICY_DEFAULT,
+  allowExternalSearch: true,
+};
 
 /** Human-readable role labels the inline candidate can show. */
 export const VISUAL_ROLE_LABELS: Readonly<Record<VisualAssetRole, string>> = {
@@ -193,6 +214,17 @@ function imageInsertionOutcome(code: string | null | undefined): EmbeddedAgentOu
       return { kind: 'clarification', message: BACKGROUND_TARGET_UNRESOLVED_MESSAGE };
     case 'background_image_already_present':
       return { kind: 'empty', message: BACKGROUND_IMAGE_PRESENT_MESSAGE };
+    // R4.5A: external acquisition (stock search). External search being off is a
+    // capability note; a reachable-but-failed search or a failed save is retryable.
+    case 'provider_not_configured':
+      return { kind: 'unsupported', message: PROVIDER_NOT_CONFIGURED_MESSAGE };
+    case 'external_search_unavailable':
+      return { kind: 'error', message: EXTERNAL_SEARCH_UNAVAILABLE_MESSAGE, canRetry: true };
+    case 'asset_persistence_failed':
+      return { kind: 'error', message: ASSET_PERSISTENCE_FAILED_MESSAGE, canRetry: true };
+    case 'external_image_too_large':
+    case 'external_image_untrusted_source':
+      return { kind: 'empty', message: EXTERNAL_IMAGE_UNUSABLE_MESSAGE };
     default:
       return null;
   }

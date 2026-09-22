@@ -12,7 +12,13 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { sniffImage, type SniffedImage } from '../infra/imageBytes.js';
 import type { MediaObjectStore } from '../infra/mediaStorage.js';
 import { ApiError } from '../apiErrors.js';
-import type { MediaItemDto } from '@seo/contracts';
+import {
+  isMediaSource,
+  isValidMediaSourceMeta,
+  type MediaItemDto,
+  type MediaSource,
+  type MediaSourceMeta,
+} from '@seo/contracts';
 
 /** Phase F upload cap (bytes) for raw image bodies, plus metadata length caps
  *  for alt text/caption so stored rows stay bounded. */
@@ -21,7 +27,7 @@ export const MEDIA_ALT_MAX = 500;
 export const MEDIA_CAPTION_MAX = 2000;
 
 const LIST_COLUMNS =
-  'id, project_id, filename, mime_type, size, storage_key, width, height, alt_text, caption, created_by, created_at, updated_at';
+  'id, project_id, filename, mime_type, size, storage_key, width, height, alt_text, caption, source, source_meta, created_by, created_at, updated_at';
 
 type Row = Record<string, unknown>;
 
@@ -45,6 +51,21 @@ export interface UploadMediaInput {
   alt?: string | null;
 }
 
+/**
+ * R4.5A: persist externally acquired image bytes (e.g. a downloaded stock photo)
+ * as an ordinary project media row. The bytes are already sniffed by the caller,
+ * and the provenance describes where they came from; `source` must never be
+ * `upload` here because that value is reserved for user uploads.
+ */
+export interface ImportExternalMediaInput {
+  bytes: Buffer;
+  source: Exclude<MediaSource, 'upload'>;
+  sourceMeta: MediaSourceMeta;
+  filename?: string | null;
+  alt?: string | null;
+  caption?: string | null;
+}
+
 export interface MediaPatchInput {
   altText?: string;
   caption?: string;
@@ -63,6 +84,8 @@ export function mapMediaRow(row: Row, store: MediaObjectStore, usageCount = 0): 
     height: typeof row.height === 'number' ? row.height : null,
     alt_text: String(row.alt_text ?? ''),
     caption: String(row.caption ?? ''),
+    source: isMediaSource(row.source) ? row.source : 'upload',
+    source_meta: isValidMediaSourceMeta(row.source_meta) ? row.source_meta : {},
     usage_count: usageCount,
     created_at: String(row.created_at),
     updated_at: String(row.updated_at),
@@ -140,24 +163,81 @@ export class MediaService {
     if (!sniffed) {
       throw ApiError.badRequest('Unsupported file type - upload PNG, JPEG or WebP images only (SVG is not accepted)');
     }
+    return this.persist(projectId, userId, {
+      bytes,
+      sniffed,
+      filename: input.filename,
+      alt: input.alt,
+      caption: '',
+      source: 'upload',
+      sourceMeta: {},
+    });
+  }
 
+  /**
+   * R4.5A: persist externally acquired bytes as an ordinary library row. The
+   * caller has already downloaded the asset and sniffed the bytes; the same size
+   * cap and format guarantees apply, and storage is written before metadata so a
+   * failed insert can best-effort clean up the orphaned object.
+   */
+  async importExternal(
+    projectId: string,
+    userId: string | null,
+    input: ImportExternalMediaInput,
+  ): Promise<MediaItemDto> {
+    const { bytes } = input;
+    if (!bytes || bytes.length === 0) throw ApiError.badRequest('The downloaded image was empty');
+    if (bytes.length > MEDIA_MAX_BYTES) {
+      throw ApiError.badRequest(`Image is too large (max ${Math.round(MEDIA_MAX_BYTES / 1024 / 1024)} MB)`);
+    }
+    const sniffed = sniffImage(bytes);
+    if (!sniffed) {
+      throw ApiError.badRequest('The downloaded image is not a supported PNG, JPEG or WebP');
+    }
+    return this.persist(projectId, userId, {
+      bytes,
+      sniffed,
+      filename: input.filename,
+      alt: input.alt,
+      caption: input.caption ?? '',
+      source: input.source,
+      sourceMeta: isValidMediaSourceMeta(input.sourceMeta) ? input.sourceMeta : {},
+    });
+  }
+
+  /** Shared storage+row write used by uploads and external imports. */
+  private async persist(
+    projectId: string,
+    userId: string | null,
+    input: {
+      bytes: Buffer;
+      sniffed: SniffedImage;
+      filename?: string | null;
+      alt?: string | null;
+      caption: string;
+      source: MediaSource;
+      sourceMeta: MediaSourceMeta;
+    },
+  ): Promise<MediaItemDto> {
     const stored = await this.store.upload({
       projectId,
-      bytes,
-      ext: sniffed.ext,
-      contentType: sniffed.mime,
+      bytes: input.bytes,
+      ext: input.sniffed.ext,
+      contentType: input.sniffed.mime,
     });
 
     const payload = {
       project_id: projectId,
       filename: sanitizeFilename(input.filename),
-      mime_type: sniffed.mime,
-      size: bytes.length,
+      mime_type: input.sniffed.mime,
+      size: input.bytes.length,
       storage_key: stored.key,
-      width: sniffed.width,
-      height: sniffed.height,
+      width: input.sniffed.width,
+      height: input.sniffed.height,
       alt_text: (input.alt ?? '').trim().slice(0, MEDIA_ALT_MAX),
-      caption: '',
+      caption: input.caption.trim().slice(0, MEDIA_CAPTION_MAX),
+      source: input.source,
+      source_meta: input.sourceMeta,
     } as Row;
     if (userId) payload.created_by = userId;
 

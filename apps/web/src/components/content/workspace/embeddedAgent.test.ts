@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { AgentRun, ImageInsertionContext, InsertImageOperation } from '@seo/contracts';
 import { ApiRequestError } from '../../../lib/api';
 import {
+  EMBEDDED_AGENT_IMAGE_SOURCE_POLICY,
   embeddedAgentContextHint,
   embeddedAgentOutcomeFromError,
   embeddedAgentOutcomeFromRun,
@@ -424,6 +425,36 @@ describe('embeddedAgent background visuals (R4.4)', () => {
     );
     expect(outcome).toMatchObject({ kind: 'insertion', operation: backgroundInsertion });
     expect(outcome.message).toContain('background');
+  });
+});
+
+describe('embeddedAgent external image acquisition (R4.5A)', () => {
+  it('sends a conservative policy that allows local-first external search but not generation', () => {
+    expect(EMBEDDED_AGENT_IMAGE_SOURCE_POLICY).toEqual({
+      allowExternalSearch: true,
+      allowGeneration: false,
+      requireGenerationConfirmation: true,
+    });
+  });
+
+  it('maps external acquisition failures to honest product copy', () => {
+    expect(embeddedAgentOutcomeFromError(new ApiRequestError('provider_not_configured', 'no key', 422))).toMatchObject({
+      kind: 'unsupported',
+    });
+    expect(embeddedAgentOutcomeFromError(new ApiRequestError('external_search_unavailable', 'down', 502))).toMatchObject({
+      kind: 'error',
+      canRetry: true,
+    });
+    expect(embeddedAgentOutcomeFromError(new ApiRequestError('asset_persistence_failed', 'save failed', 502))).toMatchObject({
+      kind: 'error',
+      canRetry: true,
+    });
+    expect(embeddedAgentOutcomeFromError(new ApiRequestError('external_image_too_large', 'too big', 422))).toMatchObject({
+      kind: 'empty',
+    });
+    expect(
+      embeddedAgentOutcomeFromError(new ApiRequestError('external_image_untrusted_source', 'blocked', 422)),
+    ).toMatchObject({ kind: 'empty' });
   });
 });
 

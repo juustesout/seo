@@ -16,6 +16,7 @@ import type {
   MediaCapability,
   PublisherCapability,
 } from './common.js';
+import type { MediaAttribution } from './mediaSource.js';
 import type {
   AuditFinding,
   ContentItem,
@@ -517,8 +518,10 @@ export interface MediaSearchOptions {
   orientation?: 'landscape' | 'portrait' | 'squarish';
 }
 
-export interface MediaResult {
+export interface MediaResult extends MediaAttribution {
   id: string;
+  /** Original provider asset id, when it differs from `id`. */
+  sourceAssetId?: string;
   url: string;
   thumbUrl?: string;
   width?: number;

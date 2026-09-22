@@ -38,6 +38,12 @@ import {
   type VisualAssetCandidate,
 } from './visualAssetSelection.js';
 import { isValidVisualDesignIntent, visualAltTextForRole, type VisualDesignIntent } from './visualVocabulary.js';
+import {
+  isImageSourceKind,
+  isValidImageSourcePolicy,
+  type ImageSourceKind,
+  type ImageSourcePolicy,
+} from './mediaSource.js';
 
 /** The single operation type this phase produces. */
 export const IMAGE_INSERTION_OPERATION_TYPE = 'insert_image' as const;
@@ -209,6 +215,12 @@ export interface ImageInsertionCandidate {
   caption?: string;
   credit?: string;
   sourceUrl?: string;
+  /**
+   * R4.5: the runtime source of the asset (`project_media`, `unsplash`, ...).
+   * A presentation/provenance hint for the editor; the asset itself is always a
+   * project media-library reference (`assetId`).
+   */
+  source?: ImageSourceKind;
   width?: number;
   height?: number;
 }
@@ -289,6 +301,12 @@ export interface ImageInsertionContext {
    * resolver only uses it when the instruction names no role itself.
    */
   targetNodeType?: string;
+  /**
+   * R4.5: the caller's explicit source policy for this request. Absent means the
+   * conservative default (project media only, no generation). Validated at the
+   * API edge so the client is never the only guard.
+   */
+  sourcePolicy?: ImageSourcePolicy;
 }
 
 // ---------------------------------------------------------------------------
@@ -315,6 +333,7 @@ const CANDIDATE_KEYS: ReadonlySet<string> = new Set([
   'caption',
   'credit',
   'sourceUrl',
+  'source',
   'width',
   'height',
 ]);
@@ -332,6 +351,7 @@ const CONTEXT_KEYS: ReadonlySet<string> = new Set([
   'sectionHeading',
   'language',
   'targetNodeType',
+  'sourcePolicy',
 ]);
 
 const TARGET_KIND_SET: ReadonlySet<string> = new Set(IMAGE_INSERTION_TARGET_KINDS);
@@ -416,6 +436,7 @@ export function isValidImageInsertionCandidate(value: unknown): value is ImageIn
   if (!isOptionalBoundedString(value.caption, IMAGE_INSERTION_CAPTION_MAX_CHARS)) return false;
   if (!isOptionalBoundedString(value.credit, IMAGE_INSERTION_CREDIT_MAX_CHARS)) return false;
   if (!isOptionalBoundedString(value.sourceUrl, IMAGE_INSERTION_SOURCE_URL_MAX_CHARS)) return false;
+  if (value.source !== undefined && !isImageSourceKind(value.source)) return false;
   if (!isOptionalPositiveInt(value.width)) return false;
   return isOptionalPositiveInt(value.height);
 }
@@ -490,6 +511,7 @@ export function isValidImageInsertionContext(value: unknown): value is ImageInse
   if (!isOptionalBoundedString(value.documentTitle, IMAGE_INSERTION_TITLE_MAX_CHARS)) return false;
   if (!isOptionalBoundedString(value.sectionHeading, IMAGE_INSERTION_TITLE_MAX_CHARS)) return false;
   if (!isOptionalBoundedString(value.targetNodeType, IMAGE_INSERTION_NODE_TYPE_MAX_CHARS)) return false;
+  if (value.sourcePolicy !== undefined && !isValidImageSourcePolicy(value.sourcePolicy)) return false;
   return isOptionalBoundedString(value.language, IMAGE_INSERTION_LANGUAGE_MAX_CHARS);
 }
 

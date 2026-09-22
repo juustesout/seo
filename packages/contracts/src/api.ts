@@ -21,6 +21,7 @@ import type {
 import type { TipDoc, TipNode } from './contentDoc.js';
 import type { SeoResult } from './seo.js';
 import type { KnowledgeDiscoveryScope } from './providers.js';
+import type { MediaSource, MediaSourceMeta } from './mediaSource.js';
 
 /**
  * Success envelope: the shared error handler wraps every 2xx payload as
@@ -637,6 +638,10 @@ export interface MediaItemDto {
   height: number | null;
   alt_text: string;
   caption: string;
+  /** Where the asset came from: `upload`, `unsplash` or `openai_generated`. */
+  source: MediaSource;
+  /** Bounded, secret-free provider metadata (attribution, original id, model). */
+  source_meta: MediaSourceMeta;
   /** Number of content documents that currently reference this item. */
   usage_count: number;
   created_at: string;

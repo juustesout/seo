@@ -364,7 +364,11 @@ describe('EmbeddedAgentEntry image insertion (R3.1)', () => {
     await waitFor(() => expect(screen.getByTestId('embedded-agent-image-candidate')).toBeTruthy());
     const body = apiMock.api.mock.calls[0]![1]!.body as Record<string, unknown>;
     expect(body.content_id).toBe(CONTENT);
-    expect(body.editor_context).toMatchObject({ target: { kind: 'cursor', position: 3 } });
+    expect(body.editor_context).toMatchObject({
+      target: { kind: 'cursor', position: 3 },
+      // R4.5A: an explicit image request opts into local-first external search.
+      sourcePolicy: { allowExternalSearch: true, allowGeneration: false, requireGenerationConfirmation: true },
+    });
 
     const insert = screen.getByTestId('embedded-agent-insert');
     fireEvent.click(insert);
@@ -380,6 +384,37 @@ describe('EmbeddedAgentEntry image insertion (R3.1)', () => {
       editor.commands.undo();
     });
     expect(JSON.stringify(editor.getJSON())).not.toContain('"type":"image"');
+  });
+
+  it('shows the external source when a candidate came from stock search (R4.5A)', async () => {
+    const editor = makeImageEditor();
+    act(() => {
+      editor.commands.setTextSelection(3);
+    });
+    const unsplashInsertion: InsertImageOperation = {
+      ...INSERTION,
+      image: {
+        ...INSERTION.image,
+        source: 'unsplash',
+        credit: 'Photo by Ada on Unsplash',
+        sourceUrl: 'https://unsplash.com/photos/x',
+      },
+    };
+    apiMock.api.mockResolvedValueOnce({ run: run({ status: 'queued' }), reused: false }).mockResolvedValueOnce(
+      run({
+        status: 'succeeded',
+        completedAt: '2026-01-01T00:00:01.000Z',
+        result: { version: 1, baseRevision: 'rev1:abc', document: { version: 1, blocks: [] }, insertion: unsplashInsertion },
+      }),
+    );
+
+    render(<EditorHarness editor={editor} />);
+    fireEvent.change(screen.getByTestId('embedded-agent-input'), { target: { value: 'Zet hier een passende afbeelding.' } });
+    fireEvent.click(screen.getByTestId('embedded-agent-send'));
+
+    await waitFor(() => expect(screen.getByTestId('embedded-agent-image-candidate')).toBeTruthy());
+    expect(screen.getByTestId('embedded-agent-image-source').textContent).toContain('Unsplash');
+    expect(screen.getByTestId('embedded-agent-image-source').textContent).toContain('Photo by Ada');
   });
 
   it('refuses to insert a candidate once the document revision has moved on', async () => {

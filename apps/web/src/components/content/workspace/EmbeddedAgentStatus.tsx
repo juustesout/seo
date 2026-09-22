@@ -63,6 +63,11 @@ export function EmbeddedAgentStatus({ state, onRetry, onInsert, onCancel }: Embe
         <p className="m-0 text-muted-foreground">
           {decorative ? 'Decorative - no alt text needed.' : `Alt text: ${image.alt || 'none'}`}
         </p>
+        {image.source === 'unsplash' && (
+          <p className="m-0 text-muted-foreground" data-testid="embedded-agent-image-source">
+            Stock photo from Unsplash{image.credit ? ` - ${image.credit}` : ''}
+          </p>
+        )}
         {image.sourceUrl && (
           <p className="m-0 text-muted-foreground">
             Source:{' '}

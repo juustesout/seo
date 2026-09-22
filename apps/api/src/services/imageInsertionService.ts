@@ -26,6 +26,7 @@ import {
   contentRevisionOf,
   editorDocumentToCanonical,
   imageInsertionAltForIntent,
+  imageSourceKindOf,
   isVisualIntentInsertable,
   isValidDesignerProposal,
   isValidImageInsertionContext,
@@ -51,6 +52,7 @@ import type { ServiceContainer } from '../context.js';
 import { SupabaseStorageStore } from '../infra/mediaStorage.js';
 import { ContentService } from './contentService.js';
 import { MediaService } from './mediaService.js';
+import { acquireExternalImage } from './externalImageAcquisition.js';
 
 /**
  * Reads the typed image-insertion context out of the opaque intent `selection`
@@ -202,9 +204,42 @@ export class ImageInsertionService {
     const operationTarget = located ? located.target : context.target;
     const effectiveContext = located ? located.context : context;
 
-    const media = await new MediaService(this.container.sb, new SupabaseStorageStore(this.container.sb)).list(projectId);
+    const mediaService = new MediaService(this.container.sb, new SupabaseStorageStore(this.container.sb));
+    const media = await mediaService.list(projectId);
     const selection = selectImageInsertionCandidate(effectiveContext, media.map(toVisualCandidate), { visual });
-    if (!selection) {
+
+    let image: ImageInsertionCandidate | null = null;
+    let rationale: string | undefined;
+    if (selection) {
+      const item = media.find((entry) => entry.id === selection.candidate.mediaId);
+      if (!item) {
+        throw new ApiError(422, 'image_insertion_no_candidate', 'The selected image is no longer in the media library.');
+      }
+      image = {
+        assetId: item.id,
+        url: item.url,
+        alt: imageInsertionAltForIntent(visual, item.alt_text, item.filename),
+        ...(item.caption ? { caption: item.caption } : {}),
+        ...(item.width !== null ? { width: item.width } : {}),
+        ...(item.height !== null ? { height: item.height } : {}),
+        ...(item.source && item.source !== 'upload' ? { source: imageSourceKindOf(item.source) } : {}),
+      };
+      rationale = selection.rationale;
+    } else if (context.sourcePolicy?.allowExternalSearch) {
+      // R4.5A: local-first fallback. Only reached when the library has no
+      // suitable asset and the caller explicitly allowed external search; the
+      // acquired asset is persisted as a normal library row before insertion.
+      image = await acquireExternalImage({
+        provider: this.container.registry?.getMedia('unsplash'),
+        context: effectiveContext,
+        visual,
+        projectId,
+        persist: (input) => mediaService.importExternal(projectId, null, input),
+      });
+      rationale = 'Selected a stock photo for the surrounding text.';
+    }
+
+    if (!image) {
       const scope = section ? 'this section' : hero ? 'this hero' : background ? 'this background' : 'this text';
       throw new ApiError(
         422,
@@ -213,25 +248,12 @@ export class ImageInsertionService {
       );
     }
 
-    const item = media.find((entry) => entry.id === selection.candidate.mediaId);
-    if (!item) {
-      throw new ApiError(422, 'image_insertion_no_candidate', 'The selected image is no longer in the media library.');
-    }
-
-    const image: ImageInsertionCandidate = {
-      assetId: item.id,
-      url: item.url,
-      alt: imageInsertionAltForIntent(visual, item.alt_text, item.filename),
-      ...(item.caption ? { caption: item.caption } : {}),
-      ...(item.width !== null ? { width: item.width } : {}),
-      ...(item.height !== null ? { height: item.height } : {}),
-    };
     const operation: InsertImageOperation = {
       type: 'insert_image',
       target: operationTarget,
       image,
       visual,
-      ...(selection.rationale ? { rationale: selection.rationale } : {}),
+      ...(rationale ? { rationale } : {}),
     };
     if (!isValidInsertImageOperation(operation)) {
       throw new ApiError(500, 'image_insertion_operation_invalid', 'The Agent produced an invalid image operation.');
