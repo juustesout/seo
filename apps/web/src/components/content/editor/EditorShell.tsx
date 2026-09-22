@@ -91,6 +91,13 @@ export function EditorShell({
     };
   }, [editor, applySelection]);
 
+  // Reveal requests (e.g. an Agent insertion that just selected its result)
+  // open the settings view for the already-lifted selection.
+  const revealRequest = shared?.revealRequest ?? 0;
+  useEffect(() => {
+    if (revealRequest > 0) setSidebarMode('settings');
+  }, [revealRequest]);
+
   return (
     <div
       className="flex min-h-[520px] flex-col overflow-hidden rounded-[10px] border bg-card lg:flex-row"

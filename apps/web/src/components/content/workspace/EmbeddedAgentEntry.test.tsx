@@ -441,6 +441,37 @@ describe('EmbeddedAgentEntry image insertion (R3.1)', () => {
     expect(JSON.stringify(editor.getJSON())).not.toContain('"type":"image"');
   });
 
+  it('reveals the inserted image after a successful insertion', async () => {
+    const editor = makeImageEditor();
+    act(() => {
+      editor.commands.setTextSelection(3);
+    });
+    const onRevealInsertion = vi.fn();
+    apiMock.api
+      .mockResolvedValueOnce({ run: run({ status: 'queued' }), reused: false })
+      .mockResolvedValueOnce(imageSucceeded());
+
+    render(
+      <EditorContextProvider projectId={PROJECT} contentId={CONTENT} ready dirty={false} doc={IMAGE_DOC} editor={editor}>
+        <EmbeddedAgentEntry
+          open
+          onOpenChange={() => {}}
+          canEdit
+          configured
+          onSaveNow={() => {}}
+          pollMs={5}
+          onRevealInsertion={onRevealInsertion}
+        />
+      </EditorContextProvider>,
+    );
+    fireEvent.change(screen.getByTestId('embedded-agent-input'), { target: { value: 'Zet hier een passende afbeelding.' } });
+    fireEvent.click(screen.getByTestId('embedded-agent-send'));
+
+    await waitFor(() => expect(screen.getByTestId('embedded-agent-image-candidate')).toBeTruthy());
+    fireEvent.click(screen.getByTestId('embedded-agent-insert'));
+    await waitFor(() => expect(onRevealInsertion).toHaveBeenCalledTimes(1));
+  });
+
   it('reports a no-candidate image run without mutating the document', async () => {
     const editor = makeImageEditor();
     act(() => {

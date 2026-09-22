@@ -5,6 +5,7 @@ import { Editor } from '@tiptap/core';
 import type { TipDoc } from '@seo/contracts';
 import { RichTextEditor } from '../RichTextEditor';
 import { EditorShell } from './EditorShell';
+import { EditorSelectionProvider, useEditorSelection } from './EditorSelectionContext';
 import { EditorToolbar } from './EditorToolbar';
 import { ElementSettings } from './ElementSettings';
 import { createEditorExtensions } from './extensions';
@@ -122,6 +123,27 @@ describe('EditorShell', () => {
     fireEvent.click(screen.getByTestId('back-to-elements'));
     expect(screen.getByTestId('editor-shell').getAttribute('data-sidebar-mode')).toBe('elements');
     expect(screen.getByTestId('element-browser')).toBeTruthy();
+  });
+
+  it('switches to settings when a reveal is requested for the live selection', () => {
+    function RevealHarness() {
+      const shared = useEditorSelection();
+      return (
+        <EditorShell>
+          <button type="button" onClick={() => shared?.requestReveal()}>
+            Reveal
+          </button>
+        </EditorShell>
+      );
+    }
+    render(
+      <EditorSelectionProvider>
+        <RevealHarness />
+      </EditorSelectionProvider>,
+    );
+    expect(screen.getByTestId('editor-shell').getAttribute('data-sidebar-mode')).toBe('elements');
+    fireEvent.click(screen.getByRole('button', { name: 'Reveal' }));
+    expect(screen.getByTestId('editor-shell').getAttribute('data-sidebar-mode')).toBe('settings');
   });
 
   it('lists composition elements in the browser', () => {

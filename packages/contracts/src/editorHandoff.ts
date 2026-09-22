@@ -77,6 +77,13 @@ function isNonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0;
 }
 
+/**
+ * Copies only the keys actually present with a meaningful value (never `null`).
+ * The editor's composition nodes declare `variant`/`layout`/`icon`/`href` with a
+ * `null` default, so an unset one arrives as `null`. The canonical validator
+ * rejects `null` where a bounded string/object is expected, so a null attribute
+ * is omitted instead of persisted as invalid.
+ */
 function pickAttrs(
   source: Record<string, unknown> | undefined,
   keys: readonly string[] | undefined,
@@ -85,10 +92,11 @@ function pickAttrs(
   const out: Record<string, unknown> = {};
   let any = false;
   for (const key of keys) {
-    if (Object.prototype.hasOwnProperty.call(source, key)) {
-      out[key] = source[key];
-      any = true;
-    }
+    if (!Object.prototype.hasOwnProperty.call(source, key)) continue;
+    const value = source[key];
+    if (value === null) continue;
+    out[key] = value;
+    any = true;
   }
   return any ? out : undefined;
 }

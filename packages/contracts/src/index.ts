@@ -33,6 +33,7 @@ export * from './visualDesign.js';
 export * from './visualAssetSelection.js';
 export * from './mediaSource.js';
 export * from './imageInsertion.js';
+export * from './documentOperations.js';
 export * from './visualVocabulary.js';
 export * from './visualIntent.js';
 export * from './sectionVisual.js';

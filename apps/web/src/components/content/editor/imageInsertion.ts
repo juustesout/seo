@@ -19,6 +19,7 @@
  */
 import type { Editor } from '@tiptap/react';
 import type { Node as PmNode } from '@tiptap/pm/model';
+import { NodeSelection } from '@tiptap/pm/state';
 import {
   IMAGE_INSERTION_HERO_PLACEMENT,
   IMAGE_INSERTION_HERO_SUPPORTING_MAX_CHARS,
@@ -412,6 +413,32 @@ export function resolveImageInsertionRange(
 }
 
 /**
+ * Selects the just-inserted image node so the host can reveal its properties.
+ * The image is located by its media reference nearest the caret; the selection
+ * change is kept out of history so a single undo still removes the image. Pure
+ * best-effort: a miss leaves the caret untouched.
+ */
+function selectInsertedImage(editor: Editor, mediaId: string): void {
+  const { doc, selection } = editor.state;
+  let best = -1;
+  let bestDistance = Number.POSITIVE_INFINITY;
+  doc.descendants((node, pos) => {
+    if (node.type.name !== 'image') return true;
+    if ((node.attrs as { mediaId?: unknown }).mediaId !== mediaId) return true;
+    const distance = Math.abs(pos - selection.from);
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      best = pos;
+    }
+    return true;
+  });
+  if (best < 0) return;
+  const tr = editor.state.tr.setSelection(NodeSelection.create(doc, best));
+  tr.setMeta('addToHistory', false);
+  editor.view.dispatch(tr);
+}
+
+/**
  * Applies an `insert_image` operation as one editor transaction. Reuses the
  * existing `insertMedia` command, so the image lands on a valid block boundary
  * and `undo` removes it cleanly. Returns a typed failure instead of mutating on
@@ -438,7 +465,13 @@ export function applyImageInsertionOperation(
         ...(operation.image.caption ? { caption: operation.image.caption } : {}),
       })
       .run();
-    return applied ? { ok: true } : { ok: false, reason: 'apply-failed' };
+    if (!applied) return { ok: false, reason: 'apply-failed' };
+    try {
+      selectInsertedImage(editor, assetId);
+    } catch {
+      // Selection is a presentation nicety; the insertion itself succeeded.
+    }
+    return { ok: true };
   } catch {
     return { ok: false, reason: 'apply-failed' };
   }

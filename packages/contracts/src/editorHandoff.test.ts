@@ -329,6 +329,34 @@ describe('editor reverse bridge round trip (Stage 8E.6)', () => {
     expect(back.blocks.map((block) => block.type)).toContain('featureGrid');
     expect(JSON.stringify(back)).not.toContain('[unsupported');
   });
+
+  it('omits the editor null defaults (composition and image attrs) so a real editor doc stays valid', () => {
+    const editor: TipNode = {
+      type: 'doc',
+      content: [
+        {
+          type: 'compositionHero',
+          attrs: { variant: null, layout: null },
+          content: [
+            { type: 'heading', attrs: { level: 1 }, content: [{ type: 'text', text: 'Halleluja' }] },
+            {
+              type: 'image',
+              attrs: { mediaId: 'media-1', src: 'https://cdn/x.png', alt: '', caption: '', width: null, height: null },
+            },
+          ],
+        },
+      ],
+    };
+    const back = editorDocumentToCanonical(editor);
+    expect(isValidCanonicalDoc(back)).toBe(true);
+    const hero = back.blocks[0];
+    expect(hero?.type).toBe('hero');
+    expect(hero?.attrs).toBeUndefined();
+    expect(hero?.children?.[1]).toMatchObject({
+      type: 'image',
+      attrs: { mediaId: 'media-1', src: 'https://cdn/x.png', alt: '', caption: '' },
+    });
+  });
 });
 
 describe('canonical metadata propagation', () => {

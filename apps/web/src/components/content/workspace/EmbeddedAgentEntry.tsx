@@ -13,6 +13,7 @@
 import { useEffect, useRef } from 'react';
 import { Button } from '@/components/ui/button';
 import { useEditorContext, useEditorContextSnapshot } from '../editor/EditorContext';
+import { useEditorSelection } from '../editor/EditorSelectionContext';
 import { embeddedAgentContextHint } from './embeddedAgent';
 import { EmbeddedAgentInput } from './EmbeddedAgentInput';
 import { EmbeddedAgentStatus } from './EmbeddedAgentStatus';
@@ -25,6 +26,8 @@ export interface EmbeddedAgentEntryProps {
   configured: boolean;
   onSaveNow: () => void;
   pollMs?: number;
+  /** Opens the workspace rail so the applied insertion is visible and selectable. */
+  onRevealInsertion?: () => void;
 }
 
 export function EmbeddedAgentEntry({
@@ -34,9 +37,11 @@ export function EmbeddedAgentEntry({
   configured,
   onSaveNow,
   pollMs,
+  onRevealInsertion,
 }: EmbeddedAgentEntryProps) {
   const snapshot = useEditorContextSnapshot();
   const context = useEditorContext();
+  const selectionContext = useEditorSelection();
   const agent = useEmbeddedAgent({
     projectId: snapshot?.projectId ?? '',
     contentId: snapshot?.contentId ?? null,
@@ -53,6 +58,10 @@ export function EmbeddedAgentEntry({
           applyImageInsertion: context.applyImageInsertion,
         }
       : {}),
+    onInserted: () => {
+      selectionContext?.requestReveal();
+      onRevealInsertion?.();
+    },
   });
 
   const triggerRef = useRef<HTMLSpanElement>(null);

@@ -8,6 +8,7 @@
  */
 import { afterEach, describe, expect, it } from 'vitest';
 import { Editor, type JSONContent } from '@tiptap/core';
+import { NodeSelection } from '@tiptap/pm/state';
 import type { InsertImageOperation, TipDoc } from '@seo/contracts';
 import { createEditorExtensions } from './extensions';
 import { buildEditorContextSnapshot, type EditorContextSnapshot, type EditorSelectionSnapshot } from './editorContext';
@@ -162,6 +163,21 @@ describe('applyImageInsertionOperation', () => {
     expect(result).toEqual({ ok: true });
     expect(hasImage(editor)).toBe(true);
 
+    editor.commands.undo();
+    expect(hasImage(editor)).toBe(false);
+  });
+
+  it('selects the inserted image so its settings can be revealed, without an extra undo step', () => {
+    const editor = makeEditor();
+    const result = applyImageInsertionOperation(editor, operation());
+    expect(result).toEqual({ ok: true });
+
+    const { selection } = editor.state;
+    expect(selection).toBeInstanceOf(NodeSelection);
+    expect(selection instanceof NodeSelection ? selection.node.type.name : null).toBe('image');
+    expect(selection instanceof NodeSelection ? selection.node.attrs.mediaId : null).toBe('m1');
+
+    // The selection change is not a separate history entry: one undo removes the image.
     editor.commands.undo();
     expect(hasImage(editor)).toBe(false);
   });

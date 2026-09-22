@@ -55,6 +55,8 @@ export interface UseEmbeddedAgentOptions {
   buildImageInsertionContext?: () => ImageInsertionContext | null;
   /** Applies a returned insert_image operation through the editor (R3.1). */
   applyImageInsertion?: (operation: InsertImageOperation, expectedRevision: string) => ImageInsertionApplyResult;
+  /** Called after an insertion is applied so the host can reveal the result. */
+  onInserted?: () => void;
 }
 
 export interface EmbeddedAgentController {
@@ -86,6 +88,7 @@ export function useEmbeddedAgent(options: UseEmbeddedAgentOptions): EmbeddedAgen
     pollMs = EMBEDDED_AGENT_DEFAULT_POLL_MS,
     buildImageInsertionContext,
     applyImageInsertion,
+    onInserted,
   } = options;
 
   const [state, setState] = useState<EmbeddedAgentState>(CLOSED_EMBEDDED_AGENT);
@@ -294,6 +297,7 @@ export function useEmbeddedAgent(options: UseEmbeddedAgentOptions): EmbeddedAgen
     }
     if (result.ok) {
       setState({ status: 'applied', instruction: text, message: 'Image inserted. Undo removes it.' });
+      onInserted?.();
       return;
     }
     applyingRef.current = false;
@@ -306,7 +310,7 @@ export function useEmbeddedAgent(options: UseEmbeddedAgentOptions): EmbeddedAgen
           : "I couldn't place the image there. Put the cursor where you want it and try again.",
       canRetry: false,
     });
-  }, [state, applyImageInsertion]);
+  }, [state, applyImageInsertion, onInserted]);
 
   // Poll the active run while it is still working. The epoch captured at schedule
   // time invalidates a slow response after a document switch, close or resubmit.

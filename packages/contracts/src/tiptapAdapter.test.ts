@@ -179,6 +179,26 @@ describe('tiptap round trip', () => {
     const doc: TipDoc = { type: 'doc', content: [{ type: 'image', attrs: { mediaId: 'm1' } }, { type: 'paragraph' }] };
     expect(canonicalToTiptap(tiptapToCanonical(doc))).toEqual(doc);
   });
+
+  it('omits an unset image width/height instead of emitting invalid nulls', () => {
+    const doc: TipDoc = {
+      type: 'doc',
+      content: [
+        {
+          type: 'image',
+          attrs: { mediaId: 'm1', src: 'https://cdn/x.png', alt: '', caption: '', width: null, height: null },
+        },
+      ],
+    };
+    const canonical = tiptapToCanonical(doc);
+    expect(canonical.blocks[0]?.attrs).toEqual({
+      mediaId: 'm1',
+      src: 'https://cdn/x.png',
+      alt: '',
+      caption: '',
+    });
+    expect(isValidCanonicalDoc(canonical)).toBe(true);
+  });
 });
 
 describe('canonicalToTiptap', () => {

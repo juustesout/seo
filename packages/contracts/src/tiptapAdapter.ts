@@ -52,8 +52,14 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
 
-/** Copies only the keys actually present, preserving `null` vs missing so
- *  round trips do not invent attributes the source node never had. */
+/**
+ * Copies only the keys actually present with a meaningful value (never `null`).
+ * TipTap materialises every declared attribute and uses `null` for an unset
+ * optional one (image `width`/`height`, code `language`, ...). The canonical
+ * model treats "absent" as unset and its validator rejects `null` where a
+ * number/string is expected, so a null value is dropped rather than emitted as
+ * an invalid attribute.
+ */
 function pickAttrs(
   attrs: Record<string, unknown> | undefined,
   keys: readonly string[],
@@ -62,10 +68,11 @@ function pickAttrs(
   const out: Record<string, unknown> = {};
   let any = false;
   for (const key of keys) {
-    if (Object.prototype.hasOwnProperty.call(attrs, key)) {
-      out[key] = attrs[key];
-      any = true;
-    }
+    if (!Object.prototype.hasOwnProperty.call(attrs, key)) continue;
+    const value = attrs[key];
+    if (value === null) continue;
+    out[key] = value;
+    any = true;
   }
   return any ? out : undefined;
 }

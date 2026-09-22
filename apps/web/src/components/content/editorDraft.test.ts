@@ -88,8 +88,33 @@ describe('canonicalFromEditorDocument (editor save reverse bridge)', () => {
     expect(back.blocks[1]?.children?.[0]?.attrs).toEqual({ variant: 'elevated' });
   });
 
-  it('returns a valid canonical document for plain and empty editor documents', () => {
-    expect(isValidCanonicalDoc(canonicalFromEditorDocument(tiptapEmptyDoc()))).toBe(true);
+  it('saves a document holding a just-inserted image and composition node', () => {
+    const editor: TipDoc = {
+      type: 'doc',
+      content: [
+        {
+          type: 'compositionHero',
+          attrs: { variant: null, layout: null },
+          content: [
+            { type: 'heading', attrs: { level: 1 }, content: [{ type: 'text', text: 'Halleluja' }] },
+            {
+              type: 'image',
+              attrs: { mediaId: 'media-1', src: 'https://cdn/x.png', alt: '', caption: '', width: null, height: null },
+            },
+          ],
+        },
+      ],
+    };
+
+    const back = canonicalFromEditorDocument(editor);
+
+    expect(isValidCanonicalDoc(back)).toBe(true);
+    const hero = back.blocks[0];
+    expect(hero?.type).toBe('hero');
+    expect(hero?.children?.[1]).toMatchObject({ type: 'image', attrs: { mediaId: 'media-1' } });
+  });
+
+  it('returns a valid canonical document for plain and empty editor documents', () => {    expect(isValidCanonicalDoc(canonicalFromEditorDocument(tiptapEmptyDoc()))).toBe(true);
     expect(
       isValidCanonicalDoc(
         canonicalFromEditorDocument({ type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Hello' }] }] }),

@@ -149,6 +149,7 @@ export function EditorWorkspace({
                   configured={assistant.configured}
                   onSaveNow={onSaveNow}
                   pollMs={assistant.pollMs}
+                  onRevealInsertion={() => setRailOpen(true)}
                 />
               </InlineAssistantSlot>
               {review}
