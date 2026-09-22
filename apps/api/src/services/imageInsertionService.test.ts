@@ -230,13 +230,13 @@ describe('ImageInsertionService visual intent (R4.1)', () => {
     expect(mock.getCalls).toBe(0);
   });
 
-  it('reports a combined hero and background request as unsupported', async () => {
+  it('treats a named hero with a background as a hero-hosted background request (R4.4)', async () => {
     const err = await expectApiError(
       service.buildProposal(PROJECT_ID, intent({ instruction: 'Voeg een hero en een achtergrond toe.' }), context()),
     );
     expect(err.status).toBe(422);
-    expect(err.code).toBe('image_insertion_unrecognized_instruction');
-    expect(mock.getCalls).toBe(0);
+    expect(err.code).toBe('background_target_unresolved');
+    expect(mock.mediaListCalls).toEqual([]);
   });
 
   it('asks for clarification when several roles are named', async () => {
@@ -507,5 +507,138 @@ describe('ImageInsertionService hero visuals (R4.3)', () => {
     );
     expect(err.status).toBe(422);
     expect(err.code).toBe('hero_image_already_present');
+  });
+});
+
+function backgroundContext(over: Partial<ImageInsertionContext> = {}): ImageInsertionContext {
+  return sectionContext({ backgroundTarget: { ...SECTION_TARGET }, ...over });
+}
+
+describe('ImageInsertionService background visuals (R4.4)', () => {
+  it('builds a full-bleed background hosted in a section named by the instruction', async () => {
+    const proposal = await service.buildProposal(
+      PROJECT_ID,
+      intent({ instruction: 'Zet een rustige achtergrond in deze sectie.' }),
+      backgroundContext(),
+    );
+    expect(proposal.insertion?.visual).toMatchObject({ role: 'background', intent: 'atmosphere', placement: 'full_bleed' });
+    expect(proposal.insertion?.target).toEqual({ kind: 'section', sectionPath: [0], anchorPath: [0], heading: 'Solar energy' });
+    expect(proposal.insertion?.image.assetId).toBe('m_solar');
+    expect(proposal.insertion?.image.alt).toBe('');
+  });
+
+  it('builds a full-bleed background hosted in the hero named by the instruction', async () => {
+    const proposal = await service.buildProposal(
+      PROJECT_ID,
+      intent({ instruction: 'Gebruik een rustige achtergrond voor de hero.' }),
+      heroContext({ backgroundTarget: { ...HERO_TARGET } }),
+    );
+    expect(proposal.insertion?.visual).toMatchObject({ role: 'background', intent: 'atmosphere', placement: 'full_bleed' });
+    expect(proposal.insertion?.target).toMatchObject({ kind: 'hero', heroPath: [0], anchorPath: [0], placement: 'full_bleed' });
+    expect(proposal.insertion?.image.alt).toBe('');
+  });
+
+  it('uses the background host hint when the instruction names no region', async () => {
+    const proposal = await service.buildProposal(
+      PROJECT_ID,
+      intent({ instruction: 'Gebruik een rustige achtergrond.' }),
+      backgroundContext(),
+    );
+    expect(proposal.insertion?.target).toMatchObject({ kind: 'section', sectionPath: [0], anchorPath: [0] });
+  });
+
+  it('accepts a section host target supplied directly as the location', async () => {
+    const proposal = await service.buildProposal(
+      PROJECT_ID,
+      intent({ instruction: 'Gebruik een rustige achtergrond.' }),
+      context({ document: SECTION_CANONICAL, target: { ...SECTION_TARGET }, nearbyText: '' }),
+    );
+    expect(proposal.insertion?.target).toMatchObject({ kind: 'section', sectionPath: [0], anchorPath: [0] });
+    expect(proposal.insertion?.visual?.role).toBe('background');
+  });
+
+  it('uses the host heading and body to drive the background search', async () => {
+    mock.media = [
+      { ...mock.media[0]!, id: 'm_wind', filename: 'wind.png', alt_text: 'Wind turbines', caption: '' },
+      { ...mock.media[0]!, id: 'm_solar', filename: 'solar.png', alt_text: 'Solar panels', caption: '' },
+    ];
+    const proposal = await service.buildProposal(
+      PROJECT_ID,
+      intent({ instruction: 'Zet een rustige achtergrond in deze sectie.' }),
+      backgroundContext({ documentTitle: 'Installation guide' }),
+    );
+    expect(proposal.insertion?.image.assetId).toBe('m_solar');
+  });
+
+  it('refuses a background with no resolvable host region', async () => {
+    const err = await expectApiError(
+      service.buildProposal(PROJECT_ID, intent({ instruction: 'Gebruik een rustige achtergrond.' }), context()),
+    );
+    expect(err.status).toBe(422);
+    expect(err.code).toBe('background_target_unresolved');
+    expect(mock.mediaListCalls).toEqual([]);
+  });
+
+  it('refuses a background host whose heading no longer exists', async () => {
+    const err = await expectApiError(
+      service.buildProposal(
+        PROJECT_ID,
+        intent({ instruction: 'Zet een rustige achtergrond in deze sectie.' }),
+        backgroundContext({ backgroundTarget: { kind: 'section', sectionPath: [1], anchorPath: [1], heading: 'Solar energy' } }),
+      ),
+    );
+    expect(err.status).toBe(422);
+    expect(err.code).toBe('background_target_unresolved');
+  });
+
+  it('refuses a background placement it cannot host instead of downgrading it', async () => {
+    const err = await expectApiError(
+      service.buildProposal(
+        PROJECT_ID,
+        intent({ instruction: 'Zet een achtergrond als overlay in deze sectie.' }),
+        backgroundContext(),
+      ),
+    );
+    expect(err.status).toBe(422);
+    expect(err.code).toBe('visual_placement_unsupported');
+    expect(mock.mediaListCalls).toEqual([]);
+  });
+
+  it('refuses to add a background to a section that already has an image', async () => {
+    const withImage: CanonicalDocument = {
+      version: 1,
+      blocks: [
+        { type: 'heading', attrs: { level: 2 }, content: [{ type: 'text', text: 'Solar energy' }] },
+        { type: 'image', attrs: { mediaId: 'm_existing', src: 'https://cdn.test/a.png', alt: 'Panels' } },
+      ],
+    };
+    const err = await expectApiError(
+      service.buildProposal(
+        PROJECT_ID,
+        intent({ instruction: 'Zet een rustige achtergrond in deze sectie.' }),
+        backgroundContext({ document: withImage }),
+      ),
+    );
+    expect(err.status).toBe(422);
+    expect(err.code).toBe('background_image_already_present');
+  });
+
+  it('refuses to add a background to a hero that already has an image', async () => {
+    const withImage: CanonicalDocument = {
+      version: 1,
+      blocks: [
+        { type: 'heading', attrs: { level: 1 }, content: [{ type: 'text', text: 'Solar for every roof' }] },
+        { type: 'image', attrs: { mediaId: 'm_existing', src: 'https://cdn.test/a.png', alt: 'Panels' } },
+      ],
+    };
+    const err = await expectApiError(
+      service.buildProposal(
+        PROJECT_ID,
+        intent({ instruction: 'Gebruik een rustige achtergrond voor de hero.' }),
+        heroContext({ document: withImage, backgroundTarget: { ...HERO_TARGET } }),
+      ),
+    );
+    expect(err.status).toBe(422);
+    expect(err.code).toBe('background_image_already_present');
   });
 });

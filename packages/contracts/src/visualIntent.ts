@@ -23,7 +23,12 @@
  * Dependency-free by convention: plain types plus hand-rolled guards.
  */
 
-import { isImageInsertionInstruction, type ImageInsertionContext } from './imageInsertion.js';
+import {
+  IMAGE_INSERTION_BACKGROUND_PLACEMENT,
+  isImageInsertionInstruction,
+  type ImageInsertionBackgroundHostRegion,
+  type ImageInsertionContext,
+} from './imageInsertion.js';
 import {
   VISUAL_ROLE_DEFAULT_INTENT,
   VISUAL_ROLE_DEFAULT_PLACEMENT,
@@ -41,10 +46,13 @@ import {
 /**
  * The uncertainty model. A resolved intent is usable; a clarification carries the
  * plausible candidates and a product-language question; an unsupported request
- * carries a short reason. Callers must branch on `status`, never guess.
+ * carries a short reason. A resolved `background` may additionally carry the host
+ * region the instruction named (`section`/`hero`), which is a host-region cue and
+ * a different dimension from layout placement; callers must branch on `status`,
+ * never guess.
  */
 export type VisualIntentResolution =
-  | { status: 'resolved'; intent: VisualDesignIntent }
+  | { status: 'resolved'; intent: VisualDesignIntent; hostRegion?: ImageInsertionBackgroundHostRegion }
   | { status: 'needs_clarification'; candidates: VisualDesignIntent[]; question: string }
   | { status: 'unsupported'; reason: string };
 
@@ -66,7 +74,9 @@ interface RoleSignal {
  */
 const ROLE_SIGNALS: readonly RoleSignal[] = [
   { role: 'hero', pattern: /\bhero\b|header\s?(image|afbeelding)|banner|masthead|kopafbeelding/ },
-  { role: 'background', pattern: /achtergrond|background|backdrop/ },
+  // R4.4: a bounded `achtergrond` so `achtergrondinformatie` (background
+  // information) is not misread as a background visual; the noun forms are kept.
+  { role: 'background', pattern: /\bachtergrond(?:afbeelding|foto|beeld|visual)?\b|\bbackground\b|\bbackdrop\b/ },
   { role: 'illustration', pattern: /illustrat|diagram|infograf|\bschema\b|visual explanation|concept ?graphic/ },
   { role: 'icon', pattern: /\bicoon\b|\bicon\b|pictogram/ },
   { role: 'logo', pattern: /\blogo\b|beeldmerk/ },
@@ -180,13 +190,13 @@ export function resolveVisualDesignIntent(instruction: string, context: VisualIn
   const nonSectionRoles = [...new Set(matchedRoles.filter((role) => role !== 'section'))];
   const roles = nonSectionRoles.length === 1 ? nonSectionRoles : matchedRoles;
 
-  // R4.3: a hero and a background are different hosts with different placements.
-  // The pair cannot be satisfied by one visual, and reinterpreting it as a single
-  // full-bleed image would silently downgrade the request, so it is reported
-  // unsupported rather than guessed at.
-  if (roles.includes('hero') && roles.includes('background')) {
-    return { status: 'unsupported', reason: 'hero_background_unsupported' };
-  }
+  // R4.4: the host region a background request names. `section` and `hero` are
+  // host-region cues for a background, not competing roles.
+  const explicitHostRegion: ImageInsertionBackgroundHostRegion | undefined = matchedRoles.includes('hero')
+    ? 'hero'
+    : matchedRoles.includes('section')
+      ? 'section'
+      : undefined;
 
   // R4.2 can place one image per request. A clearly plural/multi request is
   // clarified instead of silently resolved to a single image.
@@ -200,6 +210,41 @@ export function resolveVisualDesignIntent(instruction: string, context: VisualIn
       status: 'needs_clarification',
       candidates,
       question: 'I can add one image at a time. Which single image should I add here?',
+    };
+  }
+
+  // R4.4: a background is a visual hosted in a region. A named hero/section is a
+  // host-region cue (not a competing role), so background wins as the role and the
+  // cue becomes the host region. Combining a background with a different visual
+  // role is genuinely ambiguous, so it is clarified; an unsupported placement
+  // (e.g. overlay) is refused rather than downgraded.
+  if (nonSectionRoles.includes('background')) {
+    const competing = nonSectionRoles.filter((role) => role !== 'background' && role !== 'hero');
+    if (competing.length > 0) {
+      const candidates = (['background', ...competing] as VisualAssetRole[]).map((candidate) =>
+        buildIntent(candidate, resolveIntentWord(text, candidate), VISUAL_ROLE_DEFAULT_PLACEMENT[candidate], context, instruction),
+      );
+      const names = (['background', ...competing] as VisualAssetRole[]).join(' or ');
+      return {
+        status: 'needs_clarification',
+        candidates,
+        question: bounded(`Which visual did you mean: a ${names}?`),
+      };
+    }
+    const explicitPlacement = PLACEMENT_SIGNALS.find((signal) => signal.pattern.test(text))?.placement;
+    if (explicitPlacement !== undefined && explicitPlacement !== IMAGE_INSERTION_BACKGROUND_PLACEMENT) {
+      return { status: 'unsupported', reason: 'background_placement_unsupported' };
+    }
+    return {
+      status: 'resolved',
+      intent: buildIntent(
+        'background',
+        resolveIntentWord(text, 'background'),
+        IMAGE_INSERTION_BACKGROUND_PLACEMENT,
+        context,
+        instruction,
+      ),
+      ...(explicitHostRegion ? { hostRegion: explicitHostRegion } : {}),
     };
   }
 

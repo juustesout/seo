@@ -286,7 +286,8 @@ describe('embeddedAgent visual intent (R4.1)', () => {
       embeddedAgentOutcomeFromError(new ApiRequestError('visual_intent_needs_clarification', 'which role?', 422)),
     ).toEqual({
       kind: 'clarification',
-      message: 'What kind of visual do you want here: an inline image, a section image, a hero image or an illustration?',
+      message:
+        'What kind of visual do you want here: an inline image, a section image, a hero image, a background image or an illustration?',
     });
   });
 
@@ -391,17 +392,54 @@ describe('embeddedAgent hero visuals (R4.3)', () => {
   });
 });
 
+describe('embeddedAgent background visuals (R4.4)', () => {
+  it('asks the user to anchor the request when no host region is found', () => {
+    expect(embeddedAgentOutcomeFromError(new ApiRequestError('background_target_unresolved', 'no region', 422))).toEqual({
+      kind: 'clarification',
+      message: "I couldn't find a section or hero for the background. Put the cursor in a section or the hero and try again.",
+    });
+  });
+
+  it('reports an already-imaged host region as a neutral note, not a failure', () => {
+    expect(
+      embeddedAgentOutcomeFromError(new ApiRequestError('background_image_already_present', 'has image', 422)),
+    ).toEqual({
+      kind: 'empty',
+      message: 'This area already has an image. Remove or replace it first, then ask again.',
+    });
+  });
+
+  it('labels the background role and describes its candidate in the host area', () => {
+    expect(visualRoleLabel('background')).toBe('Background visual');
+    const backgroundInsertion: InsertImageOperation = {
+      ...INSERTION,
+      target: { kind: 'section', sectionPath: [1], anchorPath: [1], heading: 'Solar energy' },
+      visual: { role: 'background', intent: 'atmosphere', placement: 'full_bleed' },
+    };
+    const outcome = embeddedAgentOutcomeFromRun(
+      run({
+        status: 'succeeded',
+        result: { version: 1, baseRevision: 'rev1:abc', document: { version: 1, blocks: [] }, insertion: backgroundInsertion },
+      }),
+    );
+    expect(outcome).toMatchObject({ kind: 'insertion', operation: backgroundInsertion });
+    expect(outcome.message).toContain('background');
+  });
+});
+
 describe('embeddedAgentWantsImageContext', () => {
-  it('routes plain image requests and explicit hero requests through the image path', () => {
+  it('routes plain image requests and explicit hero/background requests through the image path', () => {
     expect(embeddedAgentWantsImageContext('Zet hier een passende afbeelding.')).toBe(true);
     expect(embeddedAgentWantsImageContext('Geef deze sectie een passende afbeelding.')).toBe(true);
     expect(embeddedAgentWantsImageContext('Maak de hero sterker.')).toBe(true);
     expect(embeddedAgentWantsImageContext('Maak de hero-afbeelding sterker.')).toBe(true);
+    expect(embeddedAgentWantsImageContext('Gebruik een rustige achtergrond.')).toBe(true);
+    expect(embeddedAgentWantsImageContext('Gebruik een rustige achtergrond voor de hero.')).toBe(true);
   });
 
   it('leaves ordinary and unsupported-role instructions to the Designer run', () => {
     expect(embeddedAgentWantsImageContext('Add a section')).toBe(false);
     expect(embeddedAgentWantsImageContext('Maak het mooier.')).toBe(false);
-    expect(embeddedAgentWantsImageContext('Gebruik een rustige achtergrond.')).toBe(false);
+    expect(embeddedAgentWantsImageContext('Geef achtergrondinformatie over zonnepanelen.')).toBe(false);
   });
 });

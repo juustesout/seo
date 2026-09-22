@@ -1,6 +1,6 @@
 # Editor-Native Designer — Product & UX Contract (ADR Phase R0)
 
-Status: **R0 done (recon + contract); R1 done (editor shell built); R1.2 done (editor context foundation); R2.1 done (embedded agent entry surface); R3.1 done (context-aware image insertion, `docs/context-aware-image-insertion.md`); R4.1 done (visual design intent & asset roles, `docs/visual-design-foundation.md`); R4.2 done (role-aware section image capability, `docs/section-visual-capability.md`); R4.3 done (role-aware hero image capability, `docs/hero-visual-capability.md`)**. This document is the product handle for
+Status: **R0 done (recon + contract); R1 done (editor shell built); R1.2 done (editor context foundation); R2.1 done (embedded agent entry surface); R3.1 done (context-aware image insertion, `docs/context-aware-image-insertion.md`); R4.1 done (visual design intent & asset roles, `docs/visual-design-foundation.md`); R4.2 done (role-aware section image capability, `docs/section-visual-capability.md`); R4.3 done (role-aware hero image capability, `docs/hero-visual-capability.md`); R4.4 done (role-aware background visual capability, `docs/background-visual-capability.md`)**. This document is the product handle for
 the R-series. `docs/editor-native-designer-roadmap.md` is the guiding brief and
 stays authoritative for intent; this document turns that intent into concrete
 product rules and records what the current UI actually is.
@@ -359,7 +359,7 @@ overshadows the Editor.
 | R1.2 | Editor Context Foundation | **Done** (`docs/editor-context-foundation.md`) |
 | R2 | Embedded Designer Agent Shell | In progress (R2.1 entry surface done, `docs/embedded-agent-entry-surface.md`) |
 | R3 | First Vertical Slice, Image Insertion | **R3.1 done** (`docs/context-aware-image-insertion.md`) |
-| R4 | In-Editor Proposal, Apply & Undo | In progress (R4.1 visual design foundation done, `docs/visual-design-foundation.md`; R4.2 section image capability done, `docs/section-visual-capability.md`; R4.3 hero image capability done, `docs/hero-visual-capability.md`) |
+| R4 | In-Editor Proposal, Apply & Undo | In progress (R4.1 visual design foundation done, `docs/visual-design-foundation.md`; R4.2 section image capability done, `docs/section-visual-capability.md`; R4.3 hero image capability done, `docs/hero-visual-capability.md`; R4.4 background visual capability done, `docs/background-visual-capability.md`) |
 | R5 | Contextual Designer Actions | Not started |
 | R6 | Designer Capabilities as Native Editor Tools | Not started |
 | R7 | Unified Intelligence Layer | Not started |
@@ -401,8 +401,8 @@ rather than guessed. The shared visual ranker now factors role/placement/aspect
 fit below subject relevance, with no `visual` option reproducing the exact R3.1
 order. Accessibility defaults live in the vocabulary: decorative/background
 roles get empty alt, content-bearing roles require descriptive alt, and roles
-the editor cannot host yet (hero, background, logo at R4.1; hero became hostable
-in R4.3) are reported as
+the editor cannot host yet (hero, background and logo at R4.1; hero became
+hostable in R4.3, background in R4.4, logo still stands) are reported as
 `visual_role_unsupported` before any content is read. Visual intent rides the
 existing R3.1 operation envelope, so there is no migration, no new table, no new
 route and no new panel. Full contract, vocabulary, error table and limitations
@@ -458,19 +458,42 @@ R3.1/R4.2 and the insertion is still one undoable editor transaction; the backen
 still never writes the document. Full contract, error table and limitations are
 in `docs/hero-visual-capability.md`.
 
-## 20. Handoff to the next briefing
+## 20. R4.4 role-aware background visual capability
 
-R4.3 is done, R4.1/R4.2/R3.1 still work. "Maak de hero sterker." now inserts a
-real hero image inside the Editor, while "Geef deze sectie een passende
-afbeelding." and plain "Zet hier een passende afbeelding." are unchanged. The
-next step is to widen the *host* side further while keeping every R4
-invariant (three separate axes, honest refusal over guessing, pure ranking, one
-role fully integrated at a time, no new persistence, no new route or detached
-UI). In priority order: a host block for full-bleed `background`; replacement of
-an existing image block (including a hero/section image); candidate choice
-("show me another") reusing the same ranker and intent; then `logo`/`icon`
-hosts. The general R4 review-before-apply step for non-visual Designer proposals
-remains open. Details and rationale are in `docs/hero-visual-capability.md`,
+R4.4 turns the R4.2/R4.3 host pattern onto the third role: a **background**
+image, requested in the Editor as "Gebruik een rustige achtergrond." (or
+English). A background is **hosted** in the document's real structure, not a new
+abstraction: an explicit section or hero container, or a heading-delimited
+section / page-hero region. It keeps three dimensions separate: the **visual
+role** (`background`), the **host region** (`section` or `hero`, reusing the
+R4.2/R4.3 targets) and the **layout placement** (fixed to `full_bleed`).
+`section`/`hero` are host regions, never new `VisualPlacement` values. The Editor
+always sends its real caret/selection as `target` and adds a structural
+`backgroundTarget` hint; the backend validates that hint against the canonical
+snapshot with the same pure resolvers the capability is defined by, then ranks
+existing media against the host heading plus its bounded body/supporting copy and
+inserts after the heading. The image stays a real image block with
+`role: "background"` and **empty alt** (decorative); R4.4 never mutates CSS
+`background-image`. Any placement other than `full_bleed` is refused rather than
+downgraded, and a named hero/section becomes the background's host region (the
+R4.3 `hero_background_unsupported` outcome is removed). The inline candidate is
+unchanged from R3.1/R4.2/R4.3 and the insertion is still one undoable editor
+transaction; the backend still never writes the document. Full contract, error
+table and limitations are in `docs/background-visual-capability.md`.
+
+## 21. Handoff to the next briefing
+
+R4.4 is done, R4.1/R4.2/R4.3/R3.1 still work. "Gebruik een rustige achtergrond."
+now inserts a real full-bleed background image inside the Editor, while the
+section, hero and plain image instructions are unchanged. The next step is to
+widen the *host* side further while keeping every R4 invariant (three separate
+axes, honest refusal over guessing, pure ranking, one role fully integrated at a
+time, no new persistence, no new route or detached UI). In priority order:
+replacement of an existing image block (including a hero/section/background
+image); candidate choice ("show me another") reusing the same ranker and intent;
+then `logo`/`icon` hosts. The general R4 review-before-apply step for non-visual
+Designer proposals remains open. Details and rationale are in
+`docs/background-visual-capability.md`, `docs/hero-visual-capability.md`,
 `docs/section-visual-capability.md` and `docs/visual-design-foundation.md`.
 
 ---
@@ -485,6 +508,8 @@ remains open. Details and rationale are in `docs/hero-visual-capability.md`,
 - `docs/visual-design-foundation.md` — R4.1 visual design intent & asset roles.
 - `docs/section-visual-capability.md` — R4.2 role-aware section image capability.
 - `docs/hero-visual-capability.md` — R4.3 role-aware hero image capability.
+- `docs/background-visual-capability.md` — R4.4 role-aware background visual
+  capability.
 - `docs/8e6-agent-architecture.md` — the Designer/Writer/Composer backend ADR
   whose infrastructure R0 keeps and hides.
 - `docs/content-studio-roadmap.md`, `docs/w10-magic-roadmap.md` — prior

@@ -198,6 +198,39 @@ describe('candidate and operation validation', () => {
       }),
     ).toBe(false);
   });
+
+  it('hosts a background in a section or hero with the full-bleed placement (R4.4)', () => {
+    const image = { assetId: 'm_solar', url: 'https://x.test/a.png', alt: '' };
+    const sectionTarget = { kind: 'section', sectionPath: [1], anchorPath: [1], heading: 'Solar energy' };
+    const heroTarget = { kind: 'hero', heroPath: [0], anchorPath: [0], nodeType: 'heading', placement: 'full_bleed' };
+    const backgroundVisual = { role: 'background', intent: 'atmosphere', placement: 'full_bleed' };
+
+    expect(isValidInsertImageOperation({ type: 'insert_image', target: sectionTarget, image, visual: backgroundVisual })).toBe(true);
+    expect(isValidInsertImageOperation({ type: 'insert_image', target: heroTarget, image, visual: backgroundVisual })).toBe(true);
+    // A background still needs a host region, never a bare caret target.
+    expect(
+      isValidInsertImageOperation({ type: 'insert_image', target: { kind: 'cursor', position: 2 }, image, visual: backgroundVisual }),
+    ).toBe(false);
+    // A background is never downgraded to another placement.
+    expect(
+      isValidInsertImageOperation({
+        type: 'insert_image',
+        target: sectionTarget,
+        image,
+        visual: { role: 'background', intent: 'atmosphere', placement: 'overlay' },
+      }),
+    ).toBe(false);
+    // A section/hero target may not carry the plain section/hero role when the
+    // request was resolved as a background, and vice versa.
+    expect(
+      isValidInsertImageOperation({
+        type: 'insert_image',
+        target: sectionTarget,
+        image,
+        visual: { role: 'hero', intent: 'emphasis', placement: 'full_bleed' },
+      }),
+    ).toBe(false);
+  });
 });
 
 describe('context validation', () => {
@@ -228,6 +261,16 @@ describe('context validation', () => {
     // The hint must itself be a hero target, never some other location kind.
     expect(isValidImageInsertionContext({ ...context(), heroTarget: { kind: 'cursor', position: 1 } })).toBe(false);
     expect(isValidImageInsertionContext({ ...context(), heroTarget: { kind: 'section', sectionPath: [0], anchorPath: [0] } })).toBe(false);
+  });
+
+  it('accepts a background host hint that reuses a section or hero target (R4.4)', () => {
+    const sectionHost = { kind: 'section', sectionPath: [1], anchorPath: [1], heading: 'Solar energy' };
+    const heroHost = { kind: 'hero', heroPath: [0], anchorPath: [0], nodeType: 'heading', placement: 'full_bleed' };
+    expect(isValidImageInsertionContext({ ...context(), backgroundTarget: sectionHost })).toBe(true);
+    expect(isValidImageInsertionContext({ ...context(), backgroundTarget: heroHost })).toBe(true);
+    // The hint must itself be a section/hero host, never a caret or block kind.
+    expect(isValidImageInsertionContext({ ...context(), backgroundTarget: { kind: 'cursor', position: 1 } })).toBe(false);
+    expect(isValidImageInsertionContext({ ...context(), backgroundTarget: { kind: 'block', path: [0] } })).toBe(false);
   });
 });
 

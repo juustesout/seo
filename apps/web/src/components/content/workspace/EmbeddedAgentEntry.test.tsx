@@ -308,6 +308,13 @@ const HERO_INSERTION: InsertImageOperation = {
   visual: { role: 'hero', intent: 'emphasis', placement: 'full_bleed' },
 };
 
+const BACKGROUND_INSERTION: InsertImageOperation = {
+  type: 'insert_image',
+  target: { kind: 'section', sectionPath: [0], anchorPath: [0], heading: 'Solar energy' },
+  image: { assetId: 'm1', url: 'https://cdn.test/solar.png', alt: '' },
+  visual: { role: 'background', intent: 'atmosphere', placement: 'full_bleed' },
+};
+
 function imageSucceeded(): AgentRun {
   return run({
     status: 'succeeded',
@@ -596,6 +603,75 @@ describe('EmbeddedAgentEntry hero visuals (R4.3)', () => {
 
     await waitFor(() =>
       expect(screen.getByTestId('embedded-agent-status').textContent).toContain("couldn't find a hero area"),
+    );
+    expect(JSON.stringify(editor.getJSON())).not.toContain('"type":"image"');
+  });
+});
+
+describe('EmbeddedAgentEntry background visuals (R4.4)', () => {
+  it('sends the host hint, previews the candidate, and inserts the background after the heading', async () => {
+    const editor = new Editor({ extensions: createEditorExtensions({ nodeViews: false }), content: SECTION_DOC });
+    editors.push(editor);
+    act(() => {
+      editor.commands.setTextSelection(20);
+    });
+    apiMock.api
+      .mockResolvedValueOnce({ run: run({ status: 'queued' }), reused: false })
+      .mockResolvedValueOnce(
+        run({
+          status: 'succeeded',
+          result: { version: 1, baseRevision: 'rev1:abc', document: { version: 1, blocks: [] }, insertion: BACKGROUND_INSERTION },
+        }),
+      );
+
+    render(<EditorHarness editor={editor} doc={SECTION_DOC} />);
+    fireEvent.change(screen.getByTestId('embedded-agent-input'), {
+      target: { value: 'Geef deze sectie een rustige achtergrond.' },
+    });
+    fireEvent.click(screen.getByTestId('embedded-agent-send'));
+
+    await waitFor(() => expect(screen.getByTestId('embedded-agent-image-role').textContent).toContain('Background visual'));
+    const body = apiMock.api.mock.calls[0]![1]!.body as Record<string, unknown>;
+    expect(body.editor_context).toMatchObject({
+      target: { kind: 'cursor' },
+      sectionTarget: { kind: 'section', sectionPath: [0], anchorPath: [0], heading: 'Solar energy' },
+    });
+
+    fireEvent.click(screen.getByTestId('embedded-agent-insert'));
+    await waitFor(() => expect(screen.getByTestId('embedded-agent-status').textContent).toContain('Image inserted'));
+
+    const content = editor.getJSON().content ?? [];
+    expect(content[0]!.type).toBe('heading');
+    expect(content[1]!.type).toBe('image');
+  });
+
+  it('asks the user to anchor the request when no host region can be found', async () => {
+    const editor = new Editor({
+      extensions: createEditorExtensions({ nodeViews: false }),
+      content: { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Just prose.' }] }] },
+    });
+    editors.push(editor);
+    act(() => {
+      editor.commands.setTextSelection(3);
+    });
+    apiMock.api.mockResolvedValueOnce({
+      run: run({ status: 'failed', error: { code: 'background_target_unresolved', message: 'no region', retryable: false } }),
+      reused: false,
+    });
+
+    render(
+      <EditorHarness
+        editor={editor}
+        doc={{ type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Just prose.' }] }] }}
+      />,
+    );
+    fireEvent.change(screen.getByTestId('embedded-agent-input'), {
+      target: { value: 'Gebruik een rustige achtergrond.' },
+    });
+    fireEvent.click(screen.getByTestId('embedded-agent-send'));
+
+    await waitFor(() =>
+      expect(screen.getByTestId('embedded-agent-status').textContent).toContain('section or hero for the background'),
     );
     expect(JSON.stringify(editor.getJSON())).not.toContain('"type":"image"');
   });

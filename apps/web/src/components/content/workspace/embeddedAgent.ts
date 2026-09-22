@@ -90,16 +90,20 @@ const SECTION_IMAGE_PRESENT_MESSAGE = 'This section already has an image. Remove
 const HERO_TARGET_UNRESOLVED_MESSAGE =
   "I couldn't find a hero area on this page. Add a hero section or a heading at the top and try again.";
 const HERO_IMAGE_PRESENT_MESSAGE = 'This hero already has an image. Remove or replace it first, then ask again.';
+/** R4.4: the host region for a background could not be resolved or anchored. */
+const BACKGROUND_TARGET_UNRESOLVED_MESSAGE =
+  "I couldn't find a section or hero for the background. Put the cursor in a section or the hero and try again.";
+const BACKGROUND_IMAGE_PRESENT_MESSAGE = 'This area already has an image. Remove or replace it first, then ask again.';
 
 /** R4.1 product copy for the typed visual-intent outcomes. */
 const VISUAL_ROLE_UNSUPPORTED_MESSAGE =
-  "That kind of visual isn't supported here yet. I can add an inline image, a section image, a hero image or an illustration.";
+  "That kind of visual isn't supported here yet. I can add an inline image, a section image, a hero image, a background image or an illustration.";
 const VISUAL_CLARIFICATION_MESSAGE =
-  'What kind of visual do you want here: an inline image, a section image, a hero image or an illustration?';
+  'What kind of visual do you want here: an inline image, a section image, a hero image, a background image or an illustration?';
 const VISUAL_UNSUPPORTED_MESSAGE =
   "I couldn't tell what visual you want here. Try naming it, for example an illustration or a background image.";
 const VISUAL_PLACEMENT_UNSUPPORTED_MESSAGE =
-  "That placement isn't supported here yet. I can add a contained section image or a full-width hero image.";
+  "That placement isn't supported here yet. I can add a contained section image, a full-width hero image or a full-width background.";
 
 /** Shown when the user asked for an image but there is no reliable insertion point. */
 export const IMAGE_INSERTION_CLARIFICATION_MESSAGE =
@@ -163,9 +167,10 @@ function visualIntentMessage(code: string | null | undefined): EmbeddedAgentOutc
 /**
  * Product-language outcome for the typed image-insertion error codes, or null
  * when the code is not one of them. Keeps the visible copy understandable while
- * the code stays available internally. R4.2 adds the section outcomes: a missing
- * section is a clarification (the user repositions), an existing image is a
- * neutral note rather than a failure.
+ * the code stays available internally. R4.2 adds the section outcomes, R4.3 the
+ * hero outcomes and R4.4 the background outcomes: a missing region is a
+ * clarification (the user repositions), an existing image is a neutral note
+ * rather than a failure.
  */
 function imageInsertionOutcome(code: string | null | undefined): EmbeddedAgentOutcome | null {
   switch (code) {
@@ -184,6 +189,10 @@ function imageInsertionOutcome(code: string | null | undefined): EmbeddedAgentOu
       return { kind: 'clarification', message: HERO_TARGET_UNRESOLVED_MESSAGE };
     case 'hero_image_already_present':
       return { kind: 'empty', message: HERO_IMAGE_PRESENT_MESSAGE };
+    case 'background_target_unresolved':
+      return { kind: 'clarification', message: BACKGROUND_TARGET_UNRESOLVED_MESSAGE };
+    case 'background_image_already_present':
+      return { kind: 'empty', message: BACKGROUND_IMAGE_PRESENT_MESSAGE };
     default:
       return null;
   }
@@ -191,15 +200,16 @@ function imageInsertionOutcome(code: string | null | undefined): EmbeddedAgentOu
 
 /**
  * True when an instruction is a visual request this capability can act on: a
- * plain image-insertion request, or an explicit hero request ("Maak de hero
- * sterker.") that names no image noun. Only the hero role is admitted without an
- * image noun: words like "section" appear in ordinary instructions ("Add a
- * section") and must keep routing to the Designer run, not to image insertion.
+ * plain image-insertion request, or an explicit hero/background request ("Maak de
+ * hero sterker.", "Gebruik een rustige achtergrond.") that names no image noun.
+ * Only those roles are admitted without an image noun: words like "section" appear
+ * in ordinary instructions ("Add a section") and must keep routing to the Designer
+ * run, not to image insertion.
  */
 export function embeddedAgentWantsImageContext(instruction: string): boolean {
   if (isImageInsertionInstruction(instruction)) return true;
   const resolution = resolveVisualDesignIntent(instruction, { nearbyText: '' });
-  return resolution.status === 'resolved' && resolution.intent.role === 'hero';
+  return resolution.status === 'resolved' && (resolution.intent.role === 'hero' || resolution.intent.role === 'background');
 }
 
 export interface EmbeddedAgentSubmissionInput {
@@ -283,6 +293,7 @@ function completedMessage(run: AgentRun): string {
 function insertionCandidateMessage(role: VisualAssetRole | undefined): string {
   if (role === 'section') return 'I found a suitable image for this section. Insert it after the heading?';
   if (role === 'hero') return 'I found a suitable hero image. Insert it in the hero?';
+  if (role === 'background') return 'I found a suitable background. Insert it in this area?';
   return 'I found a suitable image. Insert it where you asked?';
 }
 

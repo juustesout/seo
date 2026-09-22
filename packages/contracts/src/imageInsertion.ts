@@ -93,6 +93,23 @@ export const IMAGE_INSERTION_HERO_PLACEMENT = 'full_bleed' as const;
 /** Bounded supporting copy derived from a hero and used for hero retrieval. */
 export const IMAGE_INSERTION_HERO_SUPPORTING_MAX_CHARS = 600;
 
+/**
+ * R4.4: the host region a background visual belongs to. This is deliberately a
+ * separate dimension from `VisualPlacement`: `section` and `hero` name the region
+ * that hosts the background, while its layout placement stays `full_bleed`. These
+ * values are never added to `VISUAL_PLACEMENTS`.
+ */
+export const IMAGE_INSERTION_BACKGROUND_HOST_REGIONS = ['section', 'hero'] as const;
+export type ImageInsertionBackgroundHostRegion = (typeof IMAGE_INSERTION_BACKGROUND_HOST_REGIONS)[number];
+
+/**
+ * The one layout placement a background visual supports today: a real image
+ * block filling its host region. R4.4 deliberately does not implement a CSS
+ * `background-image` treatment, so any other placement is refused rather than
+ * silently rendered as something it is not.
+ */
+export const IMAGE_INSERTION_BACKGROUND_PLACEMENT = 'full_bleed' as const;
+
 /** An insertion point at the caret (editor document position). */
 export interface ImageInsertionCursorTarget {
   kind: 'cursor';
@@ -167,6 +184,15 @@ export type ImageInsertionTarget =
   | ImageInsertionSectionTarget
   | ImageInsertionHeroTarget;
 
+/**
+ * R4.4: a background visual is hosted inside a section or the hero. Rather than a
+ * new target shape it reuses the R4.2/R4.3 host targets and adds only the
+ * host-region discriminator, which is the reused target's `kind`. The operation's
+ * target is therefore a `section` or `hero` target carrying `visual.role =
+ * "background"`; host region and layout placement stay separate dimensions.
+ */
+export type ImageInsertionBackgroundTarget = ImageInsertionSectionTarget | ImageInsertionHeroTarget;
+
 // ---------------------------------------------------------------------------
 // Candidate
 // ---------------------------------------------------------------------------
@@ -239,6 +265,14 @@ export interface ImageInsertionContext {
    * roles.
    */
   heroTarget?: ImageInsertionHeroTarget;
+  /**
+   * R4.4: the host region a background request addresses, when the editor could
+   * resolve one. It reuses the R4.2/R4.3 section/hero targets, so `kind` is the
+   * host-region discriminator; it is a structural hint for the `background` role
+   * only and is ignored for other roles. Validated against the canonical snapshot
+   * before use.
+   */
+  backgroundTarget?: ImageInsertionBackgroundTarget;
   /** The user's selected text, when the target is a text selection. */
   selectedText?: string;
   /** Bounded surrounding copy (current block plus nearby blocks). */
@@ -291,6 +325,7 @@ const CONTEXT_KEYS: ReadonlySet<string> = new Set([
   'target',
   'sectionTarget',
   'heroTarget',
+  'backgroundTarget',
   'selectedText',
   'nearbyText',
   'documentTitle',
@@ -396,23 +431,22 @@ export function isValidInsertImageOperation(value: unknown): value is InsertImag
 
   const target = value.target;
   const visual = value.visual as VisualDesignIntent | undefined;
-  // R4.2: the resolved role and the target kind must agree. A `section` target
-  // without a section role (or vice versa) is a mismatched operation, and a
-  // section intent may only carry the one placement the section host supports.
-  const sectionTarget = target.kind === 'section';
-  const sectionVisual = visual?.role === 'section';
-  if (sectionTarget !== sectionVisual) return false;
-  if (sectionVisual && visual?.placement !== undefined && visual.placement !== IMAGE_INSERTION_SECTION_PLACEMENT) {
+  const role = visual?.role;
+  // R4.2/R4.3/R4.4: the resolved role and the target kind must agree. A section
+  // or hero target without a matching host role (or vice versa) is a mismatched
+  // operation, and the role may only carry the one placement its host supports. A
+  // background is hosted in a section or the hero, so it is the one role allowed
+  // over either host target; it is never downgraded into a section/hero role.
+  if (target.kind === 'section' && role !== 'section' && role !== 'background') return false;
+  if (target.kind === 'hero' && role !== 'hero' && role !== 'background') return false;
+  if (role === 'section' && target.kind !== 'section') return false;
+  if (role === 'hero' && target.kind !== 'hero') return false;
+  if (role === 'background' && target.kind !== 'section' && target.kind !== 'hero') return false;
+  if (role === 'section' && visual?.placement !== undefined && visual.placement !== IMAGE_INSERTION_SECTION_PLACEMENT) {
     return false;
   }
-
-  // R4.3: a `hero` target requires the hero role and the one supported hero
-  // placement, and a hero role requires a hero target. A hero intent with any
-  // other placement is a mismatched operation, never silently downgraded.
-  const heroTarget = target.kind === 'hero';
-  const heroVisual = visual?.role === 'hero';
-  if (heroTarget !== heroVisual) return false;
-  if (heroVisual && visual?.placement !== IMAGE_INSERTION_HERO_PLACEMENT) return false;
+  if (role === 'hero' && visual?.placement !== IMAGE_INSERTION_HERO_PLACEMENT) return false;
+  if (role === 'background' && visual?.placement !== IMAGE_INSERTION_BACKGROUND_PLACEMENT) return false;
 
   return isOptionalBoundedString(value.rationale, IMAGE_INSERTION_RATIONALE_MAX_CHARS);
 }
@@ -439,6 +473,15 @@ export function isValidImageInsertionContext(value: unknown): value is ImageInse
   if (
     value.heroTarget !== undefined &&
     !(isValidImageInsertionTarget(value.heroTarget) && value.heroTarget.kind === 'hero')
+  ) {
+    return false;
+  }
+  if (
+    value.backgroundTarget !== undefined &&
+    !(
+      isValidImageInsertionTarget(value.backgroundTarget) &&
+      (value.backgroundTarget.kind === 'section' || value.backgroundTarget.kind === 'hero')
+    )
   ) {
     return false;
   }

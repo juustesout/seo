@@ -254,16 +254,18 @@ Explicitly not supported (unimplemented, and reported as such):
 - advanced aesthetic ranking;
 - any new graphics panel, separate visual editor or new route.
 
-Status note: the "not supported" list above reflects R4.1. Since then two roles
-became real hosts - `section` in R4.2 (`docs/section-visual-capability.md`) and
-`hero` in R4.3 (`docs/hero-visual-capability.md`); the rest still stand.
+Status note: the "not supported" list above reflects R4.1. Since then three roles
+became real hosts - `section` in R4.2 (`docs/section-visual-capability.md`),
+`hero` in R4.3 (`docs/hero-visual-capability.md`) and `background` in R4.4
+(`docs/background-visual-capability.md`); the rest still stand.
 
 ## 13. R4.2 handoff
 
 Recommended next step: extend the *host* side so more resolved roles become
 real. In priority order:
 
-1. [Done in R4.3] Host block for `hero`; still open: full-bleed `background`.
+1. [Done in R4.3] Host block for `hero`; [Done in R4.4] full-bleed `background`
+   (`docs/background-visual-capability.md`).
 2. Replacement of an existing image block (the R4.1-resolved role becomes the
    replacement's role).
 3. Candidate choice ("show me another") reusing the same ranker and intent.

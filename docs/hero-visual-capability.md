@@ -141,9 +141,10 @@ such as "Add a section" still routes to the Designer run.
 
 ## 7. Honesty and accessibility
 
-- **A hero and a background in one request are unsupported, not reinterpreted.**
-  The pair is reported as `unsupported` (`hero_background_unsupported`) rather
-  than being flattened into a single full-bleed visual.
+- **A hero and a background in one request now resolve as a background hosted in
+  the hero** (R4.4, `docs/background-visual-capability.md`); a named hero/section
+  becomes the background's host region instead of being flattened or refused.
+  Any other role pair is still a clarification, not a silent pick.
 - **An existing hero image is reported, not duplicated or replaced**
   (`hero_image_already_present`).
 - **No hero / heading -> no hero**: `hero_target_unresolved`, a clarification
@@ -188,11 +189,12 @@ Supported now:
 
 Explicitly not supported (reported as such, not faked):
 
-- other visual roles as hosts (background, logo, icon, ...);
+- other visual roles as hosts (logo, icon, ...); the `background` role was added
+  in R4.4 (`docs/background-visual-capability.md`);
 - replacement of an existing image (including a hero image);
 - choosing between multiple candidates ("another one");
 - plural / multi-image insertion;
-- hero placement other than `full_bleed`; a hero+background combination;
+- hero placement other than `full_bleed`;
 - generation, visual search, or any new graphics panel, page or route.
 
 ## 11. Handoff to the next briefing
@@ -205,7 +207,8 @@ and keeping every invariant (three separate axes, honest refusal over guessing,
 pure ranking, one role fully integrated at a time, no new persistence, no new
 route or detached UI):
 
-1. Host blocks for full-bleed `background`.
+1. [Done in R4.4] Host blocks for full-bleed `background` - see
+   `docs/background-visual-capability.md`.
 2. Replacement of an existing image block (the R4.1-resolved role becomes the
    replacement's role) - this also makes `hasImage` heroes/sections replaceable.
 3. Candidate choice ("show me another") reusing the same ranker and intent.

@@ -190,12 +190,13 @@ export const VISUAL_ROLE_DEFAULT_INTENT: Readonly<Record<VisualAssetRole, Visual
 /**
  * The visual roles the canonical model can actually host today. An `image` block
  * plus, since R4.2/R4.3, a section region and a hero region give these roles a
- * real, addressable home. Roles that need a layout host we still do not have
- * (full-bleed backgrounds, card thumbnails, avatars, icons) resolve as vocabulary
- * but are not insertable. Declaring that here, once, is what keeps the API from
- * faking an insertion it cannot perform.
+ * real, addressable home; R4.4 adds the `background`, which reuses those two host
+ * regions as a real image block. Roles that need a layout host we still do not
+ * have (card thumbnails, avatars, icons) resolve as vocabulary but are not
+ * insertable. Declaring that here, once, is what keeps the API from faking an
+ * insertion it cannot perform.
  */
-export const VISUAL_INSERTABLE_ROLES = ['inline', 'section', 'hero', 'illustration', 'decorative'] as const;
+export const VISUAL_INSERTABLE_ROLES = ['inline', 'section', 'hero', 'background', 'illustration', 'decorative'] as const;
 
 /** True when the current capabilities can place this role as a real, hostable visual. */
 export function isVisualInsertableRole(role: VisualAssetRole): boolean {

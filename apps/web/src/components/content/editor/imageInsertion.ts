@@ -28,6 +28,7 @@ import {
   IMAGE_INSERTION_NODE_TYPE_MAX_CHARS,
   IMAGE_INSERTION_TITLE_MAX_CHARS,
   isValidImageInsertionContext,
+  type ImageInsertionBackgroundTarget,
   type ImageInsertionContext,
   type ImageInsertionHeroTarget,
   type ImageInsertionSectionTarget,
@@ -55,6 +56,12 @@ export interface EditorImageSemantics {
    * canonical snapshot and the editor re-validates it before inserting.
    */
   heroTarget?: ImageInsertionHeroTarget;
+  /**
+   * R4.4: the host region a background request addresses, when one can be
+   * resolved. It reuses the section/hero hints already carried here; it is a
+   * structural hint for the `background` role only and is ignored for other roles.
+   */
+  backgroundTarget?: ImageInsertionBackgroundTarget;
 }
 
 /** Editor node names that describe a section for R4.2 and a hero for R4.3. */
@@ -231,6 +238,41 @@ export function readEditorHeroTarget(editor: Editor | null): ImageInsertionHeroT
 }
 
 /**
+ * Reads the host region a background request addresses (R4.4), mirroring the
+ * canonical target: a section or the hero. An explicit `compositionHero` the
+ * selection sits in wins; the page-hero region (the first top-level heading plus
+ * its copy) also defaults to the hero, since that is exactly the hero host; any
+ * other heading-delimited region is a section. Returns null when neither exists so
+ * the backend can ask instead of guessing. Pure read.
+ */
+export function readEditorBackgroundTarget(editor: Editor | null): ImageInsertionBackgroundTarget | null {
+  if (!editor || editor.isDestroyed) return null;
+  const { doc, selection } = editor.state;
+  if (doc.childCount === 0) return null;
+
+  const topIndex = Math.max(0, Math.min(doc.resolve(selection.from).index(0), doc.childCount - 1));
+  const topNode = doc.child(topIndex);
+
+  if (topNode.type.name === HERO_NODE_TYPE) {
+    const hero = readEditorHeroTarget(editor);
+    if (hero) return hero;
+  }
+
+  const section = readEditorSectionTarget(editor);
+  const hero = readEditorHeroTarget(editor);
+  if (
+    section &&
+    hero &&
+    section.anchorPath.length === 1 &&
+    hero.anchorPath.length === 1 &&
+    section.anchorPath[0] === hero.anchorPath[0]
+  ) {
+    return hero;
+  }
+  return section ?? hero;
+}
+
+/**
  * Reads bounded semantic context from the live editor: the selected text, the
  * surrounding copy (previous/current/next block) and the nearest preceding
  * heading. It never reads the whole document body and never invents context.
@@ -265,6 +307,7 @@ export function readEditorImageSemantics(editor: Editor | null): EditorImageSema
   const targetNodeType = doc.childCount > 0 ? doc.child(topIndex).type.name : undefined;
   const sectionTarget = readEditorSectionTarget(editor);
   const heroTarget = readEditorHeroTarget(editor);
+  const backgroundTarget = readEditorBackgroundTarget(editor);
 
   return {
     ...(selectedText ? { selectedText } : {}),
@@ -273,6 +316,7 @@ export function readEditorImageSemantics(editor: Editor | null): EditorImageSema
     ...(targetNodeType ? { targetNodeType } : {}),
     ...(sectionTarget ? { sectionTarget } : {}),
     ...(heroTarget ? { heroTarget } : {}),
+    ...(backgroundTarget ? { backgroundTarget } : {}),
   };
 }
 
@@ -308,6 +352,7 @@ export function imageInsertionContextFromSnapshot(
       : {}),
     ...(semantics.sectionTarget ? { sectionTarget: semantics.sectionTarget } : {}),
     ...(semantics.heroTarget ? { heroTarget: semantics.heroTarget } : {}),
+    ...(semantics.backgroundTarget ? { backgroundTarget: semantics.backgroundTarget } : {}),
     ...(meta.language ? { language: clamp(meta.language, IMAGE_INSERTION_LANGUAGE_MAX_CHARS) } : {}),
   };
   return isValidImageInsertionContext(context) ? context : null;

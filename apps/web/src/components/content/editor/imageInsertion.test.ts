@@ -16,6 +16,7 @@ import {
   applyImageInsertionOperation,
   imageInsertionContextFromSnapshot,
   imageInsertionTargetFromSelection,
+  readEditorBackgroundTarget,
   readEditorHeroTarget,
   readEditorImageSemantics,
   readEditorSectionTarget,
@@ -371,6 +372,100 @@ describe('hero targeting (R4.3)', () => {
       target: { kind: 'hero', heroPath: [0], anchorPath: [0], nodeType: 'heading', placement: 'full_bleed' },
       image: { assetId: 'm1', url: 'https://cdn.test/solar.png', alt: 'Solar panels' },
       visual: { role: 'hero', intent: 'emphasis', placement: 'full_bleed' },
+    });
+    expect(result).toEqual({ ok: true });
+    const content = editor.getJSON().content ?? [];
+    expect(content[0]!.type).toBe('heading');
+    expect(content[1]!.type).toBe('image');
+
+    editor.commands.undo();
+    expect(JSON.stringify(editor.getJSON()).includes('"type":"image"')).toBe(false);
+  });
+});
+
+describe('background targeting (R4.4)', () => {
+  function makeEditorWith(content: JSONContent[]): Editor {
+    const editor = new Editor({
+      extensions: createEditorExtensions({ nodeViews: false }),
+      content: { type: 'doc', content },
+    });
+    editors.push(editor);
+    return editor;
+  }
+
+  it('reads the page-hero region as the hero host for a background', () => {
+    const editor = makeEditor();
+    editor.commands.setTextSelection(CURSOR_IN_SECOND);
+    expect(readEditorBackgroundTarget(editor)).toEqual({
+      kind: 'hero',
+      heroPath: [0],
+      anchorPath: [0],
+      nodeType: 'heading',
+      placement: 'full_bleed',
+      heading: 'Solar energy',
+      supportingText: 'Solar panels store energy. Battery storage holds charge.',
+    });
+  });
+
+  it('reads a section host for a heading-delimited region below the hero', () => {
+    const editor = makeEditorWith([
+      { type: 'heading', attrs: { level: 2 }, content: [{ type: 'text', text: 'Intro' }] },
+      { type: 'paragraph', content: [{ type: 'text', text: 'Intro text.' }] },
+      { type: 'heading', attrs: { level: 2 }, content: [{ type: 'text', text: 'Solar energy' }] },
+      { type: 'paragraph', content: [{ type: 'text', text: 'Solar panels store energy.' }] },
+    ]);
+    editor.commands.setTextSelection(editor.state.doc.content.size - 1);
+    expect(readEditorBackgroundTarget(editor)).toEqual({
+      kind: 'section',
+      sectionPath: [2],
+      anchorPath: [2],
+      heading: 'Solar energy',
+    });
+  });
+
+  it('prefers an explicit composition hero the selection sits in', () => {
+    const editor = makeEditorWith([
+      { type: 'heading', attrs: { level: 1 }, content: [{ type: 'text', text: 'Page title' }] },
+      {
+        type: 'compositionHero',
+        content: [
+          { type: 'heading', attrs: { level: 1 }, content: [{ type: 'text', text: 'Storage' }] },
+          { type: 'paragraph', content: [{ type: 'text', text: 'Batteries hold charge.' }] },
+        ],
+      },
+    ]);
+    editor.commands.setTextSelection(15);
+    expect(readEditorBackgroundTarget(editor)).toEqual({
+      kind: 'hero',
+      heroPath: [1],
+      anchorPath: [1, 0],
+      nodeType: 'compositionHero',
+      placement: 'full_bleed',
+      heading: 'Storage',
+      supportingText: 'Batteries hold charge.',
+    });
+  });
+
+  it('returns null when the document has no section or hero to host it', () => {
+    const editor = makeEditorWith([{ type: 'paragraph', content: [{ type: 'text', text: 'Just prose.' }] }]);
+    editor.commands.setTextSelection(3);
+    expect(readEditorBackgroundTarget(editor)).toBeNull();
+  });
+
+  it('carries the background host hint into the transmitted context', () => {
+    const editor = makeEditor();
+    editor.commands.setTextSelection(CURSOR_IN_SECOND);
+    const context = imageInsertionContextFromSnapshot(snapshotOf(editor), readEditorImageSemantics(editor));
+    expect(context?.backgroundTarget).toMatchObject({ kind: 'hero', heroPath: [0], anchorPath: [0] });
+  });
+
+  it('inserts a background image after the host heading and undo removes it', () => {
+    const editor = makeEditor();
+    const result = applyImageInsertionOperation(editor, {
+      type: 'insert_image',
+      target: { kind: 'section', sectionPath: [0], anchorPath: [0] },
+      image: { assetId: 'm1', url: 'https://cdn.test/solar.png', alt: '' },
+      visual: { role: 'background', intent: 'atmosphere', placement: 'full_bleed' },
     });
     expect(result).toEqual({ ok: true });
     const content = editor.getJSON().content ?? [];

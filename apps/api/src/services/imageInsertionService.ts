@@ -20,6 +20,7 @@
 
 import {
   DESIGNER_PROPOSAL_VERSION,
+  IMAGE_INSERTION_BACKGROUND_PLACEMENT,
   IMAGE_INSERTION_HERO_PLACEMENT,
   IMAGE_INSERTION_SECTION_PLACEMENT,
   contentRevisionOf,
@@ -35,6 +36,8 @@ import {
   selectImageInsertionCandidate,
   type DesignerIntent,
   type DesignerProposal,
+  type ImageInsertionBackgroundHostRegion,
+  type ImageInsertionBackgroundTarget,
   type ImageInsertionCandidate,
   type ImageInsertionContext,
   type ImageInsertionHeroTarget,
@@ -102,6 +105,32 @@ function heroTargetOf(context: ImageInsertionContext): ImageInsertionHeroTarget 
   return context.target.kind === 'hero' ? context.target : null;
 }
 
+/**
+ * The host region a background request addresses: the editor's dedicated
+ * background hint when present, or a section/hero target used directly as the
+ * location. Null when the context names no host region at all.
+ */
+function backgroundTargetOf(context: ImageInsertionContext): ImageInsertionBackgroundTarget | null {
+  if (context.backgroundTarget) return context.backgroundTarget;
+  return context.target.kind === 'section' || context.target.kind === 'hero' ? context.target : null;
+}
+
+/**
+ * The concrete host target for a background in `region`: the editor's background
+ * hint when it already names that region, otherwise the section/hero hint the
+ * editor sent (both are always transmitted). Null when the region cannot be
+ * resolved, so the caller asks instead of guessing.
+ */
+function backgroundHostTargetFor(
+  context: ImageInsertionContext,
+  region: ImageInsertionBackgroundHostRegion,
+  hint: ImageInsertionBackgroundTarget | null,
+): ImageInsertionBackgroundTarget | null {
+  if (hint && hint.kind === region) return hint;
+  if (region === 'hero') return context.heroTarget ?? null;
+  return context.sectionTarget ?? null;
+}
+
 export class ImageInsertionService {
   constructor(private readonly container: ServiceContainer) {}
 
@@ -122,6 +151,15 @@ export class ImageInsertionService {
       });
     }
     if (resolution.status === 'unsupported') {
+      // R4.4: a background with a layout placement the editor cannot host (e.g.
+      // overlay) is a placement refusal, not an unrecognized instruction.
+      if (resolution.reason === 'background_placement_unsupported') {
+        throw new ApiError(
+          422,
+          'visual_placement_unsupported',
+          "That placement isn't supported for a background yet. A background fills its section or the hero.",
+        );
+      }
       throw new ApiError(
         422,
         'image_insertion_unrecognized_instruction',
@@ -158,14 +196,16 @@ export class ImageInsertionService {
 
     const section = visual.role === 'section' ? this.resolveSectionTarget(context, visual) : null;
     const hero = visual.role === 'hero' ? this.resolveHeroTarget(context, visual) : null;
-    const located = section ?? hero;
+    const background =
+      visual.role === 'background' ? this.resolveBackgroundTarget(context, visual, resolution.hostRegion) : null;
+    const located = section ?? hero ?? background;
     const operationTarget = located ? located.target : context.target;
     const effectiveContext = located ? located.context : context;
 
     const media = await new MediaService(this.container.sb, new SupabaseStorageStore(this.container.sb)).list(projectId);
     const selection = selectImageInsertionCandidate(effectiveContext, media.map(toVisualCandidate), { visual });
     if (!selection) {
-      const scope = section ? 'this section' : hero ? 'this hero' : 'this text';
+      const scope = section ? 'this section' : hero ? 'this hero' : background ? 'this background' : 'this text';
       throw new ApiError(
         422,
         'image_insertion_no_candidate',
@@ -324,6 +364,108 @@ export class ImageInsertionService {
     return {
       target,
       context: { ...context, target, sectionHeading: hero.heading, nearbyText: hero.supportingText },
+    };
+  }
+
+  /**
+   * Resolves the host region for a `background` visual, or fails honestly.
+   *
+   * A background is a real image block hosted in a section or the hero (never a
+   * CSS `background-image`). The host region is the instruction's explicit cue
+   * when it named one, otherwise the editor's background/section/hero hint. This
+   * refuses (never guesses) when no host region can be resolved, the host heading
+   * can no longer be found, or the host already contains an image (R4.4 does not
+   * silently duplicate or replace). The returned context carries the host heading
+   * and bounded body/supporting copy so ranking reasons about the whole region. A
+   * placement other than the supported full-bleed is refused rather than
+   * downgraded into a section/hero image.
+   */
+  private resolveBackgroundTarget(
+    context: ImageInsertionContext,
+    visual: VisualDesignIntent,
+    hostRegion: ImageInsertionBackgroundHostRegion | undefined,
+  ): { target: ImageInsertionBackgroundTarget; context: ImageInsertionContext } {
+    if (visual.placement !== undefined && visual.placement !== IMAGE_INSERTION_BACKGROUND_PLACEMENT) {
+      throw new ApiError(
+        422,
+        'visual_placement_unsupported',
+        `A ${visual.placement} background is not supported in the editor yet.`,
+        { placement: visual.placement },
+      );
+    }
+    const hint = backgroundTargetOf(context);
+    const region = hostRegion ?? hint?.kind;
+    if (!region) {
+      throw new ApiError(
+        422,
+        'background_target_unresolved',
+        "I couldn't find a section or hero to place the background in. Put the cursor in a section or the hero and try again.",
+      );
+    }
+    const host = backgroundHostTargetFor(context, region, hint);
+    if (!host) {
+      throw new ApiError(
+        422,
+        'background_target_unresolved',
+        "I couldn't find that section or hero in the document any more. Put the cursor there and try again.",
+      );
+    }
+
+    if (region === 'hero') {
+      const hero = resolveHeroVisual(context.document, host as ImageInsertionHeroTarget);
+      if (!hero) {
+        throw new ApiError(
+          422,
+          'background_target_unresolved',
+          "I couldn't find that hero in the document any more. Put the cursor in the hero and try again.",
+        );
+      }
+      if (hero.hasImage) {
+        throw new ApiError(
+          422,
+          'background_image_already_present',
+          'This hero already has an image. Remove or replace it first, then ask again.',
+        );
+      }
+      const target: ImageInsertionHeroTarget = {
+        kind: 'hero',
+        heroPath: hero.heroPath,
+        anchorPath: hero.anchorPath,
+        nodeType: hero.nodeType,
+        placement: IMAGE_INSERTION_HERO_PLACEMENT,
+        heading: hero.heading,
+        supportingText: hero.supportingText,
+      };
+      return {
+        target,
+        context: { ...context, target, sectionHeading: hero.heading, nearbyText: hero.supportingText },
+      };
+    }
+
+    const section = resolveSectionVisual(context.document, host as ImageInsertionSectionTarget);
+    if (!section) {
+      throw new ApiError(
+        422,
+        'background_target_unresolved',
+        "I couldn't find that section in the document any more. Put the cursor under a section heading and try again.",
+      );
+    }
+    if (section.hasImage) {
+      throw new ApiError(
+        422,
+        'background_image_already_present',
+        'This section already has an image. Remove or replace it first, then ask again.',
+      );
+    }
+    const target: ImageInsertionSectionTarget = {
+      kind: 'section',
+      sectionPath: section.sectionPath,
+      anchorPath: section.anchorPath,
+      heading: section.heading,
+    };
+    return {
+      target,
+      context: { ...context, target, sectionHeading: section.heading, nearbyText: section.body },
     };
   }
 }
