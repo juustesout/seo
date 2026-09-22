@@ -112,7 +112,7 @@ describe('buildImageGenerationPrompt', () => {
       'hero photograph',
     );
     expect(
-      buildImageGenerationPrompt(context, { role: 'background', intent: 'set_mood', placement: 'full_bleed' }),
+      buildImageGenerationPrompt(context, { role: 'background', intent: 'atmosphere', placement: 'full_bleed' }),
     ).toContain('background photograph');
   });
 });
@@ -125,7 +125,7 @@ describe('acquireGeneratedImage', () => {
         context,
         visual,
         apiKey: null,
-        provider: provider(async () => ({ id: 'x', url: 'https://x/y.png' }), false),
+        provider: provider(async () => ({ id: 'x', url: 'https://x/y.png', source: 'openai' }), false),
         persist: vi.fn(),
       }),
     );
@@ -158,7 +158,12 @@ describe('acquireGeneratedImage', () => {
       apiKey: 'sk-test',
       model: 'dall-e-3',
       provider: provider(async (): Promise<MediaResult> => {
-        return { id: 'g1', url: `data:image/png;base64,${bytes.toString('base64')}`, description: 'A solar roof' };
+        return {
+          id: 'g1',
+          url: `data:image/png;base64,${bytes.toString('base64')}`,
+          description: 'A solar roof',
+          source: 'openai',
+        };
       }),
       persist,
     });
@@ -184,7 +189,7 @@ describe('acquireGeneratedImage', () => {
       context,
       visual,
       apiKey: 'sk-test',
-      provider: provider(async () => ({ id: 'g1', url: 'https://oaidalleapi.blob.core.windows.net/x.png' })),
+      provider: provider(async () => ({ id: 'g1', url: 'https://oaidalleapi.blob.core.windows.net/x.png', source: 'openai' })),
       persist,
       fetchFn: okFetch(pngBuffer()),
     });
@@ -198,7 +203,7 @@ describe('acquireGeneratedImage', () => {
         context,
         visual,
         apiKey: 'sk-test',
-        provider: provider(async () => ({ id: 'g1', url: 'http://insecure.example/x.png' })),
+        provider: provider(async () => ({ id: 'g1', url: 'http://insecure.example/x.png', source: 'openai' })),
         persist: vi.fn(),
         fetchFn: okFetch(pngBuffer()),
       }),
@@ -218,7 +223,7 @@ describe('acquireGeneratedImage', () => {
         context,
         visual,
         apiKey: 'sk-test',
-        provider: provider(async () => ({ id: 'g1', url: 'https://oaidalleapi.blob.core.windows.net/x.png' })),
+        provider: provider(async () => ({ id: 'g1', url: 'https://oaidalleapi.blob.core.windows.net/x.png', source: 'openai' })),
         persist: vi.fn(),
         fetchFn,
       }),
@@ -234,7 +239,7 @@ describe('acquireGeneratedImage', () => {
         context,
         visual,
         apiKey: 'sk-test',
-        provider: provider(async () => ({ id: 'g1', url: `data:image/png;base64,${bytes.toString('base64')}` })),
+        provider: provider(async () => ({ id: 'g1', url: `data:image/png;base64,${bytes.toString('base64')}`, source: 'openai' })),
         persist: async () => {
           throw new Error('db down');
         },
