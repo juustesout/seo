@@ -140,6 +140,14 @@ export interface RankedVisualAssetCandidate {
  */
 export interface VisualAssetRankingOptions {
   visual?: VisualDesignIntent;
+  /**
+   * A subject the user explicitly named (e.g. "Amsterdam"). When present, only
+   * candidates whose real metadata mentions at least one of its tokens are
+   * eligible. This keeps the named subject from being outvoted by the general
+   * document context: an asset matching only the post topic can no longer clear
+   * the relevance floor and stand in for the requested subject.
+   */
+  subject?: string;
 }
 
 /**
@@ -432,6 +440,14 @@ function tokenSet(text: string | undefined): Set<string> {
   return new Set(tokenize(text ?? ''));
 }
 
+/** Every normalized metadata token on a candidate, across alt, caption and filename. */
+function candidateTokenSet(candidate: VisualAssetCandidate): Set<string> {
+  const tokens = tokenSet(candidate.alt);
+  for (const token of tokenSet(candidate.caption)) tokens.add(token);
+  for (const token of tokenSet(candidate.filename.replace(/[._-]/g, ' '))) tokens.add(token);
+  return tokens;
+}
+
 function areaOf(candidate: VisualAssetCandidate): number {
   return (candidate.width ?? 0) * (candidate.height ?? 0);
 }
@@ -536,13 +552,21 @@ export function rankVisualAssetCandidates(
     if (usable.length >= VISUAL_ASSET_MAX_CANDIDATES) break;
   }
   const queryTokens = tokenize(queryText);
+  const subjectTokens = options?.subject ? [...new Set(tokenize(options.subject))] : [];
+  const eligible =
+    subjectTokens.length > 0
+      ? usable.filter((candidate) => {
+          const tokens = candidateTokenSet(candidate);
+          return subjectTokens.some((token) => tokens.has(token));
+        })
+      : usable;
   const scores = new Map<string, number>();
   const fits = new Map<string, number>();
-  for (const candidate of usable) {
+  for (const candidate of eligible) {
     scores.set(candidate.mediaId, matchScore(queryTokens, candidate));
     fits.set(candidate.mediaId, fitScore(candidate, options));
   }
-  return [...usable]
+  return [...eligible]
     .sort((a, b) => compareCandidates(a, b, scores, fits))
     .map((candidate) => {
       const score = scores.get(candidate.mediaId) ?? 0;

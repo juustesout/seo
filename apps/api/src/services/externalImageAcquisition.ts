@@ -122,6 +122,11 @@ export interface AcquireExternalImageParams {
   provider: MediaProvider | undefined;
   /** The editor context used to derive a bounded search query. */
   context: ImageInsertionContext;
+  /**
+   * Subject explicitly named in the instruction. When present it leads the
+   * search query, so the requested subject is not diluted by the post topic.
+   */
+  subject?: string;
   /** The resolved visual intent (drives orientation and decorative alt policy). */
   visual: VisualDesignIntent;
   projectId: string;
@@ -151,7 +156,7 @@ export async function acquireExternalImage(params: AcquireExternalImageParams): 
     );
   }
 
-  const query = buildImageInsertionQuery(params.context).trim();
+  const query = buildImageInsertionQuery(params.context, params.subject).trim();
   if (!query) {
     throw new ApiError(422, 'external_search_unavailable', 'There is not enough context to search for an image.');
   }

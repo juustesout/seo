@@ -581,17 +581,148 @@ export function isImageInsertionInstruction(instruction: string): boolean {
   return !IMAGE_NON_INSERTION_HINTS.some((hint) => text.includes(hint));
 }
 
+/** Bound for a subject parsed out of the user's instruction. */
+export const IMAGE_INSERTION_SUBJECT_MAX_CHARS = 120;
+
+/**
+ * Generic request/image/region words that never name a subject. They are dropped
+ * wherever they appear in a candidate phrase so "image of the battery storage"
+ * yields "battery storage", not "image the battery storage".
+ */
+const SUBJECT_SKIP_WORDS: ReadonlySet<string> = new Set([
+  'a',
+  'an',
+  'the',
+  'this',
+  'that',
+  'de',
+  'het',
+  'een',
+  'dit',
+  'dat',
+  'deze',
+  'die',
+  'image',
+  'images',
+  'afbeelding',
+  'afbeeldingen',
+  'foto',
+  'fotos',
+  'photo',
+  'photos',
+  'picture',
+  'pictures',
+  'illustration',
+  'illustratie',
+  'graphic',
+  'plaatje',
+  'background',
+  'achtergrond',
+  'hero',
+  'banner',
+  'cover',
+  'header',
+  'section',
+  'sectie',
+  'block',
+  'blok',
+  'title',
+  'titel',
+  'heading',
+  'kop',
+  'caption',
+  'onderschrift',
+]);
+
+/**
+ * Connectors/verbs that end a subject phrase. "amsterdam and a title" stops at
+ * "and" so a trailing clause never leaks into the subject.
+ */
+const SUBJECT_STOP_WORDS: ReadonlySet<string> = new Set([
+  'and',
+  'or',
+  'en',
+  'with',
+  'met',
+  'for',
+  'voor',
+  'to',
+  'naar',
+  'in',
+  'on',
+  'op',
+  'at',
+  'of',
+  'van',
+  'about',
+  'over',
+  'make',
+  'maak',
+  'create',
+  'add',
+  'voeg',
+  'toe',
+  'insert',
+  'plaats',
+  'zet',
+  'place',
+  'use',
+  'gebruik',
+  'please',
+  'graag',
+  'neer',
+]);
+
+/**
+ * Extracts the subject the user explicitly named in the instruction (e.g.
+ * "a background image of amsterdam" -> "amsterdam"). This is the deterministic,
+ * inspectable bridge from the user's words to the search query: without it the
+ * query only carries document context, so a named subject is diluted by the post
+ * topic. Localized (Dutch + English). Returns undefined when the instruction
+ * names no subject, in which case callers keep the previous context-only
+ * behaviour. Pure, so the API and the editor agree.
+ */
+export function imageSubjectFromInstruction(instruction: string): string | undefined {
+  const text = instruction
+    .replace(/"[^"]{0,120}"|'[^']{0,120}'/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (text.length === 0) return undefined;
+
+  const match = /\b(?:of|van|about|over)\s+([\p{L}\d][\p{L}\d' -]{0,80})/iu.exec(text);
+  const properNouns = text
+    .split(/\s+/)
+    .slice(1)
+    .filter((word) => /^\p{Lu}[\p{L}\d'-]*$/u.test(word) && !SUBJECT_SKIP_WORDS.has(word.toLowerCase()));
+  const phrase = match?.[1] ?? properNouns.join(' ');
+
+  const kept: string[] = [];
+  for (const word of phrase.split(/[^\p{L}\d'-]+/u)) {
+    if (word.length === 0) continue;
+    const lower = word.toLowerCase();
+    if (SUBJECT_STOP_WORDS.has(lower)) break;
+    if (SUBJECT_SKIP_WORDS.has(lower)) continue;
+    kept.push(word);
+    if (kept.length >= 4) break;
+  }
+
+  const subject = kept.join(' ').trim().slice(0, IMAGE_INSERTION_SUBJECT_MAX_CHARS);
+  return subject.length >= 3 ? subject : undefined;
+}
+
 /**
  * Builds the bounded, deterministic search query from the transmitted context.
- * Selected text takes precedence (the user named that text), then the section
- * heading, then the surrounding copy, then the document title. Empty parts are
- * dropped rather than padding the query; the result is capped at
- * `IMAGE_INSERTION_MAX_TEXT_CHARS`.
+ * A subject parsed from the instruction takes precedence - the user named it
+ * explicitly, so it must not be diluted by the general post context. Then
+ * selected text, the section heading, the surrounding copy and the document
+ * title. Empty parts are dropped rather than padding the query; the result is
+ * capped at `IMAGE_INSERTION_MAX_TEXT_CHARS`.
  */
 export function buildImageInsertionQuery(
   context: Pick<ImageInsertionContext, 'selectedText' | 'sectionHeading' | 'nearbyText' | 'documentTitle'>,
+  subject?: string,
 ): string {
-  const parts = [context.selectedText, context.sectionHeading, context.nearbyText, context.documentTitle]
+  const parts = [subject, context.selectedText, context.sectionHeading, context.nearbyText, context.documentTitle]
     .map((part) => (typeof part === 'string' ? part.replace(/\s+/g, ' ').trim() : ''))
     .filter((part) => part.length > 0);
   return parts.join(' ').slice(0, IMAGE_INSERTION_MAX_TEXT_CHARS);
@@ -606,23 +737,29 @@ export interface ImageInsertionSelection {
 /**
  * Selects at most one existing project asset for the context. Assets already
  * referenced by an image block in the supplied snapshot are excluded so the same
- * picture is not inserted twice. Returns null when nothing clears the relevance
- * floor - the caller must report an honest "no suitable image", never fall back
- * to an arbitrary asset. Pure and deterministic.
+ * picture is not inserted twice. When `options.subject` is supplied (a subject
+ * parsed from the instruction), only assets whose real metadata mentions that
+ * subject are eligible, so the named subject outranks the general document
+ * context instead of being diluted by it. Returns null when nothing clears the
+ * relevance floor - the caller must report an honest "no suitable image", never
+ * fall back to an arbitrary asset. Pure and deterministic.
  */
 export function selectImageInsertionCandidate(
   context: ImageInsertionContext,
   candidates: readonly VisualAssetCandidate[],
-  options: { minScore?: number; visual?: VisualDesignIntent } = {},
+  options: { minScore?: number; visual?: VisualDesignIntent; subject?: string } = {},
 ): ImageInsertionSelection | null {
   const taken = new Set<string>();
   collectUsedMediaIds(context.document.blocks, taken);
   const pool = candidates.filter((candidate) => !taken.has(candidate.mediaId));
   const minScore = options.minScore ?? IMAGE_INSERTION_DEFAULT_MIN_SCORE;
+  const ranking: { visual?: VisualDesignIntent; subject?: string } = {};
+  if (options.visual) ranking.visual = options.visual;
+  if (options.subject) ranking.subject = options.subject;
   const best = rankVisualAssetCandidates(
-    buildImageInsertionQuery(context),
+    buildImageInsertionQuery(context, options.subject),
     pool,
-    options.visual ? { visual: options.visual } : undefined,
+    options.visual || options.subject ? ranking : undefined,
   )[0];
   if (!best || best.score < minScore) return null;
   return { candidate: best.candidate, score: best.score, rationale: best.rationale };

@@ -225,6 +225,29 @@ describe('ImageInsertionService.buildProposal', () => {
     expect(proposal.insertion?.image.alt).toBe('solar-panels.png');
   });
 
+  it('ranks by the subject named in the instruction, not only the document context', async () => {
+    const proposal = await service.buildProposal(
+      PROJECT_ID,
+      intent({ instruction: 'Voeg een afbeelding van het team toe.' }),
+      context(),
+    );
+    expect(proposal.insertion?.image.assetId).toBe('m_team');
+  });
+
+  it('passes the instruction subject into external search (R4.5A)', async () => {
+    acquireCalls.length = 0;
+    mock.media = [];
+    const proposal = await service.buildProposal(
+      PROJECT_ID,
+      intent({ instruction: 'Add an image of the Amsterdam canals.' }),
+      context({
+        sourcePolicy: { allowExternalSearch: true, allowGeneration: false, requireGenerationConfirmation: true },
+      }),
+    );
+    expect(proposal.insertion?.image.assetId).toBe('m_external');
+    expect((acquireCalls[0] as { subject?: string }).subject).toBe('Amsterdam canals');
+  });
+
   it('refuses an instruction that is not an image insertion', async () => {
     const err = await expectApiError(
       service.buildProposal(PROJECT_ID, intent({ instruction: 'Tighten the introduction' }), context()),

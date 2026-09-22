@@ -11,6 +11,7 @@ import {
   IMAGE_INSERTION_MAX_TEXT_CHARS,
   buildImageInsertionQuery,
   imageInsertionAltForIntent,
+  imageSubjectFromInstruction,
   isImageInsertionInstruction,
   isValidImageInsertionCandidate,
   isValidImageInsertionContext,
@@ -72,6 +73,36 @@ describe('buildImageInsertionQuery', () => {
     expect(buildImageInsertionQuery({ nearbyText: '   ' })).toBe('');
     const long = buildImageInsertionQuery({ nearbyText: 'x'.repeat(5000) });
     expect(long.length).toBe(IMAGE_INSERTION_MAX_TEXT_CHARS);
+  });
+
+  it('leads with a subject named in the instruction', () => {
+    expect(buildImageInsertionQuery({ nearbyText: 'SEO strategies' }, 'amsterdam')).toBe('amsterdam SEO strategies');
+    expect(buildImageInsertionQuery({ nearbyText: 'SEO strategies' })).toBe('SEO strategies');
+  });
+});
+
+describe('imageSubjectFromInstruction', () => {
+  it('extracts the subject after an image-of phrase, ignoring a quoted title', () => {
+    expect(
+      imageSubjectFromInstruction(
+        "please add a hero section with a background image of amsterdam and a title 'Haleluja'",
+      ),
+    ).toBe('amsterdam');
+  });
+
+  it('supports Dutch and drops leading articles/generic words', () => {
+    expect(imageSubjectFromInstruction('Voeg een foto van de Amsterdamse grachten toe')).toBe('Amsterdamse grachten');
+    expect(imageSubjectFromInstruction('Zet een afbeelding van het team neer')).toBe('team');
+  });
+
+  it('falls back to a capitalized proper noun when no image-of phrase is present', () => {
+    expect(imageSubjectFromInstruction('Add an Amsterdam hero image')).toBe('Amsterdam');
+  });
+
+  it('returns undefined when the instruction names no subject', () => {
+    expect(imageSubjectFromInstruction('Zet hier een passende afbeelding.')).toBeUndefined();
+    expect(imageSubjectFromInstruction('Add a relevant image here')).toBeUndefined();
+    expect(imageSubjectFromInstruction('')).toBeUndefined();
   });
 });
 
@@ -335,6 +366,26 @@ describe('selectImageInsertionCandidate', () => {
       visual: { role: 'hero', intent: 'emphasis' },
     });
     expect(hero?.candidate.mediaId).toBe('m_solar');
+  });
+
+  it('requires a candidate to match the subject named in the instruction', () => {
+    const amsterdam = {
+      mediaId: 'm_amsterdam',
+      filename: 'amsterdam-canal.jpg',
+      alt: 'Amsterdam canal houses',
+      mimeType: 'image/jpeg',
+      width: 1600,
+      height: 900,
+    };
+    const candidates = [CANDIDATES[0]!, amsterdam];
+    // Without a subject, the context-only match wins.
+    expect(selectImageInsertionCandidate(context(), candidates)?.candidate.mediaId).toBe('m_solar');
+    // With a named subject, only the subject-matching asset is eligible.
+    expect(
+      selectImageInsertionCandidate(context(), candidates, { subject: 'amsterdam' })?.candidate.mediaId,
+    ).toBe('m_amsterdam');
+    // A subject no asset mentions yields no candidate, even though the context matches one.
+    expect(selectImageInsertionCandidate(context(), candidates, { subject: 'berlin' })).toBeNull();
   });
 });
 

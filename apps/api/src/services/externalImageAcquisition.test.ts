@@ -161,7 +161,6 @@ describe('acquireExternalImage', () => {
       persist,
       fetchFn: okFetch(bytes),
     });
-
     expect(persist).toHaveBeenCalledTimes(1);
     const input = persist.mock.calls[0][0];
     expect(input.source).toBe('unsplash');
@@ -184,6 +183,25 @@ describe('acquireExternalImage', () => {
       width: 800,
       height: 600,
     });
+  });
+
+  it('leads the search query with the subject named in the instruction', async () => {
+    const queries: string[] = [];
+    const search: MediaProvider['search'] = async (params) => {
+      queries.push(params.query);
+      return [result];
+    };
+    await acquireExternalImage({
+      provider: provider(search),
+      context,
+      subject: 'amsterdam',
+      visual,
+      projectId: 'p-1',
+      persist: vi.fn(async (input: ImportExternalMediaInput) => item({ alt_text: input.alt ?? '' })),
+      fetchFn: okFetch(pngBuffer()),
+    });
+    expect(queries[0]).toContain('amsterdam');
+    expect(queries[0]?.startsWith('amsterdam')).toBe(true);
   });
 
   it('skips an untrusted source host and falls through to the next result', async () => {

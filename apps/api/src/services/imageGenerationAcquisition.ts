@@ -75,21 +75,24 @@ export function imageGenerationModel(override?: string): string {
 
 /**
  * A deterministic, bounded image prompt built from the same context search uses,
- * plus a role-aware photographic style. It asks for text-free imagery so a
- * generated asset never ships embedded copy that the editor cannot edit.
+ * plus a role-aware photographic style. A subject named in the instruction leads
+ * the prompt so a generated image depicts what the user asked for. It asks for
+ * text-free imagery so a generated asset never ships embedded copy that the
+ * editor cannot edit.
  */
 export function buildImageGenerationPrompt(
   context: ImageInsertionContext,
   visual: VisualDesignIntent,
+  subject?: string,
 ): string {
-  const subject = buildImageInsertionQuery(context).replace(/\s+/g, ' ').trim();
+  const description = buildImageInsertionQuery(context, subject).replace(/\s+/g, ' ').trim();
   const style =
     visual.role === 'hero'
       ? 'wide editorial hero photograph'
       : visual.role === 'background'
         ? 'subtle, unobtrusive background photograph'
         : 'editorial photograph';
-  const body = subject ? `${style} for: ${subject}` : style;
+  const body = description ? `${style} for: ${description}` : style;
   return `${body}. No text, no watermark, no logos.`.slice(0, IMAGE_GENERATION_PROMPT_MAX_CHARS);
 }
 
@@ -160,6 +163,8 @@ async function downloadGeneratedImage(opts: {
 export interface AcquireGeneratedImageParams {
   projectId: string;
   context: ImageInsertionContext;
+  /** Subject named in the instruction; leads the generation prompt when present. */
+  subject?: string;
   visual: VisualDesignIntent;
   /**
    * Effective OpenAI credential resolved through the BYOK chain, or null when
@@ -207,7 +212,7 @@ export async function acquireGeneratedImage(
     );
   }
 
-  const prompt = buildImageGenerationPrompt(params.context, params.visual);
+  const prompt = buildImageGenerationPrompt(params.context, params.visual, params.subject);
   const fetchFn = params.fetchFn ?? fetch;
   const timeoutMs = params.timeoutMs ?? IMAGE_GENERATION_TIMEOUT_MS;
   const maxBytes = params.maxBytes ?? IMAGE_GENERATION_MAX_BYTES;

@@ -115,6 +115,11 @@ describe('buildImageGenerationPrompt', () => {
       buildImageGenerationPrompt(context, { role: 'background', intent: 'atmosphere', placement: 'full_bleed' }),
     ).toContain('background photograph');
   });
+
+  it('leads the prompt with the subject named in the instruction', () => {
+    const prompt = buildImageGenerationPrompt(context, visual, 'amsterdam');
+    expect(prompt).toContain('for: amsterdam');
+  });
 });
 
 describe('acquireGeneratedImage', () => {

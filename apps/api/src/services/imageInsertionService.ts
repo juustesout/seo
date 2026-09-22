@@ -30,6 +30,7 @@ import {
   editorDocumentToCanonical,
   imageInsertionAltForIntent,
   imageSourceKindOf,
+  imageSubjectFromInstruction,
   isVisualIntentInsertable,
   isValidDesignerProposal,
   isValidImageInsertionContext,
@@ -173,7 +174,11 @@ export class ImageInsertionService {
         'This instruction is not an image-insertion request.',
       );
     }
-    const visual = resolution.intent;
+    const instructionSubject = imageSubjectFromInstruction(intent.instruction);
+    const visual: VisualDesignIntent =
+      instructionSubject && instructionSubject !== resolution.intent.subject
+        ? { ...resolution.intent, subject: instructionSubject }
+        : resolution.intent;
     if (!isVisualIntentInsertable(visual)) {
       throw new ApiError(
         422,
@@ -211,7 +216,10 @@ export class ImageInsertionService {
 
     const mediaService = new MediaService(this.container.sb, new SupabaseStorageStore(this.container.sb));
     const media = await mediaService.list(projectId);
-    const selection = selectImageInsertionCandidate(effectiveContext, media.map(toVisualCandidate), { visual });
+    const selection = selectImageInsertionCandidate(effectiveContext, media.map(toVisualCandidate), {
+      visual,
+      ...(instructionSubject ? { subject: instructionSubject } : {}),
+    });
 
     let image: ImageInsertionCandidate | null = null;
     let rationale: string | undefined;
@@ -241,6 +249,7 @@ export class ImageInsertionService {
         image = await acquireExternalImage({
           provider: this.container.registry?.getMedia('unsplash'),
           context: effectiveContext,
+          ...(instructionSubject ? { subject: instructionSubject } : {}),
           visual,
           projectId,
           persist: (input) => mediaService.importExternal(projectId, null, input),
@@ -285,6 +294,7 @@ export class ImageInsertionService {
       image = await acquireGeneratedImage({
         projectId,
         context: effectiveContext,
+        ...(instructionSubject ? { subject: instructionSubject } : {}),
         visual,
         apiKey: credentials.apiKey,
         baseUrl: this.container.config.env.OPENAI_BASE_URL,
