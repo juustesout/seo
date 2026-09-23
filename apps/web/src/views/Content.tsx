@@ -52,6 +52,7 @@ import { IntelligencePanel } from '../components/content/IntelligencePanel';
 import { AI_EDIT_OPERATION_LABELS, textToBlocksHtml } from '../components/content/contentAi';
 import { canonicalFromEditorDocument } from '../components/content/editorDraft';
 import { useAutosave } from '../components/content/useAutosave';
+import { useDocumentSession, type SwitchResult } from '../components/content/session/useDocumentSession';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -130,12 +131,18 @@ export function Content({
     [projectId, refresh],
   );
 
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [creating, setCreating] = useState(false);
   const [newTitle, setNewTitle] = useState('');
   const [notice, setNotice] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [loadSeq, setLoadSeq] = useState(0);
+
+  // Shared session boundary: the single authoritative document identity. Every
+  // switch crosses the save barrier (see useDocumentSession) so dirty content is
+  // flushed before the current document is abandoned.
+  const flushRef = useRef<() => Promise<boolean>>(async () => true);
+  const session = useDocumentSession({ flush: () => flushRef.current() });
+  const editingId = session.identity.documentId;
+  const creating = session.identity.creating;
 
   // Editor workspace state.
   const [title, setTitle] = useState('');
@@ -234,7 +241,7 @@ export function Content({
     const row = editingId
       ? await api<ContentRow>(`/projects/${projectId}/content/${editingId}`, { method: 'PATCH', body })
       : await api<ContentRow>(`/projects/${projectId}/content`, { method: 'POST', body });
-    if (!editingId && row) setEditingId(row.id);
+    if (!editingId && row) session.adoptDocumentId(row.id);
     if (row) {
       setSavedAt(row.updated_at ?? new Date().toISOString());
       setSlug(row.slug ?? null);
@@ -250,6 +257,9 @@ export function Content({
     snapshotKey: workspaceSnapshot,
     persist: commit,
   });
+
+  // The session barrier flushes through the live autosave instance.
+  flushRef.current = auto.flush;
 
   const loadedRef = useRef<string | null>(null);
 
@@ -315,15 +325,30 @@ export function Content({
     };
   }, [editor]);
 
-  const open = (id: string) => {
-    setEditingId(id);
-    setCreating(false);
+  /**
+   * Cross the shared save barrier, then apply the destination state. Nothing
+   * about the current document is reset until the barrier reports `switched`,
+   * so a failed save leaves the editor, selection and dirty state untouched.
+   */
+  const switchTo = async (pending: Promise<SwitchResult>, after?: () => void) => {
+    const result = await pending;
+    if (result.status !== 'switched') {
+      setErr(
+        result.reason === 'save_in_progress'
+          ? 'A document switch is already in progress.'
+          : 'Could not switch documents because your latest changes were not saved. Retry the save, then try again.',
+      );
+      return;
+    }
     setErr(null);
     setNotice(null);
     loadedRef.current = null;
     resetAi();
     setLoadSeq((n) => n + 1);
+    after?.();
   };
+
+  const open = (id: string) => void switchTo(session.requestDocumentSwitch(id));
 
   // Deep link from Compose: open the freshly created draft exactly once. The
   // regular list flow keeps `initialContentId` null and is untouched.
@@ -335,26 +360,14 @@ export function Content({
   }, [initialContentId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const startNew = () => {
-    setCreating(true);
-    setEditingId(null);
-    setTitle(newTitle);
-    setNewTitle('');
-    setErr(null);
-    setNotice(null);
-    loadedRef.current = null;
-    resetAi();
-    setLoadSeq((n) => n + 1);
+    const nextTitle = newTitle;
+    void switchTo(session.requestNewDocument(), () => {
+      setTitle(nextTitle);
+      setNewTitle('');
+    });
   };
 
-  const goList = () => {
-    setEditingId(null);
-    setCreating(false);
-    setNotice(null);
-    setErr(null);
-    loadedRef.current = null;
-    resetAi();
-    setLoadSeq((n) => n + 1);
-  };
+  const goList = () => void switchTo(session.requestCloseDocument());
 
   const resetAi = () => {
     setAiBusy(false);
@@ -382,8 +395,8 @@ export function Content({
     try {
       await api(`/projects/${projectId}/content/${id}`, { method: 'DELETE' });
       if (editingId === id) {
-        setEditingId(null);
-        setCreating(false);
+        // The row is gone; there is nothing to flush, only to forget.
+        session.discardDocument();
         setNotice(null);
       }
       setRefresh((x) => x + 1);

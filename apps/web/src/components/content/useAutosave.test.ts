@@ -135,4 +135,110 @@ describe('useAutosave', () => {
 
     vi.useRealTimers();
   });
+
+  it('flush resolves without saving when there is nothing to persist', async () => {
+    const { result, persist } = mount('{"t":"a"}');
+    act(() => result.current.setBaseline('{"t":"a"}'));
+
+    let ok = false;
+    await act(async () => {
+      ok = await result.current.flush();
+    });
+
+    expect(ok).toBe(true);
+    expect(persist).not.toHaveBeenCalled();
+  });
+
+  it('flush saves pending edits immediately and resolves once settled', async () => {
+    vi.useFakeTimers();
+    const { result, rerender, persist } = mount('{"t":"a"}');
+    act(() => result.current.setBaseline('{"t":"a"}'));
+    rerender({ snapshot: '{"t":"b"}' });
+    expect(result.current.dirty).toBe(true);
+
+    let ok = false;
+    await act(async () => {
+      ok = await result.current.flush();
+    });
+
+    expect(ok).toBe(true);
+    expect(persist).toHaveBeenCalledTimes(1);
+    expect(persist).toHaveBeenCalledWith('{"t":"b"}');
+    expect(result.current.dirty).toBe(false);
+    expect(result.current.status).toBe('saved');
+
+    vi.useRealTimers();
+  });
+
+  it('flush waits for an in-flight save and includes edits that land during it', async () => {
+    vi.useFakeTimers();
+    const pending: Array<() => void> = [];
+    const persist = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          pending.push(resolve);
+        }),
+    );
+    const { result, rerender } = mount('{"t":"a"}', persist);
+    act(() => result.current.setBaseline('{"t":"a"}'));
+    rerender({ snapshot: '{"t":"b"}' });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(100);
+    });
+    expect(persist).toHaveBeenCalledTimes(1);
+
+    rerender({ snapshot: '{"t":"c"}' });
+    let ok: boolean | undefined;
+    let flushPromise: Promise<boolean> = Promise.resolve(false);
+    await act(async () => {
+      flushPromise = result.current.flush().then((value) => {
+        ok = value;
+        return value;
+      });
+      await Promise.resolve();
+    });
+    // Still waiting on the in-flight save of the older snapshot.
+    expect(ok).toBeUndefined();
+
+    await act(async () => {
+      pending.shift()?.();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    // The newer edit is persisted before the barrier can settle.
+    expect(persist).toHaveBeenCalledTimes(2);
+    expect(persist).toHaveBeenLastCalledWith('{"t":"c"}');
+    expect(ok).toBeUndefined();
+
+    await act(async () => {
+      pending.shift()?.();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    await flushPromise;
+    expect(ok).toBe(true);
+    expect(result.current.dirty).toBe(false);
+
+    vi.useRealTimers();
+  });
+
+  it('flush resolves false and stays dirty when the save fails', async () => {
+    const persist = vi.fn(async () => {
+      throw new Error('offline');
+    });
+    const { result, rerender } = mount('{"t":"a"}', persist);
+    act(() => result.current.setBaseline('{"t":"a"}'));
+    rerender({ snapshot: '{"t":"b"}' });
+
+    let ok = true;
+    await act(async () => {
+      ok = await result.current.flush();
+    });
+
+    expect(ok).toBe(false);
+    expect(result.current.dirty).toBe(true);
+    expect(result.current.status).toBe('failed');
+  });
 });

@@ -36,6 +36,7 @@ export function useAutosave({ enabled, delayMs = 1600, makeSnapshot, snapshotKey
   const busyRef = useRef(false);
   const rerunRef = useRef(false);
   const timerRef = useRef<number | null>(null);
+  const inFlightRef = useRef<Promise<boolean> | null>(null);
 
   const clearTimer = () => {
     if (timerRef.current !== null) {
@@ -44,34 +45,50 @@ export function useAutosave({ enabled, delayMs = 1600, makeSnapshot, snapshotKey
     }
   };
 
-  const doSave = async () => {
-    clearTimer();
-    const payload = makeRef.current();
-    if (baselineRef.current === null || baselineRef.current === payload) {
-      setStatus('saved');
-      return;
-    }
+  /**
+   * Persist until the workspace stops changing, resolving `true` when it is
+   * fully saved and `false` when a persist failed (the workspace stays dirty).
+   * A caller that arrives while a save is in flight joins that running chain and
+   * marks it for a rerun, so the newest edits are always included before it
+   * settles and requests never overlap.
+   */
+  const runSave = (): Promise<boolean> => {
     if (busyRef.current) {
       rerunRef.current = true;
-      return;
+      return inFlightRef.current ?? Promise.resolve(false);
     }
-    busyRef.current = true;
-    setStatus('saving');
-    try {
-      await persistRef.current(payload);
-      baselineRef.current = payload;
-      busyRef.current = false;
-      if (rerunRef.current || makeRef.current() !== payload) {
+    const chain = (async () => {
+      for (;;) {
+        clearTimer();
+        const payload = makeRef.current();
+        if (baselineRef.current === null || baselineRef.current === payload) {
+          setStatus('saved');
+          return true;
+        }
+        busyRef.current = true;
+        setStatus('saving');
+        try {
+          await persistRef.current(payload);
+          baselineRef.current = payload;
+        } catch {
+          busyRef.current = false;
+          rerunRef.current = false;
+          setStatus('failed');
+          return false;
+        }
+        busyRef.current = false;
+        if (!(rerunRef.current || makeRef.current() !== payload)) {
+          setStatus('saved');
+          return true;
+        }
         rerunRef.current = false;
-        void doSave();
-      } else {
-        setStatus('saved');
       }
-    } catch {
-      busyRef.current = false;
-      rerunRef.current = false;
-      setStatus('failed');
-    }
+    })();
+    inFlightRef.current = chain;
+    void chain.finally(() => {
+      if (inFlightRef.current === chain) inFlightRef.current = null;
+    });
+    return chain;
   };
 
   // Debounce: a workspace change or lifecycle/config change (re)schedules the
@@ -89,7 +106,7 @@ export function useAutosave({ enabled, delayMs = 1600, makeSnapshot, snapshotKey
     }
     setStatus((current) => (current === 'saving' ? current : 'unsaved'));
     clearTimer();
-    timerRef.current = window.setTimeout(() => void doSave(), delayMs);
+    timerRef.current = window.setTimeout(() => void runSave(), delayMs);
     return clearTimer;
     // makeSnapshot/persist are deliberately read from refs.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -101,11 +118,21 @@ export function useAutosave({ enabled, delayMs = 1600, makeSnapshot, snapshotKey
   };
 
   /** Immediate save, used by explicit Save / Publish actions. */
-  const saveNow = () => void doSave();
+  const saveNow = () => void runSave();
+
+  /**
+   * Await the save barrier: flush pending debounces and queued edits, resolving
+   * `true` once the workspace is settled (safe to leave the document) or `false`
+   * when a persist failed, in which case the workspace is still dirty.
+   */
+  const flush = (): Promise<boolean> => {
+    clearTimer();
+    return runSave();
+  };
 
   // Read through the ref so a stale render can never report the wrong state: the
-  // comparison uses the same source `doSave` compares against.
+  // comparison uses the same source `runSave` compares against.
   const dirty = baselineRef.current !== null && baselineRef.current !== makeRef.current();
 
-  return { status, dirty, setBaseline, saveNow };
+  return { status, dirty, setBaseline, saveNow, flush };
 }
