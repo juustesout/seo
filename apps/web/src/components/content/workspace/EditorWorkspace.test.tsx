@@ -17,7 +17,7 @@ const SESSION: DocumentSessionValue = {
   documentId: 'c1',
   isNew: false,
   hasDocument: true,
-  ready: true,
+  lifecycle: { status: 'ready', documentId: 'c1', error: null },
   dirty: false,
   saveState: 'saved',
   requestDocumentSwitch: async () => ({ status: 'switched' }),

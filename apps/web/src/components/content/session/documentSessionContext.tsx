@@ -1,6 +1,6 @@
 import { createContext, useContext, type ReactNode } from 'react';
 import type { AutosaveStatus } from '../useAutosave';
-import type { SwitchResult } from './useDocumentSession';
+import type { DocumentLifecycle, SwitchResult } from './useDocumentSession';
 
 /**
  * The canonical shared session context for the current editing experience.
@@ -9,9 +9,9 @@ import type { SwitchResult } from './useDocumentSession';
  * identity: the editor, the content surface and the save lifecycle all read the
  * active document from here instead of prop-drilling their own copies.
  * `documentId` is null for a brand-new, not-yet-persisted document (`isNew`) and
- * for no document at all (`hasDocument` false). `ready`/`dirty`/`saveState`
- * surface the lifecycle state the existing loader and autosave already own;
- * they are not a second source of truth.
+ * for no document at all (`hasDocument` false). `lifecycle` is the one document
+ * lifecycle (idle/loading/ready/error); `dirty`/`saveState` surface the state
+ * the autosave already owns. None of them is a second source of truth.
  */
 export interface DocumentSessionValue {
   projectId: string;
@@ -21,8 +21,8 @@ export interface DocumentSessionValue {
   isNew: boolean;
   /** True when any document (persisted or new) is active. */
   hasDocument: boolean;
-  /** True once the active document is loaded and safe to act on. */
-  ready: boolean;
+  /** The single lifecycle of the active document. */
+  lifecycle: DocumentLifecycle;
   /** True when local edits differ from the persisted baseline. */
   dirty: boolean;
   /** The autosave status for the active document. */

@@ -55,6 +55,9 @@ import { useAutosave } from '../components/content/useAutosave';
 import { workspaceRevisionOf, workspaceSnapshotOf } from '../components/content/documentRevision';
 import {
   DocumentSessionProvider,
+  documentLifecycle,
+  editorHistoryKey,
+  useDocumentLoad,
   useDocumentSession,
   type DocumentSessionValue,
   type SwitchResult,
@@ -123,7 +126,6 @@ export function Content({
   const [newTitle, setNewTitle] = useState('');
   const [notice, setNotice] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
-  const [loadSeq, setLoadSeq] = useState(0);
 
   // Shared session boundary: the single authoritative document identity. Every
   // switch crosses the save barrier (see useDocumentSession) so dirty content is
@@ -164,7 +166,11 @@ export function Content({
   // and only ever targets the persisted row being edited (never a new draft).
   const [writerOpen, setWriterOpen] = useState(false);
 
-  const detail = useAsync<DetailRow>(() => api(`/projects/${projectId}/content/${editingId}`), [projectId, editingId]);
+  const detail = useDocumentLoad<DetailRow>(editingId, (id) => api(`/projects/${projectId}/content/${id}`));
+
+  // The one document lifecycle. It is a pure projection of the session identity
+  // and the identity-keyed loader, so readiness is not tracked anywhere else.
+  const lifecycle = documentLifecycle(session.identity, detail);
 
   // Synchronous mirror of the current workspace so autosave always reads the
   // latest document/title/status, even mid-render or right after a state update.
@@ -201,8 +207,6 @@ export function Content({
     });
   }, [detail.data]);
 
-  const workspaceReady = creating || (editingId !== null && detail.data?.id === editingId);
-
   // One canonical revision for the open workspace (see documentRevision): the
   // autosave equality/dirty check and the debounce key use it, while the JSON
   // snapshot stays the exact payload persisted.
@@ -238,7 +242,7 @@ export function Content({
   };
 
   const auto = useAutosave({
-    enabled: workspaceReady && canEdit,
+    enabled: lifecycle.status === 'ready' && canEdit,
     delayMs: 1600,
     makeSnapshot: () => workspaceSnapshotOf(live.current),
     makeRevision: () => workspaceRevisionOf(live.current),
@@ -257,7 +261,7 @@ export function Content({
       documentId: session.identity.documentId,
       isNew: session.identity.creating,
       hasDocument: session.hasDocument,
-      ready: workspaceReady,
+      lifecycle,
       dirty: auto.dirty,
       saveState: auto.status,
       requestDocumentSwitch: session.requestDocumentSwitch,
@@ -266,6 +270,8 @@ export function Content({
       adoptDocumentId: session.adoptDocumentId,
       discardDocument: session.discardDocument,
     }),
+    // `lifecycle` is a fresh object each render; the primitive fields it is
+    // derived from are the stable inputs.
     [
       projectId,
       session.identity,
@@ -275,20 +281,20 @@ export function Content({
       session.requestCloseDocument,
       session.adoptDocumentId,
       session.discardDocument,
-      workspaceReady,
+      lifecycle.status,
+      lifecycle.error,
       auto.dirty,
       auto.status,
-    ],
+    ], // eslint-disable-line react-hooks/exhaustive-deps
   );
 
-  const loadedRef = useRef<string | null>(null);
-
-  // Seed an existing row into the workspace exactly once per open.
+  // Seed an existing row into the workspace once the active document has loaded.
+  // The identity-keyed loader clears its payload on a switch, so this runs once
+  // per loaded document without a separate "already seeded" flag.
   useEffect(() => {
     if (!editingId) return;
     const row = detail.data;
-    if (!row || row.id !== editingId || loadedRef.current === editingId) return;
-    loadedRef.current = editingId;
+    if (!row || row.id !== editingId) return;
     const next = asTipDoc(row.content_json);
     const kw = typeof row.target_keyword === 'string' ? row.target_keyword : '';
     const mt = typeof row.meta_title === 'string' ? row.meta_title : '';
@@ -317,7 +323,7 @@ export function Content({
   // AI provider availability (account BYOK + env) for this project.
   useEffect(() => {
     let alive = true;
-    if (!workspaceReady || !canEdit || !editingId) return;
+    if (lifecycle.status !== 'ready' || !canEdit || !editingId) return;
     api<ProjectAiStatusDto>(`/projects/${projectId}/ai`)
       .then((s) => {
         if (alive) setAiConfigured(Boolean(s.configured));
@@ -328,7 +334,7 @@ export function Content({
     return () => {
       alive = false;
     };
-  }, [projectId, workspaceReady, canEdit, editingId]);
+  }, [projectId, lifecycle.status, canEdit, editingId]);
 
   /**
    * Cross the shared save barrier, then apply the destination state. Nothing
@@ -347,9 +353,7 @@ export function Content({
     }
     setErr(null);
     setNotice(null);
-    loadedRef.current = null;
     resetAi();
-    setLoadSeq((n) => n + 1);
     after?.();
   };
 
@@ -386,7 +390,7 @@ export function Content({
   };
 
   const changeStatus = (next: string) => {
-    if (!canEdit || !workspaceReady || next === live.current.status) return;
+    if (!canEdit || lifecycle.status !== 'ready' || next === live.current.status) return;
     live.current.status = next;
     setStatus(next);
     auto.saveNow();
@@ -514,7 +518,7 @@ export function Content({
     setAiEditProposal(null);
   };
 
-  if (!creating && editingId === null) {
+  if (lifecycle.status === 'idle') {
     return (
       <div className="grid gap-5">
         <PageHeader
@@ -611,10 +615,11 @@ export function Content({
     );
   }
 
-  // Wait for the row that matches the open id. Rendering with stale data would
-  // pair the new document identity with the previous document's content and
-  // selection, which the editor context must never expose.
-  if (editingId && detail.data?.id !== editingId) {
+  // Loading and load failure are explicit lifecycle states. Rendering with
+  // stale data would pair the new document identity with the previous
+  // document's content and selection, which the editor context must never
+  // expose; so the workspace is not mounted until the active document is ready.
+  if (lifecycle.status === 'loading') {
     return (
       <div className="grid gap-5">
         <PageHeader title="Content Studio" description="Loading…" />
@@ -622,10 +627,36 @@ export function Content({
     );
   }
 
+  if (lifecycle.status === 'error') {
+    return (
+      <div className="grid gap-4">
+        <PageHeader title="Content Studio" description="Could not load this document." />
+        <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+          {lifecycle.error}
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <Button variant="outline" size="sm" onClick={detail.reload}>
+            Retry
+          </Button>
+          <Button variant="outline" size="sm" onClick={goList}>
+            <ArrowLeft /> Back to list
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
   // Read-only workspace for viewers: rendered server-side HTML, never an
   // editable Tiptap instance hidden behind a read-only flag.
-  if (!canEdit && detail.data) {
+  if (!canEdit) {
     const d = detail.data;
+    if (!d) {
+      return (
+        <div className="grid gap-5">
+          <PageHeader title="Content Studio" description="Loading…" />
+        </div>
+      );
+    }
     return (
       <div className="grid gap-4">
         <div className="flex flex-wrap items-center gap-2.5">
@@ -669,14 +700,6 @@ export function Content({
     );
   }
 
-  if (!canEdit) {
-    return (
-      <div className="grid gap-5">
-        <p className="text-sm text-muted-foreground">Loading…</p>
-      </div>
-    );
-  }
-
   const initialDoc = creating ? tiptapEmptyDoc() : asTipDoc(detail.data?.content_json);
 
   return (
@@ -706,7 +729,7 @@ export function Content({
           editingId ? { configured: aiConfigured, busy: aiBusy, onAction: runAi } : undefined
         }
         writing={{
-          editorKey: `${editingId ?? 'new'}-${loadSeq}`,
+          editorKey: editorHistoryKey(session.identity, session.generation),
           editorRef,
           initialDoc,
           onDocChange: setDoc,

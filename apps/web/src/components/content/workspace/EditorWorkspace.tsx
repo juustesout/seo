@@ -115,7 +115,7 @@ export function EditorWorkspace({
       <EditorContextProvider
         projectId={session.projectId}
         contentId={session.documentId}
-        ready={session.ready}
+        ready={session.lifecycle.status === 'ready'}
         dirty={session.dirty}
         doc={doc}
         editor={editor}

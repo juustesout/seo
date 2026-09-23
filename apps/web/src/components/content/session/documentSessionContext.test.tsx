@@ -43,7 +43,7 @@ function SessionHarness({ flush }: { flush: () => Promise<boolean> }) {
       documentId: session.identity.documentId,
       isNew: session.identity.creating,
       hasDocument: session.hasDocument,
-      ready: true,
+      lifecycle: { status: 'ready', documentId: session.identity.documentId, error: null },
       dirty: false,
       saveState: 'saved',
       requestDocumentSwitch: session.requestDocumentSwitch,

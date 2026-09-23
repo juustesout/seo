@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { act, renderHook } from '@testing-library/react';
-import { useDocumentSession, type SwitchResult } from './useDocumentSession';
+import { editorHistoryKey, useDocumentSession, type SwitchResult } from './useDocumentSession';
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -156,5 +156,60 @@ describe('useDocumentSession save barrier', () => {
     act(() => result.current.discardDocument());
     expect(result.current.identity).toEqual({ documentId: null, creating: false });
     expect(flush).not.toHaveBeenCalled();
+  });
+});
+
+describe('useDocumentSession history generation (R5.2.5)', () => {
+  it('advances the generation only on a successful document change', async () => {
+    const flush = vi.fn(async () => true);
+    const { result } = mount(flush);
+
+    expect(result.current.generation).toBe(0);
+
+    await act(async () => {
+      await result.current.requestDocumentSwitch('doc-b');
+    });
+    expect(result.current.generation).toBe(1);
+
+    await act(async () => {
+      await result.current.requestNewDocument();
+    });
+    expect(result.current.generation).toBe(2);
+  });
+
+  it('does not advance the generation when the save barrier blocks the switch', async () => {
+    const { result } = mount(async () => false);
+    act(() => result.current.adoptDocumentId('doc-a'));
+
+    let outcome: SwitchResult | undefined;
+    await act(async () => {
+      outcome = await result.current.requestDocumentSwitch('doc-b');
+    });
+
+    expect(outcome).toEqual({ status: 'blocked', reason: 'save_failed' });
+    expect(result.current.identity.documentId).toBe('doc-a');
+    expect(result.current.generation).toBe(0);
+  });
+
+  it('does not advance the generation for adoption or discard', () => {
+    const { result } = mount(async () => true);
+    act(() => result.current.adoptDocumentId('doc-a'));
+    expect(result.current.generation).toBe(0);
+    act(() => result.current.discardDocument());
+    expect(result.current.generation).toBe(0);
+  });
+
+  it('keys the editor instance by identity and generation', () => {
+    const a = { documentId: 'doc-a', creating: false };
+    const b = { documentId: 'doc-b', creating: false };
+    const draft = { documentId: null, creating: true };
+
+    // A different document at the same generation is a different boundary.
+    expect(editorHistoryKey(a, 1)).not.toBe(editorHistoryKey(b, 1));
+    // The same document at a later generation is a different boundary.
+    expect(editorHistoryKey(a, 1)).not.toBe(editorHistoryKey(a, 2));
+    // The same document and generation is the same boundary.
+    expect(editorHistoryKey(a, 1)).toBe(editorHistoryKey(a, 1));
+    expect(editorHistoryKey(draft, 0)).not.toBe(editorHistoryKey(a, 0));
   });
 });
