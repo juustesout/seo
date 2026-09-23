@@ -14,6 +14,7 @@ import { Editor } from '@tiptap/core';
 import type { AgentRun, DocumentOperationBatch, InsertImageOperation } from '@seo/contracts';
 import { contentRevisionOf, tiptapEmptyDoc, type TipDoc } from '@seo/contracts';
 import { EditorContextProvider } from '../editor/EditorContext';
+import { EditorSelectionProvider } from '../editor/EditorSelectionContext';
 import { createEditorExtensions } from '../editor/extensions';
 import { EmbeddedAgentEntry } from './EmbeddedAgentEntry';
 
@@ -331,9 +332,11 @@ function makeImageEditor(): Editor {
 
 function EditorHarness({ editor, doc = IMAGE_DOC }: { editor: Editor; doc?: TipDoc }) {
   return (
-    <EditorContextProvider projectId={PROJECT} contentId={CONTENT} ready dirty={false} doc={doc} editor={editor}>
-      <EmbeddedAgentEntry open onOpenChange={() => {}} canEdit configured onSaveNow={() => {}} pollMs={5} />
-    </EditorContextProvider>
+    <EditorSelectionProvider editor={editor}>
+      <EditorContextProvider projectId={PROJECT} contentId={CONTENT} ready dirty={false} doc={doc} editor={editor}>
+        <EmbeddedAgentEntry open onOpenChange={() => {}} canEdit configured onSaveNow={() => {}} pollMs={5} />
+      </EditorContextProvider>
+    </EditorSelectionProvider>
   );
 }
 
@@ -454,17 +457,19 @@ describe('EmbeddedAgentEntry image insertion (R3.1)', () => {
       .mockResolvedValueOnce(imageSucceeded());
 
     render(
-      <EditorContextProvider projectId={PROJECT} contentId={CONTENT} ready dirty={false} doc={IMAGE_DOC} editor={editor}>
-        <EmbeddedAgentEntry
-          open
-          onOpenChange={() => {}}
-          canEdit
-          configured
-          onSaveNow={() => {}}
-          pollMs={5}
-          onRevealInsertion={onRevealInsertion}
-        />
-      </EditorContextProvider>,
+      <EditorSelectionProvider editor={editor}>
+        <EditorContextProvider projectId={PROJECT} contentId={CONTENT} ready dirty={false} doc={IMAGE_DOC} editor={editor}>
+          <EmbeddedAgentEntry
+            open
+            onOpenChange={() => {}}
+            canEdit
+            configured
+            onSaveNow={() => {}}
+            pollMs={5}
+            onRevealInsertion={onRevealInsertion}
+          />
+        </EditorContextProvider>
+      </EditorSelectionProvider>,
     );
     fireEvent.change(screen.getByTestId('embedded-agent-input'), { target: { value: 'Zet hier een passende afbeelding.' } });
     fireEvent.click(screen.getByTestId('embedded-agent-send'));

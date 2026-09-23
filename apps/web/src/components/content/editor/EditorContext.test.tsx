@@ -5,6 +5,7 @@ import { Editor } from '@tiptap/core';
 import { CANONICAL_DOCUMENT_VERSION, contentRevisionOf, type CanonicalDocument, type DocumentOperationBatch, type TipDoc } from '@seo/contracts';
 import { createEditorExtensions } from './extensions';
 import { EditorContextProvider, useEditorContext } from './EditorContext';
+import { EditorSelectionProvider } from './EditorSelectionContext';
 import type { DocumentOperationApplyResult, ExternalEditorDocumentResult } from './editorContext';
 import { documentRevisionOf } from '../documentRevision';
 
@@ -61,18 +62,22 @@ function Harness({
   ready?: boolean;
 }) {
   return (
-    <EditorContextProvider projectId="p1" contentId={contentId} ready={ready} doc={doc} dirty={dirty} editor={editor}>
-      <Probe />
-    </EditorContextProvider>
+    <EditorSelectionProvider editor={editor}>
+      <EditorContextProvider projectId="p1" contentId={contentId} ready={ready} doc={doc} dirty={dirty} editor={editor}>
+        <Probe />
+      </EditorContextProvider>
+    </EditorSelectionProvider>
   );
 }
 
 function wrapperFor(editor: Editor | null, doc: TipDoc, ready = true) {
   return function Wrapper({ children }: { children: ReactNode }) {
     return (
-      <EditorContextProvider projectId="p1" contentId="c1" ready={ready} doc={doc} dirty={false} editor={editor}>
-        {children}
-      </EditorContextProvider>
+      <EditorSelectionProvider editor={editor}>
+        <EditorContextProvider projectId="p1" contentId="c1" ready={ready} doc={doc} dirty={false} editor={editor}>
+          {children}
+        </EditorContextProvider>
+      </EditorSelectionProvider>
     );
   };
 }

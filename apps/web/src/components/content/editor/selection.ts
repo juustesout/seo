@@ -94,3 +94,22 @@ export function readSelectionSnapshot(editor: Editor | null): EditorSelectionSna
   if (block) withNodeContext(snapshot, block.node, block.pos, doc);
   return snapshot;
 }
+
+/** True when a normalized selection is a non-empty text range or a selected node. */
+export function snapshotHasSelection(snapshot: EditorSelectionSnapshot): boolean {
+  return snapshot.type === 'text' || snapshot.type === 'node';
+}
+
+/**
+ * Coarse element projection of a normalized selection for the composition
+ * surface. It is derived state, never a second selection: it carries only the
+ * fields already present in the snapshot and returns null when the snapshot has
+ * no reliable editor node (for example an empty document).
+ */
+export function editorSelectionFromSnapshot(snapshot: EditorSelectionSnapshot): EditorSelection {
+  if (!snapshot.nodeType) return null;
+  const element: EditorSelection = { type: resolveElementType(snapshot.nodeType) };
+  if (snapshot.blockId) element.id = snapshot.blockId;
+  if (snapshot.nodePath) element.path = snapshot.nodePath;
+  return element;
+}

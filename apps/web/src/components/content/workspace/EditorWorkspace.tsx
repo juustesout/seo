@@ -18,8 +18,9 @@ import type { TipDoc } from '@seo/contracts';
 import { RichTextEditor, type RichTextEditorHandle } from '../RichTextEditor';
 import type { EditorAiActions } from '../EditorAiBubbleMenu';
 import type { ContentAiToolbar } from '../ContentToolbar';
-import { EditorSelectionProvider } from '../editor/EditorSelectionContext';
+import { EditorSelectionProvider, useEditorSelection } from '../editor/EditorSelectionContext';
 import { EditorContextProvider } from '../editor/EditorContext';
+import { snapshotHasSelection } from '../editor/selection';
 import { useRequiredDocumentSession } from '../session';
 import { EditorShell } from '../editor/EditorShell';
 import { ContextualToolbar } from './ContextualToolbar';
@@ -49,6 +50,16 @@ export interface EditorWorkspaceProps {
   rail: IntelligenceRailProps;
   secondary?: ReactNode;
   knowledge?: ReactNode;
+}
+
+/**
+ * Merged toolbar that derives AI selection availability from the canonical
+ * selection boundary instead of the view tracking it separately (R5.2.4).
+ */
+function WorkspaceToolbar({ editor, ai }: { editor: Editor | null; ai?: ContentAiToolbar }) {
+  const shared = useEditorSelection();
+  const resolved = ai ? { ...ai, hasSelection: shared ? snapshotHasSelection(shared.selection) : false } : undefined;
+  return <ContextualToolbar editor={editor} ai={resolved} />;
 }
 
 export function EditorWorkspace({
@@ -100,15 +111,15 @@ export function EditorWorkspace({
   }, [onSaveNow, assistantOpen]);
 
   return (
-    <EditorContextProvider
-      projectId={session.projectId}
-      contentId={session.documentId}
-      ready={session.ready}
-      dirty={session.dirty}
-      doc={doc}
-      editor={editor}
-    >
-      <EditorSelectionProvider>
+    <EditorSelectionProvider editor={editor} documentId={session.documentId}>
+      <EditorContextProvider
+        projectId={session.projectId}
+        contentId={session.documentId}
+        ready={session.ready}
+        dirty={session.dirty}
+        doc={doc}
+        editor={editor}
+      >
         <div className="grid gap-3" data-testid="editor-workspace">
           {banners}
           <DocumentHeader
@@ -124,7 +135,7 @@ export function EditorWorkspace({
                 <EditorShell
                   editor={editor}
                   showRail={railOpen}
-                  toolbar={<ContextualToolbar editor={editor} ai={toolbarAi} />}
+                  toolbar={<WorkspaceToolbar editor={editor} ai={toolbarAi} />}
                 >
                   <RichTextEditor
                     key={writing.editorKey}
@@ -155,7 +166,7 @@ export function EditorWorkspace({
           {secondary}
           {knowledge}
         </div>
-      </EditorSelectionProvider>
-    </EditorContextProvider>
+      </EditorContextProvider>
+    </EditorSelectionProvider>
   );
 }

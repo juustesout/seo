@@ -151,7 +151,6 @@ export function Content({
   const [aiError, setAiError] = useState<string | null>(null);
   const [aiSuggestion, setAiSuggestion] = useState<ContentAiSuggestionDto | null>(null);
   const [aiSelRange, setAiSelRange] = useState<{ from: number; to: number } | null>(null);
-  const [hasSelection, setHasSelection] = useState(false);
   const [useKnowledge, setUseKnowledge] = useState(true);
 
   // Cosmos AI editor: one structured, selection-scoped edit path (preview-only
@@ -330,19 +329,6 @@ export function Content({
       alive = false;
     };
   }, [projectId, workspaceReady, canEdit, editingId]);
-
-  // Keep the toolbar's "AI" action availability in sync with the selection.
-  useEffect(() => {
-    if (!editor) return;
-    const sync = () => setHasSelection(!editor.state.selection.empty);
-    sync();
-    editor.on('selectionUpdate', sync);
-    editor.on('transaction', sync);
-    return () => {
-      editor.off('selectionUpdate', sync);
-      editor.off('transaction', sync);
-    };
-  }, [editor]);
 
   /**
    * Cross the shared save barrier, then apply the destination state. Nothing
@@ -717,7 +703,7 @@ export function Content({
           onOpenCalendar,
         }}
         toolbarAi={
-          editingId ? { configured: aiConfigured, busy: aiBusy, hasSelection, onAction: runAi } : undefined
+          editingId ? { configured: aiConfigured, busy: aiBusy, onAction: runAi } : undefined
         }
         writing={{
           editorKey: `${editingId ?? 'new'}-${loadSeq}`,

@@ -2,18 +2,18 @@
  * Editor context provider (R1.2).
  *
  * Owns the live, normalized view of the editor: identity, local document,
- * revision, dirty state and a document-scoped selection snapshot. It subscribes
- * to the Tiptap instance once (selection/focus/blur) so no future feature has
- * to. It also exposes the single controlled seam for applying an external
- * document result (`applyExternalDocument`), which validates the revision,
- * writes through a normal editor transaction and therefore reuses the existing
- * `onDocChange` + autosave path instead of adding a second persistence system.
+ * revision, dirty state and the document-scoped selection snapshot that it
+ * derives from the canonical selection boundary. It also exposes the single
+ * controlled seam for applying an external document result
+ * (`applyExternalDocument`), which validates the revision, writes through a
+ * normal editor transaction and therefore reuses the existing `onDocChange` +
+ * autosave path instead of adding a second persistence system.
  *
- * The element selection used by the composition sidebar stays in
- * `EditorSelectionContext`; that is a coarse element projection, while this
- * provider exposes the normalized selection for Editor-native features.
+ * Selection is not owned here. `EditorSelectionContext` is the single canonical
+ * selection boundary (R5.2.4); this provider copies its normalized snapshot into
+ * the context, so there is never a second, mirrored Tiptap selection model.
  */
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useMemo, type ReactNode } from 'react';
 import type { Editor } from '@tiptap/react';
 import {
   applyDocumentOperations as executeDocumentOperations,
@@ -32,7 +32,6 @@ import {
   EMPTY_EDITOR_SELECTION,
   type DocumentOperationApplyResult,
   type EditorContextSnapshot,
-  type EditorSelectionSnapshot,
   type ExternalEditorDocumentInput,
   type ExternalEditorDocumentResult,
 } from './editorContext';
@@ -43,7 +42,7 @@ import {
   selectInsertedImage,
   type ImageInsertionApplyResult,
 } from './imageInsertion';
-import { readSelectionSnapshot } from './selection';
+import { useEditorSelection } from './EditorSelectionContext';
 
 export interface EditorContextValue {
   /** The current normalized snapshot; always defined inside the provider. */
@@ -116,24 +115,9 @@ export function EditorContextProvider({
   editor,
   children,
 }: EditorContextProviderProps) {
-  const [selection, setSelection] = useState<EditorSelectionSnapshot>(EMPTY_EDITOR_SELECTION);
-
-  useEffect(() => {
-    if (!editor || editor.isDestroyed) {
-      setSelection(EMPTY_EDITOR_SELECTION);
-      return;
-    }
-    const sync = () => setSelection(readSelectionSnapshot(editor));
-    sync();
-    editor.on('selectionUpdate', sync);
-    editor.on('focus', sync);
-    editor.on('blur', sync);
-    return () => {
-      editor.off('selectionUpdate', sync);
-      editor.off('focus', sync);
-      editor.off('blur', sync);
-    };
-  }, [editor]);
+  // Derived projection of the canonical selection owner. When rendered outside
+  // the selection provider the context is inert rather than tracking its own.
+  const selection = useEditorSelection()?.selection ?? EMPTY_EDITOR_SELECTION;
 
   const snapshot = useMemo(
     () => buildEditorContextSnapshot({ projectId, contentId, ready, doc: liveDocumentOf(editor, doc), dirty, selection }),

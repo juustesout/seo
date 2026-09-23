@@ -28,14 +28,13 @@ export function EditorShell({
   const [localSelection, setLocalSelection] = useState<EditorSelection>(null);
   const [insertHint, setInsertHint] = useState<string | null>(null);
 
-  // Prefer the lifted workspace selection; fall back to local state when the
-  // surface is used standalone (tests, other hosts).
-  const selectedElement = shared ? shared.selection : localSelection;
+  // Prefer the canonical selection projection; fall back to local state when
+  // the surface is used standalone (tests, other hosts).
+  const selectedElement = shared ? shared.element : localSelection;
 
   const applySelection = useCallback(
     (selection: EditorSelection, switchToSettings: boolean) => {
-      if (shared) shared.setSelection(selection);
-      else setLocalSelection(selection);
+      if (!shared) setLocalSelection(selection);
       onSelectionChange?.(selection);
       if (switchToSettings && selection) setSidebarMode('settings');
     },
@@ -73,7 +72,8 @@ export function EditorShell({
   );
 
   useEffect(() => {
-    if (!editor) return;
+    // The canonical owner publishes selection when a provider is present.
+    if (shared || !editor) return;
     const sync = () => {
       const next = readCanvasSelection(editor);
       if (!next) {
@@ -89,7 +89,7 @@ export function EditorShell({
       editor.off('selectionUpdate', sync);
       editor.off('focus', sync);
     };
-  }, [editor, applySelection]);
+  }, [editor, applySelection, shared]);
 
   // Reveal requests (e.g. an Agent insertion that just selected its result)
   // open the settings view for the already-lifted selection.

@@ -41,7 +41,12 @@ function ToolbarButton({ title, label, active, disabled, onClick }: ToolbarButto
 export interface ContentAiToolbar {
   configured: boolean;
   busy: boolean;
-  hasSelection: boolean;
+  /**
+   * Whether the editor currently holds a non-empty text/node selection. Omitted
+   * by callers that cannot see the canonical selection; the workspace fills it
+   * in from the single selection boundary (R5.2.4).
+   */
+  hasSelection?: boolean;
   onAction: (action: ContentAiAction) => void;
 }
 

@@ -1,6 +1,6 @@
 import { useRef, useState, type ReactNode } from 'react';
 import { describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, act } from '@testing-library/react';
 import type { Editor } from '@tiptap/react';
 import { evaluateSeo, tiptapEmptyDoc, type TipDoc } from '@seo/contracts';
 import { RichTextEditor, type RichTextEditorHandle } from '../RichTextEditor';
@@ -31,10 +31,12 @@ function Harness({
   onSaveNow = () => {},
   session = SESSION,
   probe,
+  onEditor,
 }: {
   onSaveNow?: () => void;
   session?: DocumentSessionValue;
   probe?: ReactNode;
+  onEditor?: (editor: Editor | null) => void;
 }) {
   const [editor, setEditor] = useState<Editor | null>(null);
   const editorRef = useRef<RichTextEditorHandle | null>(null);
@@ -65,7 +67,10 @@ function Harness({
           editorRef,
           initialDoc: DOC,
           onDocChange: () => {},
-          onEditor: setEditor,
+          onEditor: (next) => {
+            setEditor(next);
+            onEditor?.(next);
+          },
         }}
         assistant={{ configured: true, busy: false }}
         rail={{
@@ -163,13 +168,13 @@ describe('EditorWorkspace', () => {
 
 function Probe() {
   const shared = useEditorSelection();
-  return <span data-testid="selection-probe">{shared?.selection?.type ?? 'none'}</span>;
+  return <span data-testid="selection-probe">{shared?.element?.type ?? 'none'}</span>;
 }
 
 function SelectionHarness() {
   const [editor, setEditor] = useState<Editor | null>(null);
   return (
-    <EditorSelectionProvider>
+    <EditorSelectionProvider editor={editor}>
       <Probe />
       <EditorShell editor={editor}>
         <RichTextEditor initialDoc={DOC} onEditor={setEditor} />
@@ -184,5 +189,29 @@ describe('EditorWorkspace selection', () => {
     await waitFor(() => expect(document.querySelector('.ProseMirror')).toBeTruthy());
     fireEvent.click(screen.getByRole('button', { name: 'Hero' }));
     await waitFor(() => expect(screen.getByTestId('selection-probe').textContent).toBe('compositionHero'));
+  });
+
+  it('derives AI selection availability from the canonical selection, not a view-owned flag', async () => {
+    let editor: Editor | null = null;
+    render(<Harness onEditor={(next) => { editor = next; }} />);
+    await waitFor(() => expect(editor).not.toBeNull());
+
+    // The view passed hasSelection:false; the workspace must ignore that stale
+    // flag and follow the canonical selection instead.
+    const rewrite = () => screen.getByRole('button', { name: /^Rewrite/ }) as HTMLButtonElement;
+    expect(rewrite().disabled).toBe(true);
+
+    act(() => {
+      editor!.commands.insertContent('Hello world');
+    });
+    act(() => {
+      editor!.commands.setTextSelection({ from: 1, to: 6 });
+    });
+    await waitFor(() => expect(rewrite().disabled).toBe(false));
+
+    act(() => {
+      editor!.commands.setTextSelection(1);
+    });
+    await waitFor(() => expect(rewrite().disabled).toBe(true));
   });
 });
