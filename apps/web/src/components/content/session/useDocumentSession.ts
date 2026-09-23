@@ -81,7 +81,18 @@ export function useDocumentSession({ flush }: UseDocumentSessionOptions) {
   /** Forget the current document after it was deleted; there is nothing to save. */
   const discardDocument = useCallback(() => setIdentity(INITIAL), []);
 
-  return { identity, requestDocumentSwitch, requestNewDocument, requestCloseDocument, adoptDocumentId, discardDocument };
+  /** True while a document is active, whether persisted or brand new. */
+  const hasDocument = identity.creating || identity.documentId !== null;
+
+  return {
+    identity,
+    hasDocument,
+    requestDocumentSwitch,
+    requestNewDocument,
+    requestCloseDocument,
+    adoptDocumentId,
+    discardDocument,
+  };
 }
 
 export type DocumentSession = ReturnType<typeof useDocumentSession>;

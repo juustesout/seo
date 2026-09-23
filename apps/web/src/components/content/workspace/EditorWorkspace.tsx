@@ -8,7 +8,9 @@
  * assistant focus, escape) and the preview toggle.
  *
  * It deliberately adds no route and no backend behaviour: every action is
- * delegated to handlers the view already owned.
+ * delegated to handlers the view already owned. The active document identity,
+ * ready/dirty state all come from the shared document session context rather
+ * than a prop-drilled copy.
  */
 import { useEffect, useState, type ReactNode, type Ref } from 'react';
 import type { Editor } from '@tiptap/react';
@@ -18,6 +20,7 @@ import type { EditorAiActions } from '../EditorAiBubbleMenu';
 import type { ContentAiToolbar } from '../ContentToolbar';
 import { EditorSelectionProvider } from '../editor/EditorSelectionContext';
 import { EditorContextProvider } from '../editor/EditorContext';
+import { useRequiredDocumentSession } from '../session';
 import { EditorShell } from '../editor/EditorShell';
 import { ContextualToolbar } from './ContextualToolbar';
 import { DocumentHeader, type DocumentHeaderProps } from './DocumentHeader';
@@ -30,13 +33,6 @@ export interface EditorWorkspaceProps {
   /** Live document, used only for the preview render. */
   doc: TipDoc;
   editor: Editor | null;
-  /** Identity and document state exposed through the shared editor context. */
-  context: {
-    projectId: string;
-    contentId: string | null;
-    dirty: boolean;
-    ready: boolean;
-  };
   header: Omit<DocumentHeaderProps, 'previewOpen' | 'onTogglePreview' | 'railOpen' | 'onToggleRail'>;
   toolbarAi?: ContentAiToolbar;
   writing: {
@@ -58,7 +54,6 @@ export interface EditorWorkspaceProps {
 export function EditorWorkspace({
   doc,
   editor,
-  context,
   header,
   toolbarAi,
   writing,
@@ -69,6 +64,7 @@ export function EditorWorkspace({
   secondary,
   knowledge,
 }: EditorWorkspaceProps) {
+  const session = useRequiredDocumentSession();
   const [preview, setPreview] = useState(false);
   const [railOpen, setRailOpen] = useState(false);
   const [assistantOpen, setAssistantOpen] = useState(false);
@@ -105,10 +101,10 @@ export function EditorWorkspace({
 
   return (
     <EditorContextProvider
-      projectId={context.projectId}
-      contentId={context.contentId}
-      ready={context.ready}
-      dirty={context.dirty}
+      projectId={session.projectId}
+      contentId={session.documentId}
+      ready={session.ready}
+      dirty={session.dirty}
       doc={doc}
       editor={editor}
     >

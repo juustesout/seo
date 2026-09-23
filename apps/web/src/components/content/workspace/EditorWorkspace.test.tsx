@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useRef, useState, type ReactNode } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { Editor } from '@tiptap/react';
@@ -6,64 +6,101 @@ import { evaluateSeo, tiptapEmptyDoc, type TipDoc } from '@seo/contracts';
 import { RichTextEditor, type RichTextEditorHandle } from '../RichTextEditor';
 import { EditorShell } from '../editor/EditorShell';
 import { EditorSelectionProvider, useEditorSelection } from '../editor/EditorSelectionContext';
+import { useEditorContextSnapshot } from '../editor/EditorContext';
+import { DocumentSessionProvider, type DocumentSessionValue } from '../session';
 import { EditorWorkspace } from './EditorWorkspace';
 
 const DOC: TipDoc = tiptapEmptyDoc();
 
-function Harness({ onSaveNow = () => {} }: { onSaveNow?: () => void }) {
+const SESSION: DocumentSessionValue = {
+  projectId: 'p1',
+  documentId: 'c1',
+  isNew: false,
+  hasDocument: true,
+  ready: true,
+  dirty: false,
+  saveState: 'saved',
+  requestDocumentSwitch: async () => ({ status: 'switched' }),
+  requestNewDocument: async () => ({ status: 'switched' }),
+  requestCloseDocument: async () => ({ status: 'switched' }),
+  adoptDocumentId: () => {},
+  discardDocument: () => {},
+};
+
+function Harness({
+  onSaveNow = () => {},
+  session = SESSION,
+  probe,
+}: {
+  onSaveNow?: () => void;
+  session?: DocumentSessionValue;
+  probe?: ReactNode;
+}) {
   const [editor, setEditor] = useState<Editor | null>(null);
   const editorRef = useRef<RichTextEditorHandle | null>(null);
   return (
-    <EditorWorkspace
-      doc={DOC}
-      editor={editor}
-      context={{ projectId: 'p1', contentId: 'c1', dirty: false, ready: true }}
-      header={{
-        title: 'My article',
-        onTitleChange: () => {},
-        status: 'draft',
-        onStatusChange: () => {},
-        saveState: 'saved',
-        wordCount: 0,
-        slug: 'my-article',
-        savedAt: '2026-01-01T00:00:00.000Z',
-        canEdit: true,
-        canDelete: true,
-        busy: false,
-        onSaveNow,
-        onDelete: () => {},
-        onBack: () => {},
-      }}
-      toolbarAi={{ configured: true, busy: false, hasSelection: false, onAction: () => {} }}
-      writing={{
-        editorKey: 'test',
-        editorRef,
-        initialDoc: DOC,
-        onDocChange: () => {},
-        onEditor: setEditor,
-      }}
-      assistant={{ configured: true, busy: false }}
-      rail={{
-        outline: [],
-        onSelectHeading: () => {},
-        seo: {
-          result: evaluateSeo({
-            doc: DOC,
-            meta: { title: 'My article', targetKeyword: null, metaTitle: null, metaDescription: null },
-          }),
-          targetKeyword: '',
-          metaTitle: '',
-          metaDescription: '',
-          onKeywordChange: () => {},
-          onMetaTitleChange: () => {},
-          onMetaDescriptionChange: () => {},
-        },
-      }}
-    />
+    <DocumentSessionProvider value={session}>
+      <EditorWorkspace
+        doc={DOC}
+        editor={editor}
+        header={{
+          title: 'My article',
+          onTitleChange: () => {},
+          status: 'draft',
+          onStatusChange: () => {},
+          saveState: 'saved',
+          wordCount: 0,
+          slug: 'my-article',
+          savedAt: '2026-01-01T00:00:00.000Z',
+          canEdit: true,
+          canDelete: true,
+          busy: false,
+          onSaveNow,
+          onDelete: () => {},
+          onBack: () => {},
+        }}
+        toolbarAi={{ configured: true, busy: false, hasSelection: false, onAction: () => {} }}
+        writing={{
+          editorKey: 'test',
+          editorRef,
+          initialDoc: DOC,
+          onDocChange: () => {},
+          onEditor: setEditor,
+        }}
+        assistant={{ configured: true, busy: false }}
+        rail={{
+          outline: [],
+          onSelectHeading: () => {},
+          seo: {
+            result: evaluateSeo({
+              doc: DOC,
+              meta: { title: 'My article', targetKeyword: null, metaTitle: null, metaDescription: null },
+            }),
+            targetKeyword: '',
+            metaTitle: '',
+            metaDescription: '',
+            onKeywordChange: () => {},
+            onMetaTitleChange: () => {},
+            onMetaDescriptionChange: () => {},
+          },
+        }}
+        knowledge={probe}
+      />
+    </DocumentSessionProvider>
   );
 }
 
+function IdentityProbe() {
+  const snapshot = useEditorContextSnapshot();
+  return <span data-testid="session-identity-probe">{snapshot?.contentId ?? 'none'}</span>;
+}
+
 describe('EditorWorkspace', () => {
+  it('derives the active document identity from the shared session context', async () => {
+    render(<Harness session={{ ...SESSION, documentId: 'doc-A' }} probe={<IdentityProbe />} />);
+    await waitFor(() => expect(screen.getByTestId('session-identity-probe').textContent).toBe('doc-A'));
+  });
+
   it('renders one header, one merged toolbar and a single save indicator', async () => {
     render(<Harness />);
     expect(screen.getByTestId('editor-workspace')).toBeTruthy();
