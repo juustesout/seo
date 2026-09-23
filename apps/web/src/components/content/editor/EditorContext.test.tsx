@@ -6,6 +6,7 @@ import { CANONICAL_DOCUMENT_VERSION, contentRevisionOf, type CanonicalDocument, 
 import { createEditorExtensions } from './extensions';
 import { EditorContextProvider, useEditorContext } from './EditorContext';
 import type { DocumentOperationApplyResult, ExternalEditorDocumentResult } from './editorContext';
+import { documentRevisionOf } from '../documentRevision';
 
 const editors: Editor[] = [];
 
@@ -294,5 +295,72 @@ describe('EditorContextProvider applyDocumentOperations', () => {
       notReadyOutcome = notReady.result.current!.applyDocumentOperations(batch(), contentRevisionOf(DOC));
     });
     expect(notReadyOutcome).toEqual({ ok: false, reason: 'not-ready' });
+  });
+});
+
+describe('EditorContextProvider live document (R5.2.3)', () => {
+  const LIVE_DOC: TipDoc = {
+    type: 'doc',
+    content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Bravo' }] }],
+  };
+
+  function liveBatch(): DocumentOperationBatch {
+    return {
+      version: 1,
+      baseRevision: documentRevisionOf(LIVE_DOC),
+      operations: [
+        { type: 'insert_section', ref: 's1', section: { kind: 'hero' }, position: { mode: 'document_start' } },
+        { type: 'insert_text', target: { mode: 'ref', ref: 's1' }, block: { type: 'heading', level: 1, text: 'Halleluja' } },
+      ],
+    };
+  }
+
+  it('reports the live editor revision instead of the lagging doc prop', () => {
+    const editor = makeEditor(LIVE_DOC);
+    const { result } = renderHook(() => useEditorContext(), { wrapper: wrapperFor(editor, DOC) });
+
+    expect(result.current!.snapshot.document.revision).toBe(documentRevisionOf(LIVE_DOC));
+    expect(JSON.stringify(result.current!.snapshot.document.canonical)).toContain('Bravo');
+  });
+
+  it('applies an external document whose revision matches the live editor', () => {
+    const editor = makeEditor(LIVE_DOC);
+    const { result } = renderHook(() => useEditorContext(), { wrapper: wrapperFor(editor, DOC) });
+
+    let outcome: ExternalEditorDocumentResult | undefined;
+    act(() => {
+      outcome = result.current!.applyExternalDocument({ canonical: APPLIED, expectedRevision: documentRevisionOf(LIVE_DOC) });
+    });
+
+    expect(outcome).toEqual({ ok: true });
+    expect(editor.getText()).toBe('Applied');
+  });
+
+  it('rejects the lagging doc prop revision even though it differs from the live editor', () => {
+    const editor = makeEditor(LIVE_DOC);
+    const { result } = renderHook(() => useEditorContext(), { wrapper: wrapperFor(editor, DOC) });
+
+    let outcome: ExternalEditorDocumentResult | undefined;
+    act(() => {
+      outcome = result.current!.applyExternalDocument({ canonical: APPLIED, expectedRevision: documentRevisionOf(DOC) });
+    });
+
+    expect(outcome).toEqual({ ok: false, reason: 'stale-revision' });
+    expect(editor.getText()).toBe('Bravo');
+  });
+
+  it('builds operation batches from the live editor content, not the lagging prop', () => {
+    const editor = makeEditor(LIVE_DOC);
+    const { result } = renderHook(() => useEditorContext(), { wrapper: wrapperFor(editor, DOC) });
+
+    let outcome: DocumentOperationApplyResult | undefined;
+    act(() => {
+      outcome = result.current!.applyDocumentOperations(liveBatch(), documentRevisionOf(LIVE_DOC));
+    });
+
+    expect(outcome).toEqual({ ok: true });
+    const json = JSON.stringify(editor.getJSON());
+    expect(json).toContain('Bravo');
+    expect(json).toContain('Halleluja');
   });
 });

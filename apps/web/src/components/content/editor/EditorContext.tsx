@@ -18,7 +18,6 @@ import type { Editor } from '@tiptap/react';
 import {
   applyDocumentOperations as executeDocumentOperations,
   canonicalDocumentToEditorDocument,
-  contentRevisionOf,
   isValidCanonicalDoc,
   type CanonicalDocument,
   type DocumentOperationBatch,
@@ -27,6 +26,7 @@ import {
   type TipDoc,
 } from '@seo/contracts';
 import { canonicalFromEditorDocument } from '../editorDraft';
+import { documentRevisionOf } from '../documentRevision';
 import {
   buildEditorContextSnapshot,
   EMPTY_EDITOR_SELECTION,
@@ -75,13 +75,31 @@ export interface EditorContextValue {
 
 const EditorContext = createContext<EditorContextValue | null>(null);
 
+/**
+ * Reads the document straight off the live Tiptap instance. The `doc` prop is
+ * only a render trigger (it lands one render behind the editor), so the
+ * snapshot and every revision guard must treat the live editor as the source of
+ * truth and use the prop solely as a fallback when no editor exists yet.
+ */
+function liveDocumentOf(editor: Editor | null, fallback: TipDoc): TipDoc {
+  if (!editor || editor.isDestroyed) return fallback;
+  try {
+    return editor.getJSON() as unknown as TipDoc;
+  } catch {
+    return fallback;
+  }
+}
+
 export interface EditorContextProviderProps {
   projectId: string;
   /** Null for a brand-new document that has not been persisted yet. */
   contentId: string | null;
   /** False while the document is still loading/seeding. */
   ready: boolean;
-  /** The current local editor document as lifted by the editor boundary. */
+  /**
+   * The lifted editor document. It is only a render trigger/fallback: revision
+   * and guards read the live editor, never this one-render-behind value.
+   */
   doc: TipDoc;
   /** True when local edits differ from the persisted baseline. */
   dirty: boolean;
@@ -118,15 +136,17 @@ export function EditorContextProvider({
   }, [editor]);
 
   const snapshot = useMemo(
-    () => buildEditorContextSnapshot({ projectId, contentId, ready, doc, dirty, selection }),
-    [projectId, contentId, ready, doc, dirty, selection],
+    () => buildEditorContextSnapshot({ projectId, contentId, ready, doc: liveDocumentOf(editor, doc), dirty, selection }),
+    [projectId, contentId, ready, doc, dirty, selection, editor],
   );
 
   const applyExternalDocument = useCallback(
     (input: ExternalEditorDocumentInput): ExternalEditorDocumentResult => {
       if (!ready) return { ok: false, reason: 'not-ready' };
       if (!editor || editor.isDestroyed) return { ok: false, reason: 'no-editor' };
-      if (input.expectedRevision !== contentRevisionOf(doc)) return { ok: false, reason: 'stale-revision' };
+      if (input.expectedRevision !== documentRevisionOf(liveDocumentOf(editor, doc))) {
+        return { ok: false, reason: 'stale-revision' };
+      }
       if (!isValidCanonicalDoc(input.canonical)) return { ok: false, reason: 'unrepresentable' };
       try {
         const next = canonicalDocumentToEditorDocument(input.canonical);
@@ -150,7 +170,7 @@ export function EditorContextProvider({
     (operation: InsertImageOperation, expectedRevision: string): ImageInsertionApplyResult => {
       if (!ready) return { ok: false, reason: 'not-ready' };
       if (!editor || editor.isDestroyed) return { ok: false, reason: 'no-editor' };
-      if (contentRevisionOf(doc) !== expectedRevision) return { ok: false, reason: 'stale-revision' };
+      if (documentRevisionOf(liveDocumentOf(editor, doc)) !== expectedRevision) return { ok: false, reason: 'stale-revision' };
       return applyImageInsertionOperation(editor, operation);
     },
     [ready, editor, doc],
@@ -160,12 +180,13 @@ export function EditorContextProvider({
     (batch: DocumentOperationBatch, expectedRevision: string): DocumentOperationApplyResult => {
       if (!ready) return { ok: false, reason: 'not-ready' };
       if (!editor || editor.isDestroyed) return { ok: false, reason: 'no-editor' };
-      if (contentRevisionOf(doc) !== expectedRevision || batch.baseRevision !== expectedRevision) {
+      const current = liveDocumentOf(editor, doc);
+      if (documentRevisionOf(current) !== expectedRevision || batch.baseRevision !== expectedRevision) {
         return { ok: false, reason: 'stale-revision' };
       }
       let base: CanonicalDocument;
       try {
-        base = canonicalFromEditorDocument(doc);
+        base = canonicalFromEditorDocument(current);
       } catch {
         return { ok: false, reason: 'unrepresentable' };
       }

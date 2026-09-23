@@ -241,4 +241,80 @@ describe('useAutosave', () => {
     expect(result.current.dirty).toBe(true);
     expect(result.current.status).toBe('failed');
   });
+
+  it('gates dirty and saves on the canonical revision, persisting the payload', async () => {
+    vi.useFakeTimers();
+    const persist = vi.fn(async () => undefined);
+    let revision = 'revA';
+    let payload = '{"v":1}';
+    const { result, rerender } = renderHook(() =>
+      useAutosave({
+        enabled: true,
+        delayMs: 100,
+        makeSnapshot: () => payload,
+        makeRevision: () => revision,
+        snapshotKey: revision,
+        persist,
+      }),
+    );
+
+    act(() => result.current.setBaseline('revA'));
+
+    // A payload change that keeps the same revision does not dirty or save.
+    payload = '{"v":2}';
+    rerender();
+    expect(result.current.dirty).toBe(false);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(200);
+    });
+    expect(persist).not.toHaveBeenCalled();
+
+    // A revision change dirties and saves the current payload.
+    revision = 'revB';
+    rerender();
+    expect(result.current.dirty).toBe(true);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(100);
+    });
+    expect(persist).toHaveBeenCalledTimes(1);
+    expect(persist).toHaveBeenCalledWith('{"v":2}');
+    expect(result.current.dirty).toBe(false);
+
+    // Returning to the old revision is dirty again: B is the saved baseline.
+    revision = 'revA';
+    rerender();
+    expect(result.current.dirty).toBe(true);
+
+    vi.useRealTimers();
+  });
+
+  it('flush applies the revision gate and resolves once the payload is settled', async () => {
+    const persist = vi.fn(async () => undefined);
+    let revision = 'revA';
+    const payload = '{"v":1}';
+    const { result, rerender } = renderHook(() =>
+      useAutosave({
+        enabled: true,
+        delayMs: 100,
+        makeSnapshot: () => payload,
+        makeRevision: () => revision,
+        snapshotKey: revision,
+        persist,
+      }),
+    );
+
+    act(() => result.current.setBaseline('revA'));
+    revision = 'revB';
+    rerender();
+    expect(result.current.dirty).toBe(true);
+
+    let ok = false;
+    await act(async () => {
+      ok = await result.current.flush();
+    });
+
+    expect(ok).toBe(true);
+    expect(persist).toHaveBeenCalledWith('{"v":1}');
+    expect(result.current.dirty).toBe(false);
+  });
 });

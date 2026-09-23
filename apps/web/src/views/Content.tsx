@@ -52,6 +52,7 @@ import { IntelligencePanel } from '../components/content/IntelligencePanel';
 import { AI_EDIT_OPERATION_LABELS, textToBlocksHtml } from '../components/content/contentAi';
 import { canonicalFromEditorDocument } from '../components/content/editorDraft';
 import { useAutosave } from '../components/content/useAutosave';
+import { workspaceRevisionOf, workspaceSnapshotOf } from '../components/content/documentRevision';
 import {
   DocumentSessionProvider,
   useDocumentSession,
@@ -83,23 +84,6 @@ interface ContentRow {
 type DetailRow = ContentRow & { content_json: unknown; content_html: string | null; outline: unknown };
 
 const ROLE_RANK: Record<string, number> = { viewer: 0, editor: 1, admin: 2, owner: 3 };
-
-/**
- * Freezes the whole workspace into one canonical JSON string. Snapshots are
- * strings rather than objects on purpose: autosave needs a cheap equality check
- * (baseline vs current) and exactly one immutable payload to persist, so the
- * workspace is serialized once per change instead of compared by reference.
- */
-function workspaceSnapshotOf(
-  title: string,
-  status: string,
-  doc: TipDoc,
-  targetKeyword: string,
-  metaTitle: string,
-  metaDescription: string,
-): string {
-  return JSON.stringify({ t: title, s: status, d: doc, k: targetKeyword, mt: metaTitle, md: metaDescription });
-}
 
 /**
  * Orchestrates the Content Studio list, the editor workspace and the read-only
@@ -220,11 +204,11 @@ export function Content({
 
   const workspaceReady = creating || (editingId !== null && detail.data?.id === editingId);
 
-  // Snapshots are canonical JSON strings: useAutosave needs a cheap equality
-  // check (baseline vs current) and one immutable payload to persist, and the
-  // editor context uses the same value as its change key.
-  const workspaceSnapshot = useMemo(
-    () => workspaceSnapshotOf(title, status, doc, targetKeyword, metaTitle, metaDescription),
+  // One canonical revision for the open workspace (see documentRevision): the
+  // autosave equality/dirty check and the debounce key use it, while the JSON
+  // snapshot stays the exact payload persisted.
+  const workspaceRevision = useMemo(
+    () => workspaceRevisionOf({ doc, title, status, targetKeyword, metaTitle, metaDescription }),
     [title, status, doc, targetKeyword, metaTitle, metaDescription],
   );
 
@@ -257,9 +241,9 @@ export function Content({
   const auto = useAutosave({
     enabled: workspaceReady && canEdit,
     delayMs: 1600,
-    makeSnapshot: () =>
-      workspaceSnapshotOf(live.current.title, live.current.status, live.current.doc, live.current.targetKeyword, live.current.metaTitle, live.current.metaDescription),
-    snapshotKey: workspaceSnapshot,
+    makeSnapshot: () => workspaceSnapshotOf(live.current),
+    makeRevision: () => workspaceRevisionOf(live.current),
+    snapshotKey: workspaceRevision,
     persist: commit,
   });
 
@@ -319,7 +303,7 @@ export function Content({
     setMetaDescription(md);
     setSlug(row.slug ?? null);
     setSavedAt(row.updated_at ?? null);
-    auto.setBaseline(workspaceSnapshotOf(live.current.title, live.current.status, next, kw, mt, md));
+    auto.setBaseline(workspaceRevisionOf(live.current));
   }, [editingId, detail.data]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Seed a brand-new document so opening the editor never auto-creates a row.
@@ -328,9 +312,7 @@ export function Content({
     const next = tiptapEmptyDoc();
     live.current = { ...live.current, doc: next };
     setDoc(next);
-    auto.setBaseline(
-      workspaceSnapshotOf(live.current.title, live.current.status, next, live.current.targetKeyword, live.current.metaTitle, live.current.metaDescription),
-    );
+    auto.setBaseline(workspaceRevisionOf(live.current));
   }, [creating]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // AI provider availability (account BYOK + env) for this project.

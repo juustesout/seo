@@ -428,13 +428,15 @@ describe('EmbeddedAgentEntry image insertion (R3.1)', () => {
       .mockResolvedValueOnce({ run: run({ status: 'queued' }), reused: false })
       .mockResolvedValueOnce(imageSucceeded());
 
-    const { rerender } = render(<EditorHarness editor={editor} />);
+    render(<EditorHarness editor={editor} />);
     fireEvent.change(screen.getByTestId('embedded-agent-input'), { target: { value: 'Zet hier een passende afbeelding.' } });
     fireEvent.click(screen.getByTestId('embedded-agent-send'));
     await waitFor(() => expect(screen.getByTestId('embedded-agent-image-candidate')).toBeTruthy());
 
     // The document revision the request was generated against is no longer current.
-    rerender(<EditorHarness editor={editor} doc={tiptapEmptyDoc()} />);
+    act(() => {
+      editor.commands.insertContent({ type: 'paragraph', content: [{ type: 'text', text: 'Edited after the request.' }] });
+    });
     fireEvent.click(screen.getByTestId('embedded-agent-insert'));
 
     await waitFor(() => expect(screen.getByTestId('embedded-agent-status').textContent).toContain('document changed'));
@@ -904,12 +906,14 @@ describe('EmbeddedAgentEntry document operations (Part B)', () => {
       .mockResolvedValueOnce({ run: run({ status: 'queued' }), reused: false })
       .mockResolvedValueOnce(operationsSucceeded());
 
-    const { rerender } = render(<EditorHarness editor={editor} />);
+    render(<EditorHarness editor={editor} />);
     fireEvent.change(screen.getByTestId('embedded-agent-input'), { target: { value: OPERATION_INSTRUCTION } });
     fireEvent.click(screen.getByTestId('embedded-agent-send'));
     await waitFor(() => expect(screen.getByTestId('embedded-agent-operations')).toBeTruthy());
 
-    rerender(<EditorHarness editor={editor} doc={tiptapEmptyDoc()} />);
+    act(() => {
+      editor.commands.insertContent({ type: 'paragraph', content: [{ type: 'text', text: 'Edited after the request.' }] });
+    });
     fireEvent.click(screen.getByTestId('embedded-agent-apply'));
 
     await waitFor(() => expect(screen.getByTestId('embedded-agent-status').textContent).toContain('document changed'));

@@ -8,11 +8,12 @@
  *
  * This module is pure types plus one pure builder - no React, no Tiptap, no
  * network. The revision scheme and the canonical bridge are the existing shared
- * ones (`contentRevisionOf` and `canonicalFromEditorDocument`), so the context
+ * ones (`documentRevisionOf` and `canonicalFromEditorDocument`), so the context
  * never becomes a second revision or document system.
  */
-import { contentRevisionOf, type CanonicalDocument, type TipDoc } from '@seo/contracts';
+import type { CanonicalDocument, TipDoc } from '@seo/contracts';
 import { canonicalFromEditorDocument } from '../editorDraft';
+import { documentRevisionOf } from '../documentRevision';
 
 /**
  * Normalized selection kinds. `none` means the document is active but no
@@ -136,7 +137,7 @@ export function buildEditorContextSnapshot(input: BuildEditorContextInput): Edit
     document: {
       canonical,
       unrepresentable,
-      revision: contentRevisionOf(input.doc),
+      revision: documentRevisionOf(input.doc),
       dirty: input.dirty,
     },
     selection: input.selection,

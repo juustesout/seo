@@ -5,8 +5,15 @@ export type AutosaveStatus = 'saved' | 'unsaved' | 'saving' | 'failed';
 interface UseAutosaveOptions {
   enabled: boolean;
   delayMs?: number;
-  /** Serialize the current document+metadata to a canonical string. */
+  /** Serialize the current document+metadata to the payload to persist. */
   makeSnapshot: () => string;
+  /**
+   * Canonical revision of the current workspace, compared against the baseline
+   * to decide dirty and whether a save is needed. Defaults to `makeSnapshot`,
+   * so a payload that is already canonical stays equivalent; a caller with a
+   * separate revision token (R5.2.3) passes one here.
+   */
+  makeRevision?: () => string;
   /**
    * A value that changes whenever the workspace changes, used only to schedule
    * the debounce. It is read from a ref, so status transitions never restart the
@@ -21,14 +28,16 @@ interface UseAutosaveOptions {
  * Debounced autosave with a single in-flight request. A newer edit that lands
  * while a save is running is saved again right after it completes, so an older
  * save never overwrites newer edits and requests never overlap. `dirty` is
- * derived from the same baseline as the save decision, so the two can never
- * disagree.
+ * derived from the same canonical revision the save decision uses, so the two
+ * can never disagree.
  */
-export function useAutosave({ enabled, delayMs = 1600, makeSnapshot, snapshotKey, persist }: UseAutosaveOptions) {
+export function useAutosave({ enabled, delayMs = 1600, makeSnapshot, makeRevision, snapshotKey, persist }: UseAutosaveOptions) {
   const [status, setStatus] = useState<AutosaveStatus>('saved');
 
   const makeRef = useRef(makeSnapshot);
   makeRef.current = makeSnapshot;
+  const revisionRef = useRef(makeRevision ?? makeSnapshot);
+  revisionRef.current = makeRevision ?? makeSnapshot;
   const persistRef = useRef(persist);
   persistRef.current = persist;
 
@@ -61,7 +70,8 @@ export function useAutosave({ enabled, delayMs = 1600, makeSnapshot, snapshotKey
       for (;;) {
         clearTimer();
         const payload = makeRef.current();
-        if (baselineRef.current === null || baselineRef.current === payload) {
+        const revision = revisionRef.current();
+        if (baselineRef.current === null || baselineRef.current === revision) {
           setStatus('saved');
           return true;
         }
@@ -69,7 +79,7 @@ export function useAutosave({ enabled, delayMs = 1600, makeSnapshot, snapshotKey
         setStatus('saving');
         try {
           await persistRef.current(payload);
-          baselineRef.current = payload;
+          baselineRef.current = revision;
         } catch {
           busyRef.current = false;
           rerunRef.current = false;
@@ -77,7 +87,7 @@ export function useAutosave({ enabled, delayMs = 1600, makeSnapshot, snapshotKey
           return false;
         }
         busyRef.current = false;
-        if (!(rerunRef.current || makeRef.current() !== payload)) {
+        if (!(rerunRef.current || revisionRef.current() !== revision)) {
           setStatus('saved');
           return true;
         }
@@ -108,12 +118,12 @@ export function useAutosave({ enabled, delayMs = 1600, makeSnapshot, snapshotKey
     clearTimer();
     timerRef.current = window.setTimeout(() => void runSave(), delayMs);
     return clearTimer;
-    // makeSnapshot/persist are deliberately read from refs.
+    // makeSnapshot/makeRevision/persist are deliberately read from refs.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enabled, snapshotKey, delayMs]);
 
-  const setBaseline = (snapshot: string) => {
-    baselineRef.current = snapshot;
+  const setBaseline = (revision: string) => {
+    baselineRef.current = revision;
     if (!busyRef.current) setStatus('saved');
   };
 
@@ -131,8 +141,9 @@ export function useAutosave({ enabled, delayMs = 1600, makeSnapshot, snapshotKey
   };
 
   // Read through the ref so a stale render can never report the wrong state: the
-  // comparison uses the same source `runSave` compares against.
-  const dirty = baselineRef.current !== null && baselineRef.current !== makeRef.current();
+  // comparison uses the same canonical revision `runSave` compares against and
+  // updates the baseline with.
+  const dirty = baselineRef.current !== null && baselineRef.current !== revisionRef.current();
 
   return { status, dirty, setBaseline, saveNow, flush };
 }
