@@ -12,7 +12,7 @@
  * ready/dirty state all come from the shared document session context rather
  * than a prop-drilled copy.
  */
-import { useEffect, useState, type ReactNode, type Ref } from 'react';
+import { useEffect, type ReactNode, type Ref } from 'react';
 import type { Editor } from '@tiptap/react';
 import type { TipDoc } from '@seo/contracts';
 import { RichTextEditor, type RichTextEditorHandle } from '../RichTextEditor';
@@ -22,6 +22,7 @@ import { EditorSelectionProvider, useEditorSelection } from '../editor/EditorSel
 import { EditorContextProvider } from '../editor/EditorContext';
 import { snapshotHasSelection } from '../editor/selection';
 import { useRequiredDocumentSession } from '../session';
+import { useDocumentScopedState } from './workspaceState';
 import { EditorShell } from '../editor/EditorShell';
 import { ContextualToolbar } from './ContextualToolbar';
 import { DocumentHeader, type DocumentHeaderProps } from './DocumentHeader';
@@ -76,9 +77,12 @@ export function EditorWorkspace({
   knowledge,
 }: EditorWorkspaceProps) {
   const session = useRequiredDocumentSession();
-  const [preview, setPreview] = useState(false);
-  const [railOpen, setRailOpen] = useState(false);
-  const [assistantOpen, setAssistantOpen] = useState(false);
+  // Document-scoped view state (R5.2.7): keyed to the session document
+  // boundary, so a new document starts from these defaults instead of
+  // inheriting the previous document's preview/rail/assistant state.
+  const [preview, setPreview] = useDocumentScopedState(false);
+  const [railOpen, setRailOpen] = useDocumentScopedState(false);
+  const [assistantOpen, setAssistantOpen] = useDocumentScopedState(false);
 
   const onSaveNow = header.onSaveNow;
 

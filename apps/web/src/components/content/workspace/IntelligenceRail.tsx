@@ -6,13 +6,13 @@
  * panels keep their own props and data sources; this is a layout change, not
  * new data.
  */
-import { useState } from 'react';
 import type { Editor } from '@tiptap/react';
 import type { ContentOutlineItem, SeoResult } from '@seo/contracts';
 import { ContentOutline } from '../ContentOutline';
 import { SeoPanel } from '../SeoPanel';
 import { MediaPanel } from '../MediaPanel';
 import { IntelligencePanel } from '../IntelligencePanel';
+import { useDocumentScopedState } from './workspaceState';
 import { cn } from '@/lib/utils';
 
 export type RailTab = 'outline' | 'seo' | 'media' | 'insights';
@@ -40,7 +40,7 @@ export function IntelligenceRail({ outline, onSelectHeading, seo, media, intelli
     ...(media ? [{ id: 'media' as const, label: 'Media' }] : []),
     ...(intelligence ? [{ id: 'insights' as const, label: 'Insights' }] : []),
   ];
-  const [tab, setTab] = useState<RailTab>('outline');
+  const [tab, setTab] = useDocumentScopedState<RailTab>('outline');
   const active = tabs.some((t) => t.id === tab) ? tab : 'outline';
 
   return (

@@ -1,5 +1,6 @@
 export { EditorWorkspace } from './EditorWorkspace';
 export type { EditorWorkspaceProps } from './EditorWorkspace';
+export { WorkspaceStateProvider, useDocumentScopedState, useWorkspaceScope } from './workspaceState';
 export { DocumentHeader, SAVE_LABEL } from './DocumentHeader';
 export type { DocumentHeaderProps } from './DocumentHeader';
 export { ContextualToolbar } from './ContextualToolbar';

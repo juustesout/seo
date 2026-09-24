@@ -2,6 +2,7 @@ export {
   useDocumentSession,
   editorHistoryKey,
   documentLifecycle,
+  documentScopeKey,
   IDLE_DOCUMENT_LOAD,
   type DocumentIdentity,
   type DocumentLifecycle,

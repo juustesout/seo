@@ -90,20 +90,30 @@ interface UseDocumentSessionOptions {
 const INITIAL: DocumentIdentity = { documentId: null, creating: false };
 
 /**
+ * The one canonical document boundary key: a pure projection of the identity
+ * and the session generation. It changes exactly on a successful document
+ * transition (switch, new, close) and never on a blocked one, so it is the
+ * single document epoch. Editor history (R5.2.5) and document-scoped workspace
+ * UI state (R5.2.7) both scope to this key instead of inventing their own.
+ */
+export function documentScopeKey(identity: DocumentIdentity, generation: number): string {
+  const id = identity.creating ? 'new' : identity.documentId ?? 'closed';
+  return `${id}#${generation}`;
+}
+
+/**
  * The lifetime key of the editor instance, and therefore of its undo/redo
  * history. The editor component is keyed by this value, so a new key remounts
  * the editor and starts a fresh ProseMirror history.
  *
- * It is derived from the canonical session identity plus the session
- * generation, so it changes on every successful document change and stays
- * constant across a failed one. History therefore never crosses a document
- * boundary, while a failed switch keeps the current editor and its history.
- * It deliberately does not add a second identity owner: it is a pure projection
- * of the identity the session already owns.
+ * It is the shared document boundary key (`documentScopeKey`): it changes on
+ * every successful document change and stays constant across a failed one.
+ * History therefore never crosses a document boundary, while a failed switch
+ * keeps the current editor and its history. It deliberately adds no second
+ * identity owner.
  */
 export function editorHistoryKey(identity: DocumentIdentity, generation: number): string {
-  const id = identity.creating ? 'new' : identity.documentId ?? 'closed';
-  return `${id}#${generation}`;
+  return documentScopeKey(identity, generation);
 }
 
 /**

@@ -34,7 +34,7 @@ import {
 import { api } from '../lib/api';
 import { useAsync, fmtDate, Empty } from '../lib/ui';
 import type { RichTextEditorHandle } from '../components/content/RichTextEditor';
-import { CollapsibleSection, EditorWorkspace } from '../components/content/workspace';
+import { CollapsibleSection, EditorWorkspace, WorkspaceStateProvider } from '../components/content/workspace';
 import { ContentOutline } from '../components/content/ContentOutline';
 import { SeoPanel } from '../components/content/SeoPanel';
 import { AgentControls } from '../components/content/AgentControls';
@@ -56,6 +56,7 @@ import { workspaceRevisionOf, workspaceSnapshotOf } from '../components/content/
 import {
   DocumentSessionProvider,
   documentLifecycle,
+  documentScopeKey,
   editorHistoryKey,
   useDocumentLoad,
   useDocumentSession,
@@ -704,159 +705,161 @@ export function Content({
 
   return (
     <DocumentSessionProvider value={sessionValue}>
-      <EditorWorkspace
-        doc={doc}
-        editor={editor}
-        header={{
-          title,
-          onTitleChange: setTitle,
-          status,
-          onStatusChange: changeStatus,
-          saveState: auto.status,
-          wordCount,
-          slug,
-          savedAt,
-          canEdit,
-          canDelete,
-          busy: auto.status === 'saving',
-          onSaveNow: auto.saveNow,
-          onDelete: () => void remove(editingId),
-          onBack: goList,
-          onViewPublications: editingId && onOpenPublications ? () => onOpenPublications(editingId) : undefined,
-          onOpenCalendar,
-        }}
-        toolbarAi={
-          editingId ? { configured: aiConfigured, busy: aiBusy, onAction: runAi } : undefined
-        }
-        writing={{
-          editorKey: editorHistoryKey(session.identity, session.generation),
-          editorRef,
-          initialDoc,
-          onDocChange: setDoc,
-          onEditor: setEditor,
-          aiActions:
-            editingId && canEdit
-              ? {
-                  configured: aiConfigured,
-                  busy: aiEditBusy,
-                  onAction: (operation, instruction) => void runAiEdit(operation, instruction),
-                }
-              : undefined,
-        }}
-        assistant={{ configured: aiConfigured, busy: aiBusy || aiEditBusy }}
-        banners={
-          <>
-            {err && (
-              <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-                {err}
-              </div>
-            )}
-            {notice && (
-              <div className="rounded-md border border-success/30 bg-success/5 px-3 py-2 text-sm text-success">{notice}</div>
-            )}
-            {auto.status === 'failed' && (
-              <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-                Could not save your changes. Check your connection and press Save to retry.
-              </div>
-            )}
-            {aiError && (
-              <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-                {aiError}
-              </div>
-            )}
-          </>
-        }
-        review={
-          <>
-            {aiSuggestion && (
-              <div className="mt-3">
-                <ContentAiPanel suggestion={aiSuggestion} onApply={applyAi} onReject={rejectAi} />
-              </div>
-            )}
-            {aiEditProposal && (
-              <div className="mt-3">
-                <ContentAiEditPanel
-                  proposal={aiEditProposal}
-                  operationLabel={AI_EDIT_OPERATION_LABELS[aiEditProposal.requested]}
-                  onApply={applyAiEdit}
-                  onReject={rejectAiEdit}
-                />
-              </div>
-            )}
-            {aiEditError && (
-              <div className="mt-3 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-                {aiEditError}
-              </div>
-            )}
-          </>
-        }
-        rail={{
-          outline,
-          onSelectHeading: (index) => editorRef.current?.selectHeading(index),
-          seo: {
-            result: seo,
-            targetKeyword,
-            metaTitle,
-            metaDescription,
-            onKeywordChange: setTargetKeyword,
-            onMetaTitleChange: setMetaTitle,
-            onMetaDescriptionChange: setMetaDescription,
-          },
-          media: editor ? { projectId, editor, canEdit, canDelete } : undefined,
-          intelligence: editingId ? { projectId, contentId: editingId } : undefined,
-        }}
-        secondary={
-          <CollapsibleSection title="Writer and draft tools" testId="editor-secondary-tools">
-            <div className="grid gap-3">
-              {aiConfigured && (
-                <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                  <input type="checkbox" checked={useKnowledge} onChange={(e) => setUseKnowledge(e.target.checked)} />
-                  <span>Include this project's knowledge as context when available</span>
-                </label>
+      <WorkspaceStateProvider documentKey={documentScopeKey(session.identity, session.generation)}>
+        <EditorWorkspace
+          doc={doc}
+          editor={editor}
+          header={{
+            title,
+            onTitleChange: setTitle,
+            status,
+            onStatusChange: changeStatus,
+            saveState: auto.status,
+            wordCount,
+            slug,
+            savedAt,
+            canEdit,
+            canDelete,
+            busy: auto.status === 'saving',
+            onSaveNow: auto.saveNow,
+            onDelete: () => void remove(editingId),
+            onBack: goList,
+            onViewPublications: editingId && onOpenPublications ? () => onOpenPublications(editingId) : undefined,
+            onOpenCalendar,
+          }}
+          toolbarAi={
+            editingId ? { configured: aiConfigured, busy: aiBusy, onAction: runAi } : undefined
+          }
+          writing={{
+            editorKey: editorHistoryKey(session.identity, session.generation),
+            editorRef,
+            initialDoc,
+            onDocChange: setDoc,
+            onEditor: setEditor,
+            aiActions:
+              editingId && canEdit
+                ? {
+                    configured: aiConfigured,
+                    busy: aiEditBusy,
+                    onAction: (operation, instruction) => void runAiEdit(operation, instruction),
+                  }
+                : undefined,
+          }}
+          assistant={{ configured: aiConfigured, busy: aiBusy || aiEditBusy }}
+          banners={
+            <>
+              {err && (
+                <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+                  {err}
+                </div>
               )}
-              <div className="flex flex-wrap items-center gap-2">
-                <Button variant="outline" size="sm" disabled={!editingId} onClick={() => setWriterOpen((v) => !v)}>
-                  {writerOpen ? 'Close writer' : 'Writer'}
-                </Button>
-                {!editingId && (
-                  <span className="text-xs text-muted-foreground">Save this draft first to run the writer on it.</span>
+              {notice && (
+                <div className="rounded-md border border-success/30 bg-success/5 px-3 py-2 text-sm text-success">{notice}</div>
+              )}
+              {auto.status === 'failed' && (
+                <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+                  Could not save your changes. Check your connection and press Save to retry.
+                </div>
+              )}
+              {aiError && (
+                <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+                  {aiError}
+                </div>
+              )}
+            </>
+          }
+          review={
+            <>
+              {aiSuggestion && (
+                <div className="mt-3">
+                  <ContentAiPanel suggestion={aiSuggestion} onApply={applyAi} onReject={rejectAi} />
+                </div>
+              )}
+              {aiEditProposal && (
+                <div className="mt-3">
+                  <ContentAiEditPanel
+                    proposal={aiEditProposal}
+                    operationLabel={AI_EDIT_OPERATION_LABELS[aiEditProposal.requested]}
+                    onApply={applyAiEdit}
+                    onReject={rejectAiEdit}
+                  />
+                </div>
+              )}
+              {aiEditError && (
+                <div className="mt-3 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+                  {aiEditError}
+                </div>
+              )}
+            </>
+          }
+          rail={{
+            outline,
+            onSelectHeading: (index) => editorRef.current?.selectHeading(index),
+            seo: {
+              result: seo,
+              targetKeyword,
+              metaTitle,
+              metaDescription,
+              onKeywordChange: setTargetKeyword,
+              onMetaTitleChange: setMetaTitle,
+              onMetaDescriptionChange: setMetaDescription,
+            },
+            media: editor ? { projectId, editor, canEdit, canDelete } : undefined,
+            intelligence: editingId ? { projectId, contentId: editingId } : undefined,
+          }}
+          secondary={
+            <CollapsibleSection title="Writer and draft tools" testId="editor-secondary-tools">
+              <div className="grid gap-3">
+                {aiConfigured && (
+                  <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                    <input type="checkbox" checked={useKnowledge} onChange={(e) => setUseKnowledge(e.target.checked)} />
+                    <span>Include this project's knowledge as context when available</span>
+                  </label>
                 )}
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button variant="outline" size="sm" disabled={!editingId} onClick={() => setWriterOpen((v) => !v)}>
+                    {writerOpen ? 'Close writer' : 'Writer'}
+                  </Button>
+                  {!editingId && (
+                    <span className="text-xs text-muted-foreground">Save this draft first to run the writer on it.</span>
+                  )}
+                  {writerOpen && editingId && (
+                    <span className="text-xs text-muted-foreground">
+                      Runs the approved writer flow against this article's saved context; results are previewed, never saved
+                      automatically.
+                    </span>
+                  )}
+                </div>
                 {writerOpen && editingId && (
-                  <span className="text-xs text-muted-foreground">
-                    Runs the approved writer flow against this article's saved context; results are previewed, never saved
-                    automatically.
-                  </span>
+                  <WriterPanel
+                    projectId={projectId}
+                    contentId={editingId}
+                    defaultTopic={title}
+                    defaultKeyword={targetKeyword.trim() || undefined}
+                  />
+                )}
+                {editingId && (
+                  <AgentControls
+                    projectId={projectId}
+                    contentId={editingId}
+                    canEdit={canEdit}
+                    aiConfigured={aiConfigured}
+                    onOpenDraft={(id) => {
+                      setRefresh((x) => x + 1);
+                      open(id);
+                    }}
+                  />
                 )}
               </div>
-              {writerOpen && editingId && (
-                <WriterPanel
-                  projectId={projectId}
-                  contentId={editingId}
-                  defaultTopic={title}
-                  defaultKeyword={targetKeyword.trim() || undefined}
-                />
-              )}
-              {editingId && (
-                <AgentControls
-                  projectId={projectId}
-                  contentId={editingId}
-                  canEdit={canEdit}
-                  aiConfigured={aiConfigured}
-                  onOpenDraft={(id) => {
-                    setRefresh((x) => x + 1);
-                    open(id);
-                  }}
-                />
-              )}
-            </div>
-          </CollapsibleSection>
-        }
-        knowledge={
-          <CollapsibleSection title="Project knowledge" testId="editor-knowledge">
-            <KnowledgePanel projectId={projectId} canEdit={canEdit} />
-          </CollapsibleSection>
-        }
-      />
+            </CollapsibleSection>
+          }
+          knowledge={
+            <CollapsibleSection title="Project knowledge" testId="editor-knowledge">
+              <KnowledgePanel projectId={projectId} canEdit={canEdit} />
+            </CollapsibleSection>
+          }
+        />
+      </WorkspaceStateProvider>
     </DocumentSessionProvider>
   );
 }

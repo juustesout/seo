@@ -6,6 +6,7 @@ import { getEditorElement } from './elementRegistry';
 import { insertComposition, selectInsertedComposition } from './insertComposition';
 import { readCanvasSelection } from './selection';
 import { useEditorSelection } from './EditorSelectionContext';
+import { useDocumentScopedState } from '../workspace/workspaceState';
 import type { EditorElementDefinition, EditorSelection, SidebarMode } from './types';
 
 export function EditorShell({
@@ -24,7 +25,8 @@ export function EditorShell({
   onSelectionChange?: (selection: EditorSelection) => void;
 }) {
   const shared = useEditorSelection();
-  const [sidebarMode, setSidebarMode] = useState<SidebarMode>('elements');
+  // Document-scoped: which side panel is active resets with the document (R5.2.7).
+  const [sidebarMode, setSidebarMode] = useDocumentScopedState<SidebarMode>('elements');
   const [localSelection, setLocalSelection] = useState<EditorSelection>(null);
   const [insertHint, setInsertHint] = useState<string | null>(null);
 

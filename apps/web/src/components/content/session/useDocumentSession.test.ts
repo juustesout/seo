@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { act, renderHook } from '@testing-library/react';
-import { editorHistoryKey, useDocumentSession, type SwitchResult } from './useDocumentSession';
+import { documentScopeKey, editorHistoryKey, useDocumentSession, type SwitchResult } from './useDocumentSession';
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -211,5 +211,19 @@ describe('useDocumentSession history generation (R5.2.5)', () => {
     // The same document and generation is the same boundary.
     expect(editorHistoryKey(a, 1)).toBe(editorHistoryKey(a, 1));
     expect(editorHistoryKey(draft, 0)).not.toBe(editorHistoryKey(a, 0));
+  });
+
+  it('exposes one document boundary key shared with workspace UI scoping (R5.2.7)', () => {
+    const a = { documentId: 'doc-a', creating: false };
+    const b = { documentId: 'doc-b', creating: false };
+    const draft = { documentId: null, creating: true };
+    const closed = { documentId: null, creating: false };
+
+    // Editor history and workspace UI scope are the same epoch.
+    expect(documentScopeKey(a, 3)).toBe(editorHistoryKey(a, 3));
+    expect(documentScopeKey(a, 1)).not.toBe(documentScopeKey(b, 1));
+    expect(documentScopeKey(a, 1)).not.toBe(documentScopeKey(a, 2));
+    expect(documentScopeKey(draft, 0)).toBe('new#0');
+    expect(documentScopeKey(closed, 1)).toBe('closed#1');
   });
 });
