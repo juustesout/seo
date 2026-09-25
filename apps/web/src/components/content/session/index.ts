@@ -12,6 +12,7 @@ export {
   type SwitchResult,
 } from './useDocumentSession';
 export { useDocumentLoad, type DocumentLoad } from './useDocumentLoad';
+export { useOperationBoundary, type OperationBoundary } from './useOperationBoundary';
 export {
   DocumentSessionProvider,
   useDocumentSessionContext,

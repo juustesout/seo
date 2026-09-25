@@ -227,3 +227,26 @@ describe('useDocumentSession history generation (R5.2.5)', () => {
     expect(documentScopeKey(closed, 1)).toBe('closed#1');
   });
 });
+
+/**
+ * R5.2.9 closes the R5.2.8 gap: `adoptDocumentId` - the first save of a
+ * brand-new document, which is not a document boundary - must keep the frozen
+ * session `boundary` (and generation) so the editor and document-scoped
+ * workspace state are not remounted. Only the persistent identity advances.
+ */
+describe('R5.2.9 id adoption is not a document boundary', () => {
+  it('keeps the boundary and generation stable while exposing the persisted id', async () => {
+    const { result } = mount(async () => true);
+    await act(async () => {
+      await result.current.requestNewDocument();
+    });
+    const beforeBoundary = result.current.boundary;
+    const beforeGeneration = result.current.generation;
+
+    act(() => result.current.adoptDocumentId('doc-new'));
+
+    expect(result.current.boundary).toBe(beforeBoundary);
+    expect(result.current.generation).toBe(beforeGeneration);
+    expect(result.current.identity).toEqual({ documentId: 'doc-new', creating: false });
+  });
+});

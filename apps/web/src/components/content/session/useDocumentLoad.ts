@@ -11,6 +11,13 @@ export interface DocumentLoad<T> extends DocumentLoadState {
   data: T | null;
   /** Re-run the load for the active document. No-op while idle. */
   reload: () => void;
+  /**
+   * Mark `documentId` as already loaded without fetching, so adopting the first
+   * persisted id of a new document does not enter the loading lifecycle and
+   * remount the editor (R5.2.9). The live editor stays authoritative; a later
+   * genuine switch to this id loads normally, and `reload` still forces a fetch.
+   */
+  adopt: (documentId: string, data?: T | null) => void;
 }
 
 interface LoadedState<T> {
@@ -37,9 +44,18 @@ export function useDocumentLoad<T>(
   const [tick, setTick] = useState(0);
   const loadRef = useRef(load);
   loadRef.current = load;
+  // The id already loaded without a fetch via `adopt`; a document change to it
+  // is then skipped until an explicit reload clears this.
+  const adoptedRef = useRef<string | null>(null);
 
   useEffect(() => {
+    // The adoption marker only suppresses the load for the id it was created
+    // for. Once the active id moves elsewhere (including leaving the document),
+    // the marker is cleared so a later genuine switch back to that id loads
+    // normally instead of showing the adopted-but-empty state.
+    if (adoptedRef.current !== null && adoptedRef.current !== documentId) adoptedRef.current = null;
     if (!documentId) return;
+    if (adoptedRef.current === documentId) return;
     let alive = true;
     setState({ documentId, status: 'loading', data: null, error: null });
     loadRef.current(documentId).then(
@@ -55,16 +71,24 @@ export function useDocumentLoad<T>(
     };
   }, [documentId, tick]);
 
-  const reload = useCallback(() => setTick((value) => value + 1), []);
+  const reload = useCallback(() => {
+    adoptedRef.current = null;
+    setTick((value) => value + 1);
+  }, []);
+
+  const adopt = useCallback((documentId: string, data: T | null = null) => {
+    adoptedRef.current = documentId;
+    setState({ documentId, status: 'ready', data, error: null });
+  }, []);
 
   // A state that describes a different id than the one requested is stale by
   // definition; report it as loading (or idle when nothing is requested) so no
   // caller can read the previous document's payload as the active one.
   if (documentId === null) {
-    return { documentId: null, status: 'idle', data: null, error: null, reload };
+    return { documentId: null, status: 'idle', data: null, error: null, reload, adopt };
   }
   if (state.documentId !== documentId) {
-    return { documentId, status: 'loading', data: null, error: null, reload };
+    return { documentId, status: 'loading', data: null, error: null, reload, adopt };
   }
-  return { ...state, reload };
+  return { ...state, reload, adopt };
 }

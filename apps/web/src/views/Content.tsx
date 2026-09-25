@@ -56,10 +56,9 @@ import { workspaceRevisionOf, workspaceSnapshotOf } from '../components/content/
 import {
   DocumentSessionProvider,
   documentLifecycle,
-  documentScopeKey,
-  editorHistoryKey,
   useDocumentLoad,
   useDocumentSession,
+  useOperationBoundary,
   type DocumentSessionValue,
   type SwitchResult,
 } from '../components/content/session';
@@ -135,6 +134,12 @@ export function Content({
   const session = useDocumentSession({ flush: () => flushRef.current() });
   const editingId = session.identity.documentId;
   const creating = session.identity.creating;
+
+  // Guards async inline AI operations against applying a late result to the
+  // wrong document. It reads the live session boundary (identity + generation,
+  // frozen across an id adoption), so a switch/new/close invalidates a capture
+  // while an adoption does not (R5.2.9).
+  const beginOperation = useOperationBoundary(session.boundary);
 
   // Editor workspace state.
   const [title, setTitle] = useState('');
@@ -234,7 +239,13 @@ export function Content({
     const row = editingId
       ? await api<ContentRow>(`/projects/${projectId}/content/${editingId}`, { method: 'PATCH', body })
       : await api<ContentRow>(`/projects/${projectId}/content`, { method: 'POST', body });
-    if (!editingId && row) session.adoptDocumentId(row.id);
+    if (!editingId && row) {
+      // First save of a new document: adopt the persisted identity without
+      // creating a new logical boundary, and mark the id as already loaded so
+      // the loader does not refetch through the loading screen (R5.2.9).
+      session.adoptDocumentId(row.id);
+      detail.adopt(row.id);
+    }
     if (row) {
       setSavedAt(row.updated_at ?? new Date().toISOString());
       setSlug(row.slug ?? null);
@@ -434,6 +445,9 @@ export function Content({
     const selText = needsSel ? editor.state.doc.textBetween(from, to, '\n') : '';
     const ctxFrom = Math.max(0, from - 600);
     const context = needsSel ? editor.state.doc.textBetween(ctxFrom, from, '\n') : '';
+    // Capture the active document boundary: a late suggestion for a document
+    // the user has left must never populate the panels of the active one.
+    const operation = beginOperation();
     setAiBusy(true);
     setAiError(null);
     setAiSuggestion(null);
@@ -450,12 +464,14 @@ export function Content({
           use_knowledge: useKnowledge,
         },
       });
+      if (operation.isStale()) return;
       setAiSuggestion(data);
       if (needsSel) setAiSelRange({ from, to });
     } catch (e) {
+      if (operation.isStale()) return;
       setAiError(e instanceof Error ? e.message : String(e));
     } finally {
-      setAiBusy(false);
+      if (!operation.isStale()) setAiBusy(false);
     }
   };
 
@@ -491,6 +507,9 @@ export function Content({
       return;
     }
     const { from, to, text } = selection;
+    // Same document-boundary guard as `runAi`: a stale structured edit must not
+    // populate (or, later, mutate through) the active document.
+    const boundary = beginOperation();
     setAiEditBusy(true);
     setAiEditError(null);
     setAiEditProposal(null);
@@ -499,11 +518,13 @@ export function Content({
         method: 'POST',
         body: { operation, selection: { from, to }, text, instruction: instruction ?? null },
       });
+      if (boundary.isStale()) return;
       setAiEditProposal({ ...data, range: { from, to }, requested: operation });
     } catch (e) {
+      if (boundary.isStale()) return;
       setAiEditError(e instanceof Error ? e.message : String(e));
     } finally {
-      setAiEditBusy(false);
+      if (!boundary.isStale()) setAiEditBusy(false);
     }
   };
 
@@ -705,7 +726,7 @@ export function Content({
 
   return (
     <DocumentSessionProvider value={sessionValue}>
-      <WorkspaceStateProvider documentKey={documentScopeKey(session.identity, session.generation)}>
+      <WorkspaceStateProvider documentKey={session.boundary}>
         <EditorWorkspace
           doc={doc}
           editor={editor}
@@ -731,7 +752,7 @@ export function Content({
             editingId ? { configured: aiConfigured, busy: aiBusy, onAction: runAi } : undefined
           }
           writing={{
-            editorKey: editorHistoryKey(session.identity, session.generation),
+            editorKey: session.boundary,
             editorRef,
             initialDoc,
             onDocChange: setDoc,
