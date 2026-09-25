@@ -15,7 +15,6 @@
 import { useEffect, useState } from 'react';
 import {
   BookOpen,
-  Bot,
   CalendarDays,
   FolderKanban,
   KeyRound,
@@ -41,12 +40,12 @@ import { Integrations } from './views/Integrations';
 import { Keywords } from './views/Keywords';
 import { Knowledge } from './views/Knowledge';
 import { Publishing } from './views/Publishing';
-import { Content } from './views/Content';
 import { ContentSchedule } from './views/ContentSchedule';
 import { Publications } from './views/Publications';
 import { Compose } from './views/Compose';
-import { Designer } from './views/Designer';
+import { ProjectWorkspaceShell, normalizeWorkspaceMode } from './workspace';
 import { openProjectView } from './lib/nav';
+import { parseRoute, routePath, type Route, type TopArea } from './lib/projectRoute';
 import { DesignSystemProvider } from './lib/designSystem';
 import { Overview } from './views/Overview';
 import { AccountIntegrations } from './views/AccountIntegrations';
@@ -71,33 +70,7 @@ interface Me {
   projects: ProjectRow[];
 }
 
-type TopArea = 'overview' | 'projects' | 'compose' | 'integrations' | 'keys';
-type Route =
-  | { area: TopArea }
-  | { area: 'project'; projectId: string; view: string; sub: string | null; search: string };
-
 type NavIcon = React.ComponentType<{ className?: string }>;
-
-/**
- * Derive the current Route from the URL. Project views may carry one extra
- * sub-segment so a workspace can own URL-based sections (e.g.
- * `/p/:id/knowledge/sources`); `search` keeps query-driven filters like
- * `?status=failed` available to the view.
- */
-function parseRoute(): Route {
-  const seg = window.location.pathname.split('/').filter(Boolean);
-  if (seg[0] === 'p' && seg[1]) {
-    return { area: 'project', projectId: seg[1], view: seg[2] || 'dashboard', sub: seg[3] ?? null, search: window.location.search };
-  }
-  const area = seg[0] === 'projects' || seg[0] === 'compose' || seg[0] === 'integrations' || seg[0] === 'keys' ? seg[0] : 'overview';
-  return { area };
-}
-
-/** Render a Route back to its canonical URL path. */
-function routePath(r: Route): string {
-  if (r.area === 'project') return `/p/${r.projectId}/${r.view}${r.sub ? `/${r.sub}` : ''}`;
-  return `/${r.area === 'overview' ? 'overview' : r.area}`;
-}
 
 const TOP_NAV: Array<{ id: TopArea; label: string; icon: NavIcon }> = [
   { id: 'overview', label: 'Overview', icon: LayoutDashboard },
@@ -112,9 +85,7 @@ const PROJECT_NAV: Array<{ id: string; label: string; icon: NavIcon }> = [
   { id: 'keywords', label: 'Keywords', icon: Search },
   { id: 'integrations', label: 'Integrations', icon: Plug },
   { id: 'knowledge', label: 'Knowledge Base', icon: BookOpen },
-  { id: 'content', label: 'Content Studio', icon: PenSquare },
-  { id: 'designer', label: 'Designer', icon: Bot },
-  { id: 'compose', label: 'Compose', icon: Sparkles },
+  { id: 'workspace', label: 'Workspace', icon: PenSquare },
   { id: 'calendar', label: 'Calendar', icon: CalendarDays },
   { id: 'publications', label: 'Publications', icon: Newspaper },
   { id: 'publishing', label: 'Publishing', icon: Send },
@@ -183,8 +154,8 @@ export function App() {
     setRoute(r);
   };
 
-  const goProject = (projectId: string, view: string, sub?: string) => {
-    const r: Route = { area: 'project', projectId, view, sub: sub ?? null, search: '' };
+  const goProject = (projectId: string, view: string, sub?: string, sub2?: string) => {
+    const r: Route = { area: 'project', projectId, view, sub: sub ?? null, sub2: sub2 ?? null, search: '' };
     window.history.pushState({}, '', routePath(r));
     setRoute(r);
   };
@@ -293,6 +264,20 @@ export function App() {
     }
     const pid = project.id;
     const view = route.view;
+    // The unified workspace shell owns one document session across the three
+    // modes. Its canonical route is `/p/:id/workspace/:mode`; the former
+    // `content`, `compose` and `designer` views remain as compatibility entry
+    // points that render the same shell with the mapped mode.
+    const workspaceActive = view === 'workspace' || view === 'content' || view === 'compose' || view === 'designer';
+    const workspaceMode =
+      view === 'workspace'
+        ? normalizeWorkspaceMode(route.sub)
+        : view === 'compose'
+          ? 'composer'
+          : view === 'designer'
+            ? 'designer'
+            : 'editor';
+    const workspaceContentId = view === 'workspace' ? route.sub2 : view === 'content' ? route.sub : null;
     return (
       <DesignSystemProvider projectId={pid}>
         <div className="flex min-h-screen flex-col">
@@ -306,7 +291,7 @@ export function App() {
             onOpenProject={goProject}
           />
           <div className="flex flex-1">
-            <ProjectSidebar projectId={pid} view={view} onNavigate={goProject} />
+            <ProjectSidebar projectId={pid} view={workspaceActive ? 'workspace' : view} onNavigate={goProject} />
             <main className="min-w-0 flex-1 px-6 py-6">
               {view === 'dashboard' && <Dashboard projectId={pid} onOpenSettings={() => goProject(pid, 'settings')} />}
               {view === 'keywords' && <Keywords projectId={pid} role={project.role} />}
@@ -322,9 +307,17 @@ export function App() {
                   }
                 />
               )}
-              {view === 'content' && <Content projectId={pid} role={project.role} initialContentId={route.sub} onOpenCalendar={() => goProject(pid, 'calendar')} onOpenPublications={(contentId) => openProjectView(pid, 'publications', { content_id: contentId })} />}
-              {view === 'designer' && <Designer projectId={pid} role={project.role} />}
-              {view === 'compose' && <Compose projectId={pid} role={project.role} onOpenEditor={(contentId) => goProject(pid, 'content', contentId)} />}
+              {workspaceActive && (
+                <ProjectWorkspaceShell
+                  projectId={pid}
+                  role={project.role}
+                  mode={workspaceMode}
+                  initialContentId={workspaceContentId}
+                  onModeChange={(mode) => goProject(pid, 'workspace', mode)}
+                  onOpenCalendar={() => goProject(pid, 'calendar')}
+                  onOpenPublications={(contentId) => openProjectView(pid, 'publications', { content_id: contentId })}
+                />
+              )}
               {view === 'calendar' && <ContentSchedule projectId={pid} role={project.role} onViewPublication={(scheduleId) => openProjectView(pid, 'publications', { schedule_id: scheduleId })} />}
               {view === 'publications' && <Publications projectId={pid} />}
               {view === 'publishing' && <Publishing projectId={pid} />}
@@ -357,7 +350,7 @@ export function App() {
             <Compose
               projectId={composeProject.id}
               role={composeProject.role}
-              onOpenEditor={(contentId) => goProject(composeProject.id, 'content', contentId)}
+              onOpenEditor={(contentId) => goProject(composeProject.id, 'workspace', 'editor', contentId)}
             />
           </DesignSystemProvider>
         )}
