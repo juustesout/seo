@@ -4,9 +4,11 @@
  * This is the R5.2 Content Studio editor orchestration, extracted from
  * `views/Content.tsx`. It no longer owns the document session, loader,
  * lifecycle, autosave or the live document fields - the shell owns those and
- * this view reads them through `useWorkspaceSessionContext`. It keeps the
- * editor-specific concerns: the list, inline AI state, the writer panel and the
- * editor instance.
+ * this view reads them through `useWorkspaceSessionContext`. Since R5.3.2 the
+ * workspace chrome (document header, save status, assistant entry) and the
+ * editor instance + editor context providers also live in the shell; this view
+ * owns only editor-specific concerns: the list, inline AI state, the writer
+ * panel and the canvas.
  *
  * Structured content is the source of truth: the editor works on a Tiptap
  * `content_json` document plus metadata (title, status, target keyword, meta
@@ -25,7 +27,6 @@ import { ArrowLeft } from 'lucide-react';
 import {
   asTipDoc,
   docHeadings,
-  docWordCount,
   evaluateSeo,
   tiptapEmptyDoc,
   type ContentAiAction,
@@ -33,7 +34,6 @@ import {
   type ContentAiEditResponseDto,
   type ContentAiSuggestionDto,
   type ContentOutlineItem,
-  type ProjectAiStatusDto,
   type SeoResult,
   type TipDoc,
 } from '@seo/contracts';
@@ -54,7 +54,7 @@ import { WriterPanel } from '../components/content/WriterPanel';
 import { KnowledgePanel } from '../components/content/KnowledgePanel';
 import { IntelligencePanel } from '../components/content/IntelligencePanel';
 import { AI_EDIT_OPERATION_LABELS, textToBlocksHtml } from '../components/content/contentAi';
-import { useOperationBoundary, type SwitchResult } from '../components/content/session';
+import { useOperationBoundary } from '../components/content/session';
 import { useWorkspaceSessionContext } from '../workspace/workspaceSession';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -63,16 +63,39 @@ import { Input } from '@/components/ui/input';
 import { PageHeader } from '@/components/ui/page-header';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 
-export function EditorView({
-  initialContentId = null,
-  onOpenCalendar,
-  onOpenPublications,
-}: {
+export interface EditorViewProps {
+  /** Live Tiptap instance, owned by the shell so the chrome can share it. */
+  editor: Editor | null;
+  onEditor: (editor: Editor | null) => void;
+  /** Project-level AI availability, owned by the shell. */
+  aiConfigured: boolean;
+  /** Reports the combined inline AI busy signal up to the shell chrome. */
+  onAssistantBusyChange: (busy: boolean) => void;
+  /** Shell-owned canvas preview toggle. */
+  preview: boolean;
+  /** Shell-owned insert rail toggle. */
+  railOpen: boolean;
   /** Deep link (e.g. from Compose) to open one draft on mount. */
   initialContentId?: string | null;
+  open: (id: string) => void;
+  startNew: () => void;
+  goList: () => void;
   onOpenCalendar?: () => void;
-  onOpenPublications?: (contentId: string) => void;
-}) {
+}
+
+export function EditorView({
+  editor,
+  onEditor,
+  aiConfigured,
+  onAssistantBusyChange,
+  preview,
+  railOpen,
+  initialContentId = null,
+  open,
+  startNew,
+  goList,
+  onOpenCalendar,
+}: EditorViewProps) {
   const ws = useWorkspaceSessionContext();
   const {
     projectId,
@@ -81,13 +104,9 @@ export function EditorView({
     session,
     detail,
     lifecycle,
-    auto,
     live,
     seededKey,
     title,
-    setTitle,
-    status,
-    setStatus,
     doc,
     setDoc,
     targetKeyword,
@@ -96,28 +115,21 @@ export function EditorView({
     setMetaTitle,
     metaDescription,
     setMetaDescription,
-    slug,
-    savedAt,
-    changeStatus,
     list,
     setRefresh,
     newTitle,
     setNewTitle,
     notice,
-    setNotice,
     err,
-    setErr,
     remove,
   } = ws;
 
   const editingId = session.identity.documentId;
   const creating = session.identity.creating;
 
-  const [editor, setEditor] = useState<Editor | null>(null);
   const editorRef = useRef<RichTextEditorHandle | null>(null);
 
   // In-editor AI action state (review-before-apply; never auto-applies).
-  const [aiConfigured, setAiConfigured] = useState(false);
   const [aiBusy, setAiBusy] = useState(false);
   const [aiError, setAiError] = useState<string | null>(null);
   const [aiSuggestion, setAiSuggestion] = useState<ContentAiSuggestionDto | null>(null);
@@ -142,7 +154,6 @@ export function EditorView({
   const beginOperation = useOperationBoundary(session.boundary);
 
   const outline: ContentOutlineItem[] = useMemo(() => docHeadings(doc), [doc]);
-  const wordCount = useMemo(() => docWordCount(doc), [doc]);
   const seo = useMemo<SeoResult>(
     () =>
       evaluateSeo({
@@ -171,64 +182,6 @@ export function EditorView({
     });
   }, [detail.data]);
 
-  // AI provider availability (account BYOK + env) for this project.
-  useEffect(() => {
-    let alive = true;
-    if (lifecycle.status !== 'ready' || !canEdit || !editingId) return;
-    api<ProjectAiStatusDto>(`/projects/${projectId}/ai`)
-      .then((s) => {
-        if (alive) setAiConfigured(Boolean(s.configured));
-      })
-      .catch(() => {
-        if (alive) setAiConfigured(false);
-      });
-    return () => {
-      alive = false;
-    };
-  }, [projectId, lifecycle.status, canEdit, editingId]);
-
-  /**
-   * Cross the shared save barrier, then apply the destination state. Nothing
-   * about the current document is reset until the barrier reports `switched`,
-   * so a failed save leaves the editor, selection and dirty state untouched.
-   */
-  const switchTo = async (pending: Promise<SwitchResult>, after?: () => void) => {
-    const result = await pending;
-    if (result.status !== 'switched') {
-      setErr(
-        result.reason === 'save_in_progress'
-          ? 'A document switch is already in progress.'
-          : 'Could not switch documents because your latest changes were not saved. Retry the save, then try again.',
-      );
-      return;
-    }
-    setErr(null);
-    setNotice(null);
-    resetAi();
-    after?.();
-  };
-
-  const open = (id: string) => void switchTo(session.requestDocumentSwitch(id));
-
-  // Deep link from Compose: open the freshly created draft exactly once. The
-  // regular list flow keeps `initialContentId` null and is untouched.
-  const initialOpenRef = useRef<string | null>(null);
-  useEffect(() => {
-    if (!initialContentId || initialOpenRef.current === initialContentId) return;
-    initialOpenRef.current = initialContentId;
-    open(initialContentId);
-  }, [initialContentId]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const startNew = () => {
-    const nextTitle = newTitle;
-    void switchTo(session.requestNewDocument(), () => {
-      setTitle(nextTitle);
-      setNewTitle('');
-    });
-  };
-
-  const goList = () => void switchTo(session.requestCloseDocument());
-
   const resetAi = () => {
     setAiBusy(false);
     setAiError(null);
@@ -239,6 +192,29 @@ export function EditorView({
     setAiEditProposal(null);
     setWriterOpen(false);
   };
+
+  // Reset editor-local AI state when the active document boundary moves (the
+  // shell owns the switch now, so this replaces the reset that used to happen
+  // inside the view's switch helper).
+  useEffect(() => {
+    resetAi();
+  }, [session.boundary]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Report the combined inline AI busy signal to the shell chrome's assistant
+  // slot. The operations themselves stay owned here.
+  useEffect(() => {
+    onAssistantBusyChange(aiBusy || aiEditBusy);
+    return () => onAssistantBusyChange(false);
+  }, [aiBusy, aiEditBusy, onAssistantBusyChange]);
+
+  // Deep link from Compose: open the freshly created draft exactly once. The
+  // regular list flow keeps `initialContentId` null and is untouched.
+  const initialOpenRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!initialContentId || initialOpenRef.current === initialContentId) return;
+    initialOpenRef.current = initialContentId;
+    open(initialContentId);
+  }, [initialContentId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // --- AI document actions (structured suggestions, review-before-apply) ---
 
@@ -547,31 +523,15 @@ export function EditorView({
     <EditorWorkspace
       doc={doc}
       editor={editor}
-      header={{
-        title,
-        onTitleChange: setTitle,
-        status,
-        onStatusChange: changeStatus,
-        saveState: auto.status,
-        wordCount,
-        slug,
-        savedAt,
-        canEdit,
-        canDelete,
-        busy: auto.status === 'saving',
-        onSaveNow: auto.saveNow,
-        onDelete: () => void remove(editingId),
-        onBack: goList,
-        onViewPublications: editingId && onOpenPublications ? () => onOpenPublications(editingId) : undefined,
-        onOpenCalendar,
-      }}
+      preview={preview}
+      railOpen={railOpen}
       toolbarAi={editingId ? { configured: aiConfigured, busy: aiBusy, onAction: runAi } : undefined}
       writing={{
         editorKey: session.boundary,
         editorRef,
         initialDoc,
         onDocChange: setDoc,
-        onEditor: setEditor,
+        onEditor,
         aiActions:
           editingId && canEdit
             ? {
@@ -581,7 +541,6 @@ export function EditorView({
               }
             : undefined,
       }}
-      assistant={{ configured: aiConfigured, busy: aiBusy || aiEditBusy }}
       banners={
         <>
           {err && (
@@ -590,11 +549,6 @@ export function EditorView({
             </div>
           )}
           {notice && <div className="rounded-md border border-success/30 bg-success/5 px-3 py-2 text-sm text-success">{notice}</div>}
-          {auto.status === 'failed' && (
-            <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-              Could not save your changes. Check your connection and press Save to retry.
-            </div>
-          )}
           {aiError && (
             <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
               {aiError}

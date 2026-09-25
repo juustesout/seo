@@ -1,4 +1,5 @@
 export { ProjectWorkspaceShell, type ProjectWorkspaceShellProps } from './ProjectWorkspaceShell';
+export { WorkspaceChrome, type WorkspaceChromeProps } from './WorkspaceChrome';
 export { WorkspaceModeSwitcher, normalizeWorkspaceMode, WORKSPACE_MODES, type WorkspaceMode } from './WorkspaceModeSwitcher';
 export {
   useWorkspaceSession,

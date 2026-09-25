@@ -1,66 +1,39 @@
-import { useRef, useState, type ReactNode } from 'react';
-import { describe, expect, it, vi } from 'vitest';
+/**
+ * R5.3.2: `EditorWorkspace` is the editor canvas only. Workspace chrome
+ * (document header, save status, assistant entry) and the editor context
+ * providers are owned by `ProjectWorkspaceShell`, so this suite covers the
+ * canvas: merged toolbar, preview toggle, insert rail and selection.
+ */
+import { useRef, useState } from 'react';
+import { describe, expect, it } from 'vitest';
 import { fireEvent, render, screen, waitFor, act } from '@testing-library/react';
 import type { Editor } from '@tiptap/react';
 import { evaluateSeo, tiptapEmptyDoc, type TipDoc } from '@seo/contracts';
 import { RichTextEditor, type RichTextEditorHandle } from '../RichTextEditor';
 import { EditorShell } from '../editor/EditorShell';
 import { EditorSelectionProvider, useEditorSelection } from '../editor/EditorSelectionContext';
-import { useEditorContextSnapshot } from '../editor/EditorContext';
-import { DocumentSessionProvider, type DocumentSessionValue } from '../session';
 import { EditorWorkspace } from './EditorWorkspace';
 
 const DOC: TipDoc = tiptapEmptyDoc();
 
-const SESSION: DocumentSessionValue = {
-  projectId: 'p1',
-  documentId: 'c1',
-  isNew: false,
-  hasDocument: true,
-  lifecycle: { status: 'ready', documentId: 'c1', error: null },
-  dirty: false,
-  saveState: 'saved',
-  requestDocumentSwitch: async () => ({ status: 'switched' }),
-  requestNewDocument: async () => ({ status: 'switched' }),
-  requestCloseDocument: async () => ({ status: 'switched' }),
-  adoptDocumentId: () => {},
-  discardDocument: () => {},
-};
-
 function Harness({
-  onSaveNow = () => {},
-  session = SESSION,
-  probe,
+  preview = false,
+  railOpen = false,
   onEditor,
 }: {
-  onSaveNow?: () => void;
-  session?: DocumentSessionValue;
-  probe?: ReactNode;
+  preview?: boolean;
+  railOpen?: boolean;
   onEditor?: (editor: Editor | null) => void;
 }) {
   const [editor, setEditor] = useState<Editor | null>(null);
   const editorRef = useRef<RichTextEditorHandle | null>(null);
   return (
-    <DocumentSessionProvider value={session}>
+    <EditorSelectionProvider editor={editor}>
       <EditorWorkspace
         doc={DOC}
         editor={editor}
-        header={{
-          title: 'My article',
-          onTitleChange: () => {},
-          status: 'draft',
-          onStatusChange: () => {},
-          saveState: 'saved',
-          wordCount: 0,
-          slug: 'my-article',
-          savedAt: '2026-01-01T00:00:00.000Z',
-          canEdit: true,
-          canDelete: true,
-          busy: false,
-          onSaveNow,
-          onDelete: () => {},
-          onBack: () => {},
-        }}
+        preview={preview}
+        railOpen={railOpen}
         toolbarAi={{ configured: true, busy: false, hasSelection: false, onAction: () => {} }}
         writing={{
           editorKey: 'test',
@@ -72,7 +45,6 @@ function Harness({
             onEditor?.(next);
           },
         }}
-        assistant={{ configured: true, busy: false }}
         rail={{
           outline: [],
           onSelectHeading: () => {},
@@ -89,29 +61,20 @@ function Harness({
             onMetaDescriptionChange: () => {},
           },
         }}
-        knowledge={probe}
       />
-    </DocumentSessionProvider>
+    </EditorSelectionProvider>
   );
 }
 
-function IdentityProbe() {
-  const snapshot = useEditorContextSnapshot();
-  return <span data-testid="session-identity-probe">{snapshot?.contentId ?? 'none'}</span>;
-}
-
-describe('EditorWorkspace', () => {
-  it('derives the active document identity from the shared session context', async () => {
-    render(<Harness session={{ ...SESSION, documentId: 'doc-A' }} probe={<IdentityProbe />} />);
-    await waitFor(() => expect(screen.getByTestId('session-identity-probe').textContent).toBe('doc-A'));
-  });
-
-  it('renders one header, one merged toolbar and a single save indicator', async () => {
+describe('EditorWorkspace canvas', () => {
+  it('renders the merged toolbar and canvas without workspace chrome', async () => {
     render(<Harness />);
     expect(screen.getByTestId('editor-workspace')).toBeTruthy();
-    expect(screen.getByTestId('document-header')).toBeTruthy();
-    expect(screen.getByTestId('document-save-state').textContent).toContain('Saved');
     expect(screen.getByTestId('intelligence-rail')).toBeTruthy();
+    // The header, save indicator and assistant entry belong to the shell now.
+    expect(screen.queryByTestId('document-header')).toBeNull();
+    expect(screen.queryByTestId('document-save-state')).toBeNull();
+    expect(screen.queryByTestId('inline-assistant')).toBeNull();
     // The merged toolbar replaces the composition toolbar, so there is no second
     // toolbar (and therefore no second save label) in the product.
     expect(screen.queryByTestId('editor-toolbar')).toBeNull();
@@ -119,50 +82,19 @@ describe('EditorWorkspace', () => {
     await waitFor(() => expect(document.querySelector('.ProseMirror')).toBeTruthy());
   });
 
-  it('keeps the insert rail on-demand and toggled from the header', () => {
-    render(<Harness />);
-    expect(screen.queryByTestId('editor-sidebar')).toBeNull();
-    const toggle = screen.getByRole('button', { name: 'Insert' });
-    expect(toggle.getAttribute('aria-pressed')).toBe('false');
-    fireEvent.click(toggle);
-    expect(screen.getByTestId('editor-sidebar')).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Insert' }).getAttribute('aria-pressed')).toBe('true');
-    fireEvent.click(screen.getByRole('button', { name: 'Insert' }));
-    expect(screen.queryByTestId('editor-sidebar')).toBeNull();
-  });
-
-  it('saves with Ctrl/Cmd+S', () => {
-    const onSaveNow = vi.fn();
-    render(<Harness onSaveNow={onSaveNow} />);
-    fireEvent.keyDown(window, { key: 's', ctrlKey: true });
-    expect(onSaveNow).toHaveBeenCalledTimes(1);
-    fireEvent.keyDown(window, { key: 's', metaKey: true });
-    expect(onSaveNow).toHaveBeenCalledTimes(2);
-  });
-
-  it('toggles an in-editor preview without leaving the workspace', async () => {
-    render(<Harness />);
+  it('hides the canvas and shows the rendered preview when the shell toggles preview', async () => {
+    const { rerender } = render(<Harness />);
     await waitFor(() => expect(document.querySelector('.ProseMirror')).toBeTruthy());
-    fireEvent.click(screen.getByRole('button', { name: 'Preview' }));
-    expect(screen.getByTestId('preview-pane')).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'Editing' }));
     expect(screen.queryByTestId('preview-pane')).toBeNull();
+    rerender(<Harness preview />);
+    expect(screen.getByTestId('preview-pane')).toBeTruthy();
   });
 
-  it('exposes one reserved AI place, opened with Ctrl/Cmd+K', () => {
-    render(<Harness />);
-    expect(screen.getByTestId('inline-assistant')).toBeTruthy();
-    expect(screen.queryByTestId('embedded-agent-input')).toBeNull();
-    fireEvent.keyDown(window, { key: 'k', ctrlKey: true });
-    expect(document.activeElement).toBe(screen.getByTestId('embedded-agent-input'));
-  });
-
-  it('closes the Agent with Escape while focus is inside it', () => {
-    render(<Harness />);
-    fireEvent.keyDown(window, { key: 'k', ctrlKey: true });
-    expect(document.activeElement).toBe(screen.getByTestId('embedded-agent-input'));
-    fireEvent.keyDown(window, { key: 'Escape' });
-    expect(screen.queryByTestId('embedded-agent-input')).toBeNull();
+  it('shows the insert rail only when the shell opens it', () => {
+    const { rerender } = render(<Harness />);
+    expect(screen.queryByTestId('editor-sidebar')).toBeNull();
+    rerender(<Harness railOpen />);
+    expect(screen.getByTestId('editor-sidebar')).toBeTruthy();
   });
 });
 
