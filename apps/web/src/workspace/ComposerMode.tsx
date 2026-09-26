@@ -26,7 +26,7 @@
  * isolation guarantee is preserved.
  */
 import { useCallback, useEffect, useRef } from 'react';
-import type { CanonicalDocument } from '@seo/contracts';
+import type { CanonicalDocument, CompositionOperationBatch } from '@seo/contracts';
 import { useOperationBoundary } from '../components/content/session';
 import { Compose } from '../views/Compose';
 import { useWorkspaceSessionContext } from './workspaceSession';
@@ -48,10 +48,10 @@ export interface ComposerModeProps {
   /** True while the open shared document is an eligible (empty) apply target. */
   canApplyToDocument?: boolean;
   /**
-   * Appends the representable parts of a composed page to the currently open
-   * non-empty document (R5.4.3.4). Supplied by the shell.
+   * Stages the Composer operation batch produced from a generated composition
+   * for the currently open non-empty document (R5.4.4). Supplied by the shell.
    */
-  onAppendToDocument?: (document: CanonicalDocument) => void;
+  onAppendToDocument?: (batch: CompositionOperationBatch) => void;
   /** True while the open shared document is an eligible (non-empty) append target. */
   canAppendToDocument?: boolean;
 }

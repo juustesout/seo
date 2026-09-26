@@ -23,6 +23,7 @@ import {
   DOCUMENT_OPERATIONS_VERSION,
   type CanonicalDocument,
   type CompositionGap,
+  type CompositionOperationBatch,
   type DesignerProposal,
   type DocumentOperation,
 } from '@seo/contracts';
@@ -73,6 +74,21 @@ export function pendingAppendCompositionOf(
     boundary,
     gaps,
   };
+}
+
+/**
+ * Stages a Composer operation batch (R5.4.4) for the bridge. The batch carries
+ * no document revision by design, so the workspace binds the open document's
+ * `baseRevision` here; this is the one place a Composer-level batch becomes a
+ * `DesignerProposal` the existing bridge can execute.
+ */
+export function pendingAppendCompositionFromBatch(
+  batch: CompositionOperationBatch,
+  baseDocument: CanonicalDocument,
+  baseRevision: string,
+  boundary: string,
+): PendingComposition {
+  return pendingAppendCompositionOf(baseDocument, batch.operations, baseRevision, boundary, batch.gaps);
 }
 
 /** How a staged composition resolved. `stale-document` never touched the editor. */

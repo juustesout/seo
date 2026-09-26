@@ -15,10 +15,12 @@
  * Editor" creates a persistent Content Studio draft from the current
  * CanonicalDocument (no second AI call, no new persistence layer).
  */
-import { useRef, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import {
   COMPOSITION_PLAN_FORMAT_IDS,
+  composeOperationBatch,
   type CanonicalDocument,
+  type CompositionOperationBatch,
   type CompositionPlan,
   type CompositionPlanFormat,
   type CompositionPlanNode,
@@ -100,11 +102,11 @@ export function Compose({
   /** Whether the open shared document is an eligible (empty) apply target. */
   canApplyToDocument?: boolean;
   /**
-   * Appends the representable parts of the current run to the open workspace
-   * document instead of creating a new draft (R5.4.3.4). Only supplied by the
-   * shell, and only usable while that document has content.
+   * Hands the current run to the open workspace document as an operation batch
+   * (R5.4.4) instead of creating a new draft. Only supplied by the shell, and
+   * only usable while that document has content.
    */
-  onAppendToDocument?: (document: CanonicalDocument) => void;
+  onAppendToDocument?: (batch: CompositionOperationBatch) => void;
   /** Whether the open shared document is an eligible (non-empty) append target. */
   canAppendToDocument?: boolean;
 }) {
@@ -123,6 +125,15 @@ export function Compose({
   // instead of creating a duplicate. Not a document identity owner: a new run
   // clears it and it never outlives this Composer instance.
   const createdIdRef = useRef<string | null>(null);
+
+  // R5.4.4: the current run as a Composer operation batch, ready to hand to the
+  // workspace. Pure and inert: it maps the composition onto document operations
+  // (R5.4.3.4) but performs no document mutation; the workspace binds the open
+  // document's revision and the existing bridge executes it.
+  const appendBatch = useMemo(
+    () => (document ? composeOperationBatch(document, plan ?? undefined) : null),
+    [document, plan],
+  );
 
   const busy = phase === 'planning' || phase === 'writing';
   const buttonLabel = phase === 'planning' ? 'Planning…' : phase === 'writing' ? 'Writing…' : 'Generate composition';
@@ -320,8 +331,8 @@ export function Compose({
                 type="button"
                 variant="outline"
                 data-testid="compose-append-current"
-                onClick={() => onAppendToDocument(document)}
-                disabled={!canAppendToDocument}
+                onClick={() => appendBatch && onAppendToDocument(appendBatch)}
+                disabled={!canAppendToDocument || !appendBatch}
               >
                 Add to current document
               </Button>

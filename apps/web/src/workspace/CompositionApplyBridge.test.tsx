@@ -10,7 +10,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { render, waitFor } from '@testing-library/react';
 import { Editor } from '@tiptap/core';
-import { CANONICAL_DOCUMENT_VERSION, tiptapEmptyDoc, type CanonicalDocument } from '@seo/contracts';
+import { CANONICAL_DOCUMENT_VERSION, composeOperationBatch, tiptapEmptyDoc, type CanonicalDocument } from '@seo/contracts';
 import { createEditorExtensions } from '../components/content/editor/extensions';
 import { EditorContextProvider } from '../components/content/editor/EditorContext';
 import { EditorSelectionProvider } from '../components/content/editor/EditorSelectionContext';
@@ -19,6 +19,7 @@ import type { WorkspaceSessionValue } from './workspaceSession';
 import { WorkspaceSessionProvider } from './workspaceSession';
 import {
   CompositionApplyBridge,
+  pendingAppendCompositionFromBatch,
   pendingAppendCompositionOf,
   pendingCompositionOf,
   type CompositionApplyOutcome,
@@ -51,6 +52,19 @@ const COMPOSED: CanonicalDocument = {
   blocks: [
     { type: 'heading', attrs: { level: 1 }, content: [{ type: 'text', text: 'Composed heading' }] },
     { type: 'paragraph', content: [{ type: 'text', text: 'Body copy' }] },
+  ],
+};
+
+const SECTIONED: CanonicalDocument = {
+  version: CANONICAL_DOCUMENT_VERSION,
+  blocks: [
+    {
+      type: 'section',
+      children: [
+        { type: 'heading', attrs: { level: 1 }, content: [{ type: 'text', text: 'Composed heading' }] },
+        { type: 'paragraph', content: [{ type: 'text', text: 'Body copy' }] },
+      ],
+    },
   ],
 };
 
@@ -178,6 +192,23 @@ describe('CompositionApplyBridge', () => {
     expect(editor.getText()).toContain('Body copy');
     // Operations were applied to the live document, not replaced with the base.
     expect(editor.getText()).not.toContain('Existing content');
+  });
+
+  it('applies a Composer operation batch staged for the bridge', async () => {
+    const editor = makeEditor();
+    const onResult = vi.fn();
+    const batch = composeOperationBatch(SECTIONED);
+    render(
+      <Bridge
+        editor={editor}
+        pending={pendingAppendCompositionFromBatch(batch, EXISTING, documentRevisionOf(EMPTY), CURRENT_BOUNDARY)}
+        onResult={onResult}
+      />,
+    );
+
+    await waitFor(() => expect(onResult).toHaveBeenCalledWith({ status: 'applied' }));
+    expect(editor.getText()).toContain('Composed heading');
+    expect(editor.getText()).toContain('Body copy');
   });
 
   it('refuses to append when the session document boundary moved', async () => {

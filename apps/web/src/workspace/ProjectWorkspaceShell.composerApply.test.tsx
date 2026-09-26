@@ -13,6 +13,7 @@ import { useState } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { Editor } from '@tiptap/core';
+import type { CanonicalDocument, CompositionOperationBatch } from '@seo/contracts';
 import { ProjectWorkspaceShell } from './ProjectWorkspaceShell';
 import type { WorkspaceMode } from './WorkspaceModeSwitcher';
 
@@ -79,6 +80,7 @@ vi.mock('../views/EditorView', async () => {
 });
 
 vi.mock('../views/Compose', async () => {
+  const { composeOperationBatch } = await import('@seo/contracts');
   const { useWorkspaceSessionContext } = await import('./workspaceSession');
   // A fully representable run: one section whose children are text blocks.
   const composed = {
@@ -111,6 +113,11 @@ vi.mock('../views/Compose', async () => {
     version: 1,
     blocks: [{ type: 'cta', children: [{ type: 'button', content: [{ type: 'text', text: 'Go' }] }] }],
   };
+  // Mirror the real Composer: it hands the shell a ready operation batch, not a
+  // raw composition.
+  const composedBatch = composeOperationBatch(composed as unknown as CanonicalDocument);
+  const mixedBatch = composeOperationBatch(mixed as unknown as CanonicalDocument);
+  const unsupportedBatch = composeOperationBatch(unsupported as unknown as CanonicalDocument);
   return {
     Compose: ({
       onOpenEditor,
@@ -122,7 +129,7 @@ vi.mock('../views/Compose', async () => {
       onOpenEditor?: (id: string) => void;
       onApplyToDocument?: (document: unknown) => void;
       canApplyToDocument?: boolean;
-      onAppendToDocument?: (document: unknown) => void;
+      onAppendToDocument?: (batch: CompositionOperationBatch) => void;
       canAppendToDocument?: boolean;
     }) => {
       const ws = useWorkspaceSessionContext();
@@ -139,13 +146,13 @@ vi.mock('../views/Compose', async () => {
           <button type="button" data-testid="compose-apply" onClick={() => onApplyToDocument?.(composed)}>
             apply
           </button>
-          <button type="button" data-testid="compose-append" onClick={() => onAppendToDocument?.(composed)}>
+          <button type="button" data-testid="compose-append" onClick={() => onAppendToDocument?.(composedBatch)}>
             append
           </button>
-          <button type="button" data-testid="compose-append-mixed" onClick={() => onAppendToDocument?.(mixed)}>
+          <button type="button" data-testid="compose-append-mixed" onClick={() => onAppendToDocument?.(mixedBatch)}>
             append-mixed
           </button>
-          <button type="button" data-testid="compose-append-gap" onClick={() => onAppendToDocument?.(unsupported)}>
+          <button type="button" data-testid="compose-append-gap" onClick={() => onAppendToDocument?.(unsupportedBatch)}>
             append-gap
           </button>
         </div>

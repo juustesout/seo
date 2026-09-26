@@ -10,12 +10,14 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import {
+  COMPOSITION_OPERATION_BATCH_VERSION,
   MARKETING_STORYBOARD_PLAN,
   applyCompositionSlotFills,
   compileComposition,
   compositionSlotKindOf,
   isWritableCompositionSlot,
   type CanonicalDocument,
+  type CompositionOperationBatch,
 } from '@seo/contracts';
 import { Compose } from './Compose';
 
@@ -354,7 +356,14 @@ describe('Compose -> current document append affordance', () => {
     fireEvent.click(button);
 
     expect(onAppendToDocument).toHaveBeenCalledTimes(1);
-    expect(onAppendToDocument).toHaveBeenCalledWith(filledDocument());
+    expect(onAppendToDocument).toHaveBeenCalledWith(
+      expect.objectContaining({
+        version: COMPOSITION_OPERATION_BATCH_VERSION,
+        composition: filledDocument(),
+      }),
+    );
+    const batch = onAppendToDocument.mock.calls[0]?.[0] as CompositionOperationBatch;
+    expect(batch.operations.length).toBeGreaterThan(0);
     expect(apiMock.api.mock.calls.filter(([path]) => path === `/projects/${PROJECT}/content`)).toHaveLength(0);
   });
 
@@ -367,6 +376,22 @@ describe('Compose -> current document append affordance', () => {
     await screen.findByText('copy for hero.title');
 
     expect((screen.getByTestId('compose-append-current') as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('builds the operation batch without creating a draft or applying anything', async () => {
+    const flow = mockComposeFlow();
+    generateFilled(flow);
+    const onAppendToDocument = vi.fn();
+    render(<Compose projectId={PROJECT} role="editor" onAppendToDocument={onAppendToDocument} canAppendToDocument />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Generate composition' }));
+    await screen.findByText('copy for hero.title');
+
+    // The batch exists for the preview (append is enabled), but nothing was
+    // handed to the workspace and nothing was persisted.
+    expect((screen.getByTestId('compose-append-current') as HTMLButtonElement).disabled).toBe(false);
+    expect(onAppendToDocument).not.toHaveBeenCalled();
+    expect(apiMock.api.mock.calls.filter(([path]) => path === `/projects/${PROJECT}/content`)).toHaveLength(0);
   });
 
   it('omits append entirely when the shell does not offer it', async () => {

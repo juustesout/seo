@@ -16,14 +16,14 @@
  * editor instance and no second session/autosave/lifecycle.
  */
 import { useCallback, useMemo, useState } from 'react';
-import { isCanonicalDocumentEmpty, mapCompositionToAppendOperations, type CanonicalDocument, type CompositionGap } from '@seo/contracts';
+import { isCanonicalDocumentEmpty, type CanonicalDocument, type CompositionGap, type CompositionOperationBatch } from '@seo/contracts';
 import { DocumentSessionProvider, type SwitchResult } from '../components/content/session';
 import { WorkspaceStateProvider, useDocumentScopedState } from '../components/content/workspace/workspaceState';
 import { documentRevisionOf } from '../components/content/documentRevision';
 import { canonicalFromEditorDocument } from '../components/content/editorDraft';
 import { Designer } from '../views/Designer';
 import { ComposerMode } from './ComposerMode';
-import { pendingAppendCompositionOf, pendingCompositionOf, type CompositionApplyOutcome, type PendingComposition } from './CompositionApplyBridge';
+import { pendingAppendCompositionFromBatch, pendingCompositionOf, type CompositionApplyOutcome, type PendingComposition } from './CompositionApplyBridge';
 import { EditorMode } from './EditorMode';
 import { WorkspaceChrome } from './WorkspaceChrome';
 import { WorkspaceModeSwitcher, normalizeWorkspaceMode, type WorkspaceMode } from './WorkspaceModeSwitcher';
@@ -213,15 +213,16 @@ function WorkspaceBody({
   };
 
   /**
-   * R5.4.3.4: append the representable parts of a composed page to the currently
-   * open non-empty document. It maps the composed document onto the existing
-   * operation vocabulary, stages the result as `DesignerProposal.operations`
-   * bound to the open revision and boundary, and moves to the editor mode, where
-   * the bridge applies it through `applyDocumentOperations`. Unsupported
+   * R5.4.4: stage the Composer operation batch produced from a generated
+   * composition and append its operations to the currently open non-empty
+   * document. The Composer already mapped the composition onto the existing
+   * operation vocabulary (R5.4.3.4); here the workspace only binds the batch to
+   * the open document's revision and boundary, then moves to the editor mode,
+   * where the bridge applies it through `applyDocumentOperations`. Unsupported
    * structures are never dropped: they are reported back to the user. No document
    * switch, no `/content` create, no whole-document replacement.
    */
-  const appendComposition = (document: CanonicalDocument) => {
+  const appendComposition = (batch: CompositionOperationBatch) => {
     if (!canEdit || lifecycle.status !== 'ready') return;
     let base: CanonicalDocument;
     try {
@@ -237,12 +238,11 @@ function WorkspaceBody({
       return;
     }
 
-    const mapping = mapCompositionToAppendOperations(document);
-    if (mapping.operations.length === 0) {
+    if (batch.operations.length === 0) {
       ws.setNotice(null);
       ws.setErr(
-        mapping.gaps.length > 0
-          ? `Nothing in this composition could be added to the document: ${compositionGapSummary(mapping.gaps)}.`
+        batch.gaps.length > 0
+          ? `Nothing in this composition could be added to the document: ${compositionGapSummary(batch.gaps)}.`
           : 'This composition has nothing that can be added to the document.',
       );
       return;
@@ -251,7 +251,7 @@ function WorkspaceBody({
     ws.setErr(null);
     ws.setNotice(null);
     setPendingComposition(
-      pendingAppendCompositionOf(base, mapping.operations, documentRevisionOf(ws.live.current.doc), session.boundary, mapping.gaps),
+      pendingAppendCompositionFromBatch(batch, base, documentRevisionOf(ws.live.current.doc), session.boundary),
     );
     onModeChange?.('editor');
   };

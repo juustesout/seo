@@ -35,6 +35,7 @@ export * from './mediaSource.js';
 export * from './imageInsertion.js';
 export * from './documentOperations.js';
 export * from './compositionAppend.js';
+export * from './compositionOperations.js';
 export * from './sectionCreation.js';
 export * from './visualVocabulary.js';
 export * from './visualIntent.js';
