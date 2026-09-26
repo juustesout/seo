@@ -612,4 +612,38 @@ describe('Designer edit + apply (shared workspace document)', () => {
 
     confirmSpy.mockRestore();
   });
+
+  it('reports an actionable edit review to the shell and clears it on reject', async () => {
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    const onReviewOpenChange = vi.fn();
+    editApi(editRun({ status: 'succeeded', result: editProposal() }));
+    renderEdit({ onApplyProposal: vi.fn(), onReviewOpenChange });
+    enterEditMode();
+    await startEditRun();
+    await screen.findByText('Edited proposal body');
+
+    await waitFor(() => expect(onReviewOpenChange).toHaveBeenLastCalledWith(true));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Reject' }));
+
+    await waitFor(() => expect(onReviewOpenChange).toHaveBeenLastCalledWith(false));
+    confirmSpy.mockRestore();
+  });
+
+  it('does not hold navigation for a creation-mode proposal', async () => {
+    const onReviewOpenChange = vi.fn();
+    const fake = fakeApi(run({ status: 'queued' }));
+    render(<Designer projectId={PROJECT} role="editor" pollMs={5} onReviewOpenChange={onReviewOpenChange} />);
+
+    fireEvent.change(screen.getByLabelText('What should the Designer create?'), {
+      target: { value: 'Create a landing page' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Start design run' }));
+    await screen.findByText('Queued');
+
+    fake.setCurrent(run({ status: 'succeeded', result: proposal('Designer proposal body') }));
+    await screen.findByText('Designer proposal body');
+
+    expect(onReviewOpenChange).not.toHaveBeenCalledWith(true);
+  });
 });

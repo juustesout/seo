@@ -92,8 +92,10 @@ vi.mock('../views/Designer', async () => {
   return {
     Designer: ({
       onApplyProposal,
+      onReviewOpenChange,
     }: {
       onApplyProposal?: (proposal: DesignerProposal, targetDocumentId: string) => void;
+      onReviewOpenChange?: (open: boolean) => void;
     }) => {
       const ws = useWorkspaceSessionContext();
       const revision = contentRevisionOf(ws.doc);
@@ -159,6 +161,12 @@ vi.mock('../views/Designer', async () => {
           </button>
           <button type="button" data-testid="designer-apply-stale" onClick={() => onApplyProposal?.(stale, targetId)}>
             apply-stale
+          </button>
+          <button type="button" data-testid="designer-review-open" onClick={() => onReviewOpenChange?.(true)}>
+            open-review
+          </button>
+          <button type="button" data-testid="designer-review-close" onClick={() => onReviewOpenChange?.(false)}>
+            close-review
           </button>
         </div>
       );
@@ -292,5 +300,21 @@ describe('Designer proposal applied to the open document', () => {
     await screen.findByText(/changed before this proposal could be applied/);
     expect(screen.queryByTestId('mode-editor')).toBeNull();
     expect(apiMethods('/projects/p1/content', 'POST')).toBe(0);
+  });
+
+  it('holds navigation while a Designer review is open and allows it after close', async () => {
+    await openDesignerWithFullDocument();
+
+    fireEvent.click(screen.getByTestId('designer-review-open'));
+    fireEvent.click(screen.getByTestId('workspace-mode-editor'));
+
+    // Still in Designer, with the reason surfaced rather than silently dropped.
+    expect(screen.getByTestId('designer-apply')).toBeTruthy();
+    expect(screen.queryByTestId('mode-editor')).toBeNull();
+    await screen.findByText(/Finish or cancel the Designer review before leaving Designer/);
+
+    fireEvent.click(screen.getByTestId('designer-review-close'));
+    fireEvent.click(screen.getByTestId('workspace-mode-editor'));
+    await screen.findByTestId('mode-editor');
   });
 });

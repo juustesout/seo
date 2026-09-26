@@ -79,11 +79,16 @@ describe('ProjectWorkspaceShell chrome integration', () => {
     expect(screen.queryByTestId('editor-workspace')).toBeNull();
   });
 
-  it('removes the chrome when the mode is designer', async () => {
+  it('keeps the shared document chrome in designer mode without editor canvas controls', async () => {
     render(<Harness />);
     await openDocument();
     fireEvent.click(screen.getByTestId('workspace-mode-designer'));
-    await waitFor(() => expect(screen.queryByTestId('document-header')).toBeNull());
+    expect(screen.getByTestId('document-header')).toBeTruthy();
+    expect(screen.getByTestId('document-save-state')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Insert' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Preview' })).toBeNull();
+    expect(screen.queryByTestId('editor-workspace')).toBeNull();
+    // The editor-coupled assistant entry never mounts outside the editor mode.
     expect(screen.queryByTestId('inline-assistant')).toBeNull();
   });
 

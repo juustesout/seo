@@ -21,7 +21,12 @@
  * applies it through the existing document-operation mutation paths. The
  * Designer never applies a proposal itself and never calls the legacy
  * whole-document `designer/apply`. The shell's refusal/result banner is rendered
- * here because the Designer, like Composer, does not render shared chrome.
+ * here because the Designer keeps its own content body below the shared chrome.
+ *
+ * R5.5.3: the Designer uses the shared workspace chrome (the shell renders the
+ * document header above every mode), so this boundary no longer needs to work
+ * around a missing header. It also reports whether a review is open so the shell
+ * can hold navigation, mirroring `ComposerMode`.
  *
  * It mounts no editor infrastructure (no Tiptap, `EditorContextProvider`,
  * `EditorSelectionProvider`, editor keymap or editor AI state), so the R5.3.3
@@ -43,9 +48,15 @@ export interface DesignerModeProps {
    * and switches to the editor mode; the Designer performs no write itself.
    */
   onApplyProposal?: (proposal: DesignerProposal, targetDocumentId: string) => void;
+  /**
+   * Reports whether the Designer has a proposal review open (R5.5.3). The shell
+   * uses it as a navigation hold so a mode switch cannot silently discard the
+   * review; no proposal data crosses this boundary.
+   */
+  onReviewOpenChange?: (open: boolean) => void;
 }
 
-export function DesignerMode({ pollMs, onApplyProposal }: DesignerModeProps) {
+export function DesignerMode({ pollMs, onApplyProposal, onReviewOpenChange }: DesignerModeProps) {
   const { projectId, role, doc, title, session, lifecycle, err } = useWorkspaceSessionContext();
 
   // The live document in canonical form, or null when the editor document is a
@@ -76,6 +87,7 @@ export function DesignerMode({ pollMs, onApplyProposal }: DesignerModeProps) {
         documentStatus={lifecycle.status}
         currentDocument={currentDocument}
         onApplyProposal={onApplyProposal}
+        onReviewOpenChange={onReviewOpenChange}
       />
     </div>
   );

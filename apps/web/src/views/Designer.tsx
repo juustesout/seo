@@ -21,6 +21,11 @@
  * applies it through the existing mutation pipeline), while a canonical-document
  * -only or generation-required proposal is surfaced as unsupported and stays
  * proposal-only. The view never mutates the document itself.
+ *
+ * R5.5.3: the Designer renders no page header of its own; the shared workspace
+ * chrome (document header) is rendered by the shell above every mode. While an
+ * actionable edit review is open the view reports it to the shell so a mode
+ * switch cannot silently discard it.
  */
 import { useEffect, useRef, useState } from 'react';
 import {
@@ -37,7 +42,6 @@ import {
   planDesignerMutation,
   type DesignerMutationPlan,
 } from '../workspace/designerMutation';
-import { PageHeader } from '@/components/ui/page-header';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
@@ -88,6 +92,12 @@ export interface DesignerProps {
    * When absent, applying is unavailable and the proposal stays proposal-only.
    */
   onApplyProposal?: (proposal: DesignerProposal, targetDocumentId: string) => void;
+  /**
+   * Reports whether the Designer has a proposal review open (R5.5.3). The shell
+   * uses it as a navigation hold so a mode switch cannot silently discard the
+   * review; no proposal data crosses this boundary.
+   */
+  onReviewOpenChange?: (open: boolean) => void;
 }
 
 export function Designer({
@@ -100,6 +110,7 @@ export function Designer({
   documentStatus = 'idle',
   currentDocument = null,
   onApplyProposal,
+  onReviewOpenChange,
 }: DesignerProps) {
   const canEdit = (ROLE_RANK[role] ?? 0) >= 1;
   const { phase, run, error, reused, submit, reset } = useDesignerRun(projectId, pollMs);
@@ -196,13 +207,19 @@ export function Designer({
   const showForeignProposal =
     phase === 'succeeded' && runContentId !== null && !targetsOpenDocument && proposal !== null;
 
+  // R5.5.3: an actionable edit review is open while the succeeded proposal for
+  // the open document has not been rejected. The shell mirrors this to hold
+  // navigation, so a mode switch cannot silently discard the review; clear the
+  // hold when this surface unmounts for any reason. Creation-mode and
+  // foreign-document proposals stay proposal-only and never hold navigation.
+  const reviewOpen = showEditReview && applyState !== 'rejected';
+  useEffect(() => {
+    onReviewOpenChange?.(reviewOpen);
+  }, [reviewOpen, onReviewOpenChange]);
+  useEffect(() => () => onReviewOpenChange?.(false), [onReviewOpenChange]);
+
   return (
     <div className="flex flex-col gap-6">
-      <PageHeader
-        title="Designer"
-        description="Create a new document or change the one you have open. The Designer runs in the background and returns a reviewable proposal; edit proposals are only written when you explicitly apply them."
-      />
-
       <section className="rounded-[10px] border bg-card p-4">
         <fieldset disabled={busy}>
           <legend className="text-sm font-medium">Mode</legend>

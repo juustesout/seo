@@ -144,30 +144,34 @@ function WorkspaceBody({
 
   const activeMode = normalizeWorkspaceMode(mode);
   // The shared header is the one workspace chrome layer. It is meaningful while
-  // a ready, editable document is open, so both the Editor and Composer modes
-  // show it (R5.4.6); Composer suppresses its own page header in favour of this
-  // one. Designer is bound to the open document (R5.5.1) but gains the shared
-  // chrome in R5.5.3.
-  const showChrome = (activeMode === 'editor' || activeMode === 'composer') && lifecycle.status === 'ready' && canEdit;
+  // a ready, editable document is open, so the Editor, Composer and Designer
+  // modes all show it (R5.4.6, R5.5.3); each body suppresses its own page header
+  // in favour of this one.
+  const showChrome = lifecycle.status === 'ready' && canEdit;
   // Editor-canvas controls (Insert/Preview) only act on the mounted editor, so
-  // they are hidden while Composer is the active mode.
+  // they are hidden while Composer or Designer is the active mode.
   const showCanvasControls = activeMode === 'editor';
 
-  // R5.4.6: a navigation hold while Composer has an open review. This is not a
-  // second navigation state machine - it only mirrors whether Composer's own
-  // review is open so the switcher cannot silently discard it. The review batch
-  // stays owned by Composer; this flag carries no review data.
+  // R5.4.6 / R5.5.3: a navigation hold while Composer or Designer has an open
+  // review. This is not a second navigation state machine - it only mirrors
+  // whether the body's own review is open so the switcher cannot silently
+  // discard it. The review stays owned by the body; this flag carries no data.
   const [composerReviewOpen, setComposerReviewOpen] = useState(false);
+  const [designerReviewOpen, setDesignerReviewOpen] = useState(false);
 
   /**
-   * Single navigation entry for the workspace switcher. When Composer has an
-   * open review, leaving the mode is refused with the reason rather than
+   * Single navigation entry for the workspace switcher. When the active body has
+   * an open review, leaving the mode is refused with the reason rather than
    * silently unmounting the review; the user cancels or applies first.
    */
   const requestMode = (next: WorkspaceMode) => {
     if (next === activeMode) return;
     if (activeMode === 'composer' && composerReviewOpen) {
       ws.setErr('Finish or cancel the composition review before leaving Composer.');
+      return;
+    }
+    if (activeMode === 'designer' && designerReviewOpen) {
+      ws.setErr('Finish or cancel the Designer review before leaving Designer.');
       return;
     }
     // A successful mode change is a navigation: drop any stale banner so a
@@ -400,7 +404,9 @@ function WorkspaceBody({
           onReviewOpenChange={setComposerReviewOpen}
         />
       )}
-      {activeMode === 'designer' && <DesignerMode onApplyProposal={applyDesignerProposal} />}
+      {activeMode === 'designer' && (
+        <DesignerMode onApplyProposal={applyDesignerProposal} onReviewOpenChange={setDesignerReviewOpen} />
+      )}
     </div>
   );
 }
