@@ -1,7 +1,8 @@
 /**
- * R5.3.2: `WorkspaceChrome` owns the workspace-level document header (including
- * its save indicator), the save-failure status and the assistant entry. It
- * reads the shared session and reports toggles upward; it owns no session state.
+ * R5.3.2/R5.3.3: `WorkspaceChrome` owns the shared, workspace-level document
+ * header (including its save indicator) and the save-failure status. It reads
+ * the shared session and reports toggles upward; it owns no session state and no
+ * editor-coupled chrome (the assistant entry lives in `EditorMode`).
  */
 import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
@@ -43,21 +44,11 @@ function renderChrome(session: WorkspaceSessionValue, props: Partial<React.Compo
   const handlers = {
     onTogglePreview: vi.fn(),
     onToggleRail: vi.fn(),
-    onAssistantOpenChange: vi.fn(),
-    onRevealInsertion: vi.fn(),
     onBack: vi.fn(),
   };
   render(
     <WorkspaceSessionProvider value={session}>
-      <WorkspaceChrome
-        previewOpen={false}
-        railOpen={false}
-        assistantOpen={false}
-        assistantConfigured
-        assistantBusy={false}
-        {...handlers}
-        {...props}
-      />
+      <WorkspaceChrome previewOpen={false} railOpen={false} {...handlers} {...props} />
     </WorkspaceSessionProvider>,
   );
   return handlers;
@@ -80,11 +71,10 @@ describe('WorkspaceChrome', () => {
     expect(handlers.onBack).toHaveBeenCalledTimes(1);
   });
 
-  it('renders the assistant entry and opens it through the shell handler', () => {
-    const handlers = renderChrome(makeSession());
-    expect(screen.getByTestId('inline-assistant')).toBeTruthy();
-    fireEvent.click(screen.getByTestId('embedded-agent-open'));
-    expect(handlers.onAssistantOpenChange).toHaveBeenCalledWith(true);
+  it('renders no assistant entry (it is editor-mode-owned)', () => {
+    renderChrome(makeSession());
+    expect(screen.queryByTestId('inline-assistant')).toBeNull();
+    expect(screen.queryByTestId('embedded-agent-open')).toBeNull();
   });
 
   it('surfaces save failure as workspace status', () => {

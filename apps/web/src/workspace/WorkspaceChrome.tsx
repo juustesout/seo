@@ -1,23 +1,24 @@
 /**
- * Workspace-level chrome for the unified shell (R5.3.2).
+ * Shared workspace chrome for the unified shell (R5.3.2/R5.3.3).
  *
- * Rendered by `ProjectWorkspaceShell` above the active mode, it owns the three
+ * Rendered by `ProjectWorkspaceShell` above the active mode, it owns the
  * elements that belong to the workspace rather than to a single mode:
  *
  * - `DocumentHeader`: the document title/status and its action cluster. The
  *   save indicator/status lives inside this header as the `document-save-state`
  *   badge, so it moves with it; the save-failure banner is rendered here too.
- * - the assistant entry (`InlineAssistantSlot` + `EmbeddedAgentEntry`).
+ *
+ * The editor-coupled assistant entry does NOT live here: it needs
+ * `useEditorContext`/`useEditorSelection`, so it is rendered by `EditorMode`
+ * only while the editor mode is active (R5.3.3). This keeps Composer/Designer
+ * from paying for editor infrastructure.
  *
  * It introduces no state of its own: the document session comes from
- * `useWorkspaceSessionContext`, and the small open/toggle booleans come from the
- * shell (document-scoped). This keeps exactly one session, autosave, lifecycle
- * and assistant owner.
+ * `useWorkspaceSessionContext`, and the preview/rail toggles come from the
+ * shell (document-scoped).
  */
 import { docWordCount } from '@seo/contracts';
 import { DocumentHeader } from '../components/content/workspace/DocumentHeader';
-import { EmbeddedAgentEntry } from '../components/content/workspace/EmbeddedAgentEntry';
-import { InlineAssistantSlot } from '../components/content/workspace/InlineAssistantSlot';
 import { useWorkspaceSessionContext } from './workspaceSession';
 
 export interface WorkspaceChromeProps {
@@ -25,11 +26,6 @@ export interface WorkspaceChromeProps {
   onTogglePreview: () => void;
   railOpen: boolean;
   onToggleRail: () => void;
-  assistantOpen: boolean;
-  onAssistantOpenChange: (open: boolean) => void;
-  assistantConfigured: boolean;
-  assistantBusy: boolean;
-  onRevealInsertion: () => void;
   onBack: () => void;
   onOpenCalendar?: () => void;
   onOpenPublications?: (contentId: string) => void;
@@ -40,11 +36,6 @@ export function WorkspaceChrome({
   onTogglePreview,
   railOpen,
   onToggleRail,
-  assistantOpen,
-  onAssistantOpenChange,
-  assistantConfigured,
-  assistantBusy,
-  onRevealInsertion,
   onBack,
   onOpenCalendar,
   onOpenPublications,
@@ -96,16 +87,6 @@ export function WorkspaceChrome({
           Could not save your changes. Check your connection and press Save to retry.
         </div>
       )}
-      <InlineAssistantSlot configured={assistantConfigured} busy={assistantBusy}>
-        <EmbeddedAgentEntry
-          open={assistantOpen}
-          onOpenChange={onAssistantOpenChange}
-          canEdit={canEdit}
-          configured={assistantConfigured}
-          onSaveNow={auto.saveNow}
-          onRevealInsertion={onRevealInsertion}
-        />
-      </InlineAssistantSlot>
     </div>
   );
 }
