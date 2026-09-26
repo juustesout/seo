@@ -449,6 +449,43 @@ export function embeddedAgentOutcomeFromRun(run: AgentRun): EmbeddedAgentOutcome
 }
 
 /**
+ * Maps a normalized outcome to the surface state machine. One place so the
+ * submission path and the polling path cannot drift; the instruction text is
+ * carried through unchanged.
+ */
+export function embeddedAgentStateFromOutcome(
+  outcome: EmbeddedAgentOutcome,
+  instruction: string,
+): EmbeddedAgentState {
+  switch (outcome.kind) {
+    case 'working':
+      return { status: 'working', instruction, message: outcome.message };
+    case 'completed':
+      return { status: 'completed', instruction, message: outcome.message };
+    case 'insertion':
+      return { status: 'insertion', instruction, message: outcome.message, operation: outcome.operation };
+    case 'operations':
+      return { status: 'operations', instruction, message: outcome.message, operations: outcome.operations };
+    case 'generation_required':
+      return {
+        status: 'generation',
+        instruction,
+        message: outcome.message,
+        provider: outcome.provider,
+        model: outcome.model,
+      };
+    case 'empty':
+      return { status: 'empty', instruction, message: outcome.message };
+    case 'clarification':
+      return { status: 'clarification', instruction, message: outcome.message };
+    case 'unsupported':
+      return { status: 'unsupported', instruction, message: outcome.message };
+    case 'error':
+      return { status: 'error', instruction, message: outcome.message, canRetry: outcome.canRetry };
+  }
+}
+
+/**
  * Maps a submission or polling failure to a product outcome. Server messages are
  * not shown (see the note above); the typed error drives the copy and the
  * retryability. Authorization and not-found failures are not retryable.
