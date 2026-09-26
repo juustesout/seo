@@ -27,7 +27,6 @@ import {
   Search,
   Send,
   Settings,
-  Sparkles,
 } from 'lucide-react';
 import { supabase, configured as supabaseConfigured, currentUser, sessionToken } from './lib/supabase';
 import { api } from './lib/api';
@@ -42,10 +41,9 @@ import { Knowledge } from './views/Knowledge';
 import { Publishing } from './views/Publishing';
 import { ContentSchedule } from './views/ContentSchedule';
 import { Publications } from './views/Publications';
-import { Compose } from './views/Compose';
 import { ProjectWorkspaceShell, normalizeWorkspaceMode } from './workspace';
 import { openProjectView } from './lib/nav';
-import { parseRoute, routePath, type Route, type TopArea } from './lib/projectRoute';
+import { canonicalWorkspaceRoute, parseRoute, routePath, type Route, type TopArea } from './lib/projectRoute';
 import { DesignSystemProvider } from './lib/designSystem';
 import { Overview } from './views/Overview';
 import { AccountIntegrations } from './views/AccountIntegrations';
@@ -75,7 +73,6 @@ type NavIcon = React.ComponentType<{ className?: string }>;
 const TOP_NAV: Array<{ id: TopArea; label: string; icon: NavIcon }> = [
   { id: 'overview', label: 'Overview', icon: LayoutDashboard },
   { id: 'projects', label: 'Projects', icon: FolderKanban },
-  { id: 'compose', label: 'Compose', icon: Sparkles },
   { id: 'integrations', label: 'Integrations', icon: Plug },
   { id: 'keys', label: 'API keys', icon: KeyRound },
 ];
@@ -147,6 +144,23 @@ export function App() {
     });
     return () => sub.subscription.unsubscribe();
   }, []);
+
+  // R5.4.7: retired Composer/editor entry points resolve to the canonical
+  // workspace route instead of rendering a second implementation. The account
+  // `/compose` area lands on the first project's workspace Composer; the former
+  // `content`/`compose` project views land on their workspace equivalents.
+  // `replaceState` keeps the back button from bouncing between the two URLs.
+  useEffect(() => {
+    const target =
+      route.area === 'compose'
+        ? me?.projects[0]
+          ? { area: 'project' as const, projectId: me.projects[0].id, view: 'workspace', sub: 'composer', sub2: null, search: '' }
+          : null
+        : canonicalWorkspaceRoute(route);
+    if (!target) return;
+    window.history.replaceState({}, '', routePath(target));
+    setRoute(target);
+  }, [route, me]);
 
   const goArea = (area: TopArea) => {
     const r: Route = { area };
@@ -265,19 +279,13 @@ export function App() {
     const pid = project.id;
     const view = route.view;
     // The unified workspace shell owns one document session across the three
-    // modes. Its canonical route is `/p/:id/workspace/:mode`; the former
-    // `content`, `compose` and `designer` views remain as compatibility entry
-    // points that render the same shell with the mapped mode.
-    const workspaceActive = view === 'workspace' || view === 'content' || view === 'compose' || view === 'designer';
-    const workspaceMode =
-      view === 'workspace'
-        ? normalizeWorkspaceMode(route.sub)
-        : view === 'compose'
-          ? 'composer'
-          : view === 'designer'
-            ? 'designer'
-            : 'editor';
-    const workspaceContentId = view === 'workspace' ? route.sub2 : view === 'content' ? route.sub : null;
+    // modes. Its canonical route is `/p/:id/workspace/:mode`. R5.4.7: the former
+    // `content`/`compose` views no longer render a second implementation; they
+    // redirect to the canonical workspace route (see the redirect effect), and
+    // only `workspace` and the not-yet-retired `designer` view mount the shell.
+    const workspaceActive = view === 'workspace' || view === 'designer';
+    const workspaceMode = view === 'workspace' ? normalizeWorkspaceMode(route.sub) : 'designer';
+    const workspaceContentId = view === 'workspace' ? route.sub2 : null;
     return (
       <DesignSystemProvider projectId={pid}>
         <div className="flex min-h-screen flex-col">
@@ -307,6 +315,9 @@ export function App() {
                   }
                 />
               )}
+              {(view === 'content' || view === 'compose') && (
+                <p className="text-sm text-muted-foreground">Opening the workspace...</p>
+              )}
               {workspaceActive && (
                 <ProjectWorkspaceShell
                   projectId={pid}
@@ -329,8 +340,6 @@ export function App() {
     );
   }
 
-  const composeProject = route.area === 'compose' ? me.projects[0] ?? null : null;
-
   return (
     <div className="flex min-h-screen flex-col">
       <AppHeader
@@ -345,15 +354,7 @@ export function App() {
       <main className="mx-auto w-full max-w-5xl flex-1 px-6 py-6">
         {route.area === 'overview' && <Overview onOpenProject={goProject} onGoProjects={() => goArea('projects')} />}
         {route.area === 'projects' && <ProjectsPage onOpenProject={goProject} />}
-        {route.area === 'compose' && composeProject && (
-          <DesignSystemProvider projectId={composeProject.id}>
-            <Compose
-              projectId={composeProject.id}
-              role={composeProject.role}
-              onOpenEditor={(contentId) => goProject(composeProject.id, 'workspace', 'editor', contentId)}
-            />
-          </DesignSystemProvider>
-        )}
+        {route.area === 'compose' && <p className="text-sm text-muted-foreground">Opening the workspace Composer...</p>}
         {route.area === 'integrations' && <AccountIntegrations onOpenProject={goProject} />}
         {route.area === 'keys' && <AccountApiKeys />}
       </main>

@@ -483,8 +483,8 @@ describe('Compose -> current document append affordance', () => {
     await waitFor(() => expect(onReviewOpenChange).toHaveBeenLastCalledWith(false));
   });
 
-  it('suppresses its own page header when mounted in the workspace shell', () => {
-    render(<Compose projectId={PROJECT} role="editor" showHeader={false} />);
+  it('renders no page header of its own; the workspace shell owns the chrome', () => {
+    render(<Compose projectId={PROJECT} role="editor" />);
     expect(screen.queryByRole('heading', { name: 'Compose' })).toBeNull();
     expect(screen.getByLabelText('What do you want to create?')).toBeTruthy();
   });

@@ -26,10 +26,11 @@
  * isolation guarantee is preserved.
  *
  * R5.4.6: the workspace is the single chrome/navigation layer. This boundary
- * hides Composer's own page header (`showHeader={false}`) because the shell's
- * document header already anchors the current document, and it reports whether a
- * review is open so the shell can refuse a mode switch that would silently
- * discard it. Neither change gives Composer a second document identity.
+ * does not give Composer its own page header (the shell's document header
+ * anchors the current document), and it reports whether a review is open so the
+ * shell can refuse a mode switch that would silently discard it. Neither change
+ * gives Composer a second document identity. R5.4.7 removed the standalone
+ * `/compose` surface, so this is the only way Composer is mounted.
  */
 import { useCallback, useEffect, useRef } from 'react';
 import type { CanonicalDocument, CompositionOperationBatch } from '@seo/contracts';
@@ -112,7 +113,6 @@ export function ComposerMode({
         onAppendToDocument={onAppendToDocument}
         canAppendToDocument={canAppendToDocument}
         onReviewOpenChange={onReviewOpenChange}
-        showHeader={false}
       />
     </div>
   );

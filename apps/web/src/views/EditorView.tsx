@@ -1,10 +1,11 @@
 /**
  * Editor mode of the unified workspace shell (R5.3.1).
  *
- * This is the R5.2 Content Studio editor orchestration, extracted from
- * `views/Content.tsx`. It no longer owns the document session, loader,
- * lifecycle, autosave or the live document fields - the shell owns those and
- * this view reads them through `useWorkspaceSessionContext`. Since R5.3.2 the
+ * This is the R5.2 Content Studio editor orchestration, extracted from the
+ * former `views/Content.tsx` wrapper (removed in R5.4.7). It no longer owns the
+ * document session, loader, lifecycle, autosave or the live document fields - the
+ * shell owns those and this view reads them through
+ * `useWorkspaceSessionContext`. Since R5.3.2 the
  * workspace chrome (document header, save status, assistant entry) and the
  * editor instance + editor context providers also live in the shell; this view
  * owns only editor-specific concerns: the list, inline AI state, the writer

@@ -7,9 +7,10 @@
  * and the single `useAutosave`, plus the live document fields those modes edit.
  * Modes read it through `useWorkspaceSession`; none of them keeps a second copy.
  *
- * This is the R5.2 session ownership lifted out of `views/Content.tsx` so the
- * Editor, Composer and Designer modes of the workspace share one document. It
- * creates no new identity, revision or autosave: it only relocates the owners.
+ * This is the R5.2 session ownership lifted out of the former `views/Content.tsx`
+ * wrapper (removed in R5.4.7) so the Editor, Composer and Designer modes of the
+ * workspace share one document. It creates no new identity, revision or autosave:
+ * it only relocates the owners.
  */
 import { createContext, useContext, useEffect, useMemo, useRef, useState, type Dispatch, type MutableRefObject, type ReactNode, type SetStateAction } from 'react';
 import { asTipDoc, tiptapEmptyDoc, type TipDoc } from '@seo/contracts';

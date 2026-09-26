@@ -29,7 +29,6 @@ import { ApiRequestError, api } from '../lib/api';
 import { CanonicalRenderer } from '../components/canonicalRenderer';
 import { CompositionReviewDialog } from './CompositionReviewDialog';
 import { editorDraftFromCanonical } from '../components/content/editorDraft';
-import { PageHeader } from '@/components/ui/page-header';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/utils';
@@ -94,7 +93,6 @@ export function Compose({
   onAppendToDocument,
   canAppendToDocument = false,
   onReviewOpenChange,
-  showHeader = true,
 }: {
   projectId: string;
   role?: string;
@@ -103,8 +101,8 @@ export function Compose({
    * Optional guard supplied by the workspace when Composer runs inside the
    * shell. It captures the shared document boundary at the moment the handoff
    * task starts and reports whether that boundary has since moved, so a stale
-   * creation result cannot switch the workspace to an obsolete draft. Omitted
-   * for the legacy standalone Composer, where the handoff is immediate.
+   * creation result cannot switch the workspace to an obsolete draft. Omitted by
+   * callers that do not need the guard, where the handoff is immediate.
    */
   beginHandoff?: () => { isStale: () => boolean };
   /**
@@ -130,13 +128,6 @@ export function Compose({
    * never leaves this component.
    */
   onReviewOpenChange?: (open: boolean) => void;
-  /**
-   * Whether to render this surface's own page header. The standalone legacy
-   * Composer (`/compose`) owns its header; while mounted in the workspace shell
-   * the shared workspace chrome is the single top layer, so the shell passes
-   * false (R5.4.6).
-   */
-  showHeader?: boolean;
 }) {
   const canEdit = (ROLE_RANK[role] ?? 0) >= 1;
   const [brief, setBrief] = useState(DEFAULT_BRIEF);
@@ -280,13 +271,6 @@ export function Compose({
 
   return (
     <div className="flex flex-col gap-6">
-      {showHeader && (
-        <PageHeader
-          title="Compose"
-          description="Turn a brief into a composition plan, let the writer fill its slots and preview the compiled page. Uses the project's configured AI; nothing is saved."
-        />
-      )}
-
       <section className="rounded-[10px] border bg-card p-4">
         <label className="text-sm font-medium" htmlFor="compose-brief">
           What do you want to create?
