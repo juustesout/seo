@@ -67,7 +67,19 @@ describe('ProjectWorkspaceShell chrome integration', () => {
     expect(screen.getByTestId('editor-workspace')).toBeTruthy();
   });
 
-  it('removes the chrome when the mode is not the editor', async () => {
+  it('keeps the shared document chrome in composer mode without editor canvas controls', async () => {
+    render(<Harness />);
+    await openDocument();
+    fireEvent.click(screen.getByTestId('workspace-mode-composer'));
+    expect(screen.getByTestId('document-header')).toBeTruthy();
+    expect(screen.getByTestId('document-save-state')).toBeTruthy();
+    // Insert/Preview act on the editor canvas, which is not mounted here.
+    expect(screen.queryByRole('button', { name: 'Insert' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Preview' })).toBeNull();
+    expect(screen.queryByTestId('editor-workspace')).toBeNull();
+  });
+
+  it('removes the chrome when the mode is designer', async () => {
     render(<Harness />);
     await openDocument();
     fireEvent.click(screen.getByTestId('workspace-mode-designer'));

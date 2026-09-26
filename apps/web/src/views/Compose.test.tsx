@@ -457,4 +457,35 @@ describe('Compose -> current document append affordance', () => {
 
     expect(screen.queryByTestId('compose-append-current')).toBeNull();
   });
+
+  it('reports the review open/closed state to the workspace shell', async () => {
+    const flow = mockComposeFlow();
+    generateFilled(flow);
+    const onReviewOpenChange = vi.fn();
+    render(
+      <Compose
+        projectId={PROJECT}
+        role="editor"
+        onAppendToDocument={vi.fn()}
+        canAppendToDocument
+        onReviewOpenChange={onReviewOpenChange}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Generate composition' }));
+    await screen.findByText('copy for hero.title');
+    expect(onReviewOpenChange).toHaveBeenLastCalledWith(false);
+
+    fireEvent.click(screen.getByTestId('compose-append-current'));
+    await waitFor(() => expect(onReviewOpenChange).toHaveBeenLastCalledWith(true));
+
+    fireEvent.click(screen.getByTestId('composition-review-cancel'));
+    await waitFor(() => expect(onReviewOpenChange).toHaveBeenLastCalledWith(false));
+  });
+
+  it('suppresses its own page header when mounted in the workspace shell', () => {
+    render(<Compose projectId={PROJECT} role="editor" showHeader={false} />);
+    expect(screen.queryByRole('heading', { name: 'Compose' })).toBeNull();
+    expect(screen.getByLabelText('What do you want to create?')).toBeTruthy();
+  });
 });

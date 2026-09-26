@@ -134,10 +134,38 @@ function WorkspaceBody({
   );
 
   const activeMode = normalizeWorkspaceMode(mode);
-  // The shared header is meaningful only while the editor mode owns a ready,
-  // editable document; Composer/Designer are still legacy bodies with their own
-  // headers (R5.4/R5.5 converge them onto the shared document).
-  const showChrome = activeMode === 'editor' && lifecycle.status === 'ready' && canEdit;
+  // The shared header is the one workspace chrome layer. It is meaningful while
+  // a ready, editable document is open, so both the Editor and Composer modes
+  // show it (R5.4.6); Composer suppresses its own page header in favour of this
+  // one. Designer remains a legacy body until R5.5.
+  const showChrome = (activeMode === 'editor' || activeMode === 'composer') && lifecycle.status === 'ready' && canEdit;
+  // Editor-canvas controls (Insert/Preview) only act on the mounted editor, so
+  // they are hidden while Composer is the active mode.
+  const showCanvasControls = activeMode === 'editor';
+
+  // R5.4.6: a navigation hold while Composer has an open review. This is not a
+  // second navigation state machine - it only mirrors whether Composer's own
+  // review is open so the switcher cannot silently discard it. The review batch
+  // stays owned by Composer; this flag carries no review data.
+  const [composerReviewOpen, setComposerReviewOpen] = useState(false);
+
+  /**
+   * Single navigation entry for the workspace switcher. When Composer has an
+   * open review, leaving the mode is refused with the reason rather than
+   * silently unmounting the review; the user cancels or applies first.
+   */
+  const requestMode = (next: WorkspaceMode) => {
+    if (next === activeMode) return;
+    if (activeMode === 'composer' && composerReviewOpen) {
+      ws.setErr('Finish or cancel the composition review before leaving Composer.');
+      return;
+    }
+    // A successful mode change is a navigation: drop any stale banner so a
+    // refusal message does not follow the user into the destination mode.
+    ws.setErr(null);
+    ws.setNotice(null);
+    onModeChange?.(next);
+  };
 
   /**
    * Cross the shared save barrier, then apply the destination state. Nothing
@@ -278,7 +306,7 @@ function WorkspaceBody({
 
   return (
     <div className="grid gap-4">
-      <WorkspaceModeSwitcher mode={activeMode} onChange={onModeChange} />
+      <WorkspaceModeSwitcher mode={activeMode} onChange={onModeChange ? requestMode : undefined} />
       {showChrome && (
         <WorkspaceChrome
           previewOpen={previewOpen}
@@ -288,6 +316,7 @@ function WorkspaceBody({
           onBack={goList}
           onOpenCalendar={onOpenCalendar}
           onOpenPublications={onOpenPublications}
+          showCanvasControls={showCanvasControls}
         />
       )}
       {activeMode === 'editor' && (
@@ -312,6 +341,7 @@ function WorkspaceBody({
           canApplyToDocument={canApplyComposition}
           onAppendToDocument={appendComposition}
           canAppendToDocument={canAppendComposition}
+          onReviewOpenChange={setComposerReviewOpen}
         />
       )}
       {activeMode === 'designer' && <Designer projectId={projectId} role={role} />}

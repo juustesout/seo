@@ -15,7 +15,7 @@
  * Editor" creates a persistent Content Studio draft from the current
  * CanonicalDocument (no second AI call, no new persistence layer).
  */
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   COMPOSITION_PLAN_FORMAT_IDS,
   composeOperationBatch,
@@ -93,6 +93,8 @@ export function Compose({
   canApplyToDocument = false,
   onAppendToDocument,
   canAppendToDocument = false,
+  onReviewOpenChange,
+  showHeader = true,
 }: {
   projectId: string;
   role?: string;
@@ -121,6 +123,20 @@ export function Compose({
   onAppendToDocument?: (batch: CompositionOperationBatch) => void;
   /** Whether the open shared document is an eligible (non-empty) append target. */
   canAppendToDocument?: boolean;
+  /**
+   * Reports whether an operation-batch review is currently open (R5.4.6). When
+   * Composer runs inside the workspace shell this lets the shell hold navigation
+   * so a mode switch cannot silently discard the review. The review data itself
+   * never leaves this component.
+   */
+  onReviewOpenChange?: (open: boolean) => void;
+  /**
+   * Whether to render this surface's own page header. The standalone legacy
+   * Composer (`/compose`) owns its header; while mounted in the workspace shell
+   * the shared workspace chrome is the single top layer, so the shell passes
+   * false (R5.4.6).
+   */
+  showHeader?: boolean;
 }) {
   const canEdit = (ROLE_RANK[role] ?? 0) >= 1;
   const [brief, setBrief] = useState(DEFAULT_BRIEF);
@@ -150,6 +166,13 @@ export function Compose({
     () => (document ? composeOperationBatch(document, plan ?? undefined) : null),
     [document, plan],
   );
+
+  // R5.4.6: tell the workspace shell when a review is open so it can hold
+  // navigation; clear the hold when this surface unmounts for any reason.
+  useEffect(() => {
+    onReviewOpenChange?.(review !== null);
+  }, [review, onReviewOpenChange]);
+  useEffect(() => () => onReviewOpenChange?.(false), [onReviewOpenChange]);
 
   const busy = phase === 'planning' || phase === 'writing';
   const buttonLabel = phase === 'planning' ? 'Planning…' : phase === 'writing' ? 'Writing…' : 'Generate composition';
@@ -257,10 +280,12 @@ export function Compose({
 
   return (
     <div className="flex flex-col gap-6">
-      <PageHeader
-        title="Compose"
-        description="Turn a brief into a composition plan, let the writer fill its slots and preview the compiled page. Uses the project's configured AI; nothing is saved."
-      />
+      {showHeader && (
+        <PageHeader
+          title="Compose"
+          description="Turn a brief into a composition plan, let the writer fill its slots and preview the compiled page. Uses the project's configured AI; nothing is saved."
+        />
+      )}
 
       <section className="rounded-[10px] border bg-card p-4">
         <label className="text-sm font-medium" htmlFor="compose-brief">

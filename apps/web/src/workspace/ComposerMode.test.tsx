@@ -51,7 +51,9 @@ describe('ComposerMode', () => {
   it('renders the existing Composer surface and mounts no editor infrastructure', () => {
     apiMock.api.mockReset();
     const { container } = renderComposer(sessionStub());
-    expect(screen.getByRole('heading', { name: 'Compose' })).toBeTruthy();
+    // R5.4.6: the shell owns the workspace chrome, so the Composer surface no
+    // longer renders its own page header; the brief still identifies it.
+    expect(screen.queryByRole('heading', { name: 'Compose' })).toBeNull();
     expect(screen.getByLabelText('What do you want to create?')).toBeTruthy();
     expect(container.querySelector('.ProseMirror')).toBeNull();
     expect(screen.queryByTestId('editor-workspace')).toBeNull();

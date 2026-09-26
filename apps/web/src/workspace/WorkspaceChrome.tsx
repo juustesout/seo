@@ -29,6 +29,12 @@ export interface WorkspaceChromeProps {
   onBack: () => void;
   onOpenCalendar?: () => void;
   onOpenPublications?: (contentId: string) => void;
+  /**
+   * Whether to show the editor-canvas controls (Insert, Preview). The shell
+   * passes false while Composer is active, so the shared document header stays
+   * present without exposing editor-only controls. Defaults to true.
+   */
+  showCanvasControls?: boolean;
 }
 
 export function WorkspaceChrome({
@@ -39,6 +45,7 @@ export function WorkspaceChrome({
   onBack,
   onOpenCalendar,
   onOpenPublications,
+  showCanvasControls = true,
 }: WorkspaceChromeProps) {
   const {
     canEdit,
@@ -81,6 +88,7 @@ export function WorkspaceChrome({
         onTogglePreview={onTogglePreview}
         railOpen={railOpen}
         onToggleRail={onToggleRail}
+        showCanvasControls={showCanvasControls}
       />
       {auto.status === 'failed' && (
         <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">

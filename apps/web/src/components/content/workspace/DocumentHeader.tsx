@@ -43,6 +43,12 @@ export interface DocumentHeaderProps {
   onTogglePreview: () => void;
   railOpen: boolean;
   onToggleRail: () => void;
+  /**
+   * Whether to render the editor-canvas controls (Insert rail, Preview). These
+   * only act on the mounted editor, so non-editor workspace modes (Composer)
+   * hide them while still showing the same document header. Defaults to true.
+   */
+  showCanvasControls?: boolean;
 }
 
 const STATUSES = ['draft', 'in_review', 'published', 'archived'];
@@ -68,6 +74,7 @@ export function DocumentHeader({
   onTogglePreview,
   railOpen,
   onToggleRail,
+  showCanvasControls = true,
 }: DocumentHeaderProps) {
   const saveVariant =
     saveState === 'saving' ? 'warning' : saveState === 'failed' ? 'destructive' : saveState === 'saved' ? 'success' : 'outline';
@@ -95,26 +102,30 @@ export function DocumentHeader({
           </Badge>
         </div>
         <div className="flex flex-wrap items-center gap-1.5">
-          {canEdit && (
-            <Button
-              variant={railOpen ? 'secondary' : 'outline'}
-              size="sm"
-              aria-pressed={railOpen}
-              onClick={onToggleRail}
-              title="Insert a composition element into the document"
-            >
-              Insert
-            </Button>
+          {showCanvasControls && (
+            <>
+              {canEdit && (
+                <Button
+                  variant={railOpen ? 'secondary' : 'outline'}
+                  size="sm"
+                  aria-pressed={railOpen}
+                  onClick={onToggleRail}
+                  title="Insert a composition element into the document"
+                >
+                  Insert
+                </Button>
+              )}
+              <Button
+                variant={previewOpen ? 'secondary' : 'outline'}
+                size="sm"
+                aria-pressed={previewOpen}
+                onClick={onTogglePreview}
+                title="Preview the rendered document without leaving the editor"
+              >
+                {previewOpen ? 'Editing' : 'Preview'}
+              </Button>
+            </>
           )}
-          <Button
-            variant={previewOpen ? 'secondary' : 'outline'}
-            size="sm"
-            aria-pressed={previewOpen}
-            onClick={onTogglePreview}
-            title="Preview the rendered document without leaving the editor"
-          >
-            {previewOpen ? 'Editing' : 'Preview'}
-          </Button>
           <Button variant="outline" size="sm" disabled={!canEdit || busy} onClick={onSaveNow}>
             Save
           </Button>

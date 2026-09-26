@@ -24,6 +24,12 @@
  * It mounts no editor infrastructure (no Tiptap, `EditorContextProvider`,
  * `EditorSelectionProvider`, editor keymap or editor AI state), so the R5.3.3
  * isolation guarantee is preserved.
+ *
+ * R5.4.6: the workspace is the single chrome/navigation layer. This boundary
+ * hides Composer's own page header (`showHeader={false}`) because the shell's
+ * document header already anchors the current document, and it reports whether a
+ * review is open so the shell can refuse a mode switch that would silently
+ * discard it. Neither change gives Composer a second document identity.
  */
 import { useCallback, useEffect, useRef } from 'react';
 import type { CanonicalDocument, CompositionOperationBatch } from '@seo/contracts';
@@ -54,6 +60,12 @@ export interface ComposerModeProps {
   onAppendToDocument?: (batch: CompositionOperationBatch) => void;
   /** True while the open shared document is an eligible (non-empty) append target. */
   canAppendToDocument?: boolean;
+  /**
+   * Reports whether Composer currently has an open review (R5.4.6). The shell
+   * uses it as a navigation hold so a mode switch cannot silently discard the
+   * review; no review data crosses this boundary.
+   */
+  onReviewOpenChange?: (open: boolean) => void;
 }
 
 export function ComposerMode({
@@ -62,6 +74,7 @@ export function ComposerMode({
   canApplyToDocument = false,
   onAppendToDocument,
   canAppendToDocument = false,
+  onReviewOpenChange,
 }: ComposerModeProps) {
   const { projectId, role, session, err } = useWorkspaceSessionContext();
 
@@ -98,6 +111,8 @@ export function ComposerMode({
         canApplyToDocument={canApplyToDocument}
         onAppendToDocument={onAppendToDocument}
         canAppendToDocument={canAppendToDocument}
+        onReviewOpenChange={onReviewOpenChange}
+        showHeader={false}
       />
     </div>
   );
