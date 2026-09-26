@@ -77,6 +77,8 @@ export function Compose({
   beginHandoff,
   onApplyToDocument,
   canApplyToDocument = false,
+  onAppendToDocument,
+  canAppendToDocument = false,
 }: {
   projectId: string;
   role?: string;
@@ -97,6 +99,14 @@ export function Compose({
   onApplyToDocument?: (document: CanonicalDocument) => void;
   /** Whether the open shared document is an eligible (empty) apply target. */
   canApplyToDocument?: boolean;
+  /**
+   * Appends the representable parts of the current run to the open workspace
+   * document instead of creating a new draft (R5.4.3.4). Only supplied by the
+   * shell, and only usable while that document has content.
+   */
+  onAppendToDocument?: (document: CanonicalDocument) => void;
+  /** Whether the open shared document is an eligible (non-empty) append target. */
+  canAppendToDocument?: boolean;
 }) {
   const canEdit = (ROLE_RANK[role] ?? 0) >= 1;
   const [brief, setBrief] = useState(DEFAULT_BRIEF);
@@ -287,7 +297,7 @@ export function Compose({
           </div>
         )}
 
-        {document && tab === 'preview' && canEdit && (onOpenEditor || onApplyToDocument) && (
+        {document && tab === 'preview' && canEdit && (onOpenEditor || onApplyToDocument || onAppendToDocument) && (
           <div className="flex flex-wrap items-center gap-3">
             {onOpenEditor && (
               <Button type="button" onClick={() => void openInEditor()} disabled={creating}>
@@ -305,20 +315,38 @@ export function Compose({
                 Apply to current document
               </Button>
             )}
+            {onAppendToDocument && (
+              <Button
+                type="button"
+                variant="outline"
+                data-testid="compose-append-current"
+                onClick={() => onAppendToDocument(document)}
+                disabled={!canAppendToDocument}
+              >
+                Add to current document
+              </Button>
+            )}
             <span className="text-xs text-muted-foreground">
-              {onApplyToDocument && canApplyToDocument
-                ? 'Replaces the open empty document with this composition. Review it before applying; it is not saved until autosave runs.'
-                : 'Creates a draft in Content Studio from this run. Generating stays preview-only until you do this.'}
+              {onAppendToDocument && canAppendToDocument
+                ? 'Adds the parts of this run the editor can represent to the open document; unsupported parts are reported and left out.'
+                : onApplyToDocument && canApplyToDocument
+                  ? 'Replaces the open empty document with this composition. Review it before applying; it is not saved until autosave runs.'
+                  : 'Creates a draft in Content Studio from this run. Generating stays preview-only until you do this.'}
             </span>
           </div>
         )}
 
-        {document && tab === 'preview' && canEdit && onApplyToDocument && !canApplyToDocument && (
-          <p className="text-xs text-muted-foreground">
-            To apply this run in place, open a new or empty document first; otherwise use "Open in Editor" to create a new
-            draft.
-          </p>
-        )}
+        {document &&
+          tab === 'preview' &&
+          canEdit &&
+          (onApplyToDocument || onAppendToDocument) &&
+          !canApplyToDocument &&
+          !canAppendToDocument && (
+            <p className="text-xs text-muted-foreground">
+              Open a document first: an empty one can be replaced and one with content can have the supported parts added,
+              or use "Open in Editor" to create a new draft.
+            </p>
+          )}
 
         {createError && (
           <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">

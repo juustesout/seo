@@ -19,12 +19,32 @@ import type { WorkspaceSessionValue } from './workspaceSession';
 import { WorkspaceSessionProvider } from './workspaceSession';
 import {
   CompositionApplyBridge,
+  pendingAppendCompositionOf,
   pendingCompositionOf,
   type CompositionApplyOutcome,
   type PendingComposition,
 } from './CompositionApplyBridge';
 
 const EMPTY = tiptapEmptyDoc();
+
+const EXISTING: CanonicalDocument = {
+  version: CANONICAL_DOCUMENT_VERSION,
+  blocks: [{ type: 'paragraph', content: [{ type: 'text', text: 'Existing content' }] }],
+};
+
+const APPEND_OPERATIONS = [
+  { type: 'insert_section' as const, ref: 'section-1', section: { kind: 'section' as const }, position: { mode: 'document_end' as const } },
+  {
+    type: 'insert_text' as const,
+    target: { mode: 'ref' as const, ref: 'section-1' },
+    block: { type: 'heading' as const, level: 1 as const, text: 'Composed heading' },
+  },
+  {
+    type: 'insert_text' as const,
+    target: { mode: 'ref' as const, ref: 'section-1' },
+    block: { type: 'paragraph' as const, text: 'Body copy' },
+  },
+];
 
 const COMPOSED: CanonicalDocument = {
   version: CANONICAL_DOCUMENT_VERSION,
@@ -140,5 +160,53 @@ describe('CompositionApplyBridge', () => {
     rerender(<Bridge editor={editor} ready pending={pending} onResult={onResult} />);
     await waitFor(() => expect(onResult).toHaveBeenCalledWith({ status: 'applied' }));
     expect(editor.getText()).toContain('Composed heading');
+  });
+
+  it('appends an append proposal through the document operation path', async () => {
+    const editor = makeEditor();
+    const onResult = vi.fn();
+    render(
+      <Bridge
+        editor={editor}
+        pending={pendingAppendCompositionOf(EXISTING, APPEND_OPERATIONS, documentRevisionOf(EMPTY), CURRENT_BOUNDARY)}
+        onResult={onResult}
+      />,
+    );
+
+    await waitFor(() => expect(onResult).toHaveBeenCalledWith({ status: 'applied' }));
+    expect(editor.getText()).toContain('Composed heading');
+    expect(editor.getText()).toContain('Body copy');
+    // Operations were applied to the live document, not replaced with the base.
+    expect(editor.getText()).not.toContain('Existing content');
+  });
+
+  it('refuses to append when the session document boundary moved', async () => {
+    const editor = makeEditor();
+    const onResult = vi.fn();
+    render(
+      <Bridge
+        editor={editor}
+        pending={pendingAppendCompositionOf(EXISTING, APPEND_OPERATIONS, documentRevisionOf(EMPTY), 'other#9')}
+        onResult={onResult}
+      />,
+    );
+
+    await waitFor(() => expect(onResult).toHaveBeenCalledWith({ status: 'stale-document' }));
+    expect(editor.getText()).not.toContain('Composed heading');
+  });
+
+  it('refuses an append whose base revision no longer matches the live document', async () => {
+    const editor = makeEditor();
+    const onResult = vi.fn();
+    render(
+      <Bridge
+        editor={editor}
+        pending={pendingAppendCompositionOf(EXISTING, APPEND_OPERATIONS, STALE_REVISION, CURRENT_BOUNDARY)}
+        onResult={onResult}
+      />,
+    );
+
+    await waitFor(() => expect(onResult).toHaveBeenCalledWith({ status: 'stale-document' }));
+    expect(editor.getText()).not.toContain('Composed heading');
   });
 });

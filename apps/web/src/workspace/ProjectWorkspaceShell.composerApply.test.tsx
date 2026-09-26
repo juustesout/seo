@@ -51,44 +51,85 @@ vi.mock('../views/EditorView', async () => {
       initialContentId?: string | null;
     }) => {
       const ws = useWorkspaceSessionContext();
+      const editorRef = React.useRef<Editor | null>(null);
       React.useEffect(() => {
         if (initialContentId) open(initialContentId);
         // eslint-disable-next-line react-hooks/exhaustive-deps
       }, []);
       React.useEffect(() => {
         const editor = new Editor({ extensions: createEditorExtensions({ nodeViews: false }), content: tiptapEmptyDoc() });
+        editorRef.current = editor;
         probe.editors.push(editor);
         onEditor(editor);
         return () => editor.destroy();
       }, [onEditor]);
-      return <div data-testid="mode-editor" data-boundary={ws.session.boundary} />;
+      // Mirrors the real editor: the lifted session document seeds the live
+      // editor, so revision guards compare against the same content.
+      React.useEffect(() => {
+        const editor = editorRef.current;
+        if (editor && !editor.isDestroyed) editor.commands.setContent(ws.doc, false);
+      }, [ws.doc]);
+      return (
+        <div data-testid="mode-editor" data-boundary={ws.session.boundary}>
+          <span data-testid="editor-notice">{ws.notice ?? ''}</span>
+        </div>
+      );
     },
   };
 });
 
 vi.mock('../views/Compose', async () => {
   const { useWorkspaceSessionContext } = await import('./workspaceSession');
+  // A fully representable run: one section whose children are text blocks.
   const composed = {
     version: 1,
     blocks: [
-      { type: 'heading', attrs: { level: 1 }, content: [{ type: 'text', text: 'Composed heading' }] },
-      { type: 'paragraph', content: [{ type: 'text', text: 'Body copy' }] },
+      {
+        type: 'section',
+        children: [
+          { type: 'heading', attrs: { level: 1 }, content: [{ type: 'text', text: 'Composed heading' }] },
+          { type: 'paragraph', content: [{ type: 'text', text: 'Body copy' }] },
+        ],
+      },
     ],
+  };
+  // A partly representable run: the heading maps, the nested CTA does not.
+  const mixed = {
+    version: 1,
+    blocks: [
+      {
+        type: 'section',
+        children: [
+          { type: 'heading', attrs: { level: 2 }, content: [{ type: 'text', text: 'Mixed heading' }] },
+          { type: 'cta', children: [{ type: 'button', content: [{ type: 'text', text: 'Go' }] }] },
+        ],
+      },
+    ],
+  };
+  // A run with nothing the operation vocabulary can represent.
+  const unsupported = {
+    version: 1,
+    blocks: [{ type: 'cta', children: [{ type: 'button', content: [{ type: 'text', text: 'Go' }] }] }],
   };
   return {
     Compose: ({
       onOpenEditor,
       onApplyToDocument,
       canApplyToDocument,
+      onAppendToDocument,
+      canAppendToDocument,
     }: {
       onOpenEditor?: (id: string) => void;
       onApplyToDocument?: (document: unknown) => void;
       canApplyToDocument?: boolean;
+      onAppendToDocument?: (document: unknown) => void;
+      canAppendToDocument?: boolean;
     }) => {
       const ws = useWorkspaceSessionContext();
       return (
         <div>
           <span data-testid="compose-can-apply">{String(canApplyToDocument)}</span>
+          <span data-testid="compose-can-append">{String(canAppendToDocument)}</span>
           <span data-testid="compose-boundary">{ws.session.boundary}</span>
           <span data-testid="compose-lifecycle">{ws.lifecycle.status}</span>
           <span data-testid="compose-lifecycle-error">{ws.lifecycle.error ?? ''}</span>
@@ -97,6 +138,15 @@ vi.mock('../views/Compose', async () => {
           </button>
           <button type="button" data-testid="compose-apply" onClick={() => onApplyToDocument?.(composed)}>
             apply
+          </button>
+          <button type="button" data-testid="compose-append" onClick={() => onAppendToDocument?.(composed)}>
+            append
+          </button>
+          <button type="button" data-testid="compose-append-mixed" onClick={() => onAppendToDocument?.(mixed)}>
+            append-mixed
+          </button>
+          <button type="button" data-testid="compose-append-gap" onClick={() => onAppendToDocument?.(unsupported)}>
+            append-gap
           </button>
         </div>
       );
@@ -233,5 +283,64 @@ describe('Composer output applied to the open document', () => {
     await screen.findByTestId('mode-editor');
     await waitFor(() => expect(screen.getByTestId('mode-editor').getAttribute('data-boundary')).toContain('draft-1'));
     expect(screen.queryByTestId('compose-open')).toBeNull();
+  });
+
+  it('appends the representable parts of a run to the open non-empty document in place', async () => {
+    render(<Harness initialContentId="doc-full" />);
+    await waitFor(() => expect(screen.getByTestId('mode-editor').getAttribute('data-boundary')).toContain('doc-full'));
+
+    fireEvent.click(screen.getByTestId('workspace-mode-composer'));
+    await screen.findByTestId('compose-append');
+    await waitFor(() => expect(screen.getByTestId('compose-lifecycle').textContent).toBe('ready'));
+    await waitFor(() => expect(screen.getByTestId('compose-can-append').textContent).toBe('true'));
+    expect(screen.getByTestId('compose-can-apply').textContent).toBe('false');
+    const boundaryBefore = screen.getByTestId('compose-boundary').textContent;
+
+    fireEvent.click(screen.getByTestId('compose-append'));
+
+    await screen.findByTestId('mode-editor');
+    await waitFor(() => expect(probe.editors.at(-1)?.getText()).toContain('Composed heading'));
+    expect(probe.editors.at(-1)?.getText()).toContain('Body copy');
+    // Appended to the open content instead of replacing it.
+    expect(probe.editors.at(-1)?.getText()).toContain('Existing content');
+
+    // No document switch: the boundary is where it was before the append.
+    expect(screen.getByTestId('mode-editor').getAttribute('data-boundary')).toBe(boundaryBefore);
+    // No Composer create: the open document is the only target.
+    expect(apiMethods('/projects/p1/content', 'POST')).toBe(0);
+    // The append reuses the editor transaction; it starts no save of its own.
+    expect(autoMock.saveNow).not.toHaveBeenCalled();
+  });
+
+  it('reports the parts it could not add when only some structures are representable', async () => {
+    render(<Harness initialContentId="doc-full" />);
+    await waitFor(() => expect(screen.getByTestId('mode-editor').getAttribute('data-boundary')).toContain('doc-full'));
+
+    fireEvent.click(screen.getByTestId('workspace-mode-composer'));
+    await screen.findByTestId('compose-append-mixed');
+    await waitFor(() => expect(screen.getByTestId('compose-lifecycle').textContent).toBe('ready'));
+
+    fireEvent.click(screen.getByTestId('compose-append-mixed'));
+
+    await screen.findByTestId('mode-editor');
+    await waitFor(() => expect(probe.editors.at(-1)?.getText()).toContain('Mixed heading'));
+    expect(probe.editors.at(-1)?.getText()).toContain('Existing content');
+    // The unsupported part is surfaced, never silently dropped.
+    await waitFor(() => expect(screen.getByTestId('editor-notice').textContent).toContain('Not added'));
+  });
+
+  it('refuses to append and explains when nothing in the run is representable', async () => {
+    render(<Harness initialContentId="doc-full" />);
+    await waitFor(() => expect(screen.getByTestId('mode-editor').getAttribute('data-boundary')).toContain('doc-full'));
+
+    fireEvent.click(screen.getByTestId('workspace-mode-composer'));
+    await screen.findByTestId('compose-append-gap');
+    await waitFor(() => expect(screen.getByTestId('compose-lifecycle').textContent).toBe('ready'));
+
+    fireEvent.click(screen.getByTestId('compose-append-gap'));
+
+    await screen.findByText(/could be added to the document/);
+    expect(screen.queryByTestId('mode-editor')).toBeNull();
+    expect(apiMethods('/projects/p1/content', 'POST')).toBe(0);
   });
 });

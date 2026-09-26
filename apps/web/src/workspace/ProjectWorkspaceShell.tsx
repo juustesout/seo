@@ -16,14 +16,14 @@
  * editor instance and no second session/autosave/lifecycle.
  */
 import { useCallback, useMemo, useState } from 'react';
-import { isCanonicalDocumentEmpty, type CanonicalDocument } from '@seo/contracts';
+import { isCanonicalDocumentEmpty, mapCompositionToAppendOperations, type CanonicalDocument, type CompositionGap } from '@seo/contracts';
 import { DocumentSessionProvider, type SwitchResult } from '../components/content/session';
 import { WorkspaceStateProvider, useDocumentScopedState } from '../components/content/workspace/workspaceState';
 import { documentRevisionOf } from '../components/content/documentRevision';
 import { canonicalFromEditorDocument } from '../components/content/editorDraft';
 import { Designer } from '../views/Designer';
 import { ComposerMode } from './ComposerMode';
-import { pendingCompositionOf, type CompositionApplyOutcome, type PendingComposition } from './CompositionApplyBridge';
+import { pendingAppendCompositionOf, pendingCompositionOf, type CompositionApplyOutcome, type PendingComposition } from './CompositionApplyBridge';
 import { EditorMode } from './EditorMode';
 import { WorkspaceChrome } from './WorkspaceChrome';
 import { WorkspaceModeSwitcher, normalizeWorkspaceMode, type WorkspaceMode } from './WorkspaceModeSwitcher';
@@ -72,6 +72,11 @@ export function ProjectWorkspaceShell({
   );
 }
 
+/** Deterministic, user-facing summary of composed structures that were not appended. */
+function compositionGapSummary(gaps: CompositionGap[]): string {
+  return gaps.map((gap) => gap.message).join('; ');
+}
+
 /**
  * Inner shell body, rendered under the workspace scope so its document-scoped
  * chrome state (preview/rail) resets with the document boundary. It owns the
@@ -104,16 +109,29 @@ function WorkspaceBody({
   // the editor through the single external-document mutation path once ready.
   const [pendingComposition, setPendingComposition] = useState<PendingComposition | null>(null);
 
+  // The canonical projection of the open document, shared by the apply/append
+  // eligibility checks. Null when the live editor document is not representable.
+  const canonicalOpenDocument = useMemo(() => {
+    try {
+      return canonicalFromEditorDocument(ws.doc);
+    } catch {
+      return null;
+    }
+  }, [ws.doc]);
+
   // A composition may replace the open document in place only while it is empty:
   // a whole-document replacement must never destroy existing content.
-  const canApplyComposition = useMemo(() => {
-    if (!canEdit || lifecycle.status !== 'ready') return false;
-    try {
-      return isCanonicalDocumentEmpty(canonicalFromEditorDocument(ws.doc));
-    } catch {
-      return false;
-    }
-  }, [canEdit, lifecycle.status, ws.doc]);
+  const canApplyComposition = useMemo(
+    () => canEdit && lifecycle.status === 'ready' && canonicalOpenDocument !== null && isCanonicalDocumentEmpty(canonicalOpenDocument),
+    [canEdit, lifecycle.status, canonicalOpenDocument],
+  );
+
+  // Appending is the complement: it is available only for a non-empty document,
+  // so the two Composer actions stay mutually exclusive.
+  const canAppendComposition = useMemo(
+    () => canEdit && lifecycle.status === 'ready' && canonicalOpenDocument !== null && !isCanonicalDocumentEmpty(canonicalOpenDocument),
+    [canEdit, lifecycle.status, canonicalOpenDocument],
+  );
 
   const activeMode = normalizeWorkspaceMode(mode);
   // The shared header is meaningful only while the editor mode owns a ready,
@@ -194,10 +212,59 @@ function WorkspaceBody({
     onModeChange?.('editor');
   };
 
+  /**
+   * R5.4.3.4: append the representable parts of a composed page to the currently
+   * open non-empty document. It maps the composed document onto the existing
+   * operation vocabulary, stages the result as `DesignerProposal.operations`
+   * bound to the open revision and boundary, and moves to the editor mode, where
+   * the bridge applies it through `applyDocumentOperations`. Unsupported
+   * structures are never dropped: they are reported back to the user. No document
+   * switch, no `/content` create, no whole-document replacement.
+   */
+  const appendComposition = (document: CanonicalDocument) => {
+    if (!canEdit || lifecycle.status !== 'ready') return;
+    let base: CanonicalDocument;
+    try {
+      base = canonicalFromEditorDocument(ws.live.current.doc);
+    } catch {
+      ws.setNotice(null);
+      ws.setErr('This document cannot be represented for an append. Use "Open in Editor" instead.');
+      return;
+    }
+    if (isCanonicalDocumentEmpty(base)) {
+      ws.setNotice(null);
+      ws.setErr('Add to current document needs an open document that already has content. Use "Apply to current document" for an empty document.');
+      return;
+    }
+
+    const mapping = mapCompositionToAppendOperations(document);
+    if (mapping.operations.length === 0) {
+      ws.setNotice(null);
+      ws.setErr(
+        mapping.gaps.length > 0
+          ? `Nothing in this composition could be added to the document: ${compositionGapSummary(mapping.gaps)}.`
+          : 'This composition has nothing that can be added to the document.',
+      );
+      return;
+    }
+
+    ws.setErr(null);
+    ws.setNotice(null);
+    setPendingComposition(
+      pendingAppendCompositionOf(base, mapping.operations, documentRevisionOf(ws.live.current.doc), session.boundary, mapping.gaps),
+    );
+    onModeChange?.('editor');
+  };
+
   const onCompositionResult = (outcome: CompositionApplyOutcome) => {
+    const gaps = pendingComposition?.gaps ?? [];
     setPendingComposition(null);
     if (outcome.status === 'applied') {
-      ws.setNotice('The composition was applied to this document. Autosave will persist it.');
+      ws.setNotice(
+        gaps.length > 0
+          ? `Part of the composition was added to this document and will be autosaved. Not added: ${compositionGapSummary(gaps)}.`
+          : 'The composition was applied to this document. Autosave will persist it.',
+      );
       ws.setErr(null);
       return;
     }
@@ -243,6 +310,8 @@ function WorkspaceBody({
           onOpenEditor={openInEditor}
           onApplyToDocument={applyComposition}
           canApplyToDocument={canApplyComposition}
+          onAppendToDocument={appendComposition}
+          canAppendToDocument={canAppendComposition}
         />
       )}
       {activeMode === 'designer' && <Designer projectId={projectId} role={role} />}

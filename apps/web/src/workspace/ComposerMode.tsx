@@ -47,9 +47,22 @@ export interface ComposerModeProps {
   onApplyToDocument?: (document: CanonicalDocument) => void;
   /** True while the open shared document is an eligible (empty) apply target. */
   canApplyToDocument?: boolean;
+  /**
+   * Appends the representable parts of a composed page to the currently open
+   * non-empty document (R5.4.3.4). Supplied by the shell.
+   */
+  onAppendToDocument?: (document: CanonicalDocument) => void;
+  /** True while the open shared document is an eligible (non-empty) append target. */
+  canAppendToDocument?: boolean;
 }
 
-export function ComposerMode({ onOpenEditor, onApplyToDocument, canApplyToDocument = false }: ComposerModeProps) {
+export function ComposerMode({
+  onOpenEditor,
+  onApplyToDocument,
+  canApplyToDocument = false,
+  onAppendToDocument,
+  canAppendToDocument = false,
+}: ComposerModeProps) {
   const { projectId, role, session, err } = useWorkspaceSessionContext();
 
   // Guard for the draft-creation handoff. The workspace boundary is captured
@@ -83,6 +96,8 @@ export function ComposerMode({ onOpenEditor, onApplyToDocument, canApplyToDocume
         beginHandoff={beginHandoff}
         onApplyToDocument={onApplyToDocument}
         canApplyToDocument={canApplyToDocument}
+        onAppendToDocument={onAppendToDocument}
+        canAppendToDocument={canAppendToDocument}
       />
     </div>
   );

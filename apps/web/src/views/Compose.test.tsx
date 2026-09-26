@@ -328,3 +328,55 @@ describe('Compose -> Content Studio handoff', () => {
     expect(apiMock.api.mock.calls.filter(([path]) => path === `/projects/${PROJECT}/content`)).toHaveLength(1);
   });
 });
+
+describe('Compose -> current document append affordance', () => {
+  async function generateFilled(flow: ReturnType<typeof mockComposeFlow>) {
+    flow.plan.resolve(MARKETING_STORYBOARD_PLAN);
+    flow.compose.resolve({
+      compositionPlan: MARKETING_STORYBOARD_PLAN,
+      canonicalDocument: filledDocument(),
+    });
+  }
+
+  it('hands the run to the shell to append without creating a draft', async () => {
+    const flow = mockComposeFlow();
+    generateFilled(flow);
+    const onAppendToDocument = vi.fn();
+    render(
+      <Compose projectId={PROJECT} role="editor" onAppendToDocument={onAppendToDocument} canAppendToDocument />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Generate composition' }));
+    await screen.findByText('copy for hero.title');
+
+    const button = screen.getByTestId('compose-append-current') as HTMLButtonElement;
+    expect(button.disabled).toBe(false);
+    fireEvent.click(button);
+
+    expect(onAppendToDocument).toHaveBeenCalledTimes(1);
+    expect(onAppendToDocument).toHaveBeenCalledWith(filledDocument());
+    expect(apiMock.api.mock.calls.filter(([path]) => path === `/projects/${PROJECT}/content`)).toHaveLength(0);
+  });
+
+  it('disables append while the open document is not an eligible target', async () => {
+    const flow = mockComposeFlow();
+    generateFilled(flow);
+    render(<Compose projectId={PROJECT} role="editor" onAppendToDocument={vi.fn()} canAppendToDocument={false} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Generate composition' }));
+    await screen.findByText('copy for hero.title');
+
+    expect((screen.getByTestId('compose-append-current') as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('omits append entirely when the shell does not offer it', async () => {
+    const flow = mockComposeFlow();
+    generateFilled(flow);
+    render(<Compose projectId={PROJECT} role="editor" onApplyToDocument={vi.fn()} canApplyToDocument />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Generate composition' }));
+    await screen.findByText('copy for hero.title');
+
+    expect(screen.queryByTestId('compose-append-current')).toBeNull();
+  });
+});
