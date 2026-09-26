@@ -13,8 +13,8 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import type { AgentRun, CanonicalDocument, DesignerProposal } from '@seo/contracts';
-import { contentRevisionOf, tiptapEmptyDoc } from '@seo/contracts';
+import type { AgentRun, CanonicalDocument, DesignerProposal, DocumentOperation } from '@seo/contracts';
+import { DOCUMENT_OPERATIONS_VERSION, contentRevisionOf, tiptapEmptyDoc } from '@seo/contracts';
 import { Designer, type DesignerProps } from './Designer';
 
 const { apiMock } = vi.hoisted(() => ({ apiMock: { api: vi.fn() } }));
@@ -387,7 +387,30 @@ function enterEditMode() {
   fireEvent.click(screen.getByRole('button', { name: 'Edit open document' }));
 }
 
-function editProposal(text: string, baseRevision = REV): DesignerProposal {
+const EDIT_OPERATIONS: DocumentOperation[] = [
+  { type: 'insert_section', ref: 'section-1', section: { kind: 'section' }, position: { mode: 'document_end' } },
+  {
+    type: 'insert_text',
+    target: { mode: 'ref', ref: 'section-1', at: 'start' },
+    block: { type: 'heading', level: 1, text: 'New heading' },
+  },
+];
+
+/**
+ * R5.5.2: a representable edit proposal carries document operations, so it can
+ * be handed to the shared workspace mutation pipeline.
+ */
+function editProposal(text = 'Edited proposal body', baseRevision = REV): DesignerProposal {
+  return {
+    version: 1,
+    baseRevision,
+    document: doc(text),
+    operations: { version: DOCUMENT_OPERATIONS_VERSION, baseRevision, operations: EDIT_OPERATIONS },
+  };
+}
+
+/** A canonical-document-only proposal (the real writer/composer edit shape). */
+function canonicalOnlyProposal(text = 'Edited proposal body', baseRevision = REV): DesignerProposal {
   return { version: 1, baseRevision, document: doc(text) };
 }
 
@@ -401,25 +424,18 @@ function editRun(over: Partial<AgentRun> = {}): AgentRun {
 interface EditApi {
   calls: Call[];
   setRun: (next: AgentRun) => void;
-  isApplied: () => boolean;
 }
 
-/** Transport fake for the edit flow: runs and apply only (no content reads). */
-function editApi(initial: AgentRun, overrides: { onApply?: () => unknown } = {}): EditApi {
+/** Transport fake for the edit flow: runs only (the apply is a workspace handoff). */
+function editApi(initial: AgentRun): EditApi {
   let currentRun = initial;
   const calls: Call[] = [];
-  let applied = false;
   apiMock.api.mockReset();
   apiMock.api.mockImplementation(async (path: string, opts: { method?: string; body?: unknown } = {}) => {
     const method = opts.method ?? 'GET';
     calls.push({ path, method, body: opts.body });
     if (method === 'POST' && path === RUNS_PATH) return { run: currentRun, reused: false };
     if (method === 'GET' && path.startsWith(`/projects/${PROJECT}/designer/runs/`)) return currentRun;
-    if (method === 'POST' && path === APPLY_PATH) {
-      if (overrides.onApply) return overrides.onApply();
-      applied = true;
-      return { id: CID };
-    }
     throw new Error(`unexpected ${method} ${path}`);
   });
   return {
@@ -427,7 +443,6 @@ function editApi(initial: AgentRun, overrides: { onApply?: () => unknown } = {})
     setRun: (next) => {
       currentRun = next;
     },
-    isApplied: () => applied,
   };
 }
 
@@ -491,8 +506,8 @@ describe('Designer edit + apply (shared workspace document)', () => {
   });
 
   it('enters review for a succeeded edit run with the open document and proposal', async () => {
-    editApi(editRun({ status: 'succeeded', result: editProposal('Edited proposal body') }));
-    renderEdit();
+    editApi(editRun({ status: 'succeeded', result: editProposal() }));
+    renderEdit({ onApplyProposal: vi.fn() });
     enterEditMode();
     await startEditRun();
 
@@ -504,45 +519,44 @@ describe('Designer edit + apply (shared workspace document)', () => {
     expect(screen.getAllByText(REV).length).toBeGreaterThan(0);
   });
 
-  it('applies the proposal bound to the open document revision', async () => {
-    const fake = editApi(editRun({ status: 'succeeded', result: editProposal('Edited proposal body') }));
-    renderEdit();
+  it('hands a representable proposal to the shared mutation pipeline instead of the legacy apply route', async () => {
+    const onApplyProposal = vi.fn();
+    const fake = editApi(editRun({ status: 'succeeded', result: editProposal() }));
+    renderEdit({ onApplyProposal });
     enterEditMode();
     await startEditRun();
     await screen.findByText('Edited proposal body');
 
     fireEvent.click(screen.getByRole('button', { name: 'Apply to document' }));
 
-    await screen.findByText('Proposal applied to the saved document.');
-    const apply = pathsOf(fake.calls, 'POST').find((c) => c.path === APPLY_PATH)!;
-    expect((apply.body as { proposal: DesignerProposal }).proposal.baseRevision).toBe(REV);
-    expect(fake.isApplied()).toBe(true);
+    expect(onApplyProposal).toHaveBeenCalledTimes(1);
+    const [handedProposal, targetId] = onApplyProposal.mock.calls[0]!;
+    expect(targetId).toBe(CID);
+    expect((handedProposal as DesignerProposal).baseRevision).toBe(REV);
+    expect((handedProposal as DesignerProposal).operations).toBeTruthy();
+    // R5.5.2: the workspace Designer never calls the legacy whole-document route.
+    expect(pathsOf(fake.calls, 'POST').some((c) => c.path === APPLY_PATH)).toBe(false);
   });
 
-  it('reports a stale proposal refused by the server without marking it applied', async () => {
-    const fake = editApi(editRun({ status: 'succeeded', result: editProposal('Edited proposal body') }), {
-      onApply: () => {
-        throw new ApiRequestError(
-          'stale_proposal',
-          'The content changed since this proposal was generated; generate it again.',
-          409,
-        );
-      },
-    });
-    renderEdit();
+  it('keeps a canonical-document-only proposal proposal-only and does not offer apply', async () => {
+    const onApplyProposal = vi.fn();
+    editApi(editRun({ status: 'succeeded', result: canonicalOnlyProposal() }));
+    renderEdit({ onApplyProposal });
     enterEditMode();
     await startEditRun();
     await screen.findByText('Edited proposal body');
 
-    fireEvent.click(screen.getByRole('button', { name: 'Apply to document' }));
-    await screen.findByText('This proposal is stale and was not applied.');
-    expect(screen.getByText(/The content changed since this proposal was generated/)).toBeTruthy();
-    expect(fake.isApplied()).toBe(false);
+    expect(screen.getByText('This proposal cannot be applied from here.')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Apply to document' })).toBeNull();
+    // Reject stays available: the proposal is preserved for inspection.
+    expect(screen.getByRole('button', { name: 'Reject' })).toBeTruthy();
+    expect(onApplyProposal).not.toHaveBeenCalled();
   });
 
   it('disables apply when the live document no longer matches the proposal', async () => {
-    editApi(editRun({ status: 'succeeded', result: editProposal('Edited proposal body') }));
-    renderEdit({ documentRevision: 'rev1:changed' });
+    const onApplyProposal = vi.fn();
+    editApi(editRun({ status: 'succeeded', result: editProposal() }));
+    renderEdit({ documentRevision: 'rev1:changed', onApplyProposal });
     enterEditMode();
     await startEditRun();
     await screen.findByText('Edited proposal body');
@@ -551,10 +565,12 @@ describe('Designer edit + apply (shared workspace document)', () => {
       (screen.getByRole('button', { name: 'Apply to document' }) as HTMLButtonElement).disabled,
     ).toBe(true);
     expect(screen.getByText(/The open document no longer matches the revision/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Apply to document' }));
+    expect(onApplyProposal).not.toHaveBeenCalled();
   });
 
   it('shows a proposal for another document as proposal-only, without apply', async () => {
-    editApi(editRun({ status: 'succeeded', result: editProposal('Edited proposal body') }));
+    editApi(editRun({ status: 'succeeded', result: editProposal() }));
     renderEdit({ documentId: '99999999-9999-4999-8999-999999999999' });
     enterEditMode();
     await startEditRun();
@@ -564,30 +580,10 @@ describe('Designer edit + apply (shared workspace document)', () => {
     expect(screen.queryByRole('button', { name: 'Apply to document' })).toBeNull();
   });
 
-  it('cannot apply the same proposal twice', async () => {
-    let resolveApply: (value: unknown) => void = () => {};
-    const applyDeferred = new Promise<unknown>((resolve) => {
-      resolveApply = resolve;
-    });
-    let applyCalls = 0;
-    editApi(editRun({ status: 'succeeded', result: editProposal('Edited proposal body') }));
-    apiMock.api.mockImplementation(
-      async (path: string, opts: { method?: string; body?: unknown } = {}) => {
-        const method = opts.method ?? 'GET';
-        if (method === 'POST' && path === RUNS_PATH) {
-          return { run: editRun({ status: 'succeeded', result: editProposal('Edited proposal body') }), reused: false };
-        }
-        if (method === 'GET' && path.startsWith(`/projects/${PROJECT}/designer/runs/`)) {
-          return editRun({ status: 'succeeded', result: editProposal('Edited proposal body') });
-        }
-        if (method === 'POST' && path === APPLY_PATH) {
-          applyCalls += 1;
-          return applyDeferred;
-        }
-        throw new Error(`unexpected ${method} ${path}`);
-      },
-    );
-    renderEdit();
+  it('cannot hand off the same proposal twice', async () => {
+    const onApplyProposal = vi.fn();
+    editApi(editRun({ status: 'succeeded', result: editProposal() }));
+    renderEdit({ onApplyProposal });
     enterEditMode();
     await startEditRun();
     await screen.findByText('Edited proposal body');
@@ -596,15 +592,14 @@ describe('Designer edit + apply (shared workspace document)', () => {
     fireEvent.click(button);
     fireEvent.click(button);
 
-    await waitFor(() => expect(applyCalls).toBe(1));
-    resolveApply({ id: CID });
-    await screen.findByText('Proposal applied to the saved document.');
+    await waitFor(() => expect(onApplyProposal).toHaveBeenCalledTimes(1));
   });
 
-  it('rejects a proposal without modifying the saved content', async () => {
+  it('rejects a proposal without handing it off or writing content', async () => {
     const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
-    const fake = editApi(editRun({ status: 'succeeded', result: editProposal('Edited proposal body') }));
-    renderEdit();
+    const onApplyProposal = vi.fn();
+    const fake = editApi(editRun({ status: 'succeeded', result: editProposal() }));
+    renderEdit({ onApplyProposal });
     enterEditMode();
     await startEditRun();
     await screen.findByText('Edited proposal body');
@@ -612,7 +607,7 @@ describe('Designer edit + apply (shared workspace document)', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Reject' }));
     await screen.findByText('Proposal rejected. The saved document was not changed.');
     expect(confirmSpy).toHaveBeenCalled();
-    expect(fake.isApplied()).toBe(false);
+    expect(onApplyProposal).not.toHaveBeenCalled();
     expect(pathsOf(fake.calls, 'POST').some((c) => c.path === APPLY_PATH)).toBe(false);
 
     confirmSpy.mockRestore();

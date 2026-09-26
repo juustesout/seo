@@ -1,5 +1,6 @@
 /**
- * Designer (Stage 8E.6, ADR Phase 5.1 + 5.2; workspace binding R5.5.1).
+ * Designer (Stage 8E.6, ADR Phase 5.1 + 5.2; workspace binding R5.5.1; mutation
+ * handoff R5.5.2).
  *
  * Two flows share one view. Creation mode (5.1) submits an intent anchored to
  * the empty-document revision and shows the result as a proposal that is never
@@ -12,9 +13,14 @@
  * or a document detail read. Document identity, title, the live canonical
  * document and its revision arrive from the shared workspace session through
  * `DesignerMode`; the view owns only Designer-specific form/run/apply state.
- * Submission still uses the durable run endpoint and apply still uses the
- * existing server-side `POST /content/:contentId/designer/apply`; routing the
- * proposal through the shared mutation pipeline is R5.5.2.
+ *
+ * R5.5.2: apply no longer calls the legacy whole-document
+ * `POST /content/:contentId/designer/apply`. A proposal is classified by
+ * `planDesignerMutation`; a proposal carrying document operations or an image
+ * insertion is handed to `onApplyProposal` (the shell stages it and the editor
+ * applies it through the existing mutation pipeline), while a canonical-document
+ * -only or generation-required proposal is surfaced as unsupported and stays
+ * proposal-only. The view never mutates the document itself.
  */
 import { useEffect, useRef, useState } from 'react';
 import {
@@ -26,7 +32,11 @@ import {
 import type { DocumentLifecycleStatus } from '../components/content/session';
 import { CanonicalRenderer } from '../components/canonicalRenderer';
 import { useDesignerRun, type DesignerRunPhase } from '../components/designer/useDesignerRun';
-import { ApiRequestError, api } from '../lib/api';
+import {
+  isDesignerMutationRepresentable,
+  planDesignerMutation,
+  type DesignerMutationPlan,
+} from '../workspace/designerMutation';
 import { PageHeader } from '@/components/ui/page-header';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
@@ -45,7 +55,7 @@ const PHASE_LABEL: Record<DesignerRunPhase, string> = {
 };
 
 type DesignerFlow = 'create' | 'edit';
-type ApplyState = 'idle' | 'applying' | 'applied' | 'conflict' | 'rejected';
+type ApplyState = 'idle' | 'staging' | 'conflict' | 'rejected';
 
 function phaseVariant(phase: DesignerRunPhase): 'success' | 'warning' | 'destructive' | 'outline' {
   if (phase === 'succeeded') return 'success';
@@ -71,6 +81,13 @@ export interface DesignerProps {
   documentStatus?: DocumentLifecycleStatus;
   /** The live canonical document, or null when it is not representable. */
   currentDocument?: CanonicalDocument | null;
+  /**
+   * Hands a representable proposal to the workspace for application through the
+   * shared mutation pipeline (R5.5.2). Supplied by `DesignerMode`/the shell; the
+   * Designer never mutates the document and never calls the legacy apply route.
+   * When absent, applying is unavailable and the proposal stays proposal-only.
+   */
+  onApplyProposal?: (proposal: DesignerProposal, targetDocumentId: string) => void;
 }
 
 export function Designer({
@@ -82,6 +99,7 @@ export function Designer({
   documentRevision = null,
   documentStatus = 'idle',
   currentDocument = null,
+  onApplyProposal,
 }: DesignerProps) {
   const canEdit = (ROLE_RANK[role] ?? 0) >= 1;
   const { phase, run, error, reused, submit, reset } = useDesignerRun(projectId, pollMs);
@@ -89,7 +107,6 @@ export function Designer({
   const [mode, setMode] = useState<DesignerFlow>('create');
   const [instruction, setInstruction] = useState('');
   const [applyState, setApplyState] = useState<ApplyState>('idle');
-  const [applyError, setApplyError] = useState<string | null>(null);
   const applyingRef = useRef(false);
 
   const busy = phase === 'submitting' || phase === 'queued' || phase === 'running';
@@ -109,6 +126,16 @@ export function Designer({
     proposal !== null &&
     proposal.baseRevision === documentRevision;
 
+  // How the proposal can reach the shared mutation pipeline, or why it cannot.
+  // A canonical-document-only or generation-required proposal stays proposal-only.
+  const mutationPlan: DesignerMutationPlan | null = proposal ? planDesignerMutation(proposal) : null;
+  const representable = mutationPlan !== null && isDesignerMutationRepresentable(mutationPlan);
+  const unsupportedReason = mutationPlan?.kind === 'unsupported' ? mutationPlan.reason : null;
+  // Applying is a handoff to the shell, so it also needs the callback, a matching
+  // open document and a still-current revision.
+  const canApplyNow =
+    canEdit && representable && Boolean(onApplyProposal) && targetsOpenDocument && revisionMatches;
+
   // A restored run that targets the open document surfaces in edit mode so the
   // form context matches the review, without stealing a user's later choice.
   useEffect(() => {
@@ -118,7 +145,6 @@ export function Designer({
   // A new run or a different open document resets any apply decision.
   useEffect(() => {
     setApplyState('idle');
-    setApplyError(null);
   }, [run?.runId, documentId]);
 
   const editTargetReady = documentId !== null && documentStatus === 'ready';
@@ -138,36 +164,24 @@ export function Designer({
     setMode(next);
   };
 
-  const apply = async () => {
-    if (!canEdit || !proposal || !documentId || applyingRef.current) return;
-    if (!targetsOpenDocument || !revisionMatches) {
-      setApplyState('conflict');
+  /**
+   * Hands the proposal to the shell, which stages it and switches to the editor
+   * mode where the shared mutation pipeline applies it. The Designer performs no
+   * write; a refusal by the shell is shown by `DesignerMode`.
+   */
+  const apply = () => {
+    if (applyingRef.current) return;
+    if (!canApplyNow || !proposal || !runContentId || !onApplyProposal) {
+      if (proposal && (!targetsOpenDocument || !revisionMatches)) setApplyState('conflict');
       return;
     }
     applyingRef.current = true;
-    setApplyState('applying');
-    setApplyError(null);
-    try {
-      await api(`/projects/${projectId}/content/${documentId}/designer/apply`, {
-        method: 'POST',
-        body: { proposal },
-      });
-      setApplyState('applied');
-    } catch (e) {
-      if (e instanceof ApiRequestError && e.code === 'stale_proposal') {
-        setApplyState('conflict');
-        setApplyError(e.message);
-      } else {
-        setApplyState('idle');
-        setApplyError(e instanceof Error ? e.message : String(e));
-      }
-    } finally {
-      applyingRef.current = false;
-    }
+    setApplyState('staging');
+    onApplyProposal(proposal, runContentId);
   };
 
   const reject = () => {
-    if (!proposal || applyState === 'applied') return;
+    if (!proposal || applyState === 'rejected' || applyState === 'staging') return;
     if (!window.confirm('Reject this proposal without applying it? The saved document will not change.')) return;
     setApplyState('rejected');
   };
@@ -176,7 +190,6 @@ export function Designer({
     reset();
     setInstruction('');
     setApplyState('idle');
-    setApplyError(null);
   };
 
   const showEditReview = phase === 'succeeded' && targetsOpenDocument && proposal !== null;
@@ -331,9 +344,11 @@ export function Designer({
             currentRevision={documentRevision}
             revisionMatches={revisionMatches}
             canEdit={canEdit}
+            representable={representable}
+            unsupportedReason={unsupportedReason}
+            canApply={canApplyNow}
             applyState={applyState}
-            applyError={applyError}
-            onApply={() => void apply()}
+            onApply={apply}
             onReject={reject}
             onStartOver={startOver}
           />
@@ -361,10 +376,11 @@ export function Designer({
 }
 
 /**
- * Edit-mode review. It makes the three states explicit - the open document, the
- * generated proposal, and whether the proposal was applied - and it is the only
- * place a proposal can be written, through the existing apply route. The
- * document and revision shown are the live workspace ones, never a second read.
+ * Edit-mode review. It makes the states explicit - the open document, the
+ * generated proposal, whether the proposal can reach the shared mutation
+ * pipeline, and whether it was rejected - and it never writes the document
+ * itself. A representable proposal is handed to the shell (R5.5.2); the document
+ * and revision shown are the live workspace ones, never a second read.
  */
 function EditReview({
   proposal,
@@ -373,8 +389,10 @@ function EditReview({
   currentRevision,
   revisionMatches,
   canEdit,
+  representable,
+  unsupportedReason,
+  canApply,
   applyState,
-  applyError,
   onApply,
   onReject,
   onStartOver,
@@ -385,13 +403,16 @@ function EditReview({
   currentRevision: string | null;
   revisionMatches: boolean;
   canEdit: boolean;
+  representable: boolean;
+  unsupportedReason: string | null;
+  canApply: boolean;
   applyState: ApplyState;
-  applyError: string | null;
   onApply: () => void;
   onReject: () => void;
   onStartOver: () => void;
 }) {
-  const terminal = applyState === 'applied' || applyState === 'rejected';
+  const terminal = applyState === 'rejected';
+  const handedOff = applyState === 'staging';
 
   return (
     <div className="flex flex-col gap-3">
@@ -407,16 +428,23 @@ function EditReview({
         </p>
       </div>
 
-      {currentCanonical && !revisionMatches && applyState !== 'applied' && (
+      {currentCanonical && !revisionMatches && !handedOff && (
         <div className="rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-sm text-foreground">
           The open document no longer matches the revision this proposal was generated from. Start a new run to propose
           against the current revision.
         </div>
       )}
 
-      {applyState === 'applied' && (
-        <div className="rounded-md border border-success/30 bg-success/5 px-3 py-2 text-sm text-success">
-          Proposal applied to the saved document.
+      {!representable && unsupportedReason && (
+        <div className="rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-sm text-foreground">
+          <p className="m-0 font-medium">This proposal cannot be applied from here.</p>
+          <p className="m-0 mt-1">{unsupportedReason}</p>
+        </div>
+      )}
+
+      {handedOff && (
+        <div className="rounded-md border border-border bg-muted/30 px-3 py-2 text-sm text-muted-foreground">
+          Apply requested. The workspace is applying it through the editor.
         </div>
       )}
       {applyState === 'rejected' && (
@@ -426,13 +454,7 @@ function EditReview({
       )}
       {applyState === 'conflict' && (
         <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-          <p className="m-0 font-medium">This proposal is stale and was not applied.</p>
-          {applyError && <p className="m-0">{applyError}</p>}
-        </div>
-      )}
-      {applyError && applyState === 'idle' && (
-        <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-          {applyError}
+          This proposal is stale and was not applied.
         </div>
       )}
 
@@ -461,18 +483,20 @@ function EditReview({
 
       {!terminal && (
         <div className="flex flex-wrap items-center gap-3">
-          <Button type="button" onClick={onApply} disabled={!canEdit || applyState === 'applying' || !revisionMatches}>
-            {applyState === 'applying' ? 'Applying…' : 'Apply to document'}
-          </Button>
-          <Button
-            type="button"
-            variant="outline"
-            onClick={onReject}
-            disabled={applyState === 'applying'}
-          >
+          {representable && (
+            <Button type="button" onClick={onApply} disabled={!canApply || handedOff}>
+              {handedOff ? 'Applying…' : 'Apply to document'}
+            </Button>
+          )}
+          <Button type="button" variant="outline" onClick={onReject} disabled={handedOff}>
             Reject
           </Button>
           {!canEdit && <span className="text-xs text-muted-foreground">Editors and above can apply.</span>}
+          {canEdit && representable && !canApply && !handedOff && (
+            <span className="text-xs text-muted-foreground">
+              Apply needs the open document at the revision this proposal was generated from.
+            </span>
+          )}
         </div>
       )}
 

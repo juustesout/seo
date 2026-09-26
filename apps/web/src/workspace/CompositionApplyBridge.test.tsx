@@ -10,7 +10,17 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { render, waitFor } from '@testing-library/react';
 import { Editor } from '@tiptap/core';
-import { CANONICAL_DOCUMENT_VERSION, composeOperationBatch, tiptapEmptyDoc, type CanonicalDocument } from '@seo/contracts';
+import {
+  CANONICAL_DOCUMENT_VERSION,
+  DESIGNER_PROPOSAL_VERSION,
+  DOCUMENT_OPERATIONS_VERSION,
+  composeOperationBatch,
+  tiptapEmptyDoc,
+  type CanonicalDocument,
+  type DesignerProposal,
+  type InsertImageOperation,
+  type TipDoc,
+} from '@seo/contracts';
 import { createEditorExtensions } from '../components/content/editor/extensions';
 import { EditorContextProvider } from '../components/content/editor/EditorContext';
 import { EditorSelectionProvider } from '../components/content/editor/EditorSelectionContext';
@@ -22,11 +32,18 @@ import {
   pendingAppendCompositionFromBatch,
   pendingAppendCompositionOf,
   pendingCompositionOf,
+  pendingDesignerMutation,
   type CompositionApplyOutcome,
   type PendingComposition,
 } from './CompositionApplyBridge';
 
 const EMPTY = tiptapEmptyDoc();
+
+/** A non-empty editor seed; image insertion needs a real block to anchor to. */
+const SEEDED: TipDoc = {
+  type: 'doc',
+  content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Existing content' }] }],
+};
 
 const EXISTING: CanonicalDocument = {
   version: CANONICAL_DOCUMENT_VERSION,
@@ -71,10 +88,31 @@ const SECTIONED: CanonicalDocument = {
 const STALE_REVISION = 'rev1:0000000000000000';
 const CURRENT_BOUNDARY = 'doc-1#4';
 
+const INSERTION: InsertImageOperation = {
+  type: 'insert_image',
+  target: { kind: 'cursor', position: 1 },
+  image: { assetId: 'm_1', url: 'https://cdn.test/x.png', alt: 'X' },
+};
+
+/** A representable Designer proposal carrying the existing operation vocabulary. */
+function designerOperationsProposal(baseRevision = documentRevisionOf(EMPTY)): DesignerProposal {
+  return {
+    version: DESIGNER_PROPOSAL_VERSION,
+    baseRevision,
+    document: EXISTING,
+    operations: { version: DOCUMENT_OPERATIONS_VERSION, baseRevision, operations: APPEND_OPERATIONS },
+  };
+}
+
+/** A representable Designer proposal carrying the existing image insertion. */
+function designerInsertionProposal(baseRevision = documentRevisionOf(EMPTY)): DesignerProposal {
+  return { version: DESIGNER_PROPOSAL_VERSION, baseRevision, document: EXISTING, insertion: INSERTION };
+}
+
 const editors: Editor[] = [];
 
-function makeEditor(): Editor {
-  const editor = new Editor({ extensions: createEditorExtensions({ nodeViews: false }), content: EMPTY });
+function makeEditor(content: TipDoc = EMPTY): Editor {
+  const editor = new Editor({ extensions: createEditorExtensions({ nodeViews: false }), content });
   editors.push(editor);
   return editor;
 }
@@ -239,5 +277,93 @@ describe('CompositionApplyBridge', () => {
 
     await waitFor(() => expect(onResult).toHaveBeenCalledWith({ status: 'stale-document' }));
     expect(editor.getText()).not.toContain('Composed heading');
+  });
+
+  it('applies a Designer operation proposal through the document operation path', async () => {
+    const editor = makeEditor();
+    const onResult = vi.fn();
+    render(
+      <Bridge
+        editor={editor}
+        pending={pendingDesignerMutation(designerOperationsProposal(), 'operations', CURRENT_BOUNDARY, 'doc-1')}
+        onResult={onResult}
+      />,
+    );
+
+    await waitFor(() => expect(onResult).toHaveBeenCalledWith({ status: 'applied' }));
+    expect(editor.getText()).toContain('Composed heading');
+    expect(editor.getText()).toContain('Body copy');
+  });
+
+  it('applies a Designer insertion proposal through the insertion path', async () => {
+    const editor = makeEditor(SEEDED);
+    const onResult = vi.fn();
+    render(
+      <Bridge
+        editor={editor}
+        pending={pendingDesignerMutation(
+          designerInsertionProposal(documentRevisionOf(SEEDED)),
+          'insertion',
+          CURRENT_BOUNDARY,
+          'doc-1',
+        )}
+        onResult={onResult}
+      />,
+    );
+
+    await waitFor(() => expect(onResult).toHaveBeenCalledWith({ status: 'applied' }));
+    expect(editor.getJSON()).toEqual(
+      expect.objectContaining({ content: expect.arrayContaining([expect.objectContaining({ type: 'image' })]) }),
+    );
+  });
+
+  it('refuses a Designer proposal targeting a different document even at the same revision', async () => {
+    const editor = makeEditor();
+    const onResult = vi.fn();
+    render(
+      <Bridge
+        editor={editor}
+        pending={pendingDesignerMutation(designerOperationsProposal(), 'operations', CURRENT_BOUNDARY, 'other-doc')}
+        onResult={onResult}
+      />,
+    );
+
+    await waitFor(() => expect(onResult).toHaveBeenCalledWith({ status: 'stale-document' }));
+    expect(editor.getText()).not.toContain('Composed heading');
+  });
+
+  it('refuses a Designer proposal whose base revision is stale', async () => {
+    const editor = makeEditor();
+    const onResult = vi.fn();
+    render(
+      <Bridge
+        editor={editor}
+        pending={pendingDesignerMutation(designerInsertionProposal(STALE_REVISION), 'insertion', CURRENT_BOUNDARY, 'doc-1')}
+        onResult={onResult}
+      />,
+    );
+
+    await waitFor(() => expect(onResult).toHaveBeenCalledWith({ status: 'stale-document' }));
+  });
+
+  it('fails a staged mode whose proposal does not carry that instruction', async () => {
+    const editor = makeEditor();
+    const onResult = vi.fn();
+    // A truly empty proposal body: no operations, no insertion, no document-only
+    // replacement should ever be reached for a Designer-mode staging.
+    const malformed = {
+      version: DESIGNER_PROPOSAL_VERSION,
+      baseRevision: documentRevisionOf(EMPTY),
+      document: EXISTING,
+    } as DesignerProposal;
+    render(
+      <Bridge
+        editor={editor}
+        pending={pendingDesignerMutation(malformed, 'insertion', CURRENT_BOUNDARY, 'doc-1')}
+        onResult={onResult}
+      />,
+    );
+
+    await waitFor(() => expect(onResult).toHaveBeenCalledWith({ status: 'failed' }));
   });
 });

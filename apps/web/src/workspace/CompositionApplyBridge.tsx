@@ -1,21 +1,30 @@
 /**
- * Composer -> open document apply bridge (R5.4.3.2, extended in R5.4.3.4).
+ * Workspace document mutation bridge (R5.4.3.2, extended R5.4.3.4 and R5.5.2).
  *
- * A composed page is generated in Composer mode, where no editor infrastructure
- * is mounted (R5.3.3 isolation). The mutation itself can only happen through the
- * editor, so the shell stages the composed output as a `DesignerProposal` handoff
- * and switches to the editor mode; this component, which lives inside
- * `EditorContextProvider`, performs the apply once the editor is ready.
- *
- * Two proposal forms are supported, on the two existing editor mutation paths:
- *   - `proposal.document` only      -> `applyExternalDocument` (empty document)
- *   - `proposal.operations` present -> `applyDocumentOperations` (append)
+ * A page composed or a Designer proposal generated while no editor is mounted
+ * (Composer/Designer modes are isolated, R5.3.3) cannot mutate the document
+ * directly. The mutation can only happen through the editor, so the shell stages
+ * the output as a `DesignerProposal` handoff and switches to the editor mode;
+ * this component, which lives inside `EditorContextProvider`, performs the apply
+ * once the editor is ready.
  *
  * It introduces no mutation model of its own: the staged value is the existing
- * `DesignerProposal` envelope, and the apply is the same revision-guarded
- * transaction every external change uses. The captured session `boundary` makes a
- * document switch, new document or close between request and apply a no-op
- * instead of a write into the wrong document.
+ * `DesignerProposal` envelope, and the apply is one of the existing editor
+ * mutation paths, selected by the staged `mode`:
+ *   - `replace`    -> `applyExternalDocument` (whole-document replacement of an
+ *                     empty target; Composer only)
+ *   - `operations` -> `applyDocumentOperations` (an existing operation batch;
+ *                     Composer append or a Designer structural proposal)
+ *   - `insertion`  -> `applyImageInsertion` (an existing R3.1 insertion; a
+ *                     Designer image-insertion proposal)
+ *
+ * Every path is the same revision-guarded transaction every external change
+ * uses, so the resulting change reuses the existing autosave/history machinery.
+ * The captured session `boundary` makes a document switch, new document or close
+ * between request and apply a no-op instead of a write into the wrong document;
+ * `targetDocumentId`, when present, additionally pins the apply to the exact
+ * document the proposed change was generated for (two empty documents can share
+ * a revision, so the boundary is not the only guard the Designer needs).
  */
 import { useEffect, useRef } from 'react';
 import {
@@ -30,15 +39,26 @@ import {
 import { useEditorContext } from '../components/content/editor/EditorContext';
 import { useWorkspaceSessionContext } from './workspaceSession';
 
+/** Which existing editor mutation path a staged proposal is applied through. */
+export type PendingMutationMode = 'replace' | 'operations' | 'insertion';
+
+/** Which surface staged the mutation; only affects the result copy. */
+export type PendingMutationOrigin = 'composer' | 'designer';
+
 /**
- * A composed page waiting to be applied to the one open document. `proposal` is
- * the existing envelope; `boundary` is the session document boundary the
- * composition was requested against. `gaps` records unsupported composed
- * structures the append path could not represent (empty for full replacement).
+ * A proposal waiting to be applied to the one open document. `proposal` is the
+ * existing envelope; `boundary` is the session document boundary the mutation
+ * was requested against; `mode` selects the existing editor apply path;
+ * `targetDocumentId` pins the apply to the exact document the proposal was
+ * generated for; `gaps` records unsupported composed structures the append path
+ * could not represent (empty for full replacement and Designer proposals).
  */
 export interface PendingComposition {
   proposal: DesignerProposal;
   boundary: string;
+  mode: PendingMutationMode;
+  origin: PendingMutationOrigin;
+  targetDocumentId?: string | null;
   gaps?: CompositionGap[];
 }
 
@@ -48,7 +68,12 @@ export function pendingCompositionOf(
   baseRevision: string,
   boundary: string,
 ): PendingComposition {
-  return { proposal: { version: DESIGNER_PROPOSAL_VERSION, baseRevision, document }, boundary };
+  return {
+    proposal: { version: DESIGNER_PROPOSAL_VERSION, baseRevision, document },
+    boundary,
+    mode: 'replace',
+    origin: 'composer',
+  };
 }
 
 /**
@@ -72,6 +97,8 @@ export function pendingAppendCompositionOf(
       operations: { version: DOCUMENT_OPERATIONS_VERSION, baseRevision, operations },
     },
     boundary,
+    mode: 'operations',
+    origin: 'composer',
     gaps,
   };
 }
@@ -91,7 +118,23 @@ export function pendingAppendCompositionFromBatch(
   return pendingAppendCompositionOf(baseDocument, batch.operations, baseRevision, boundary, batch.gaps);
 }
 
-/** How a staged composition resolved. `stale-document` never touched the editor. */
+/**
+ * Stages a representable Designer proposal (R5.5.2) for the bridge. The proposal
+ * envelope is passed through intact - including its `review`/`visual` provenance
+ * - so the bridge executes its existing `operations` or `insertion`; the
+ * caller must have already classified it with `planDesignerMutation` and refused
+ * the unsupported forms, which never reach the bridge.
+ */
+export function pendingDesignerMutation(
+  proposal: DesignerProposal,
+  mode: Extract<PendingMutationMode, 'operations' | 'insertion'>,
+  boundary: string,
+  targetDocumentId: string,
+): PendingComposition {
+  return { proposal, boundary, mode, origin: 'designer', targetDocumentId };
+}
+
+/** How a staged mutation resolved. `stale-document` never touched the editor. */
 export type CompositionApplyOutcome =
   | { status: 'applied' }
   | { status: 'stale-document' }
@@ -107,16 +150,24 @@ export interface CompositionApplyBridgeProps {
 export function CompositionApplyBridge({ pending, ready, onResult }: CompositionApplyBridgeProps) {
   const context = useEditorContext();
   const { session } = useWorkspaceSessionContext();
-  // Applies each staged composition at most once, so a context re-render cannot
-  // turn a successful replacement into a spurious stale-revision failure.
+  // Applies each staged mutation at most once, so a context re-render cannot
+  // turn a successful apply into a spurious stale-revision failure.
   const handled = useRef<PendingComposition | null>(null);
 
   useEffect(() => {
     if (!pending || handled.current === pending) return;
 
-    // The document the composition was requested against is gone; never apply
-    // to whatever document the session moved on to.
+    // The document the mutation was requested against is gone; never apply to
+    // whatever document the session moved on to.
     if (session.boundary !== pending.boundary) {
+      handled.current = pending;
+      onResult({ status: 'stale-document' });
+      return;
+    }
+
+    // A proposal generated for another document must never apply, even when the
+    // destination happens to share its revision (two empty documents can).
+    if (pending.targetDocumentId != null && session.identity.documentId !== pending.targetDocumentId) {
       handled.current = pending;
       onResult({ status: 'stale-document' });
       return;
@@ -125,18 +176,42 @@ export function CompositionApplyBridge({ pending, ready, onResult }: Composition
     if (!context || !ready || !context.snapshot.ready) return;
 
     handled.current = pending;
-    const { proposal } = pending;
-    const result = proposal.operations
-      ? context.applyDocumentOperations(proposal.operations, proposal.baseRevision)
-      : context.applyExternalDocument({
-          canonical: proposal.document,
-          expectedRevision: proposal.baseRevision,
-          source: 'composer',
-        });
-    if (result.ok) onResult({ status: 'applied' });
-    else if (result.reason === 'stale-revision') onResult({ status: 'stale-document' });
+    const { proposal, mode } = pending;
+    const applied = applyPending(context, mode, proposal);
+    if (applied.ok) onResult({ status: 'applied' });
+    else if (applied.reason === 'stale-revision') onResult({ status: 'stale-document' });
     else onResult({ status: 'failed' });
-  }, [pending, ready, context, session.boundary, onResult]);
+  }, [pending, ready, context, session.boundary, session.identity.documentId, onResult]);
 
   return null;
+}
+
+type ApplyResult = { ok: true } | { ok: false; reason: 'stale-revision' | 'failed' };
+
+/**
+ * Dispatches a staged proposal to the matching existing editor mutation path.
+ * A mode whose proposal does not actually carry that instruction is a failure,
+ * never a silent fallback to whole-document replacement.
+ */
+function applyPending(
+  context: NonNullable<ReturnType<typeof useEditorContext>>,
+  mode: PendingMutationMode,
+  proposal: DesignerProposal,
+): ApplyResult {
+  if (mode === 'operations') {
+    if (!proposal.operations) return { ok: false, reason: 'failed' };
+    const result = context.applyDocumentOperations(proposal.operations, proposal.baseRevision);
+    return result.ok ? { ok: true } : { ok: false, reason: result.reason === 'stale-revision' ? 'stale-revision' : 'failed' };
+  }
+  if (mode === 'insertion') {
+    if (!proposal.insertion) return { ok: false, reason: 'failed' };
+    const result = context.applyImageInsertion(proposal.insertion, proposal.baseRevision);
+    return result.ok ? { ok: true } : { ok: false, reason: result.reason === 'stale-revision' ? 'stale-revision' : 'failed' };
+  }
+  const result = context.applyExternalDocument({
+    canonical: proposal.document,
+    expectedRevision: proposal.baseRevision,
+    source: 'composer',
+  });
+  return result.ok ? { ok: true } : { ok: false, reason: result.reason === 'stale-revision' ? 'stale-revision' : 'failed' };
 }

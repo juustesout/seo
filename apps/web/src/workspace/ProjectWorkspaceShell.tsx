@@ -16,13 +16,26 @@
  * editor instance and no second session/autosave/lifecycle.
  */
 import { useCallback, useMemo, useState } from 'react';
-import { isCanonicalDocumentEmpty, type CanonicalDocument, type CompositionGap, type CompositionOperationBatch } from '@seo/contracts';
+import {
+  isCanonicalDocumentEmpty,
+  type CanonicalDocument,
+  type CompositionGap,
+  type CompositionOperationBatch,
+  type DesignerProposal,
+} from '@seo/contracts';
 import { DocumentSessionProvider, type SwitchResult } from '../components/content/session';
 import { WorkspaceStateProvider, useDocumentScopedState } from '../components/content/workspace/workspaceState';
 import { documentRevisionOf } from '../components/content/documentRevision';
 import { canonicalFromEditorDocument } from '../components/content/editorDraft';
 import { ComposerMode } from './ComposerMode';
-import { pendingAppendCompositionFromBatch, pendingCompositionOf, type CompositionApplyOutcome, type PendingComposition } from './CompositionApplyBridge';
+import {
+  pendingAppendCompositionFromBatch,
+  pendingCompositionOf,
+  pendingDesignerMutation,
+  type CompositionApplyOutcome,
+  type PendingComposition,
+} from './CompositionApplyBridge';
+import { isDesignerMutationRepresentable, planDesignerMutation } from './designerMutation';
 import { DesignerMode } from './DesignerMode';
 import { EditorMode } from './EditorMode';
 import { WorkspaceChrome } from './WorkspaceChrome';
@@ -281,14 +294,60 @@ function WorkspaceBody({
     onModeChange?.('editor');
   };
 
+  /**
+   * R5.5.2: apply a reviewed Designer proposal to the currently open document.
+   * The Designer runs in an isolated mode with no editor, so - exactly like the
+   * Composer handoff - the proposal is staged and the shell moves to the editor
+   * mode, where the bridge applies it through the existing mutation paths
+   * (`applyDocumentOperations` / `applyImageInsertion`), never through the legacy
+   * whole-document `designer/apply` server write.
+   *
+   * The guards are explicit and ordered: the proposal must be representable at
+   * all, it must target the document that is actually open (a shared revision is
+   * not identity), and its `baseRevision` must still equal the live document
+   * revision. Any failure changes nothing and reports why.
+   */
+  const applyDesignerProposal = (proposal: DesignerProposal, targetDocumentId: string) => {
+    if (!canEdit || lifecycle.status !== 'ready') return;
+
+    const plan = planDesignerMutation(proposal);
+    if (!isDesignerMutationRepresentable(plan)) {
+      ws.setNotice(null);
+      ws.setErr(plan.reason);
+      return;
+    }
+
+    if (session.identity.documentId !== targetDocumentId) {
+      ws.setNotice(null);
+      ws.setErr(
+        'This proposal was generated for a different document than the one currently open. Open that document to review and apply it.',
+      );
+      return;
+    }
+
+    if (documentRevisionOf(ws.live.current.doc) !== proposal.baseRevision) {
+      ws.setNotice(null);
+      ws.setErr('The document changed before this proposal could be applied. Generate a new proposal from the current revision.');
+      return;
+    }
+
+    ws.setErr(null);
+    ws.setNotice(null);
+    setPendingComposition(pendingDesignerMutation(proposal, plan.kind, session.boundary, targetDocumentId));
+    onModeChange?.('editor');
+  };
+
   const onCompositionResult = (outcome: CompositionApplyOutcome) => {
+    const origin = pendingComposition?.origin ?? 'composer';
     const gaps = pendingComposition?.gaps ?? [];
+    const subject = origin === 'designer' ? 'The Designer change' : 'The composition';
+    const subjectLower = origin === 'designer' ? 'the Designer change' : 'the composition';
     setPendingComposition(null);
     if (outcome.status === 'applied') {
       ws.setNotice(
         gaps.length > 0
           ? `Part of the composition was added to this document and will be autosaved. Not added: ${compositionGapSummary(gaps)}.`
-          : 'The composition was applied to this document. Autosave will persist it.',
+          : `${subject} was applied to this document. Autosave will persist it.`,
       );
       ws.setErr(null);
       return;
@@ -296,8 +355,8 @@ function WorkspaceBody({
     ws.setNotice(null);
     ws.setErr(
       outcome.status === 'stale-document'
-        ? 'The document changed before the composition could be applied. It was left unchanged.'
-        : 'The composition could not be applied to this document.',
+        ? `The document changed before ${subjectLower} could be applied. It was left unchanged.`
+        : `${subject} could not be applied to this document.`,
     );
   };
 
@@ -341,7 +400,7 @@ function WorkspaceBody({
           onReviewOpenChange={setComposerReviewOpen}
         />
       )}
-      {activeMode === 'designer' && <DesignerMode />}
+      {activeMode === 'designer' && <DesignerMode onApplyProposal={applyDesignerProposal} />}
     </div>
   );
 }
