@@ -8,7 +8,7 @@
  *
  *   editor   -> EditorMode   (owns all editor infrastructure)
  *   composer -> ComposerMode (Composer boundary, owns no shared lifecycle)
- *   designer -> Designer     (compatibility body)
+ *   designer -> DesignerMode (Designer boundary, reads the open document)
  *
  * Editor-specific infrastructure (Tiptap instance, editor context/selection
  * providers, editor keymap, editor AI state and the editor-coupled assistant)
@@ -21,9 +21,9 @@ import { DocumentSessionProvider, type SwitchResult } from '../components/conten
 import { WorkspaceStateProvider, useDocumentScopedState } from '../components/content/workspace/workspaceState';
 import { documentRevisionOf } from '../components/content/documentRevision';
 import { canonicalFromEditorDocument } from '../components/content/editorDraft';
-import { Designer } from '../views/Designer';
 import { ComposerMode } from './ComposerMode';
 import { pendingAppendCompositionFromBatch, pendingCompositionOf, type CompositionApplyOutcome, type PendingComposition } from './CompositionApplyBridge';
+import { DesignerMode } from './DesignerMode';
 import { EditorMode } from './EditorMode';
 import { WorkspaceChrome } from './WorkspaceChrome';
 import { WorkspaceModeSwitcher, normalizeWorkspaceMode, type WorkspaceMode } from './WorkspaceModeSwitcher';
@@ -58,8 +58,6 @@ export function ProjectWorkspaceShell({
       <DocumentSessionProvider value={ws.sessionValue}>
         <WorkspaceStateProvider documentKey={ws.session.boundary}>
           <WorkspaceBody
-            projectId={projectId}
-            role={role}
             mode={mode}
             initialContentId={initialContentId}
             onModeChange={onModeChange}
@@ -83,14 +81,12 @@ function compositionGapSummary(gaps: CompositionGap[]): string {
  * shared document-switch actions and renders exactly one active mode.
  */
 function WorkspaceBody({
-  projectId,
-  role,
   mode,
   initialContentId,
   onModeChange,
   onOpenCalendar,
   onOpenPublications,
-}: Required<Pick<ProjectWorkspaceShellProps, 'projectId' | 'role' | 'mode'>> & {
+}: Required<Pick<ProjectWorkspaceShellProps, 'mode'>> & {
   initialContentId: string | null;
   onModeChange?: (mode: WorkspaceMode) => void;
   onOpenCalendar?: () => void;
@@ -137,7 +133,8 @@ function WorkspaceBody({
   // The shared header is the one workspace chrome layer. It is meaningful while
   // a ready, editable document is open, so both the Editor and Composer modes
   // show it (R5.4.6); Composer suppresses its own page header in favour of this
-  // one. Designer remains a legacy body until R5.5.
+  // one. Designer is bound to the open document (R5.5.1) but gains the shared
+  // chrome in R5.5.3.
   const showChrome = (activeMode === 'editor' || activeMode === 'composer') && lifecycle.status === 'ready' && canEdit;
   // Editor-canvas controls (Insert/Preview) only act on the mounted editor, so
   // they are hidden while Composer is the active mode.
@@ -344,7 +341,7 @@ function WorkspaceBody({
           onReviewOpenChange={setComposerReviewOpen}
         />
       )}
-      {activeMode === 'designer' && <Designer projectId={projectId} role={role} />}
+      {activeMode === 'designer' && <DesignerMode />}
     </div>
   );
 }
