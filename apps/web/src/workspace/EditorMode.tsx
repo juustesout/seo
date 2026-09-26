@@ -27,6 +27,7 @@ import { EditorSelectionProvider } from '../components/content/editor/EditorSele
 import { EmbeddedAgentEntry } from '../components/content/workspace/EmbeddedAgentEntry';
 import { InlineAssistantSlot } from '../components/content/workspace/InlineAssistantSlot';
 import { EditorView } from '../views/EditorView';
+import { CompositionApplyBridge, type CompositionApplyOutcome, type PendingComposition } from './CompositionApplyBridge';
 import { useWorkspaceSessionContext } from './workspaceSession';
 
 export interface EditorModeProps {
@@ -42,6 +43,9 @@ export interface EditorModeProps {
   startNew: () => void;
   goList: () => void;
   onOpenCalendar?: () => void;
+  /** A composed page staged by the shell, applied once this editor is ready. */
+  pendingComposition?: PendingComposition | null;
+  onCompositionResult?: (outcome: CompositionApplyOutcome) => void;
 }
 
 export function EditorMode({
@@ -54,6 +58,8 @@ export function EditorMode({
   startNew,
   goList,
   onOpenCalendar,
+  pendingComposition = null,
+  onCompositionResult,
 }: EditorModeProps) {
   const ws = useWorkspaceSessionContext();
   const { projectId, session, lifecycle, auto, canEdit } = ws;
@@ -128,6 +134,13 @@ export function EditorMode({
         dirty={auto.dirty}
         editor={editor}
       >
+        {pendingComposition && onCompositionResult && (
+          <CompositionApplyBridge
+            pending={pendingComposition}
+            ready={editor !== null}
+            onResult={onCompositionResult}
+          />
+        )}
         <div className="grid gap-3">
           <InlineAssistantSlot configured={aiConfigured} busy={assistantBusy}>
             <EmbeddedAgentEntry

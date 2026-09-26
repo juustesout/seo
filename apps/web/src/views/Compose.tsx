@@ -75,6 +75,8 @@ export function Compose({
   role = 'viewer',
   onOpenEditor,
   beginHandoff,
+  onApplyToDocument,
+  canApplyToDocument = false,
 }: {
   projectId: string;
   role?: string;
@@ -87,6 +89,14 @@ export function Compose({
    * for the legacy standalone Composer, where the handoff is immediate.
    */
   beginHandoff?: () => { isStale: () => boolean };
+  /**
+   * Applies the current run to the open workspace document instead of creating
+   * a new draft (R5.4.3.2). Only supplied by the shell, and only usable while
+   * that document is empty.
+   */
+  onApplyToDocument?: (document: CanonicalDocument) => void;
+  /** Whether the open shared document is an eligible (empty) apply target. */
+  canApplyToDocument?: boolean;
 }) {
   const canEdit = (ROLE_RANK[role] ?? 0) >= 1;
   const [brief, setBrief] = useState(DEFAULT_BRIEF);
@@ -277,15 +287,37 @@ export function Compose({
           </div>
         )}
 
-        {document && tab === 'preview' && canEdit && onOpenEditor && (
+        {document && tab === 'preview' && canEdit && (onOpenEditor || onApplyToDocument) && (
           <div className="flex flex-wrap items-center gap-3">
-            <Button type="button" onClick={() => void openInEditor()} disabled={creating}>
-              {creating ? 'Opening…' : 'Open in Editor'}
-            </Button>
+            {onOpenEditor && (
+              <Button type="button" onClick={() => void openInEditor()} disabled={creating}>
+                {creating ? 'Opening…' : 'Open in Editor'}
+              </Button>
+            )}
+            {onApplyToDocument && (
+              <Button
+                type="button"
+                variant="outline"
+                data-testid="compose-apply-current"
+                onClick={() => onApplyToDocument(document)}
+                disabled={!canApplyToDocument}
+              >
+                Apply to current document
+              </Button>
+            )}
             <span className="text-xs text-muted-foreground">
-              Creates a draft in Content Studio from this run. Generating stays preview-only until you do this.
+              {onApplyToDocument && canApplyToDocument
+                ? 'Replaces the open empty document with this composition. Review it before applying; it is not saved until autosave runs.'
+                : 'Creates a draft in Content Studio from this run. Generating stays preview-only until you do this.'}
             </span>
           </div>
+        )}
+
+        {document && tab === 'preview' && canEdit && onApplyToDocument && !canApplyToDocument && (
+          <p className="text-xs text-muted-foreground">
+            To apply this run in place, open a new or empty document first; otherwise use "Open in Editor" to create a new
+            draft.
+          </p>
         )}
 
         {createError && (

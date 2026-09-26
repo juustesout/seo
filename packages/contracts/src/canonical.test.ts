@@ -5,6 +5,7 @@ import {
   canonicalBlockTypeOf,
   canonicalEmptyDoc,
   canonicalMarkTypeOf,
+  isCanonicalDocumentEmpty,
   isValidCanonicalDoc,
   withDesignSystemRef,
 } from './canonical.js';
@@ -251,6 +252,36 @@ describe('isValidCanonicalDoc', () => {
     let node: Record<string, unknown> = { type: 'paragraph' };
     for (let i = 0; i < 205; i += 1) node = { type: 'group', children: [node] };
     expect(isValidCanonicalDoc({ version: 1, blocks: [node] })).toBe(false);
+  });
+});
+
+describe('isCanonicalDocumentEmpty', () => {
+  it('treats the canonical empty document as empty', () => {
+    expect(isCanonicalDocumentEmpty(canonicalEmptyDoc())).toBe(true);
+    expect(isCanonicalDocumentEmpty({ version: 1, blocks: [] })).toBe(true);
+  });
+
+  it('treats blank or missing paragraph content as empty', () => {
+    expect(isCanonicalDocumentEmpty({ version: 1, blocks: [{ type: 'paragraph', content: [] }] })).toBe(true);
+    expect(
+      isCanonicalDocumentEmpty({ version: 1, blocks: [{ type: 'paragraph', content: [{ type: 'text', text: '   ' }] }] }),
+    ).toBe(true);
+  });
+
+  it('treats any meaningful block, child or inline node as non-empty', () => {
+    expect(
+      isCanonicalDocumentEmpty({ version: 1, blocks: [{ type: 'paragraph', content: [{ type: 'text', text: 'Hi' }] }] }),
+    ).toBe(false);
+    expect(isCanonicalDocumentEmpty({ version: 1, blocks: [{ type: 'heading', attrs: { level: 1 } }] })).toBe(false);
+    expect(
+      isCanonicalDocumentEmpty({ version: 1, blocks: [{ type: 'slide', children: [{ type: 'paragraph' }] }] }),
+    ).toBe(false);
+    expect(
+      isCanonicalDocumentEmpty({
+        version: 1,
+        blocks: [{ type: 'paragraph', content: [{ type: 'break' }] }],
+      }),
+    ).toBe(false);
   });
 });
 

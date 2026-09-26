@@ -26,6 +26,7 @@
  * isolation guarantee is preserved.
  */
 import { useCallback, useEffect, useRef } from 'react';
+import type { CanonicalDocument } from '@seo/contracts';
 import { useOperationBoundary } from '../components/content/session';
 import { Compose } from '../views/Compose';
 import { useWorkspaceSessionContext } from './workspaceSession';
@@ -38,9 +39,17 @@ export interface ComposerModeProps {
    * a Composer-local id.
    */
   onOpenEditor: (contentId: string) => void;
+  /**
+   * Applies a composed page to the currently open document (R5.4.3.2). Supplied
+   * by the shell, which stages the composed document and moves to the editor
+   * mode; the editor then performs the single external-document replacement.
+   */
+  onApplyToDocument?: (document: CanonicalDocument) => void;
+  /** True while the open shared document is an eligible (empty) apply target. */
+  canApplyToDocument?: boolean;
 }
 
-export function ComposerMode({ onOpenEditor }: ComposerModeProps) {
+export function ComposerMode({ onOpenEditor, onApplyToDocument, canApplyToDocument = false }: ComposerModeProps) {
   const { projectId, role, session, err } = useWorkspaceSessionContext();
 
   // Guard for the draft-creation handoff. The workspace boundary is captured
@@ -67,7 +76,14 @@ export function ComposerMode({ onOpenEditor }: ComposerModeProps) {
           {err}
         </div>
       )}
-      <Compose projectId={projectId} role={role} onOpenEditor={onOpenEditor} beginHandoff={beginHandoff} />
+      <Compose
+        projectId={projectId}
+        role={role}
+        onOpenEditor={onOpenEditor}
+        beginHandoff={beginHandoff}
+        onApplyToDocument={onApplyToDocument}
+        canApplyToDocument={canApplyToDocument}
+      />
     </div>
   );
 }

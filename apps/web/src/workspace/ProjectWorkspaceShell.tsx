@@ -15,10 +15,15 @@
  * lives in `EditorMode`, so Composer/Designer never mount it. The shell keeps no
  * editor instance and no second session/autosave/lifecycle.
  */
+import { useCallback, useMemo, useState } from 'react';
+import { isCanonicalDocumentEmpty, type CanonicalDocument } from '@seo/contracts';
 import { DocumentSessionProvider, type SwitchResult } from '../components/content/session';
 import { WorkspaceStateProvider, useDocumentScopedState } from '../components/content/workspace/workspaceState';
+import { documentRevisionOf } from '../components/content/documentRevision';
+import { canonicalFromEditorDocument } from '../components/content/editorDraft';
 import { Designer } from '../views/Designer';
 import { ComposerMode } from './ComposerMode';
+import { pendingCompositionOf, type CompositionApplyOutcome, type PendingComposition } from './CompositionApplyBridge';
 import { EditorMode } from './EditorMode';
 import { WorkspaceChrome } from './WorkspaceChrome';
 import { WorkspaceModeSwitcher, normalizeWorkspaceMode, type WorkspaceMode } from './WorkspaceModeSwitcher';
@@ -94,6 +99,22 @@ function WorkspaceBody({
   const [previewOpen, setPreviewOpen] = useDocumentScopedState(false);
   const [railOpen, setRailOpen] = useDocumentScopedState(false);
 
+  // R5.4.3.2: a composed page staged for the open document. It survives the
+  // composer -> editor mode switch (this shell stays mounted) and is consumed by
+  // the editor through the single external-document mutation path once ready.
+  const [pendingComposition, setPendingComposition] = useState<PendingComposition | null>(null);
+
+  // A composition may replace the open document in place only while it is empty:
+  // a whole-document replacement must never destroy existing content.
+  const canApplyComposition = useMemo(() => {
+    if (!canEdit || lifecycle.status !== 'ready') return false;
+    try {
+      return isCanonicalDocumentEmpty(canonicalFromEditorDocument(ws.doc));
+    } catch {
+      return false;
+    }
+  }, [canEdit, lifecycle.status, ws.doc]);
+
   const activeMode = normalizeWorkspaceMode(mode);
   // The shared header is meaningful only while the editor mode owns a ready,
   // editable document; Composer/Designer are still legacy bodies with their own
@@ -147,6 +168,47 @@ function WorkspaceBody({
     void switchTo(session.requestDocumentSwitch(contentId), () => onModeChange?.('editor'));
   };
 
+  /**
+   * R5.4.3.2: apply a composed page to the currently open document. It stages
+   * the composed `CanonicalDocument` as a `DesignerProposal` bound to the open
+   * document's revision and boundary, then moves to the editor mode, where the
+   * bridge applies it through `applyExternalDocument`. No document switch and no
+   * `/content` create: the open document is replaced through the single editor
+   * mutation path. Only an empty document is a valid target.
+   */
+  const applyComposition = (document: CanonicalDocument) => {
+    if (!canEdit || lifecycle.status !== 'ready') return;
+    let empty = false;
+    try {
+      empty = isCanonicalDocumentEmpty(canonicalFromEditorDocument(ws.live.current.doc));
+    } catch {
+      empty = false;
+    }
+    if (!empty) {
+      ws.setErr('A composition can only be applied to an empty document. Use "Open in Editor" to create a new draft.');
+      return;
+    }
+    ws.setErr(null);
+    ws.setNotice(null);
+    setPendingComposition(pendingCompositionOf(document, documentRevisionOf(ws.live.current.doc), session.boundary));
+    onModeChange?.('editor');
+  };
+
+  const onCompositionResult = (outcome: CompositionApplyOutcome) => {
+    setPendingComposition(null);
+    if (outcome.status === 'applied') {
+      ws.setNotice('The composition was applied to this document. Autosave will persist it.');
+      ws.setErr(null);
+      return;
+    }
+    ws.setNotice(null);
+    ws.setErr(
+      outcome.status === 'stale-document'
+        ? 'The document changed before the composition could be applied. It was left unchanged.'
+        : 'The composition could not be applied to this document.',
+    );
+  };
+
   return (
     <div className="grid gap-4">
       <WorkspaceModeSwitcher mode={activeMode} onChange={onModeChange} />
@@ -172,9 +234,17 @@ function WorkspaceBody({
           startNew={startNew}
           goList={goList}
           onOpenCalendar={onOpenCalendar}
+          pendingComposition={pendingComposition}
+          onCompositionResult={onCompositionResult}
         />
       )}
-      {activeMode === 'composer' && <ComposerMode onOpenEditor={openInEditor} />}
+      {activeMode === 'composer' && (
+        <ComposerMode
+          onOpenEditor={openInEditor}
+          onApplyToDocument={applyComposition}
+          canApplyToDocument={canApplyComposition}
+        />
+      )}
       {activeMode === 'designer' && <Designer projectId={projectId} role={role} />}
     </div>
   );

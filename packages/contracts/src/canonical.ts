@@ -297,6 +297,27 @@ export function canonicalEmptyDoc(): CanonicalDocument {
 }
 
 /**
+ * True when a document carries no meaningful content: no blocks, or only empty
+ * paragraph blocks (no children and, at most, blank text). It mirrors the shape
+ * of `canonicalEmptyDoc()`/`tiptapEmptyDoc()`, so callers can decide whether an
+ * existing document may be replaced in place without guessing at raw editor
+ * state. It is deliberately conservative: any non-paragraph block, nested child
+ * or non-text inline node makes a document non-empty.
+ */
+export function isCanonicalDocumentEmpty(document: CanonicalDocument): boolean {
+  const blocks = Array.isArray(document?.blocks) ? document.blocks : [];
+  return blocks.every(isEmptyParagraphBlock);
+}
+
+function isEmptyParagraphBlock(block: CanonicalBlock): boolean {
+  if (!block || block.type !== 'paragraph') return false;
+  if (block.children && block.children.length > 0) return false;
+  const content = block.content;
+  if (!content || content.length === 0) return true;
+  return content.every((inline) => inline.type === 'text' && inline.text.trim().length === 0);
+}
+
+/**
  * Returns a copy of `document` that records the given design-system reference in
  * `meta.designSystem`. Pure and additive: other `meta` fields are preserved, and
  * an absent `ref` returns the document unchanged (nothing is invented, so the
