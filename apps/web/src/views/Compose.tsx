@@ -15,7 +15,7 @@
  * Editor" creates a persistent Content Studio draft from the current
  * CanonicalDocument (no second AI call, no new persistence layer).
  */
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import {
   COMPOSITION_PLAN_FORMAT_IDS,
   type CanonicalDocument,
@@ -74,10 +74,19 @@ export function Compose({
   projectId,
   role = 'viewer',
   onOpenEditor,
+  beginHandoff,
 }: {
   projectId: string;
   role?: string;
   onOpenEditor?: (contentId: string) => void;
+  /**
+   * Optional guard supplied by the workspace when Composer runs inside the
+   * shell. It captures the shared document boundary at the moment the handoff
+   * task starts and reports whether that boundary has since moved, so a stale
+   * creation result cannot switch the workspace to an obsolete draft. Omitted
+   * for the legacy standalone Composer, where the handoff is immediate.
+   */
+  beginHandoff?: () => { isStale: () => boolean };
 }) {
   const canEdit = (ROLE_RANK[role] ?? 0) >= 1;
   const [brief, setBrief] = useState(DEFAULT_BRIEF);
@@ -89,12 +98,19 @@ export function Compose({
   const [tab, setTab] = useState<OutputTab>('preview');
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
+  // The draft created for the current run, kept only until the handoff succeeds.
+  // It lets a retry (e.g. after a blocked save barrier) re-open the same draft
+  // instead of creating a duplicate. Not a document identity owner: a new run
+  // clears it and it never outlives this Composer instance.
+  const createdIdRef = useRef<string | null>(null);
 
   const busy = phase === 'planning' || phase === 'writing';
   const buttonLabel = phase === 'planning' ? 'Planning…' : phase === 'writing' ? 'Writing…' : 'Generate composition';
 
   const generate = async () => {
     if (!canEdit || busy) return;
+    // A new run invalidates any draft still pending a handoff.
+    createdIdRef.current = null;
     setError(null);
     setCreateError(null);
     setPlan(null);
@@ -134,9 +150,15 @@ export function Compose({
   // Persist the current run as a Content Studio draft and open the editor. The
   // document already exists in memory, so this is a single create call: no AI,
   // no re-planning. Guarded against double submits while the create is in
-  // flight; the preview stays on screen if it fails.
+  // flight; the preview stays on screen if it fails. Once a draft exists, a
+  // retry re-opens it through the guard instead of posting a duplicate.
   const openInEditor = async () => {
     if (!document || !canEdit || creating || !onOpenEditor) return;
+    if (createdIdRef.current) {
+      onOpenEditor(createdIdRef.current);
+      return;
+    }
+    const handoff = beginHandoff?.();
     setCreating(true);
     setCreateError(null);
     try {
@@ -145,6 +167,11 @@ export function Compose({
         method: 'POST',
         body: { title: draft.title, status: 'draft', content_json: draft.doc },
       });
+      // A result for a boundary the workspace has left must not initiate a
+      // handoff; the created draft is abandoned rather than opened into the
+      // wrong workspace state.
+      if (handoff?.isStale()) return;
+      createdIdRef.current = row.id;
       onOpenEditor(row.id);
     } catch (e) {
       setCreateError(e instanceof Error ? e.message : String(e));

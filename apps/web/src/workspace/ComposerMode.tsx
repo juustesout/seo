@@ -1,5 +1,5 @@
 /**
- * Composer mode boundary (R5.4.1).
+ * Composer mode boundary (R5.4.1 / R5.4.2).
  *
  * The shell dispatches exactly one active mode; this is the composer branch and
  * the architectural seam between the shared workspace/session and the existing
@@ -14,10 +14,19 @@
  * - the composition workflow (brief, format, phase, plan, preview, open/close
  *   flags) stays owned by `Compose`, because it is not document/session state.
  *
+ * R5.4.2 hardens the handoff: `beginHandoff` captures the shared document
+ * boundary when the create task starts (through the existing
+ * `useOperationBoundary`), and also treats leaving the composer mode as
+ * invalidation, so a late creation result cannot switch the workspace to an
+ * obsolete draft. The workspace error (e.g. a failed save barrier) is surfaced
+ * here because Composer does not render the shared document chrome.
+ *
  * It mounts no editor infrastructure (no Tiptap, `EditorContextProvider`,
  * `EditorSelectionProvider`, editor keymap or editor AI state), so the R5.3.3
  * isolation guarantee is preserved.
  */
+import { useCallback, useEffect, useRef } from 'react';
+import { useOperationBoundary } from '../components/content/session';
 import { Compose } from '../views/Compose';
 import { useWorkspaceSessionContext } from './workspaceSession';
 
@@ -32,7 +41,33 @@ export interface ComposerModeProps {
 }
 
 export function ComposerMode({ onOpenEditor }: ComposerModeProps) {
-  const { projectId, role } = useWorkspaceSessionContext();
+  const { projectId, role, session, err } = useWorkspaceSessionContext();
 
-  return <Compose projectId={projectId} role={role} onOpenEditor={onOpenEditor} />;
+  // Guard for the draft-creation handoff. The workspace boundary is captured
+  // when the task starts; leaving the composer mode (this boundary component
+  // unmounting) also invalidates it, since a composer that is no longer active
+  // must not perform a late handoff.
+  const beginOperation = useOperationBoundary(session.boundary);
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+  const beginHandoff = useCallback(() => {
+    const operation = beginOperation();
+    return { isStale: () => !mounted.current || operation.isStale() };
+  }, [beginOperation]);
+
+  return (
+    <div className="grid gap-3">
+      {err && (
+        <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+          {err}
+        </div>
+      )}
+      <Compose projectId={projectId} role={role} onOpenEditor={onOpenEditor} beginHandoff={beginHandoff} />
+    </div>
+  );
 }

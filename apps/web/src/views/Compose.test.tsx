@@ -264,4 +264,67 @@ describe('Compose -> Content Studio handoff', () => {
     expect(await screen.findByText('Could not open in editor: Could not create content')).toBeTruthy();
     expect(screen.getByText('copy for hero.title')).toBeTruthy();
   });
+
+  it('hands off when the captured workspace boundary is still current', async () => {
+    const flow = mockHandoffFlow();
+    generateFilled(flow);
+    const onOpenEditor = vi.fn();
+    render(
+      <Compose
+        projectId={PROJECT}
+        role="editor"
+        onOpenEditor={onOpenEditor}
+        beginHandoff={() => ({ isStale: () => false })}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Generate composition' }));
+    await screen.findByText('copy for hero.title');
+    fireEvent.click(screen.getByRole('button', { name: 'Open in Editor' }));
+
+    flow.create.resolve({ id: 'content-9' });
+    await waitFor(() => expect(onOpenEditor).toHaveBeenCalledWith('content-9'));
+  });
+
+  it('does not perform a handoff whose captured boundary is stale', async () => {
+    const flow = mockHandoffFlow();
+    generateFilled(flow);
+    const onOpenEditor = vi.fn();
+    render(
+      <Compose
+        projectId={PROJECT}
+        role="editor"
+        onOpenEditor={onOpenEditor}
+        beginHandoff={() => ({ isStale: () => true })}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Generate composition' }));
+    await screen.findByText('copy for hero.title');
+    fireEvent.click(screen.getByRole('button', { name: 'Open in Editor' }));
+
+    flow.create.resolve({ id: 'content-9' });
+    await waitFor(() =>
+      expect((screen.getByRole('button', { name: 'Open in Editor' }) as HTMLButtonElement).disabled).toBe(false),
+    );
+    expect(onOpenEditor).not.toHaveBeenCalled();
+  });
+
+  it('re-opens the created draft on retry instead of posting a duplicate', async () => {
+    const flow = mockHandoffFlow();
+    generateFilled(flow);
+    const onOpenEditor = vi.fn();
+    render(<Compose projectId={PROJECT} role="editor" onOpenEditor={onOpenEditor} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Generate composition' }));
+    await screen.findByText('copy for hero.title');
+    fireEvent.click(screen.getByRole('button', { name: 'Open in Editor' }));
+    flow.create.resolve({ id: 'content-1' });
+    await waitFor(() => expect(onOpenEditor).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open in Editor' }));
+    expect(onOpenEditor).toHaveBeenCalledTimes(2);
+    expect(onOpenEditor).toHaveBeenLastCalledWith('content-1');
+    expect(apiMock.api.mock.calls.filter(([path]) => path === `/projects/${PROJECT}/content`)).toHaveLength(1);
+  });
 });
