@@ -37,14 +37,13 @@ export function routePath(r: Route): string {
 }
 
 /**
- * Canonical workspace target for a retired project view (R5.4.7).
+ * Canonical workspace target for a retired project view (R5.4.7, R5.5.5).
  *
- * The former `content` and `compose` project views are superseded by the unified
- * workspace route. This maps them deterministically onto
+ * The former `content`, `compose` and `designer` project views are superseded by
+ * the unified workspace route. This maps them deterministically onto
  * `/p/:projectId/workspace/:mode[/:contentId]` so `App` can redirect old links
- * instead of rendering a second Composer/editor implementation. The `designer`
- * view is intentionally left alone (R5.5 owns its retirement). Returns null for
- * routes that are already canonical or unrelated.
+ * instead of rendering a second implementation. Returns null for routes that are
+ * already canonical or unrelated.
  */
 export function canonicalWorkspaceRoute(route: Route): Route | null {
   if (route.area !== 'project') return null;
@@ -53,6 +52,9 @@ export function canonicalWorkspaceRoute(route: Route): Route | null {
   }
   if (route.view === 'content') {
     return { area: 'project', projectId: route.projectId, view: 'workspace', sub: 'editor', sub2: route.sub, search: '' };
+  }
+  if (route.view === 'designer') {
+    return { area: 'project', projectId: route.projectId, view: 'workspace', sub: 'designer', sub2: null, search: '' };
   }
   return null;
 }

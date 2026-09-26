@@ -145,11 +145,12 @@ export function App() {
     return () => sub.subscription.unsubscribe();
   }, []);
 
-  // R5.4.7: retired Composer/editor entry points resolve to the canonical
-  // workspace route instead of rendering a second implementation. The account
-  // `/compose` area lands on the first project's workspace Composer; the former
-  // `content`/`compose` project views land on their workspace equivalents.
-  // `replaceState` keeps the back button from bouncing between the two URLs.
+  // R5.4.7/R5.5.5: retired Composer/editor/Designer entry points resolve to the
+  // canonical workspace route instead of rendering a second implementation. The
+  // account `/compose` area lands on the first project's workspace Composer; the
+  // former `content`/`compose`/`designer` project views land on their workspace
+  // equivalents. `replaceState` keeps the back button from bouncing between the
+  // two URLs.
   useEffect(() => {
     const target =
       route.area === 'compose'
@@ -279,13 +280,13 @@ export function App() {
     const pid = project.id;
     const view = route.view;
     // The unified workspace shell owns one document session across the three
-    // modes. Its canonical route is `/p/:id/workspace/:mode`. R5.4.7: the former
-    // `content`/`compose` views no longer render a second implementation; they
-    // redirect to the canonical workspace route (see the redirect effect), and
-    // only `workspace` and the not-yet-retired `designer` view mount the shell.
-    const workspaceActive = view === 'workspace' || view === 'designer';
-    const workspaceMode = view === 'workspace' ? normalizeWorkspaceMode(route.sub) : 'designer';
-    const workspaceContentId = view === 'workspace' ? route.sub2 : null;
+    // modes. Its canonical route is `/p/:id/workspace/:mode`. R5.4.7 retired the
+    // former `content`/`compose` views and R5.5.5 the former `designer` view:
+    // they no longer render a second implementation, they redirect to the
+    // canonical workspace route (see the redirect effect).
+    const workspaceActive = view === 'workspace';
+    const workspaceMode = normalizeWorkspaceMode(route.sub);
+    const workspaceContentId = route.sub2;
     return (
       <DesignSystemProvider projectId={pid}>
         <div className="flex min-h-screen flex-col">
@@ -315,7 +316,7 @@ export function App() {
                   }
                 />
               )}
-              {(view === 'content' || view === 'compose') && (
+              {(view === 'content' || view === 'compose' || view === 'designer') && (
                 <p className="text-sm text-muted-foreground">Opening the workspace...</p>
               )}
               {workspaceActive && (

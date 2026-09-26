@@ -32,6 +32,12 @@
  *
  * Everything here follows the dependency-free `@seo/contracts` convention: plain
  * types plus hand-rolled `isValid...` guards, no Zod, no runtime dependencies.
+ *
+ * R5.5.5 decision: retained as a *portable artifact* with no runtime
+ * integration. It is not the canonical workspace document and not a second live
+ * document representation; the unified Designer/workspace never reads or writes
+ * it. Its intended boundary is future export/import, templates, sharing and
+ * external agent exchange - never runtime document/session state.
  */
 
 import { isValidCanonicalDoc, type CanonicalBlock, type CanonicalDocument } from './canonical.js';
