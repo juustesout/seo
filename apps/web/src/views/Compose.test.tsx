@@ -355,6 +355,14 @@ describe('Compose -> current document append affordance', () => {
     expect(button.disabled).toBe(false);
     fireEvent.click(button);
 
+    // Opening the review is inert: it shows what will be added but hands
+    // nothing to the workspace yet.
+    expect(screen.getByTestId('composition-review')).toBeTruthy();
+    expect(onAppendToDocument).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByTestId('composition-review-apply'));
+
+    expect(screen.queryByTestId('composition-review')).toBeNull();
     expect(onAppendToDocument).toHaveBeenCalledTimes(1);
     expect(onAppendToDocument).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -364,7 +372,52 @@ describe('Compose -> current document append affordance', () => {
     );
     const batch = onAppendToDocument.mock.calls[0]?.[0] as CompositionOperationBatch;
     expect(batch.operations.length).toBeGreaterThan(0);
+    // The batch stays document-independent: the workspace binds the revision.
+    expect(batch).not.toHaveProperty('baseRevision');
     expect(apiMock.api.mock.calls.filter(([path]) => path === `/projects/${PROJECT}/content`)).toHaveLength(0);
+  });
+
+  it('cancels the review without handing the batch to the workspace', async () => {
+    const flow = mockComposeFlow();
+    generateFilled(flow);
+    const onAppendToDocument = vi.fn();
+    render(<Compose projectId={PROJECT} role="editor" onAppendToDocument={onAppendToDocument} canAppendToDocument />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Generate composition' }));
+    await screen.findByText('copy for hero.title');
+
+    fireEvent.click(screen.getByTestId('compose-append-current'));
+    expect(screen.getByTestId('composition-review')).toBeTruthy();
+
+    fireEvent.click(screen.getByTestId('composition-review-cancel'));
+    expect(screen.queryByTestId('composition-review')).toBeNull();
+    expect(onAppendToDocument).not.toHaveBeenCalled();
+    expect(apiMock.api.mock.calls.filter(([path]) => path === `/projects/${PROJECT}/content`)).toHaveLength(0);
+  });
+
+  it('discards the reviewed batch when the document moved during review', async () => {
+    const flow = mockComposeFlow();
+    generateFilled(flow);
+    const onAppendToDocument = vi.fn();
+    render(
+      <Compose
+        projectId={PROJECT}
+        role="editor"
+        onAppendToDocument={onAppendToDocument}
+        canAppendToDocument
+        beginHandoff={() => ({ isStale: () => true })}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Generate composition' }));
+    await screen.findByText('copy for hero.title');
+
+    fireEvent.click(screen.getByTestId('compose-append-current'));
+    fireEvent.click(screen.getByTestId('composition-review-apply'));
+
+    expect(screen.queryByTestId('composition-review')).toBeNull();
+    expect(onAppendToDocument).not.toHaveBeenCalled();
+    expect(screen.getByTestId('compose-review-error').textContent).toContain('changed while you were reviewing');
   });
 
   it('disables append while the open document is not an eligible target', async () => {

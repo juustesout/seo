@@ -10,6 +10,15 @@
  */
 import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import {
+  MARKETING_STORYBOARD_PLAN,
+  applyCompositionSlotFills,
+  compileComposition,
+  compositionSlotKindOf,
+  isWritableCompositionSlot,
+  type CanonicalDocument,
+  type CompositionOperationBatch,
+} from '@seo/contracts';
 import type { WorkspaceSessionValue } from './workspaceSession';
 import { WorkspaceSessionProvider } from './workspaceSession';
 import { ComposerMode } from './ComposerMode';
@@ -84,5 +93,43 @@ describe('ComposerMode', () => {
     expect((screen.getByLabelText('What do you want to create?') as HTMLTextAreaElement).value).toBe('A pricing page');
     expect(screen.getByRole('button', { name: 'Planning…' })).toBeTruthy();
     expect(apiMock.api).not.toHaveBeenCalledWith(expect.stringContaining('doc-10'));
+  });
+
+  it('forwards the reviewed batch to the shell only after the user applies it', async () => {
+    apiMock.api.mockReset();
+    const compiled = compileComposition(MARKETING_STORYBOARD_PLAN);
+    const fills = compiled.slots.slots.filter(isWritableCompositionSlot).map((ref) =>
+      compositionSlotKindOf(ref) === 'items'
+        ? { slot: ref.slot, items: [`item ${ref.slot}`] }
+        : { slot: ref.slot, text: `copy for ${ref.slot}` },
+    );
+    const document: CanonicalDocument = applyCompositionSlotFills(compiled, fills).document;
+    apiMock.api.mockImplementation((path: string) =>
+      path.endsWith('/plan')
+        ? Promise.resolve(MARKETING_STORYBOARD_PLAN)
+        : Promise.resolve({ compositionPlan: MARKETING_STORYBOARD_PLAN, canonicalDocument: document }),
+    );
+    const onAppendToDocument = vi.fn();
+    render(
+      <WorkspaceSessionProvider value={sessionStub()}>
+        <ComposerMode
+          onOpenEditor={vi.fn()}
+          onAppendToDocument={onAppendToDocument}
+          canAppendToDocument
+        />
+      </WorkspaceSessionProvider>,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Generate composition' }));
+    await screen.findByText('copy for hero.title');
+
+    fireEvent.click(screen.getByTestId('compose-append-current'));
+    expect(screen.getByTestId('composition-review')).toBeTruthy();
+    expect(onAppendToDocument).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByTestId('composition-review-apply'));
+    expect(onAppendToDocument).toHaveBeenCalledTimes(1);
+    expect(onAppendToDocument.mock.calls[0]?.[0]).toMatchObject({ composition: document });
+    expect(onAppendToDocument.mock.calls[0]?.[0] as CompositionOperationBatch).not.toHaveProperty('baseRevision');
   });
 });

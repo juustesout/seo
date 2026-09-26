@@ -27,6 +27,7 @@ import {
 } from '@seo/contracts';
 import { ApiRequestError, api } from '../lib/api';
 import { CanonicalRenderer } from '../components/canonicalRenderer';
+import { CompositionReviewDialog } from './CompositionReviewDialog';
 import { editorDraftFromCanonical } from '../components/content/editorDraft';
 import { PageHeader } from '@/components/ui/page-header';
 import { Button } from '@/components/ui/button';
@@ -62,6 +63,17 @@ interface ComposeError {
   message: string;
   code: string | null;
   phase: PhaseName;
+}
+
+/**
+ * R5.4.5: the reviewed-but-not-yet-applied batch. The batch is immutable and
+ * document-independent; `isStale` is captured from the workspace boundary at
+ * the moment the review opens so a review that outlives the document it was
+ * opened against cannot silently mutate a different document.
+ */
+interface PendingReview {
+  batch: CompositionOperationBatch;
+  isStale: () => boolean;
 }
 
 function toError(e: unknown, phase: PhaseName): ComposeError {
@@ -120,6 +132,10 @@ export function Compose({
   const [tab, setTab] = useState<OutputTab>('preview');
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
+  // R5.4.5: the run under review. Opening it is inert - no document mutation -
+  // and only Apply hands the batch to the workspace's existing staging path.
+  const [review, setReview] = useState<PendingReview | null>(null);
+  const [reviewError, setReviewError] = useState<string | null>(null);
   // The draft created for the current run, kept only until the handoff succeeds.
   // It lets a retry (e.g. after a blocked save barrier) re-open the same draft
   // instead of creating a duplicate. Not a document identity owner: a new run
@@ -144,6 +160,8 @@ export function Compose({
     createdIdRef.current = null;
     setError(null);
     setCreateError(null);
+    setReview(null);
+    setReviewError(null);
     setPlan(null);
     setDocument(null);
     setTab('preview');
@@ -209,6 +227,32 @@ export function Compose({
     } finally {
       setCreating(false);
     }
+  };
+
+  // R5.4.5: open the review for the current batch. Capturing the stale check
+  // here (rather than at apply time) is what ties the review to the document it
+  // was opened against; no document state is touched until Apply.
+  const openReview = () => {
+    if (!appendBatch) return;
+    setReviewError(null);
+    setReview({ batch: appendBatch, isStale: beginHandoff?.().isStale ?? (() => false) });
+  };
+
+  // Apply hands the reviewed batch back to the workspace, which binds the open
+  // document's revision and runs the existing bridge. If the document moved
+  // while the user was reviewing, the batch is discarded instead of applied to
+  // the wrong state.
+  const applyReview = () => {
+    if (!review) return;
+    if (review.isStale()) {
+      setReview(null);
+      setReviewError('The open document changed while you were reviewing. Generate again to add this run.');
+      return;
+    }
+    const batch = review.batch;
+    setReview(null);
+    setReviewError(null);
+    onAppendToDocument?.(batch);
   };
 
   return (
@@ -331,7 +375,7 @@ export function Compose({
                 type="button"
                 variant="outline"
                 data-testid="compose-append-current"
-                onClick={() => appendBatch && onAppendToDocument(appendBatch)}
+                onClick={openReview}
                 disabled={!canAppendToDocument || !appendBatch}
               >
                 Add to current document
@@ -365,6 +409,15 @@ export function Compose({
           </div>
         )}
 
+        {reviewError && (
+          <div
+            className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive"
+            data-testid="compose-review-error"
+          >
+            {reviewError}
+          </div>
+        )}
+
         {plan && tab === 'structure' && <StructurePanel plan={plan} />}
 
         {plan && (
@@ -374,6 +427,14 @@ export function Compose({
           </div>
         )}
       </section>
+
+      {review && (
+        <CompositionReviewDialog
+          batch={review.batch}
+          onApply={applyReview}
+          onCancel={() => setReview(null)}
+        />
+      )}
     </div>
   );
 }
