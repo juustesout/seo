@@ -114,9 +114,10 @@ describe('ProjectWorkspaceShell', () => {
     render(<Harness />);
     fireEvent.click(await screen.findByTestId('mode-composer'));
     await screen.findByTestId('mode-editor');
-    await waitFor(() =>
-      expect(probes.entries.at(-1)).toMatchObject({ mode: 'editor', contentId: 'draft-1' }),
-    );
+    await waitFor(() => expect(probes.entries.at(-1)?.mode).toBe('editor'));
+    // The created draft becomes the one canonical active document; the editor
+    // does not receive it through a shell-local id.
+    expect(probes.entries.at(-1)?.session).toMatchObject({ identity: { documentId: 'draft-1' } });
   });
 
   it('keeps the switcher inert when the parent does not own the mode', async () => {

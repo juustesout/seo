@@ -91,6 +91,7 @@ describe('workspace mode dispatch', () => {
     render(<Harness />);
     await openDocument();
     expect(screen.getByTestId('editor-workspace')).toBeTruthy();
+    expect(screen.queryByRole('heading', { name: 'Compose' })).toBeNull();
     await waitFor(() => expect(document.querySelector('.ProseMirror')).toBeTruthy());
     expect(mounts.ctx).toBeGreaterThan(0);
     expect(mounts.sel).toBeGreaterThan(0);
@@ -108,6 +109,7 @@ describe('workspace mode dispatch', () => {
 
   it('mounts only Designer for the designer mode, with no editor infrastructure', () => {
     render(<Harness initialMode="designer" />);
+    expect(screen.queryByRole('heading', { name: 'Compose' })).toBeNull();
     expect(screen.queryByTestId('editor-workspace')).toBeNull();
     expect(document.querySelector('.ProseMirror')).toBeNull();
     expect(mounts.ctx).toBe(0);
