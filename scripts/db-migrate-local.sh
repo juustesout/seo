@@ -4,8 +4,8 @@
 #
 # Creates (if absent) a database `seo_dev`, stubs the minimal Supabase Auth
 # surface that the migrations reference (auth.users, auth.uid(), the anon /
-# authenticated roles), then applies every migration in order with
-# ON_ERROR_STOP so the first failure is reported loudly.
+# authenticated / service_role roles), then applies every migration in order
+# with ON_ERROR_STOP so the first failure is reported loudly.
 #
 # No destructive commands are run: existing objects are reused, not dropped.
 # ---------------------------------------------------------------------------
@@ -21,6 +21,7 @@ do $$
 begin
   if not exists (select 1 from pg_roles where rolname = 'anon') then create role anon nologin; end if;
   if not exists (select 1 from pg_roles where rolname = 'authenticated') then create role authenticated nologin; end if;
+  if not exists (select 1 from pg_roles where rolname = 'service_role') then create role service_role nologin bypassrls; end if;
 end $$;
 SQL
 runuser -u postgres -- psql -X -q -d postgres -c "select 1 from pg_database where datname = '${DB_NAME}'" | grep -q 1 \
@@ -1416,5 +1417,216 @@ if [ -z "${AGENT_RUN_LEAK_COUNT}" ] || [ "${AGENT_RUN_LEAK_COUNT}" != "0" ]; the
   exit 1
 fi
 echo "   smoke: non-member cannot read a foreign project agent run (RLS isolation OK)"
+
+echo "==> smoke test: append-only usage ledger (R5.10.2) + idempotency scope + immutability + isolation"
+PSQL -d "${DB_NAME}" <<'SQL'
+set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-000000000001"}';
+do $$
+declare
+  v_project uuid;
+  v_project2 uuid;
+  v_account uuid;
+  v_total bigint;
+  v_groups int;
+begin
+  select id, account_id into v_project, v_account from public.seo_projects where slug = 'demo' limit 1;
+  select id into v_project2 from public.seo_projects where slug = 'second-user-project' limit 1;
+  if v_project is null or v_project2 is null or v_account is null then
+    raise exception 'smoke: usage ledger projects missing';
+  end if;
+
+  -- A project-scoped event: the trigger mirrors the project's account.
+  insert into public.seo_usage_events
+    (project_id, user_id, category, provider, operation, quantity, unit, success, source_id, idempotency_key)
+  values
+    (v_project, '00000000-0000-0000-0000-000000000001', 'ai', 'openai', 'chat', 60,
+     'input_token', true, 'smoke-usage-1', 'v1|ai|openai|chat|input_token|smoke-usage-1|0'),
+    (v_project, '00000000-0000-0000-0000-000000000001', 'ai', 'openai', 'chat', 40,
+     'output_token', true, 'smoke-usage-2', 'v1|ai|openai|chat|output_token|smoke-usage-2|0');
+
+  if exists (
+    select 1 from public.seo_usage_events e
+    join public.seo_projects p on p.id = e.project_id
+    where e.source_id = 'smoke-usage-1' and p.account_id is distinct from e.account_id
+  ) then raise exception 'smoke: usage event account_id does not mirror the project'; end if;
+
+  -- A worker-originated event: project scope, no acting user.
+  insert into public.seo_usage_events
+    (project_id, user_id, category, provider, operation, quantity, unit, success, source_id)
+  values
+    (v_project, null, 'job', 'worker', 'run', 1, 'job', true, 'smoke-usage-4');
+
+  -- An account-scoped event with no project.
+  insert into public.seo_usage_events
+    (account_id, user_id, category, provider, operation, quantity, unit, success, source_id, idempotency_key)
+  values
+    (v_account, '00000000-0000-0000-0000-000000000001', 'dataforseo', 'dataforseo', 'serp_live', 5,
+     'serp_request', true, 'smoke-usage-3', 'v1|dataforseo|dataforseo|serp_live|serp_request|smoke-usage-3|0');
+
+  -- Idempotency: a duplicate (project_id, key) is rejected ...
+  begin
+    insert into public.seo_usage_events
+      (project_id, category, provider, operation, quantity, unit, success, idempotency_key)
+    values
+      (v_project, 'ai', 'openai', 'chat', 1, 'input_token', true,
+       'v1|ai|openai|chat|input_token|smoke-usage-1|0');
+    raise exception 'smoke: duplicate usage idempotency key unexpectedly allowed';
+  exception when unique_violation then null;
+  end;
+
+  -- ... but the same key in another project is a different logical fact.
+  insert into public.seo_usage_events
+    (project_id, category, provider, operation, quantity, unit, success, idempotency_key)
+  values
+    (v_project2, 'ai', 'openai', 'chat', 1, 'input_token', true,
+     'v1|ai|openai|chat|input_token|smoke-usage-1|0');
+  if not exists (
+    select 1 from public.seo_usage_events where project_id = v_project2
+  ) then raise exception 'smoke: project-scoped usage key was not accepted'; end if;
+
+  -- Account-scope duplicate is rejected too.
+  begin
+    insert into public.seo_usage_events
+      (account_id, category, provider, operation, quantity, unit, success, idempotency_key)
+    values
+      (v_account, 'dataforseo', 'dataforseo', 'serp_live', 1, 'serp_request', true,
+       'v1|dataforseo|dataforseo|serp_live|serp_request|smoke-usage-3|0');
+    raise exception 'smoke: duplicate account usage idempotency key unexpectedly allowed';
+  exception when unique_violation then null;
+  end;
+
+  -- A NULL idempotency key is never deduplicated.
+  insert into public.seo_usage_events
+    (project_id, category, provider, operation, quantity, unit, success, source_id)
+  values (v_project, 'ai', 'openai', 'chat', 0, 'input_token', false, 'smoke-usage-5');
+  insert into public.seo_usage_events
+    (project_id, category, provider, operation, quantity, unit, success, source_id)
+  values (v_project, 'ai', 'openai', 'chat', 0, 'input_token', false, 'smoke-usage-5');
+  if (select count(*) from public.seo_usage_events where source_id = 'smoke-usage-5') <> 2 then
+    raise exception 'smoke: null-key usage events were unexpectedly deduplicated';
+  end if;
+
+  -- Closed vocabulary + format + bounds are enforced.
+  begin
+    insert into public.seo_usage_events (project_id, category, provider, operation, unit, success)
+    values (v_project, 'billing', 'openai', 'chat', 'request', true);
+    raise exception 'smoke: invalid usage category unexpectedly allowed';
+  exception when check_violation then null;
+  end;
+
+  begin
+    insert into public.seo_usage_events (project_id, category, provider, operation, unit, success)
+    values (v_project, 'ai', 'openai', 'chat', 'tokens', true);
+    raise exception 'smoke: invalid usage unit unexpectedly allowed';
+  exception when check_violation then null;
+  end;
+
+  begin
+    insert into public.seo_usage_events (project_id, category, provider, operation, quantity, unit, success)
+    values (v_project, 'ai', 'openai', 'chat', -1, 'request', true);
+    raise exception 'smoke: negative usage quantity unexpectedly allowed';
+  exception when check_violation then null;
+  end;
+
+  begin
+    insert into public.seo_usage_events (project_id, category, provider, operation, unit, success)
+    values (v_project, 'ai', 'Not Valid', 'chat', 'request', true);
+    raise exception 'smoke: malformed usage provider unexpectedly allowed';
+  exception when check_violation then null;
+  end;
+
+  begin
+    insert into public.seo_usage_events (project_id, category, provider, operation, unit, success, metadata)
+    values (v_project, 'ai', 'openai', 'chat', 'request', true, '[]'::jsonb);
+    raise exception 'smoke: non-object usage metadata unexpectedly allowed';
+  exception when check_violation then null;
+  end;
+
+  begin
+    insert into public.seo_usage_events
+      (project_id, category, provider, operation, unit, success, idempotency_key)
+    values (v_project, 'ai', 'openai', 'chat', 'request', true, repeat('x', 513));
+    raise exception 'smoke: oversized usage idempotency key unexpectedly allowed';
+  exception when check_violation then null;
+  end;
+
+  -- Historical immutability is a schema property: every FK uses ON DELETE SET
+  -- NULL ('n'), so deleting a project/account/user cannot erase usage evidence.
+  if (select count(*) from pg_constraint
+        where conrelid = 'public.seo_usage_events'::regclass and contype = 'f' and confdeltype = 'n') <> 3 then
+    raise exception 'smoke: usage event foreign keys are not all ON DELETE SET NULL';
+  end if;
+
+  -- Append-only RLS: a SELECT-only policy, no write policies, and no updated_at.
+  if not exists (
+    select 1 from pg_policies
+    where schemaname = 'public' and tablename = 'seo_usage_events' and cmd = 'SELECT'
+  ) then raise exception 'smoke: usage events select policy missing'; end if;
+  if exists (
+    select 1 from pg_policies
+    where schemaname = 'public' and tablename = 'seo_usage_events' and cmd <> 'SELECT'
+  ) then raise exception 'smoke: usage events table has a non-select policy'; end if;
+  if exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'seo_usage_events' and column_name = 'updated_at'
+  ) then raise exception 'smoke: usage events table must not have updated_at'; end if;
+
+  -- Aggregation RPC: fixed shape, membership enforced, raw ledger never returned.
+  select coalesce(sum(quantity), 0), count(*) into v_total, v_groups
+  from public.seo_usage_totals('00000000-0000-0000-0000-000000000001', v_project, null);
+  if v_total <> 101 then raise exception 'smoke: usage project total was % not 101', v_total; end if;
+  if v_groups < 2 then raise exception 'smoke: usage aggregate returned too few groups'; end if;
+
+  select coalesce(sum(quantity), 0) into v_total
+  from public.seo_usage_totals('00000000-0000-0000-0000-000000000001', null, v_account);
+  if v_total <> 106 then raise exception 'smoke: usage account total was % not 106', v_total; end if;
+
+  begin
+    perform 1 from public.seo_usage_totals('00000000-0000-0000-0000-000000000002', v_project, null);
+    raise exception 'smoke: non-member usage aggregate unexpectedly allowed';
+  exception when insufficient_privilege then null;
+  end;
+
+  -- Only the service role may execute the aggregation RPC; browser roles cannot.
+  if has_function_privilege('authenticated',
+      'public.seo_usage_totals(uuid,uuid,uuid,timestamptz,timestamptz,text,text,text,text,boolean)', 'execute') then
+    raise exception 'smoke: usage aggregate is executable by authenticated';
+  end if;
+  if not has_function_privilege('service_role',
+      'public.seo_usage_totals(uuid,uuid,uuid,timestamptz,timestamptz,text,text,text,text,boolean)', 'execute') then
+    raise exception 'smoke: usage aggregate is not executable by service_role';
+  end if;
+
+  raise notice 'smoke: append-only usage ledger OK';
+end $$;
+SQL
+
+# RLS can only be exercised as a non-superuser role (superusers bypass RLS).
+DEMO_PROJECT_ID="$(PSQL -d "${DB_NAME}" -t -A -c "select id from public.seo_projects where slug = 'demo' limit 1")"
+USAGE_LEAK_COUNT="$(PSQL -d "${DB_NAME}" -v demo_project="${DEMO_PROJECT_ID}" -t -A <<'SQL'
+grant usage on schema public to authenticated;
+grant select on public.seo_usage_events to authenticated;
+set role authenticated;
+set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-000000000002"}';
+select count(*) from public.seo_usage_events where project_id = :'demo_project';
+SQL
+)"
+if [ -z "${USAGE_LEAK_COUNT}" ] || [ "${USAGE_LEAK_COUNT}" != "0" ]; then
+  echo "!! RLS leak: non-member read ${USAGE_LEAK_COUNT} usage rows from a foreign project" >&2
+  exit 1
+fi
+echo "   smoke: non-member cannot read foreign project usage events (RLS isolation OK)"
+
+USAGE_ACCOUNT_LEAK_COUNT="$(PSQL -d "${DB_NAME}" -t -A <<'SQL'
+set role authenticated;
+set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-000000000002"}';
+select count(*) from public.seo_usage_events where project_id is null and account_id is not null;
+SQL
+)"
+if [ -z "${USAGE_ACCOUNT_LEAK_COUNT}" ] || [ "${USAGE_ACCOUNT_LEAK_COUNT}" != "0" ]; then
+  echo "!! RLS leak: non-member read ${USAGE_ACCOUNT_LEAK_COUNT} account-scoped usage rows" >&2
+  exit 1
+fi
+echo "   smoke: non-owner cannot read foreign account usage events (RLS isolation OK)"
 
 echo "==> migration validation OK (${DB_NAME})"

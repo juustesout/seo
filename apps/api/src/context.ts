@@ -23,6 +23,7 @@ import { SupabaseKnowledgeFileStore, type KnowledgeFileStore } from './infra/kno
 import { SupabaseJobStore } from './jobs/supabaseJobStore.js';
 import { PostgresJobStore } from './jobs/postgresJobStore.js';
 import type { JobStore } from './jobs/types.js';
+import { SupabaseUsageEventStore, type UsageEventStore } from './services/usageEventRepository.js';
 import type { Pool } from 'pg';
 import pg from 'pg';
 import type {
@@ -57,6 +58,12 @@ export interface ServiceContainer {
   knowledgeFileExtractors: KnowledgeFileExtractorRegistry;
   /** Durable job queue used by long operations. */
   jobStore: JobStore;
+  /**
+   * Append-only usage ledger (R5.10.2). The seam is append/list/aggregate only:
+   * usage evidence is written once and can never be updated or deleted through
+   * the application domain.
+   */
+  usageEvents: UsageEventStore;
   /** Direct Postgres pool, present when SUPABASE_DB_URL is configured. */
   pgPool: Pool | null;
 }
@@ -152,6 +159,7 @@ export function getContainer(): ServiceContainer {
     knowledgeFileStore: new SupabaseKnowledgeFileStore(sb),
     knowledgeFileExtractors: createKnowledgeFileExtractors(),
     jobStore,
+    usageEvents: new SupabaseUsageEventStore(sb),
     pgPool,
   };
   cached = container;

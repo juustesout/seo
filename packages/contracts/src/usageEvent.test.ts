@@ -7,6 +7,7 @@ import {
   isValidUsageMetadata,
   isValidUsageQuantity,
   isValidUsageUnit,
+  usageEventIdempotencyKey,
   type UsageEvent,
 } from './usageEvent.js';
 
@@ -58,10 +59,11 @@ describe('usage vocabulary', () => {
     expect(isValidUsageUnit('USD')).toBe(false);
   });
 
-  it('requires a non-negative finite quantity', () => {
+  it('requires a non-negative integer quantity', () => {
     expect(isValidUsageQuantity(0)).toBe(true);
     expect(isValidUsageQuantity(1)).toBe(true);
     expect(isValidUsageQuantity(-1)).toBe(false);
+    expect(isValidUsageQuantity(1.5)).toBe(false);
     expect(isValidUsageQuantity(Number.NaN)).toBe(false);
     expect(isValidUsageQuantity(Number.POSITIVE_INFINITY)).toBe(false);
     expect(isValidUsageQuantity('1')).toBe(false);
@@ -185,5 +187,37 @@ describe('usage event', () => {
     expect(isValidUsageEvent(baseEvent({ sourceId: 'a'.repeat(201) }))).toBe(false);
     expect(isValidUsageEvent(null)).toBe(false);
     expect(isValidUsageEvent({})).toBe(false);
+  });
+});
+
+describe('usage idempotency key', () => {
+  const parts = {
+    category: 'ai' as const,
+    provider: 'openai',
+    operation: 'chat',
+    unit: 'input_token' as const,
+    sourceId: 'call-123',
+  };
+
+  it('derives a deterministic v1 key from the stable source id', () => {
+    expect(usageEventIdempotencyKey(parts)).toBe('v1|ai|openai|chat|input_token|call-123|0');
+    expect(usageEventIdempotencyKey(parts)).toBe(usageEventIdempotencyKey({ ...parts }));
+  });
+
+  it('separates the two token directions for one source', () => {
+    const input = usageEventIdempotencyKey(parts);
+    const output = usageEventIdempotencyKey({ ...parts, unit: 'output_token' });
+    expect(input).not.toBe(output);
+  });
+
+  it('disambiguates repeated facts of the same kind with occurrence', () => {
+    expect(usageEventIdempotencyKey({ ...parts, occurrence: 1 })).toBe(
+      'v1|ai|openai|chat|input_token|call-123|1',
+    );
+  });
+
+  it('returns null without a stable source id (not deduplicatable)', () => {
+    expect(usageEventIdempotencyKey({ ...parts, sourceId: null })).toBeNull();
+    expect(usageEventIdempotencyKey({ ...parts, sourceId: '' })).toBeNull();
   });
 });

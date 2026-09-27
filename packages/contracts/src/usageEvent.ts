@@ -91,7 +91,9 @@ export type UsageUnit = (typeof USAGE_UNITS)[number];
  * provider-specific operations must not force a global enum.
  *
  * `success` is false for failed attempts, which are still meaningful usage
- * facts. `quantity` may be 0 when a failed attempt consumed nothing measurable.
+ * facts. `quantity` is a non-negative integer count (every unit in the
+ * vocabulary is countable) and may be 0 when a failed attempt consumed nothing
+ * measurable.
  *
  * `sourceId` is the correlation handle back to the originating domain record or
  * provider attempt (job id, publication id, media id, DataForSEO task id, AI
@@ -129,6 +131,7 @@ export const USAGE_PROVIDER_MAX_CHARS = 64;
 export const USAGE_OPERATION_MAX_CHARS = 64;
 export const USAGE_SOURCE_ID_MAX_CHARS = 200;
 export const USAGE_OCCURRED_AT_MAX_CHARS = 100;
+export const USAGE_EVENT_IDEMPOTENCY_KEY_MAX_CHARS = 512;
 
 // ---------------------------------------------------------------------------
 // Guards
@@ -187,9 +190,9 @@ export function isValidUsageUnit(value: unknown): value is UsageUnit {
   return typeof value === 'string' && (USAGE_UNITS as readonly string[]).includes(value);
 }
 
-/** True when `value` is a non-negative finite quantity. */
+/** True when `value` is a non-negative integer quantity. */
 export function isValidUsageQuantity(value: unknown): value is number {
-  return typeof value === 'number' && Number.isFinite(value) && value >= 0;
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0;
 }
 
 /** True when `value` is a bounded, secret-free metadata bag (plain object). */
@@ -219,4 +222,73 @@ export function isValidUsageEvent(value: unknown): value is UsageEvent {
   if (!isNullableBoundedText(value.sourceId, USAGE_SOURCE_ID_MAX_CHARS)) return false;
   if (!isValidUsageMetadata(value.metadata)) return false;
   return true;
+}
+
+// ---------------------------------------------------------------------------
+// Write and read shapes (R5.10.2 append-only ledger)
+// ---------------------------------------------------------------------------
+
+/**
+ * The write shape: a fact the caller wants recorded. `id` and `occurredAt` are
+ * assigned when absent; `metadata` defaults to `{}`. `idempotencyKey` is an
+ * explicit override for the derived key (see `usageEventIdempotencyKey`).
+ */
+export type NewUsageEvent = Omit<UsageEvent, 'id' | 'occurredAt' | 'metadata'> & {
+  id?: string;
+  occurredAt?: IsoDateTime;
+  metadata?: Record<string, unknown>;
+  idempotencyKey?: string | null;
+};
+
+/** Read filter over the ledger. A scope (account or project) is required. */
+export interface UsageEventFilter {
+  accountId?: string | null;
+  projectId?: string | null;
+  category?: UsageCategory;
+  provider?: string;
+  operation?: string;
+  unit?: UsageUnit;
+  success?: boolean;
+  sourceId?: string;
+  occurredFrom?: IsoDateTime;
+  occurredTo?: IsoDateTime;
+  limit?: number;
+}
+
+/** Fixed aggregate shape returned by the ledger (category/provider/operation/unit). */
+export interface UsageAggregate {
+  category: UsageCategory;
+  provider: string;
+  operation: string;
+  unit: UsageUnit;
+  quantity: number;
+  eventCount: number;
+}
+
+/** The inputs a deterministic ledger idempotency key is derived from. */
+export interface UsageIdempotencyParts {
+  category: UsageCategory;
+  provider: string;
+  operation: string;
+  unit: UsageUnit;
+  sourceId: string | null;
+  /** Disambiguates several facts of the same kind within one external attempt. */
+  occurrence?: number;
+}
+
+/**
+ * The deterministic ledger idempotency key (R5.10.2):
+ *
+ *   v1|<category>|<provider>|<operation>|<unit>|<sourceId>|<occurrence ?? 0>
+ *
+ * Returns null when there is no `sourceId`: an event that is not tied to a
+ * stable external attempt identity cannot be honestly de-duplicated. Scope
+ * (project/account) is enforced by the DB unique indexes, not by this string.
+ * Callers may override the derived key explicitly when a stable identity exists
+ * outside `sourceId`; such a key must be namespaced by the caller.
+ */
+export function usageEventIdempotencyKey(parts: UsageIdempotencyParts): string | null {
+  if (parts.sourceId === null || parts.sourceId.length === 0) return null;
+  const occurrence = parts.occurrence ?? 0;
+  return `v1|${parts.category}|${parts.provider}|${parts.operation}|${parts.unit}|${parts.sourceId}|${occurrence}`;
 }
