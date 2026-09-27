@@ -33,6 +33,7 @@ import type {
 import { OpenAIProvider } from '../providers/ai/openai.js';
 import { ApiError } from '../apiErrors.js';
 import { logger } from '../logger.js';
+import { instrumentAiProvider } from './usageInstrumentation.js';
 import type { ServiceContainer } from '../context.js';
 
 export const AI_OWNER_SCOPE = 'ai' as const;
@@ -177,8 +178,15 @@ export class AIService {
     }
 
     const keySource: AiKeySource = accountKey ? 'account' : projectKey ? 'project' : envKey ? 'env' : 'none';
+    // R5.10.3: this is the one gate every text/embedding caller goes through, so
+    // wrapping the resolved provider here records exactly one usage event per
+    // actual provider call with no per-caller double counting.
     return {
-      provider: provider ?? this.openAiProvider(null),
+      provider: instrumentAiProvider({
+        provider: provider ?? this.openAiProvider(null),
+        sink: this.container.usageEvents,
+        scope: { accountId: row.account_id, projectId, userId: null },
+      }),
       configured: Boolean(effectiveKey),
       keySource,
     };
@@ -192,7 +200,7 @@ export class AIService {
    */
   async resolveImageGeneration(
     projectId: string,
-  ): Promise<{ configured: boolean; apiKey: string | null; keySource: AiKeySource }> {
+  ): Promise<{ configured: boolean; apiKey: string | null; keySource: AiKeySource; accountId: string | null }> {
     const row = await this.readProjectRow(projectId);
     // Image generation is always an OpenAI capability, so the account lookup
     // targets OpenAI regardless of the project's chat provider.
@@ -201,7 +209,7 @@ export class AIService {
     const envKey = this.container.config.env.OPENAI_API_KEY ?? null;
     const effectiveKey = accountKey ?? projectKey ?? envKey;
     const keySource: AiKeySource = accountKey ? 'account' : projectKey ? 'project' : envKey ? 'env' : 'none';
-    return { configured: Boolean(effectiveKey), apiKey: effectiveKey, keySource };
+    return { configured: Boolean(effectiveKey), apiKey: effectiveKey, keySource, accountId: row.account_id };
   }
 
   /** Full non-secret status the UI / future REST + MCP rely on. */

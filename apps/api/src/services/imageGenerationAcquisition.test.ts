@@ -20,6 +20,7 @@ import {
   buildImageGenerationPrompt,
   imageGenerationModel,
 } from './imageGenerationAcquisition.js';
+import { InMemoryUsageEventStore } from './usageEventRepository.js';
 import type { ImportExternalMediaInput } from './mediaService.js';
 
 function pngBuffer(w = 1024, h = 1024): Buffer {
@@ -266,5 +267,131 @@ describe('acquireGeneratedImage', () => {
       }),
     );
     expect(err).toMatchObject({ status: 502, code: 'image_generation_failed' });
+  });
+});
+
+describe('acquireGeneratedImage usage instrumentation (R5.10.3)', () => {
+  const GEN_PROJECT = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  const GEN_ACCOUNT = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+  const usageScope = { accountId: GEN_ACCOUNT, projectId: GEN_PROJECT, userId: null } as const;
+
+  it('records one media/image_generation event with the applied model', async () => {
+    const bytes = pngBuffer();
+    const store = new InMemoryUsageEventStore();
+    await acquireGeneratedImage({
+      projectId: GEN_PROJECT,
+      context,
+      visual,
+      apiKey: 'sk-test',
+      model: 'dall-e-3',
+      provider: provider(async () => ({
+        id: 'g1',
+        url: `data:image/png;base64,${bytes.toString('base64')}`,
+        source: 'openai',
+      })),
+      persist: vi.fn(async () => item()),
+      usage: { sink: store, scope: usageScope },
+    });
+
+    const events = await store.list({ projectId: GEN_PROJECT });
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      category: 'media',
+      provider: 'openai_media',
+      operation: 'image_generate',
+      quantity: 1,
+      unit: 'image_generation',
+      success: true,
+      sourceId: null,
+      accountId: GEN_ACCOUNT,
+      projectId: GEN_PROJECT,
+      metadata: { model: 'dall-e-3' },
+    });
+  });
+
+  it('does not record usage when generation is not configured', async () => {
+    const store = new InMemoryUsageEventStore();
+    await expectApiError(
+      acquireGeneratedImage({
+        projectId: GEN_PROJECT,
+        context,
+        visual,
+        apiKey: null,
+        provider: provider(async () => ({ id: 'x', url: 'https://x/y.png', source: 'openai' }), false),
+        persist: vi.fn(),
+        usage: { sink: store, scope: usageScope },
+      }),
+    );
+    expect(await store.list({ projectId: GEN_PROJECT })).toHaveLength(0);
+  });
+
+  it('records a failed external generation without claiming an image was produced', async () => {
+    const store = new InMemoryUsageEventStore();
+    const err = await expectApiError(
+      acquireGeneratedImage({
+        projectId: GEN_PROJECT,
+        context,
+        visual,
+        apiKey: 'sk-test',
+        provider: provider(async () => {
+          throw new Error('moderation blocked');
+        }),
+        persist: vi.fn(),
+        usage: { sink: store, scope: usageScope },
+      }),
+    );
+    expect(err).toMatchObject({ status: 502, code: 'image_generation_failed' });
+
+    const events = await store.list({ projectId: GEN_PROJECT });
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ operation: 'image_generate', quantity: 1, success: false });
+  });
+
+  it('does not break a successful generation when the usage append fails', async () => {
+    const bytes = pngBuffer();
+    const candidate = await acquireGeneratedImage({
+      projectId: GEN_PROJECT,
+      context,
+      visual,
+      apiKey: 'sk-test',
+      provider: provider(async () => ({
+        id: 'g1',
+        url: `data:image/png;base64,${bytes.toString('base64')}`,
+        source: 'openai',
+      })),
+      persist: vi.fn(async () => item()),
+      usage: {
+        sink: { append: async () => { throw new Error('ledger down'); } },
+        scope: usageScope,
+      },
+    });
+    expect(candidate).toMatchObject({ assetId: 'm-gen', source: 'openai_generated' });
+  });
+
+  it('keeps the successful generation event when persistence later fails', async () => {
+    const bytes = pngBuffer();
+    const store = new InMemoryUsageEventStore();
+    const err = await expectApiError(
+      acquireGeneratedImage({
+        projectId: GEN_PROJECT,
+        context,
+        visual,
+        apiKey: 'sk-test',
+        provider: provider(async () => ({
+          id: 'g1',
+          url: `data:image/png;base64,${bytes.toString('base64')}`,
+          source: 'openai',
+        })),
+        persist: async () => {
+          throw new Error('db down');
+        },
+        usage: { sink: store, scope: usageScope },
+      }),
+    );
+    expect(err).toMatchObject({ status: 502, code: 'asset_persistence_failed' });
+
+    const events = await store.list({ projectId: GEN_PROJECT });
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ operation: 'image_generate', success: true });
   });
 });

@@ -69,6 +69,7 @@ describe('AIService.resolveImageGeneration', () => {
       configured: true,
       apiKey: 'sk-account',
       keySource: 'account',
+      accountId: 'acc-1',
     });
   });
 
@@ -96,6 +97,7 @@ describe('AIService.resolveImageGeneration', () => {
       configured: false,
       apiKey: null,
       keySource: 'none',
+      accountId: 'acc-1',
     });
   });
 });

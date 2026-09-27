@@ -372,6 +372,10 @@ export class ImageInsertionService {
         baseUrl: this.container.config.env.OPENAI_BASE_URL,
         model: this.container.config.env.OPENAI_IMAGE_MODEL,
         persist: (input2) => mediaService.importExternal(projectId, null, input2),
+        usage: {
+          sink: this.container.usageEvents,
+          scope: { accountId: credentials.accountId, projectId, userId: null },
+        },
       });
       rationale = 'Generated an image for the surrounding text.';
     }
