@@ -196,6 +196,8 @@ export function buildProviderContext(
     userId: string | null;
     owner: { integrationId: string; providerType: string } | { publisherId: string; providerType: string };
     config?: Record<string, unknown>;
+    /** Stable identity of the logical execution (e.g. a job id) for usage dedup. */
+    usageSourceId?: string | null;
   },
 ): ProviderContext {
   const providerType =
@@ -211,11 +213,23 @@ export function buildProviderContext(
     'integrationId' in args.owner
       ? container.credentials.reader({ integrationId: args.owner.integrationId }, providerType)
       : container.credentials.reader({ publisherId: args.owner.publisherId }, providerType);
+  // One occurrence counter per execution: a re-execution (retry) starts fresh,
+  // so repeated facts of the same operation reuse the same keys and dedup.
+  const occurrences = new Map<string, number>();
   return {
     projectId: args.projectId,
     userId: args.userId,
     config: args.config ?? {},
     credentials,
     logger: safeLogger,
+    usage: {
+      sink: container.usageEvents,
+      sourceId: args.usageSourceId ?? null,
+      nextOccurrence: (operation: string) => {
+        const next = occurrences.get(operation) ?? 0;
+        occurrences.set(operation, next + 1);
+        return next;
+      },
+    },
   };
 }

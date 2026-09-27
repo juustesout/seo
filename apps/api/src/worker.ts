@@ -20,6 +20,7 @@ import { jobErrorPayload } from './jobs/types.js';
 import type { JobRecord } from './jobs/types.js';
 import { syncScheduleStatus } from './services/scheduleService.js';
 import { AgentRunService } from './services/agentRunService.js';
+import { appendUsage, jobUsageEvent } from './services/usageInstrumentation.js';
 
 const IDLE_POLL_MS = 5_000;
 const STALE_RUNNING_MS = 25 * 60 * 1000;
@@ -74,6 +75,8 @@ export async function runOnce(container: ReturnType<typeof getContainer>): Promi
   const writer = new SeoWriter(container.sb);
   const executor = getExecutor(job.job_type);
   const log = logger.child({ jobId: job.id, jobType: job.job_type, projectId: job.project_id });
+  const startedAtMs = job.started_at ? Date.parse(job.started_at) : null;
+  const durationMs = startedAtMs === null || Number.isNaN(startedAtMs) ? null : Date.now() - startedAtMs;
 
   // Schedules are planning rows; reflect execution on the read model. The
   // sync is best-effort and scoped to publish jobs that carry a schedule_id.
@@ -109,6 +112,7 @@ export async function runOnce(container: ReturnType<typeof getContainer>): Promi
     });
     await container.jobStore.complete(job.id, result ?? {});
     log.info({ result }, 'job completed');
+    await recordJobUsage(container, job, true, 'completed', durationMs);
     if (scheduleId && PUBLISH_JOB_TYPES.has(job.job_type)) {
       await syncScheduleStatus(container, { projectId: job.project_id, scheduleId, status: 'published' });
     }
@@ -126,10 +130,13 @@ export async function runOnce(container: ReturnType<typeof getContainer>): Promi
     log.error({ err, retryable }, 'job failed');
     await container.jobStore.fail(job.id, error, retryable, failureResult);
     await flagFailedPublication(container, job, error.message, retryable);
+    // Retryable means the job store requeued it with backoff -> the job is not
+    // terminal, so it has no usage fact yet. Only a terminal failure records one.
+    const willRetry = retryable && job.retry_count + 1 <= job.max_retries;
+    if (!willRetry) {
+      await recordJobUsage(container, job, false, 'failed', durationMs);
+    }
     if (scheduleId && PUBLISH_JOB_TYPES.has(job.job_type)) {
-      // Retryable means the job store requeued it with backoff -> the schedule
-      // is waiting again; otherwise the attempt is terminal.
-      const willRetry = retryable && job.retry_count + 1 <= job.max_retries;
       await syncScheduleStatus(container, {
         projectId: job.project_id,
         scheduleId,
@@ -138,6 +145,23 @@ export async function runOnce(container: ReturnType<typeof getContainer>): Promi
     }
   }
   return true;
+}
+
+/**
+ * Record the single, terminal usage fact for a job execution (R5.10.4). At most
+ * one event per job is ever written (`sourceId = job.id`), so worker retries of
+ * the same logical job do not multiply it. Best-effort: a ledger failure must
+ * never affect the job outcome.
+ */
+async function recordJobUsage(
+  container: ReturnType<typeof getContainer>,
+  job: JobRecord,
+  success: boolean,
+  status: 'completed' | 'failed',
+  durationMs: number | null,
+): Promise<void> {
+  const event = jobUsageEvent({ job, success, status, durationMs });
+  if (event) await appendUsage(container.usageEvents, [event]);
 }
 
 const PUBLISH_JOB_TYPES = new Set(['publish', 'publish_update', 'publish_delete']);

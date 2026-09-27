@@ -225,6 +225,7 @@ const dataForSeoRankSync: JobExecutor = async ({ container, job, writer, report 
     userId: job.created_by,
     owner: { integrationId: String(ds.integration_id), providerType: 'dataforseo' },
     config: { ...(ds.config as Record<string, unknown>) },
+    usageSourceId: job.id,
   });
 
   await report(10, `Running SERP tracking for ${keywords.length} keywords`);
@@ -282,6 +283,7 @@ const serpRetrieval: JobExecutor = async ({ container, job, writer, report }) =>
     userId: job.created_by,
     owner: { integrationId: String(ds.integration_id), providerType: 'dataforseo' },
     config: { ...(ds.config as Record<string, unknown>) },
+    usageSourceId: job.id,
   });
   await report(10, `Retrieving live SERPs for ${keywords.length} keywords`);
   const outcomes = await dfseo.fetchLiveSerp(ctx, keywords, { depth: 20 });
@@ -390,6 +392,7 @@ const dataForSeoKeywordResearch: JobExecutor = async ({ container, job, writer, 
     userId: job.created_by,
     owner: { integrationId: String(ds.integration_id), providerType: 'dataforseo' },
     config: { ...(ds.config as Record<string, unknown>) },
+    usageSourceId: job.id,
   });
 
   // The presence of an explicit `methods` array switches this shared job to the
@@ -438,6 +441,7 @@ const dataForSeoCompetitorResearch: JobExecutor = async ({ container, job, write
     userId: job.created_by,
     owner: { integrationId: String(ds.integration_id), providerType: 'dataforseo' },
     config: { ...(ds.config as Record<string, unknown>) },
+    usageSourceId: job.id,
   });
 
   if (mode === 'discover') {

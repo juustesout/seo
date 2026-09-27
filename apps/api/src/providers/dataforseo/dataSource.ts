@@ -36,6 +36,7 @@ import {
   urlBelongsToDomain,
 } from './normalize.js';
 import { delay } from '../../util.js';
+import { emitDataForSeoUsage } from './providerUsage.js';
 import {
   DATAFORSEO_LANGUAGE_CODE as LANGUAGE_CODE,
   DATAFORSEO_LOCATION_CODE as LOCATION_CODE,
@@ -150,20 +151,33 @@ export class DataForSeoDataSource implements SeoDataSource {
     opts: { limit?: number; minSearchVolume?: number } = {},
   ): Promise<KeywordResearchResult[]> {
     const client = await this.clientFor(ctx);
-    const results: KeywordResearchResult[] = [];
-    for (const seed of seeds.slice(0, 20)) {
-      const suggestions = await client.keywordSuggestions(seed, {
-        locationCode: LOCATION_CODE,
-        languageCode: LANGUAGE_CODE,
-        limit: opts.limit ?? 25,
-        minSearchVolume: opts.minSearchVolume,
-      });
-      for (const s of suggestions) {
-        const normalized = normalizeSuggestion(s);
-        if (normalized) results.push(normalized);
+    const requested = seeds.slice(0, 20);
+    const facts = requested.length
+      ? [
+          { operation: 'keyword_research', unit: 'request' as const, quantity: 1 },
+          { operation: 'keyword_research', unit: 'keyword' as const, quantity: requested.length },
+        ]
+      : [];
+    try {
+      const results: KeywordResearchResult[] = [];
+      for (const seed of requested) {
+        const suggestions = await client.keywordSuggestions(seed, {
+          locationCode: LOCATION_CODE,
+          languageCode: LANGUAGE_CODE,
+          limit: opts.limit ?? 25,
+          minSearchVolume: opts.minSearchVolume,
+        });
+        for (const s of suggestions) {
+          const normalized = normalizeSuggestion(s);
+          if (normalized) results.push(normalized);
+        }
       }
+      await emitDataForSeoUsage({ ctx, providerId: this.id, facts, success: true, metadata: { method: 'suggestions' } });
+      return results;
+    } catch (err) {
+      await emitDataForSeoUsage({ ctx, providerId: this.id, facts, success: false, metadata: { method: 'suggestions' } });
+      throw err;
     }
-    return results;
   }
 
   /**
@@ -178,19 +192,29 @@ export class DataForSeoDataSource implements SeoDataSource {
     opts: { depth?: number; limit?: number; minSearchVolume?: number } = {},
   ): Promise<KeywordResearchResult[]> {
     const client = await this.clientFor(ctx);
-    const items = await client.relatedKeywords(seed, {
-      locationCode: LOCATION_CODE,
-      languageCode: LANGUAGE_CODE,
-      depth: opts.depth,
-      limit: opts.limit,
-      minSearchVolume: opts.minSearchVolume,
-    });
-    const out: KeywordResearchResult[] = [];
-    for (const item of items) {
-      const normalized = normalizeSuggestion(item);
-      if (normalized) out.push(normalized);
+    const facts = [
+      { operation: 'keyword_related', unit: 'request' as const, quantity: 1 },
+      { operation: 'keyword_related', unit: 'keyword' as const, quantity: 1 },
+    ];
+    try {
+      const items = await client.relatedKeywords(seed, {
+        locationCode: LOCATION_CODE,
+        languageCode: LANGUAGE_CODE,
+        depth: opts.depth,
+        limit: opts.limit,
+        minSearchVolume: opts.minSearchVolume,
+      });
+      const out: KeywordResearchResult[] = [];
+      for (const item of items) {
+        const normalized = normalizeSuggestion(item);
+        if (normalized) out.push(normalized);
+      }
+      await emitDataForSeoUsage({ ctx, providerId: this.id, facts, success: true, metadata: { method: 'related' } });
+      return out;
+    } catch (err) {
+      await emitDataForSeoUsage({ ctx, providerId: this.id, facts, success: false, metadata: { method: 'related' } });
+      throw err;
     }
-    return out;
   }
 
   /**
@@ -203,19 +227,31 @@ export class DataForSeoDataSource implements SeoDataSource {
     opts: { limit?: number; closelyVariants?: boolean; minSearchVolume?: number } = {},
   ): Promise<KeywordResearchResult[]> {
     const client = await this.clientFor(ctx);
-    const items = await client.keywordIdeas(seeds, {
-      locationCode: LOCATION_CODE,
-      languageCode: LANGUAGE_CODE,
-      limit: opts.limit,
-      closelyVariants: opts.closelyVariants,
-      minSearchVolume: opts.minSearchVolume,
-    });
-    const out: KeywordResearchResult[] = [];
-    for (const item of items) {
-      const normalized = normalizeSuggestion(item);
-      if (normalized) out.push(normalized);
+    const facts = seeds.length
+      ? [
+          { operation: 'keyword_ideas', unit: 'request' as const, quantity: 1 },
+          { operation: 'keyword_ideas', unit: 'keyword' as const, quantity: seeds.length },
+        ]
+      : [];
+    try {
+      const items = await client.keywordIdeas(seeds, {
+        locationCode: LOCATION_CODE,
+        languageCode: LANGUAGE_CODE,
+        limit: opts.limit,
+        closelyVariants: opts.closelyVariants,
+        minSearchVolume: opts.minSearchVolume,
+      });
+      const out: KeywordResearchResult[] = [];
+      for (const item of items) {
+        const normalized = normalizeSuggestion(item);
+        if (normalized) out.push(normalized);
+      }
+      await emitDataForSeoUsage({ ctx, providerId: this.id, facts, success: true, metadata: { method: 'ideas' } });
+      return out;
+    } catch (err) {
+      await emitDataForSeoUsage({ ctx, providerId: this.id, facts, success: false, metadata: { method: 'ideas' } });
+      throw err;
     }
-    return out;
   }
 
   // -- capability: SERP / competitors -----------------------------------------
@@ -223,22 +259,35 @@ export class DataForSeoDataSource implements SeoDataSource {
   /** Live organic SERP per keyword (good for small, interactive retrievals). */
   async fetchLiveSerp(ctx: ProviderContext, keywords: string[], opts: { depth?: number } = {}): Promise<SerpFetchOutcome[]> {
     const client = await this.clientFor(ctx);
-    const outcomes: SerpFetchOutcome[] = [];
-    for (const keyword of keywords.slice(0, 50)) {
-      const result = await client.serpLiveOrganic(keyword, {
-        locationCode: LOCATION_CODE,
-        languageCode: LANGUAGE_CODE,
-        depth: opts.depth ?? 20,
-      });
-      outcomes.push({
-        keyword: result.keyword ?? keyword,
-        engine: 'google',
-        fetchedAt: new Date().toISOString(),
-        items: normalizeSerpItems(result.items),
-      });
-      await delay(600);
+    const requested = keywords.slice(0, 50);
+    const facts = requested.length
+      ? [
+          { operation: 'serp_live', unit: 'serp_request' as const, quantity: requested.length },
+          { operation: 'serp_live', unit: 'keyword' as const, quantity: requested.length },
+        ]
+      : [];
+    try {
+      const outcomes: SerpFetchOutcome[] = [];
+      for (const keyword of requested) {
+        const result = await client.serpLiveOrganic(keyword, {
+          locationCode: LOCATION_CODE,
+          languageCode: LANGUAGE_CODE,
+          depth: opts.depth ?? 20,
+        });
+        outcomes.push({
+          keyword: result.keyword ?? keyword,
+          engine: 'google',
+          fetchedAt: new Date().toISOString(),
+          items: normalizeSerpItems(result.items),
+        });
+        await delay(600);
+      }
+      await emitDataForSeoUsage({ ctx, providerId: this.id, facts, success: true, metadata: { mode: 'live' } });
+      return outcomes;
+    } catch (err) {
+      await emitDataForSeoUsage({ ctx, providerId: this.id, facts, success: false, metadata: { mode: 'live' } });
+      throw err;
     }
-    return outcomes;
   }
 
   /**
@@ -251,24 +300,50 @@ export class DataForSeoDataSource implements SeoDataSource {
     opts: { onProgress?: (done: number, total: number) => void; abortSignal?: AbortSignal } = {},
   ): Promise<SerpFetchOutcome[]> {
     const client = await this.clientFor(ctx);
-    const map = new Map<string, { task: SerpTask }>();
-    for (let i = 0; i < keywords.length; i += TASK_BATCH_SIZE) {
-      const batch = keywords.slice(i, i + TASK_BATCH_SIZE);
-      const tasks = await client.postSerpOrganicTasks(
-        batch.map((keyword) => ({
-          keyword,
-          location_code: LOCATION_CODE,
-          language_code: LANGUAGE_CODE,
-          depth: 30,
-        })),
-      );
-      for (const task of tasks) {
-        map.set(task.id, { task });
+    const taskCount = Math.ceil(keywords.length / TASK_BATCH_SIZE);
+    const facts = keywords.length
+      ? [
+          { operation: 'serp_task', unit: 'keyword' as const, quantity: keywords.length },
+          { operation: 'serp_task', unit: 'task' as const, quantity: taskCount },
+          { operation: 'serp_task', unit: 'serp_request' as const, quantity: keywords.length },
+        ]
+      : [];
+    try {
+      const map = new Map<string, { task: SerpTask }>();
+      for (let i = 0; i < keywords.length; i += TASK_BATCH_SIZE) {
+        const batch = keywords.slice(i, i + TASK_BATCH_SIZE);
+        const tasks = await client.postSerpOrganicTasks(
+          batch.map((keyword) => ({
+            keyword,
+            location_code: LOCATION_CODE,
+            language_code: LANGUAGE_CODE,
+            depth: 30,
+          })),
+        );
+        for (const task of tasks) {
+          map.set(task.id, { task });
+        }
       }
+      const outcomes = await pollUntilDone(client, map, opts);
+      opts.onProgress?.(outcomes.length, keywords.length);
+      await emitDataForSeoUsage({
+        ctx,
+        providerId: this.id,
+        facts,
+        success: true,
+        metadata: { mode: 'task', batches: taskCount },
+      });
+      return outcomes;
+    } catch (err) {
+      await emitDataForSeoUsage({
+        ctx,
+        providerId: this.id,
+        facts,
+        success: false,
+        metadata: { mode: 'task', batches: taskCount },
+      });
+      throw err;
     }
-    const outcomes = await pollUntilDone(client, map, opts);
-    opts.onProgress?.(outcomes.length, keywords.length);
-    return outcomes;
   }
 
   async getSerp(): Promise<never[]> {
@@ -317,17 +392,24 @@ export class DataForSeoDataSource implements SeoDataSource {
     opts: { limit?: number } = {},
   ): Promise<CompetitorCandidate[]> {
     const client = await this.clientFor(ctx);
-    const items = await client.competitorDomains(domain, {
-      locationCode: LOCATION_CODE,
-      languageCode: LANGUAGE_CODE,
-      limit: opts.limit ?? 20,
-    });
-    const out: CompetitorCandidate[] = [];
-    for (const item of items) {
-      const candidate = normalizeCompetitorCandidate(item);
-      if (candidate) out.push(candidate);
+    const facts = [{ operation: 'competitor_discovery', unit: 'request' as const, quantity: 1 }];
+    try {
+      const items = await client.competitorDomains(domain, {
+        locationCode: LOCATION_CODE,
+        languageCode: LANGUAGE_CODE,
+        limit: opts.limit ?? 20,
+      });
+      const out: CompetitorCandidate[] = [];
+      for (const item of items) {
+        const candidate = normalizeCompetitorCandidate(item);
+        if (candidate) out.push(candidate);
+      }
+      await emitDataForSeoUsage({ ctx, providerId: this.id, facts, success: true, metadata: { mode: 'discover' } });
+      return out;
+    } catch (err) {
+      await emitDataForSeoUsage({ ctx, providerId: this.id, facts, success: false, metadata: { mode: 'discover' } });
+      throw err;
     }
-    return out;
   }
 
   /**
@@ -347,22 +429,31 @@ export class DataForSeoDataSource implements SeoDataSource {
     const client = await this.clientFor(ctx);
     const out: CompetitorKeywordGap[] = [];
     const targets = competitors.slice(0, COMPETITOR_RESEARCH_MAX_COMPETITORS);
-    for (let i = 0; i < targets.length; i += 1) {
-      const competitor = targets[i];
-      if (i > 0) await delay(600);
-      const items = await client.domainIntersection(competitor, domain, {
-        locationCode: LOCATION_CODE,
-        languageCode: LANGUAGE_CODE,
-        limit: opts.limitPerCompetitor ?? 200,
-        minSearchVolume: opts.minSearchVolume,
-        maxRankGroup: opts.maxRank,
-      });
-      for (const item of items) {
-        const gap = normalizeDomainIntersectionGap(item, competitor);
-        if (gap) out.push(gap);
+    const facts = targets.length
+      ? [{ operation: 'competitor_gap', unit: 'request' as const, quantity: targets.length }]
+      : [];
+    try {
+      for (let i = 0; i < targets.length; i += 1) {
+        const competitor = targets[i];
+        if (i > 0) await delay(600);
+        const items = await client.domainIntersection(competitor, domain, {
+          locationCode: LOCATION_CODE,
+          languageCode: LANGUAGE_CODE,
+          limit: opts.limitPerCompetitor ?? 200,
+          minSearchVolume: opts.minSearchVolume,
+          maxRankGroup: opts.maxRank,
+        });
+        for (const item of items) {
+          const gap = normalizeDomainIntersectionGap(item, competitor);
+          if (gap) out.push(gap);
+        }
       }
+      await emitDataForSeoUsage({ ctx, providerId: this.id, facts, success: true, metadata: { mode: 'gap' } });
+      return out;
+    } catch (err) {
+      await emitDataForSeoUsage({ ctx, providerId: this.id, facts, success: false, metadata: { mode: 'gap' } });
+      throw err;
     }
-    return out;
   }
 
   // -- interface stubs (unused by generic core for this provider) -------------

@@ -17,6 +17,7 @@ import type {
   PublisherCapability,
 } from './common.js';
 import type { MediaAttribution } from './mediaSource.js';
+import type { UsageEventSink } from './usageEvent.js';
 import type {
   AuditFinding,
   ContentItem,
@@ -62,6 +63,29 @@ export interface ProviderContext {
   credentials: CredentialReader;
   logger: ProviderLogger;
   signal?: AbortSignal;
+  /**
+   * Optional append-only usage correlation (R5.10.4). Present when the caller
+   * wants logical provider consumption recorded; scope comes from `projectId` /
+   * `userId` (account is mirrored by the ledger), and `sourceId` ties the
+   * consumed facts back to the originating domain record (a job id). Adapters
+   * that do not consume external resources simply ignore it.
+   */
+  usage?: ProviderUsageContext;
+}
+
+/**
+ * Per-operation usage correlation handed to provider adapters (R5.10.4).
+ *
+ * `sourceId` is a stable identity for the whole logical execution (for a job,
+ * `seo_sync_jobs.id`) so a re-execution is deduplicated. When one execution
+ * makes several calls of the same logical operation (for example one SERP
+ * expansion call per seed), `nextOccurrence` yields a stable, 0-based sequence
+ * so those facts do not collide - call it once per logical operation invocation.
+ */
+export interface ProviderUsageContext {
+  sink: UsageEventSink;
+  sourceId: string | null;
+  nextOccurrence: (operation: string) => number;
 }
 
 // ---------------------------------------------------------------------------

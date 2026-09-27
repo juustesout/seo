@@ -11,7 +11,7 @@ import type { AIProvider } from '@seo/contracts';
 import type { ServiceContainer } from '../context.js';
 import { AIService } from './aiService.js';
 import { InMemoryUsageEventStore } from './usageEventRepository.js';
-import { instrumentAiProvider, type UsageScope } from './usageInstrumentation.js';
+import { instrumentAiProvider, jobUsageEvent, type UsageScope } from './usageInstrumentation.js';
 
 const PROJECT = '11111111-1111-4111-8111-111111111111';
 const ACCOUNT = '22222222-2222-4222-8222-222222222222';
@@ -220,5 +220,55 @@ describe('AIService.resolve instrumentation seam', () => {
       output_token: 2,
     });
     expect(events[0]).toMatchObject({ accountId: ACCOUNT, projectId: PROJECT, userId: null, provider: 'openai' });
+  });
+});
+
+describe('jobUsageEvent', () => {
+  const USER = '44444444-4444-4444-8444-444444444444';
+  const record = (over: Partial<Parameters<typeof jobUsageEvent>[0]['job']> = {}) => ({
+    id: PROJECT,
+    project_id: PROJECT,
+    provider: 'dataforseo',
+    job_type: 'dataforseo_rank_sync',
+    created_by: USER,
+    retry_count: 2,
+    started_at: new Date().toISOString(),
+    ...over,
+  });
+
+  it('builds one terminal job fact with source id, retry count and duration', () => {
+    const event = jobUsageEvent({
+      job: record(),
+      success: true,
+      status: 'completed',
+      durationMs: 1234.6,
+    });
+    expect(event).toMatchObject({
+      accountId: null,
+      projectId: PROJECT,
+      userId: USER,
+      category: 'job',
+      provider: 'dataforseo',
+      operation: 'dataforseo_rank_sync',
+      quantity: 1,
+      unit: 'job',
+      success: true,
+      sourceId: PROJECT,
+      metadata: { retryCount: 2, status: 'completed', durationMs: 1235 },
+    });
+    expect(event!.idempotencyKey).toBe(`v1|job|dataforseo|dataforseo_rank_sync|job|${PROJECT}|0`);
+  });
+
+  it('records a terminal failure without inventing units', () => {
+    const event = jobUsageEvent({ job: record(), success: false, status: 'failed' });
+    expect(event).toMatchObject({ success: false, quantity: 1, unit: 'job', metadata: { retryCount: 2, status: 'failed' } });
+    expect(event!.metadata).not.toHaveProperty('durationMs');
+  });
+
+  it('nulls a non-UUID acting user and rejects invalid scope or tokens', () => {
+    expect(jobUsageEvent({ job: record({ created_by: 'u1' }), success: true, status: 'completed' })!.userId).toBeNull();
+    expect(jobUsageEvent({ job: record({ project_id: 'p-1' }), success: true, status: 'completed' })).toBeNull();
+    expect(jobUsageEvent({ job: record({ provider: 'Not Valid' }), success: true, status: 'completed' })).toBeNull();
+    expect(jobUsageEvent({ job: record({ job_type: 'Bad-Type' }), success: true, status: 'completed' })).toBeNull();
   });
 });

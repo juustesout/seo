@@ -27,6 +27,7 @@ import type {
   AIProvider,
   NewUsageEvent,
 } from '@seo/contracts';
+import { usageEventIdempotencyKey } from '@seo/contracts';
 import { logger } from '../logger.js';
 import type { UsageEventStore } from './usageEventRepository.js';
 
@@ -194,5 +195,73 @@ export function instrumentAiProvider(args: {
       await appendUsage(sink, embeddingEvents({ result, providerId: provider.id, scope }));
       return result;
     },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Job execution (R5.10.4, Layer B)
+// ---------------------------------------------------------------------------
+
+const JOB_USAGE_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const JOB_USAGE_TOKEN_RE = /^[a-z0-9_]{1,64}$/;
+const JOB_USAGE_SOURCE_MAX = 200;
+
+/** The durable job fields a job usage event is built from. */
+export interface JobUsageRecord {
+  id: string;
+  project_id: string;
+  provider: string;
+  job_type: string;
+  created_by: string | null;
+  retry_count: number;
+  started_at: string | null;
+}
+
+/**
+ * The single usage fact for one *terminal* logical job execution (R5.10.4).
+ *
+ * Emitted only once the job reaches a terminal state - completed, or failed with
+ * no retries left. A retryable failure that is requeued records nothing, so a
+ * job is one usage fact carrying its retry count rather than one row per worker
+ * attempt. `sourceId = seo_sync_jobs.id` makes a re-execution idempotent.
+ *
+ * Returns null when the job cannot form a valid event (non-UUID project, invalid
+ * provider/operation token) so a malformed fact is skipped, never persisted.
+ */
+export function jobUsageEvent(args: {
+  job: JobUsageRecord;
+  success: boolean;
+  status: 'completed' | 'failed';
+  durationMs?: number | null;
+}): NewUsageEvent | null {
+  const { job, success, status } = args;
+  if (!JOB_USAGE_UUID_RE.test(job.project_id)) return null;
+  if (!JOB_USAGE_TOKEN_RE.test(job.provider)) return null;
+  if (!JOB_USAGE_TOKEN_RE.test(job.job_type)) return null;
+  if (typeof job.id !== 'string' || job.id.length === 0 || job.id.length > JOB_USAGE_SOURCE_MAX) return null;
+  const userId = job.created_by && JOB_USAGE_UUID_RE.test(job.created_by) ? job.created_by : null;
+  const metadata: Record<string, unknown> = { retryCount: job.retry_count, status };
+  if (typeof args.durationMs === 'number' && Number.isFinite(args.durationMs) && args.durationMs >= 0) {
+    metadata.durationMs = Math.round(args.durationMs);
+  }
+  return {
+    accountId: null,
+    projectId: job.project_id,
+    userId,
+    category: 'job',
+    provider: job.provider,
+    operation: job.job_type,
+    quantity: 1,
+    unit: 'job',
+    success,
+    sourceId: job.id,
+    metadata,
+    idempotencyKey: usageEventIdempotencyKey({
+      category: 'job',
+      provider: job.provider,
+      operation: job.job_type,
+      unit: 'job',
+      sourceId: job.id,
+    }),
   };
 }

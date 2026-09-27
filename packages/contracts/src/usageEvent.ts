@@ -240,6 +240,16 @@ export type NewUsageEvent = Omit<UsageEvent, 'id' | 'occurredAt' | 'metadata'> &
   idempotencyKey?: string | null;
 };
 
+/**
+ * The minimal append surface a producer depends on (R5.10.2 store, R5.10.4
+ * provider/job instrumentation). Deliberately write-only: a producer must not be
+ * able to read back or mutate the ledger, so it depends on this narrow type
+ * instead of the full store. `UsageEventStore.append` is structurally compatible.
+ */
+export interface UsageEventSink {
+  append(events: readonly NewUsageEvent[]): Promise<{ inserted: number; duplicates: number }>;
+}
+
 /** Read filter over the ledger. A scope (account or project) is required. */
 export interface UsageEventFilter {
   accountId?: string | null;
