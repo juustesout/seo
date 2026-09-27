@@ -41,7 +41,7 @@ import {
 import { api } from '../lib/api';
 import { fmtDate, Empty } from '../lib/ui';
 import type { RichTextEditorHandle } from '../components/content/RichTextEditor';
-import { CollapsibleSection, EditorWorkspace } from '../components/content/workspace';
+import { CollapsibleSection, EditorWorkspace, type PreviewViewport } from '../components/content/workspace';
 import { SeoPanel } from '../components/content/SeoPanel';
 import { AgentControls } from '../components/content/AgentControls';
 import { ContentAiPanel } from '../components/content/ContentAiPanel';
@@ -74,6 +74,9 @@ export interface EditorViewProps {
   onAssistantBusyChange: (busy: boolean) => void;
   /** Shell-owned canvas preview toggle. */
   preview: boolean;
+  /** Shell-owned preview viewport mode (R5.7); inspection only. */
+  previewViewport?: PreviewViewport;
+  onPreviewViewportChange?: (viewport: PreviewViewport) => void;
   /** Shell-owned insert rail toggle. */
   railOpen: boolean;
   /** Shell-owned intelligence rail (outline/SEO/media/insights) toggle. */
@@ -92,6 +95,8 @@ export function EditorView({
   aiConfigured,
   onAssistantBusyChange,
   preview,
+  previewViewport,
+  onPreviewViewportChange,
   railOpen,
   toolsOpen,
   initialContentId = null,
@@ -528,6 +533,8 @@ export function EditorView({
       doc={doc}
       editor={editor}
       preview={preview}
+      previewViewport={previewViewport}
+      onPreviewViewportChange={onPreviewViewportChange}
       railOpen={railOpen}
       toolsOpen={toolsOpen}
       toolbarAi={editingId ? { configured: aiConfigured, busy: aiBusy, onAction: runAi } : undefined}

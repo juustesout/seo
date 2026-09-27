@@ -26,12 +26,16 @@ import { EditorContextProvider } from '../components/content/editor/EditorContex
 import { EditorSelectionProvider } from '../components/content/editor/EditorSelectionContext';
 import { EmbeddedAgentEntry } from '../components/content/workspace/EmbeddedAgentEntry';
 import { InlineAssistantSlot } from '../components/content/workspace/InlineAssistantSlot';
+import type { PreviewViewport } from '../components/content/workspace/previewViewport';
 import { EditorView } from '../views/EditorView';
 import { CompositionApplyBridge, type CompositionApplyOutcome, type PendingComposition } from './CompositionApplyBridge';
 import { useWorkspaceSessionContext } from './workspaceSession';
 
 export interface EditorModeProps {
   previewOpen: boolean;
+  /** Shell-owned preview viewport mode (R5.7); inspection only. */
+  previewViewport?: PreviewViewport;
+  onPreviewViewportChange?: (viewport: PreviewViewport) => void;
   railOpen: boolean;
   /** Shell-owned intelligence rail toggle; passed straight to the canvas. */
   toolsOpen: boolean;
@@ -52,6 +56,8 @@ export interface EditorModeProps {
 
 export function EditorMode({
   previewOpen,
+  previewViewport,
+  onPreviewViewportChange,
   railOpen,
   toolsOpen,
   onClosePreview,
@@ -161,6 +167,8 @@ export function EditorMode({
             aiConfigured={aiConfigured}
             onAssistantBusyChange={setAssistantBusy}
             preview={previewOpen}
+            previewViewport={previewViewport}
+            onPreviewViewportChange={onPreviewViewportChange}
             railOpen={railOpen}
             toolsOpen={toolsOpen}
             initialContentId={initialContentId}

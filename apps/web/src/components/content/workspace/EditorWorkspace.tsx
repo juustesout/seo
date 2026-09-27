@@ -22,6 +22,7 @@ import { snapshotHasSelection } from '../editor/selection';
 import { EditorShell } from '../editor/EditorShell';
 import { ContextualToolbar } from './ContextualToolbar';
 import { PreviewPane } from './PreviewPane';
+import type { PreviewViewport } from './previewViewport';
 import { IntelligenceRail, type IntelligenceRailProps } from './IntelligenceRail';
 import { cn } from '@/lib/utils';
 
@@ -31,6 +32,12 @@ export interface EditorWorkspaceProps {
   editor: Editor | null;
   /** Shell-owned preview toggle: hides the canvas and shows the rendered doc. */
   preview: boolean;
+  /**
+   * Shell-owned preview viewport mode (R5.7). It only affects how the preview
+   * inspects the document; it is never document content.
+   */
+  previewViewport?: PreviewViewport;
+  onPreviewViewportChange?: (viewport: PreviewViewport) => void;
   /** Shell-owned insert rail toggle. */
   railOpen: boolean;
   /**
@@ -68,6 +75,8 @@ export function EditorWorkspace({
   doc,
   editor,
   preview,
+  previewViewport,
+  onPreviewViewportChange,
   railOpen,
   toolsOpen,
   toolbarAi,
@@ -105,7 +114,9 @@ export function EditorWorkspace({
               />
             </EditorShell>
           </div>
-          {preview && <PreviewPane doc={doc} />}
+          {preview && (
+            <PreviewPane doc={doc} viewport={previewViewport} onViewportChange={onPreviewViewportChange} />
+          )}
           {review}
         </div>
         {toolsOpen && <IntelligenceRail {...rail} />}

@@ -25,6 +25,10 @@ import {
 } from '@seo/contracts';
 import { DocumentSessionProvider, type SwitchResult } from '../components/content/session';
 import { WorkspaceStateProvider, useDocumentScopedState } from '../components/content/workspace/workspaceState';
+import {
+  DEFAULT_PREVIEW_VIEWPORT,
+  type PreviewViewport,
+} from '../components/content/workspace/previewViewport';
 import { documentRevisionOf } from '../components/content/documentRevision';
 import { canonicalFromEditorDocument } from '../components/content/editorDraft';
 import { ComposerMode } from './ComposerMode';
@@ -116,6 +120,12 @@ function WorkspaceBody({
   // R5.6.2 so the writing canvas dominates; it is still document-scoped, so the
   // toggle resets with the document boundary like preview/rail.
   const [toolsOpen, setToolsOpen] = useDocumentScopedState(false);
+  // Preview viewport mode (R5.7): inspection-only workspace UI state, scoped to
+  // the document boundary like preview/rail/tools, so a document switch starts
+  // from the default instead of leaking the previous document's viewport. It is
+  // never document content and never dirties autosave.
+  const [previewViewport, setPreviewViewport] =
+    useDocumentScopedState<PreviewViewport>(DEFAULT_PREVIEW_VIEWPORT);
 
   // R5.4.3.2: a composed page staged for the open document. It survives the
   // composer -> editor mode switch (this shell stays mounted) and is consumed by
@@ -388,6 +398,8 @@ function WorkspaceBody({
       {activeMode === 'editor' && (
         <EditorMode
           previewOpen={previewOpen}
+          previewViewport={previewViewport}
+          onPreviewViewportChange={setPreviewViewport}
           railOpen={railOpen}
           toolsOpen={toolsOpen}
           onClosePreview={() => setPreviewOpen(false)}

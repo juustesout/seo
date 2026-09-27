@@ -7,6 +7,8 @@ export { ContextualToolbar } from './ContextualToolbar';
 export { IntelligenceRail } from './IntelligenceRail';
 export type { IntelligenceRailProps, RailTab } from './IntelligenceRail';
 export { PreviewPane } from './PreviewPane';
+export type { PreviewViewport } from './previewViewport';
+export { DEFAULT_PREVIEW_VIEWPORT, PREVIEW_VIEWPORTS, previewViewportWidth } from './previewViewport';
 export { InlineAssistantSlot } from './InlineAssistantSlot';
 export { EmbeddedAgentEntry } from './EmbeddedAgentEntry';
 export type { EmbeddedAgentEntryProps } from './EmbeddedAgentEntry';
