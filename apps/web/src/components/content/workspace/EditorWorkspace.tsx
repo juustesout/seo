@@ -22,7 +22,8 @@ import { snapshotHasSelection } from '../editor/selection';
 import { EditorShell } from '../editor/EditorShell';
 import { ContextualToolbar } from './ContextualToolbar';
 import { PreviewPane } from './PreviewPane';
-import type { PreviewViewport } from './previewViewport';
+import { DEFAULT_PREVIEW_VIEWPORT, type PreviewViewport } from './previewViewport';
+import { DEFAULT_WORKSPACE_CONTEXT, type WorkspaceContext } from './workspaceContext';
 import { IntelligenceRail, type IntelligenceRailProps } from './IntelligenceRail';
 import { cn } from '@/lib/utils';
 
@@ -87,6 +88,16 @@ export function EditorWorkspace({
   secondary,
   knowledge,
 }: EditorWorkspaceProps) {
+  // The canonical selection is published by the shared boundary; the context
+  // only points at it (plus the preview surface and viewport) so the rail can
+  // decide what is relevant without owning any of that state (R5.8).
+  const shared = useEditorSelection();
+  const context: WorkspaceContext = {
+    surface: preview ? 'preview' : 'canvas',
+    selection: shared?.selection ?? DEFAULT_WORKSPACE_CONTEXT.selection,
+    viewport: previewViewport ?? DEFAULT_PREVIEW_VIEWPORT,
+  };
+
   return (
     <div className="grid gap-3" data-testid="editor-workspace">
       {banners}
@@ -119,7 +130,7 @@ export function EditorWorkspace({
           )}
           {review}
         </div>
-        {toolsOpen && <IntelligenceRail {...rail} />}
+        {toolsOpen && <IntelligenceRail {...rail} context={context} />}
       </div>
       {secondary}
       {knowledge}

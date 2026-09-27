@@ -12,6 +12,8 @@ import type { Editor } from '@tiptap/react';
 import { evaluateSeo, tiptapEmptyDoc, type ContentOutlineItem } from '@seo/contracts';
 import { IntelligenceRail, type IntelligenceRailProps } from './IntelligenceRail';
 import { WorkspaceStateProvider } from './workspaceState';
+import { DEFAULT_WORKSPACE_CONTEXT, type WorkspaceContext } from './workspaceContext';
+import type { EditorSelectionSnapshot } from '../editor/editorContext';
 import { RichTextEditor } from '../RichTextEditor';
 
 const apiMock = vi.hoisted(() => ({ api: vi.fn() }));
@@ -64,12 +66,16 @@ function Harness({
   ] as ContentOutlineItem[],
   onSelectHeading = () => {},
   withMedia = false,
+  surface = 'canvas',
+  selection,
 }: {
   documentKey?: string;
   contentId?: string;
   outline?: ContentOutlineItem[];
   onSelectHeading?: (index: number) => void;
   withMedia?: boolean;
+  surface?: WorkspaceContext['surface'];
+  selection?: EditorSelectionSnapshot;
 }) {
   const [editor, setEditor] = useState<Editor | null>(null);
   const rail: IntelligenceRailProps = {
@@ -86,6 +92,7 @@ function Harness({
     },
     media: withMedia && editor ? { projectId: 'p1', editor, canEdit: true, canDelete: false } : undefined,
     intelligence: { projectId: 'p1', contentId },
+    context: { ...DEFAULT_WORKSPACE_CONTEXT, surface, selection: selection ?? DEFAULT_WORKSPACE_CONTEXT.selection },
   };
   return (
     <WorkspaceStateProvider documentKey={documentKey}>
@@ -143,6 +150,21 @@ describe('IntelligenceRail contextual behavior', () => {
   it('exposes the project media library on the Media tab', async () => {
     render(<Harness withMedia />);
     fireEvent.click(await screen.findByRole('tab', { name: 'Media' }));
+    await waitFor(() => expect(screen.getByText('Media library')).toBeTruthy());
+  });
+
+  it('omits the Media area on the preview surface, which must not expose editing', async () => {
+    render(<Harness withMedia surface="preview" />);
+    await screen.findByRole('tab', { name: 'Outline' });
+    expect(screen.queryByRole('tab', { name: 'Media' })).toBeNull();
+    // Inspection areas remain available.
+    expect(screen.getByRole('tab', { name: 'SEO' })).toBeTruthy();
+    expect(screen.getByRole('tab', { name: 'Insights' })).toBeTruthy();
+  });
+
+  it('points the rail at the media library for an image selection on the canvas', async () => {
+    render(<Harness withMedia selection={{ type: 'node', nodeType: 'image' }} />);
+    // The context default opens Media until the user makes an explicit choice.
     await waitFor(() => expect(screen.getByText('Media library')).toBeTruthy());
   });
 });

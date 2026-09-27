@@ -53,6 +53,24 @@ describe('DocumentHeader', () => {
     expect(onToggleTools).toHaveBeenCalledTimes(1);
   });
 
+  it('derives the canvas controls from the workspace surface (R5.8)', () => {
+    const { rerender } = render(<DocumentHeader {...makeProps({ surface: 'canvas' })} />);
+    expect(screen.getByRole('button', { name: 'Insert' })).toBeTruthy();
+
+    // Preview is inspection-only: the editing Insert control is gone, Tools and
+    // the Editing (back-to-editor) toggle remain.
+    rerender(<DocumentHeader {...makeProps({ surface: 'preview', previewOpen: true })} />);
+    expect(screen.queryByRole('button', { name: 'Insert' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Tools' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Editing' })).toBeTruthy();
+
+    // Composer/Designer never mount the editor, so no canvas controls render.
+    rerender(<DocumentHeader {...makeProps({ surface: 'designer' })} />);
+    expect(screen.queryByRole('button', { name: 'Insert' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Tools' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Preview' })).toBeNull();
+  });
+
   it('keeps secondary and destructive actions in the overflow menu', () => {
     const onViewPublications = vi.fn();
     const onOpenCalendar = vi.fn();

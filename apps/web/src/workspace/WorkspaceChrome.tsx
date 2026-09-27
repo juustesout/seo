@@ -19,6 +19,7 @@
  */
 import { docWordCount } from '@seo/contracts';
 import { DocumentHeader } from '../components/content/workspace/DocumentHeader';
+import type { WorkspaceSurface } from '../components/content/workspace/workspaceContext';
 import { useWorkspaceSessionContext } from './workspaceSession';
 
 export interface WorkspaceChromeProps {
@@ -33,11 +34,12 @@ export interface WorkspaceChromeProps {
   onOpenCalendar?: () => void;
   onOpenPublications?: (contentId: string) => void;
   /**
-   * Whether to show the editor-canvas controls (Insert, Tools, Preview). The
-   * shell passes false while Composer is active, so the shared document header
-   * stays present without exposing editor-only controls. Defaults to true.
+   * The active workspace surface (R5.8), passed straight to the document header.
+   * It decides which editor-canvas controls render: the header stays present in
+   * every mode while editor-only controls are hidden outside the editor. Defaults
+   * to the editable canvas.
    */
-  showCanvasControls?: boolean;
+  surface?: WorkspaceSurface;
 }
 
 export function WorkspaceChrome({
@@ -50,7 +52,7 @@ export function WorkspaceChrome({
   onBack,
   onOpenCalendar,
   onOpenPublications,
-  showCanvasControls = true,
+  surface = 'canvas',
 }: WorkspaceChromeProps) {
   const {
     canEdit,
@@ -95,7 +97,7 @@ export function WorkspaceChrome({
         onToggleRail={onToggleRail}
         toolsOpen={toolsOpen}
         onToggleTools={onToggleTools}
-        showCanvasControls={showCanvasControls}
+        surface={surface}
       />
       {auto.status === 'failed' && (
         <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">

@@ -25,6 +25,7 @@ import {
 } from '@seo/contracts';
 import { DocumentSessionProvider, type SwitchResult } from '../components/content/session';
 import { WorkspaceStateProvider, useDocumentScopedState } from '../components/content/workspace/workspaceState';
+import { workspaceSurface } from '../components/content/workspace/workspaceContext';
 import {
   DEFAULT_PREVIEW_VIEWPORT,
   type PreviewViewport,
@@ -162,9 +163,11 @@ function WorkspaceBody({
   // modes all show it (R5.4.6, R5.5.3); each body suppresses its own page header
   // in favour of this one.
   const showChrome = lifecycle.status === 'ready' && canEdit;
-  // Editor-canvas controls (Insert/Preview) only act on the mounted editor, so
-  // they are hidden while Composer or Designer is the active mode.
-  const showCanvasControls = activeMode === 'editor';
+  // The one workspace context derivation (R5.8): the route mode plus the preview
+  // toggle decide which surface is actually visible, and the surface decides
+  // which editor-canvas controls may render (Insert is editing-only, so it is
+  // hidden in preview; Composer/Designer show none). No component re-derives it.
+  const surface = workspaceSurface(activeMode, previewOpen);
 
   // R5.4.6 / R5.5.3: a navigation hold while Composer or Designer has an open
   // review. This is not a second navigation state machine - it only mirrors
@@ -392,7 +395,7 @@ function WorkspaceBody({
           onBack={goList}
           onOpenCalendar={onOpenCalendar}
           onOpenPublications={onOpenPublications}
-          showCanvasControls={showCanvasControls}
+          surface={surface}
         />
       )}
       {activeMode === 'editor' && (

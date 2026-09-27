@@ -11,6 +11,7 @@
 import { ArrowLeft, MoreHorizontal } from 'lucide-react';
 import type { AutosaveStatus } from '../useAutosave';
 import { fmtDate } from '../../../lib/ui';
+import { surfaceControls, type WorkspaceSurface } from './workspaceContext';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -50,12 +51,12 @@ export interface DocumentHeaderProps {
   toolsOpen: boolean;
   onToggleTools: () => void;
   /**
-   * Whether to render the editor-canvas controls (Insert rail, Tools, Preview).
-   * These only act on the mounted editor, so non-editor workspace modes
-   * (Composer) hide them while still showing the same document header. Defaults
-   * to true.
+   * The active workspace surface (R5.8). It decides which editor-canvas
+   * controls may render: the Insert rail is a document mutation and is hidden in
+   * preview; Tools/Preview inspection stay available in preview; Composer and
+   * Designer show none of them. Defaults to the editable canvas.
    */
-  showCanvasControls?: boolean;
+  surface?: WorkspaceSurface;
 }
 
 const STATUSES = ['draft', 'in_review', 'published', 'archived'];
@@ -83,8 +84,9 @@ export function DocumentHeader({
   onToggleRail,
   toolsOpen,
   onToggleTools,
-  showCanvasControls = true,
+  surface = 'canvas',
 }: DocumentHeaderProps) {
+  const controls = surfaceControls(surface);
   const saveVariant =
     saveState === 'saving' ? 'warning' : saveState === 'failed' ? 'destructive' : saveState === 'saved' ? 'success' : 'outline';
   const savedLabel =
@@ -111,9 +113,9 @@ export function DocumentHeader({
           </Badge>
         </div>
         <div className="flex flex-wrap items-center gap-1.5">
-          {showCanvasControls && (
+          {controls.editor && (
             <>
-              {canEdit && (
+              {canEdit && controls.insert && (
                 <Button
                   variant={railOpen ? 'secondary' : 'outline'}
                   size="sm"
@@ -124,7 +126,7 @@ export function DocumentHeader({
                   Insert
                 </Button>
               )}
-              {canEdit && (
+              {canEdit && controls.tools && (
                 <Button
                   variant={toolsOpen ? 'secondary' : 'outline'}
                   size="sm"
@@ -135,15 +137,17 @@ export function DocumentHeader({
                   Tools
                 </Button>
               )}
-              <Button
-                variant={previewOpen ? 'secondary' : 'outline'}
-                size="sm"
-                aria-pressed={previewOpen}
-                onClick={onTogglePreview}
-                title="Preview the rendered document without leaving the editor"
-              >
-                {previewOpen ? 'Editing' : 'Preview'}
-              </Button>
+              {controls.preview && (
+                <Button
+                  variant={previewOpen ? 'secondary' : 'outline'}
+                  size="sm"
+                  aria-pressed={previewOpen}
+                  onClick={onTogglePreview}
+                  title="Preview the rendered document without leaving the editor"
+                >
+                  {previewOpen ? 'Editing' : 'Preview'}
+                </Button>
+              )}
             </>
           )}
           <Button variant="outline" size="sm" disabled={!canEdit || busy} onClick={onSaveNow}>

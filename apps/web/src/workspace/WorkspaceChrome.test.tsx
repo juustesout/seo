@@ -74,11 +74,18 @@ describe('WorkspaceChrome', () => {
     expect(handlers.onBack).toHaveBeenCalledTimes(1);
   });
 
-  it('hides the editor-canvas toggles (Insert, Tools, Preview) when requested', () => {
-    renderChrome(makeSession(), { showCanvasControls: false });
+  it('hides the editor-canvas toggles (Insert, Tools, Preview) outside the editor', () => {
+    renderChrome(makeSession(), { surface: 'composer' });
     expect(screen.queryByRole('button', { name: 'Insert' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Tools' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Preview' })).toBeNull();
+  });
+
+  it('keeps inspection controls but drops the editing Insert control in preview (R5.8)', () => {
+    renderChrome(makeSession(), { surface: 'preview', previewOpen: true });
+    expect(screen.queryByRole('button', { name: 'Insert' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Tools' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Editing' })).toBeTruthy();
   });
 
   it('renders no assistant entry (it is editor-mode-owned)', () => {

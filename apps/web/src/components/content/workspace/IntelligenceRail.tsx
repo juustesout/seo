@@ -5,6 +5,12 @@
  * segmented surface, so the writing column stays the focus. All underlying
  * panels keep their own props and data sources; this is a layout change, not
  * new data.
+ *
+ * Since R5.8 the areas are derived from the workspace context rather than the
+ * props alone: Media can mutate the document, so it is only offered on the
+ * editable canvas surface (never in preview). The active tab remains UI state
+ * (`useDocumentScopedState`); a context default is used until the user chooses
+ * one, and an unavailable tab falls back to that default.
  */
 import type { Editor } from '@tiptap/react';
 import type { ContentOutlineItem, SeoResult } from '@seo/contracts';
@@ -13,9 +19,16 @@ import { SeoPanel } from '../SeoPanel';
 import { MediaPanel } from '../MediaPanel';
 import { IntelligencePanel } from '../IntelligencePanel';
 import { useDocumentScopedState } from './workspaceState';
+import {
+  DEFAULT_WORKSPACE_CONTEXT,
+  defaultRailTabForContext,
+  railTabsForContext,
+  type ContextRailTab,
+  type WorkspaceContext,
+} from './workspaceContext';
 import { cn } from '@/lib/utils';
 
-export type RailTab = 'outline' | 'seo' | 'media' | 'insights';
+export type RailTab = ContextRailTab;
 
 export interface IntelligenceRailProps {
   outline: ContentOutlineItem[];
@@ -31,17 +44,32 @@ export interface IntelligenceRailProps {
   };
   media?: { projectId: string; editor: Editor; canEdit: boolean; canDelete: boolean };
   intelligence?: { projectId: string; contentId: string };
+  /** Derived workspace context: which surface and which selection is active. */
+  context?: WorkspaceContext;
 }
 
-export function IntelligenceRail({ outline, onSelectHeading, seo, media, intelligence }: IntelligenceRailProps) {
+export function IntelligenceRail({
+  outline,
+  onSelectHeading,
+  seo,
+  media,
+  intelligence,
+  context = DEFAULT_WORKSPACE_CONTEXT,
+}: IntelligenceRailProps) {
+  const available = railTabsForContext(context, {
+    media: Boolean(media),
+    insights: Boolean(intelligence),
+  });
   const tabs: Array<{ id: RailTab; label: string }> = [
     { id: 'outline', label: 'Outline' },
     { id: 'seo', label: 'SEO' },
-    ...(media ? [{ id: 'media' as const, label: 'Media' }] : []),
-    ...(intelligence ? [{ id: 'insights' as const, label: 'Insights' }] : []),
+    ...(available.includes('media') ? [{ id: 'media' as const, label: 'Media' }] : []),
+    ...(available.includes('insights') ? [{ id: 'insights' as const, label: 'Insights' }] : []),
   ];
-  const [tab, setTab] = useDocumentScopedState<RailTab>('outline');
-  const active = tabs.some((t) => t.id === tab) ? tab : 'outline';
+  const [userTab, setUserTab] = useDocumentScopedState<RailTab | null>(null);
+  // The user's explicit choice wins while it is still available; otherwise the
+  // rail falls back to the context default (Outline, or Media for an image).
+  const active = userTab && available.includes(userTab) ? userTab : defaultRailTabForContext(context, available);
 
   return (
     <aside className="flex min-w-0 flex-col gap-3" data-testid="intelligence-rail">
@@ -57,7 +85,7 @@ export function IntelligenceRail({ outline, onSelectHeading, seo, media, intelli
               'flex-1 rounded-md px-2 py-1 text-xs font-medium',
               active === t.id ? 'bg-secondary font-semibold' : 'text-muted-foreground hover:bg-accent',
             )}
-            onClick={() => setTab(t.id)}
+            onClick={() => setUserTab(t.id)}
           >
             {t.label}
           </button>
