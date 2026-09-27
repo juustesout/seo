@@ -43,3 +43,4 @@ export * from './sectionVisual.js';
 export * from './heroVisual.js';
 export * from './designPackage.js';
 export * from './agentRun.js';
+export * from './usageEvent.js';
