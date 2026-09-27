@@ -73,10 +73,22 @@ describe('ProjectWorkspaceShell chrome integration', () => {
     fireEvent.click(screen.getByTestId('workspace-mode-composer'));
     expect(screen.getByTestId('document-header')).toBeTruthy();
     expect(screen.getByTestId('document-save-state')).toBeTruthy();
-    // Insert/Preview act on the editor canvas, which is not mounted here.
+    // Insert/Tools/Preview act on the editor canvas, which is not mounted here.
     expect(screen.queryByRole('button', { name: 'Insert' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Tools' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Preview' })).toBeNull();
     expect(screen.queryByTestId('editor-workspace')).toBeNull();
+  });
+
+  it('opens the on-demand intelligence rail from the header tools toggle', async () => {
+    render(<Harness />);
+    await openDocument();
+    // Canvas-dominant by default: no rail until tools is explicitly opened.
+    expect(screen.queryByTestId('intelligence-rail')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Tools' }));
+    expect(screen.getByTestId('intelligence-rail')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Tools' }));
+    expect(screen.queryByTestId('intelligence-rail')).toBeNull();
   });
 
   it('keeps the shared document chrome in designer mode without editor canvas controls', async () => {
@@ -86,6 +98,7 @@ describe('ProjectWorkspaceShell chrome integration', () => {
     expect(screen.getByTestId('document-header')).toBeTruthy();
     expect(screen.getByTestId('document-save-state')).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Insert' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Tools' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Preview' })).toBeNull();
     expect(screen.queryByTestId('editor-workspace')).toBeNull();
     // The editor-coupled assistant entry never mounts outside the editor mode.

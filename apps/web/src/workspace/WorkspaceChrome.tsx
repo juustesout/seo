@@ -26,13 +26,16 @@ export interface WorkspaceChromeProps {
   onTogglePreview: () => void;
   railOpen: boolean;
   onToggleRail: () => void;
+  /** Intelligence rail (outline/SEO/media/insights) toggle, on-demand (R5.6.2). */
+  toolsOpen: boolean;
+  onToggleTools: () => void;
   onBack: () => void;
   onOpenCalendar?: () => void;
   onOpenPublications?: (contentId: string) => void;
   /**
-   * Whether to show the editor-canvas controls (Insert, Preview). The shell
-   * passes false while Composer is active, so the shared document header stays
-   * present without exposing editor-only controls. Defaults to true.
+   * Whether to show the editor-canvas controls (Insert, Tools, Preview). The
+   * shell passes false while Composer is active, so the shared document header
+   * stays present without exposing editor-only controls. Defaults to true.
    */
   showCanvasControls?: boolean;
 }
@@ -42,6 +45,8 @@ export function WorkspaceChrome({
   onTogglePreview,
   railOpen,
   onToggleRail,
+  toolsOpen,
+  onToggleTools,
   onBack,
   onOpenCalendar,
   onOpenPublications,
@@ -88,6 +93,8 @@ export function WorkspaceChrome({
         onTogglePreview={onTogglePreview}
         railOpen={railOpen}
         onToggleRail={onToggleRail}
+        toolsOpen={toolsOpen}
+        onToggleTools={onToggleTools}
         showCanvasControls={showCanvasControls}
       />
       {auto.status === 'failed' && (

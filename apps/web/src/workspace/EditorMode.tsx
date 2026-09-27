@@ -33,6 +33,8 @@ import { useWorkspaceSessionContext } from './workspaceSession';
 export interface EditorModeProps {
   previewOpen: boolean;
   railOpen: boolean;
+  /** Shell-owned intelligence rail toggle; passed straight to the canvas. */
+  toolsOpen: boolean;
   /** Closes the canvas preview (Escape when the assistant is not focused). */
   onClosePreview: () => void;
   /** Opens the insert rail, e.g. after the agent applies an insertion. */
@@ -51,6 +53,7 @@ export interface EditorModeProps {
 export function EditorMode({
   previewOpen,
   railOpen,
+  toolsOpen,
   onClosePreview,
   onRevealInsertion,
   initialContentId,
@@ -159,6 +162,7 @@ export function EditorMode({
             onAssistantBusyChange={setAssistantBusy}
             preview={previewOpen}
             railOpen={railOpen}
+            toolsOpen={toolsOpen}
             initialContentId={initialContentId}
             open={open}
             startNew={startNew}

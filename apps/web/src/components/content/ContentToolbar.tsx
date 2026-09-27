@@ -5,6 +5,12 @@
  * dropdown only enables actions the project can actually perform (configured
  * account key + a real text selection), otherwise it explains why it is
  * disabled instead of offering a dead action.
+ *
+ * Since R5.6.2 the bar is deliberately calm: only the highest-frequency inline
+ * controls (bold, italic) and history stay permanently visible, and every
+ * block/structural command lives in the `Format` overflow so the writing canvas
+ * dominates. No command is removed - the overflow re-derives the same state and
+ * runs the same chain commands.
  */
 import type { ReactNode } from 'react';
 import type { Editor } from '@tiptap/react';
@@ -35,6 +41,48 @@ function ToolbarButton({ title, label, active, disabled, onClick }: ToolbarButto
     >
       {label}
     </button>
+  );
+}
+
+interface FormatItem {
+  title: string;
+  label: ReactNode;
+  active?: boolean;
+  onClick: () => void;
+}
+
+/**
+ * Overflow menu for the lower-frequency block and structural commands. It is a
+ * disclosure (not a second toolbar) so nothing is permanently occupied, and it
+ * keeps every original command reachable from the one calm bar.
+ */
+function FormatMenu({ items }: { items: FormatItem[] }) {
+  return (
+    <details className="relative inline-block">
+      <summary
+        className="cursor-pointer list-none rounded-[5px] border border-transparent px-1.5 py-0.5 text-xs leading-[1.4] hover:border-primary [&::-webkit-details-marker]:hidden"
+        title="Formatting, headings and blocks"
+      >
+        Format
+      </summary>
+      <div className="absolute left-0 top-[calc(100%+6px)] z-20 flex min-w-[190px] flex-col gap-0.5 rounded-lg border bg-card p-1.5 shadow-lg">
+        {items.map((item) => (
+          <button
+            key={item.title}
+            type="button"
+            title={item.title}
+            aria-pressed={item.active}
+            className={cn(
+              'rounded-md px-2 py-1 text-left text-xs hover:bg-accent',
+              item.active && 'bg-secondary font-semibold',
+            )}
+            onClick={item.onClick}
+          >
+            {item.label}
+          </button>
+        ))}
+      </div>
+    </details>
   );
 }
 
@@ -145,24 +193,30 @@ export function ContentToolbar({ editor, ai, extra }: { editor: Editor | null; a
   const run = (fn: () => void) => () => fn();
   const sep = <span className="mx-1 h-[18px] w-px bg-border" />;
 
+  // Every block/structural command the old always-visible toolbar exposed. They
+  // keep the same active-state predicates and chain commands, just inside the
+  // `Format` disclosure, so the persistent bar stays calm without losing a
+  // control. Undo/redo and inline marks stay primary because they are the
+  // highest-frequency actions while writing.
+  const formatItems: FormatItem[] = [
+    { title: 'Strikethrough', label: 'Strikethrough', active: editor.isActive('strike'), onClick: run(() => cmd((c) => c.toggleStrike())) },
+    { title: 'Heading 1', label: 'Heading 1', active: editor.isActive('heading', { level: 1 }), onClick: run(() => setHeading(1)) },
+    { title: 'Heading 2', label: 'Heading 2', active: editor.isActive('heading', { level: 2 }), onClick: run(() => setHeading(2)) },
+    { title: 'Heading 3', label: 'Heading 3', active: editor.isActive('heading', { level: 3 }), onClick: run(() => setHeading(3)) },
+    { title: 'Heading 4', label: 'Heading 4', active: editor.isActive('heading', { level: 4 }), onClick: run(() => setHeading(4)) },
+    { title: 'Bullet list', label: 'Bullet list', active: editor.isActive('bulletList'), onClick: run(() => cmd((c) => c.toggleBulletList())) },
+    { title: 'Numbered list', label: 'Numbered list', active: editor.isActive('orderedList'), onClick: run(() => cmd((c) => c.toggleOrderedList())) },
+    { title: 'Blockquote', label: 'Blockquote', active: editor.isActive('blockquote'), onClick: run(() => cmd((c) => c.toggleBlockquote())) },
+    { title: 'Code block', label: 'Code block', active: editor.isActive('codeBlock'), onClick: run(() => cmd((c) => c.toggleCodeBlock())) },
+    { title: 'Link', label: 'Link', active: editor.isActive('link'), onClick: setLink },
+    { title: 'Horizontal rule', label: 'Horizontal rule', onClick: run(() => cmd((c) => c.setHorizontalRule())) },
+  ];
+
   return (
     <div className="flex flex-wrap items-center gap-0.5 border-b bg-muted/40 px-2 py-1.5">
       <ToolbarButton title="Bold" label={<strong>B</strong>} active={editor.isActive('bold')} onClick={run(() => cmd((c) => c.toggleBold()))} />
       <ToolbarButton title="Italic" label={<em>I</em>} active={editor.isActive('italic')} onClick={run(() => cmd((c) => c.toggleItalic()))} />
-      <ToolbarButton title="Strikethrough" label={<s>S</s>} active={editor.isActive('strike')} onClick={run(() => cmd((c) => c.toggleStrike()))} />
-      {sep}
-      <ToolbarButton title="Heading 1" label="H1" active={editor.isActive('heading', { level: 1 })} onClick={run(() => setHeading(1))} />
-      <ToolbarButton title="Heading 2" label="H2" active={editor.isActive('heading', { level: 2 })} onClick={run(() => setHeading(2))} />
-      <ToolbarButton title="Heading 3" label="H3" active={editor.isActive('heading', { level: 3 })} onClick={run(() => setHeading(3))} />
-      <ToolbarButton title="Heading 4" label="H4" active={editor.isActive('heading', { level: 4 })} onClick={run(() => setHeading(4))} />
-      {sep}
-      <ToolbarButton title="Bullet list" label="• list" active={editor.isActive('bulletList')} onClick={run(() => cmd((c) => c.toggleBulletList()))} />
-      <ToolbarButton title="Numbered list" label="1. list" active={editor.isActive('orderedList')} onClick={run(() => cmd((c) => c.toggleOrderedList()))} />
-      <ToolbarButton title="Blockquote" label={'"quote"'} active={editor.isActive('blockquote')} onClick={run(() => cmd((c) => c.toggleBlockquote()))} />
-      <ToolbarButton title="Code block" label="</>" active={editor.isActive('codeBlock')} onClick={run(() => cmd((c) => c.toggleCodeBlock()))} />
-      {sep}
-      <ToolbarButton title="Link" label="Link" active={editor.isActive('link')} onClick={setLink} />
-      <ToolbarButton title="Horizontal rule" label="—" onClick={run(() => cmd((c) => c.setHorizontalRule()))} />
+      <FormatMenu items={formatItems} />
       {sep}
       <ToolbarButton title="Undo" label="undo" disabled={!editor.can().undo()} onClick={run(() => cmd((c) => c.undo()))} />
       <ToolbarButton title="Redo" label="redo" disabled={!editor.can().redo()} onClick={run(() => cmd((c) => c.redo()))} />

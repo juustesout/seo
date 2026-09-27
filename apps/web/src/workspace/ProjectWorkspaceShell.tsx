@@ -112,6 +112,10 @@ function WorkspaceBody({
   // the document, on the same boundary.
   const [previewOpen, setPreviewOpen] = useDocumentScopedState(false);
   const [railOpen, setRailOpen] = useDocumentScopedState(false);
+  // The intelligence rail (outline/SEO/media/insights) is on-demand since
+  // R5.6.2 so the writing canvas dominates; it is still document-scoped, so the
+  // toggle resets with the document boundary like preview/rail.
+  const [toolsOpen, setToolsOpen] = useDocumentScopedState(false);
 
   // R5.4.3.2: a composed page staged for the open document. It survives the
   // composer -> editor mode switch (this shell stays mounted) and is consumed by
@@ -373,6 +377,8 @@ function WorkspaceBody({
           onTogglePreview={() => setPreviewOpen((value) => !value)}
           railOpen={railOpen}
           onToggleRail={() => setRailOpen((value) => !value)}
+          toolsOpen={toolsOpen}
+          onToggleTools={() => setToolsOpen((value) => !value)}
           onBack={goList}
           onOpenCalendar={onOpenCalendar}
           onOpenPublications={onOpenPublications}
@@ -383,6 +389,7 @@ function WorkspaceBody({
         <EditorMode
           previewOpen={previewOpen}
           railOpen={railOpen}
+          toolsOpen={toolsOpen}
           onClosePreview={() => setPreviewOpen(false)}
           onRevealInsertion={() => setRailOpen(true)}
           initialContentId={initialContentId}

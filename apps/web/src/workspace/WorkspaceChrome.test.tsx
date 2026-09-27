@@ -44,11 +44,12 @@ function renderChrome(session: WorkspaceSessionValue, props: Partial<React.Compo
   const handlers = {
     onTogglePreview: vi.fn(),
     onToggleRail: vi.fn(),
+    onToggleTools: vi.fn(),
     onBack: vi.fn(),
   };
   render(
     <WorkspaceSessionProvider value={session}>
-      <WorkspaceChrome previewOpen={false} railOpen={false} {...handlers} {...props} />
+      <WorkspaceChrome previewOpen={false} railOpen={false} toolsOpen={false} {...handlers} {...props} />
     </WorkspaceSessionProvider>,
   );
   return handlers;
@@ -65,10 +66,19 @@ describe('WorkspaceChrome', () => {
     const handlers = renderChrome(makeSession());
     fireEvent.click(screen.getByRole('button', { name: 'Insert' }));
     expect(handlers.onToggleRail).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole('button', { name: 'Tools' }));
+    expect(handlers.onToggleTools).toHaveBeenCalledTimes(1);
     fireEvent.click(screen.getByRole('button', { name: 'Preview' }));
     expect(handlers.onTogglePreview).toHaveBeenCalledTimes(1);
     fireEvent.click(screen.getByRole('button', { name: 'Back' }));
     expect(handlers.onBack).toHaveBeenCalledTimes(1);
+  });
+
+  it('hides the editor-canvas toggles (Insert, Tools, Preview) when requested', () => {
+    renderChrome(makeSession(), { showCanvasControls: false });
+    expect(screen.queryByRole('button', { name: 'Insert' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Tools' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Preview' })).toBeNull();
   });
 
   it('renders no assistant entry (it is editor-mode-owned)', () => {

@@ -22,6 +22,8 @@ function makeProps(overrides: Partial<DocumentHeaderProps> = {}): DocumentHeader
     onTogglePreview: () => {},
     railOpen: false,
     onToggleRail: () => {},
+    toolsOpen: false,
+    onToggleTools: () => {},
     ...overrides,
   };
 }
@@ -42,6 +44,13 @@ describe('DocumentHeader', () => {
     expect(screen.getByRole('button', { name: 'Publish' })).toBeTruthy();
     rerender(<DocumentHeader {...makeProps({ status: 'published' })} />);
     expect(screen.queryByRole('button', { name: 'Publish' })).toBeNull();
+  });
+
+  it('toggles the on-demand tools rail from the canvas controls', () => {
+    const onToggleTools = vi.fn();
+    render(<DocumentHeader {...makeProps({ onToggleTools })} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Tools' }));
+    expect(onToggleTools).toHaveBeenCalledTimes(1);
   });
 
   it('keeps secondary and destructive actions in the overflow menu', () => {

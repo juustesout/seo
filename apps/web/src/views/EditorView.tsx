@@ -76,6 +76,8 @@ export interface EditorViewProps {
   preview: boolean;
   /** Shell-owned insert rail toggle. */
   railOpen: boolean;
+  /** Shell-owned intelligence rail (outline/SEO/media/insights) toggle. */
+  toolsOpen: boolean;
   /** Deep link (e.g. from Compose) to open one draft on mount. */
   initialContentId?: string | null;
   open: (id: string) => void;
@@ -91,6 +93,7 @@ export function EditorView({
   onAssistantBusyChange,
   preview,
   railOpen,
+  toolsOpen,
   initialContentId = null,
   open,
   startNew,
@@ -526,6 +529,7 @@ export function EditorView({
       editor={editor}
       preview={preview}
       railOpen={railOpen}
+      toolsOpen={toolsOpen}
       toolbarAi={editingId ? { configured: aiConfigured, busy: aiBusy, onAction: runAi } : undefined}
       writing={{
         editorKey: session.boundary,

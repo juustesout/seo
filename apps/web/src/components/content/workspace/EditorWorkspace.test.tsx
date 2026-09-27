@@ -19,10 +19,12 @@ const DOC: TipDoc = tiptapEmptyDoc();
 function Harness({
   preview = false,
   railOpen = false,
+  toolsOpen = false,
   onEditor,
 }: {
   preview?: boolean;
   railOpen?: boolean;
+  toolsOpen?: boolean;
   onEditor?: (editor: Editor | null) => void;
 }) {
   const [editor, setEditor] = useState<Editor | null>(null);
@@ -34,6 +36,7 @@ function Harness({
         editor={editor}
         preview={preview}
         railOpen={railOpen}
+        toolsOpen={toolsOpen}
         toolbarAi={{ configured: true, busy: false, hasSelection: false, onAction: () => {} }}
         writing={{
           editorKey: 'test',
@@ -70,7 +73,9 @@ describe('EditorWorkspace canvas', () => {
   it('renders the merged toolbar and canvas without workspace chrome', async () => {
     render(<Harness />);
     expect(screen.getByTestId('editor-workspace')).toBeTruthy();
-    expect(screen.getByTestId('intelligence-rail')).toBeTruthy();
+    // The intelligence rail is on-demand since R5.6.2, so the canvas owns the
+    // width until the shell explicitly opens the tools surface.
+    expect(screen.queryByTestId('intelligence-rail')).toBeNull();
     // The header, save indicator and assistant entry belong to the shell now.
     expect(screen.queryByTestId('document-header')).toBeNull();
     expect(screen.queryByTestId('document-save-state')).toBeNull();
@@ -80,6 +85,13 @@ describe('EditorWorkspace canvas', () => {
     expect(screen.queryByTestId('editor-toolbar')).toBeNull();
     expect(screen.queryByTestId('editor-toolbar-save')).toBeNull();
     await waitFor(() => expect(document.querySelector('.ProseMirror')).toBeTruthy());
+  });
+
+  it('shows the intelligence rail only when the shell opens tools', () => {
+    const { rerender } = render(<Harness />);
+    expect(screen.queryByTestId('intelligence-rail')).toBeNull();
+    rerender(<Harness toolsOpen />);
+    expect(screen.getByTestId('intelligence-rail')).toBeTruthy();
   });
 
   it('hides the canvas and shows the rendered preview when the shell toggles preview', async () => {

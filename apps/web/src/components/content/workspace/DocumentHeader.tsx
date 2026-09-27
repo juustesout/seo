@@ -44,9 +44,16 @@ export interface DocumentHeaderProps {
   railOpen: boolean;
   onToggleRail: () => void;
   /**
-   * Whether to render the editor-canvas controls (Insert rail, Preview). These
-   * only act on the mounted editor, so non-editor workspace modes (Composer)
-   * hide them while still showing the same document header. Defaults to true.
+   * Intelligence rail (outline/SEO/media/insights) toggle. On-demand since
+   * R5.6.2 so the writing canvas dominates by default.
+   */
+  toolsOpen: boolean;
+  onToggleTools: () => void;
+  /**
+   * Whether to render the editor-canvas controls (Insert rail, Tools, Preview).
+   * These only act on the mounted editor, so non-editor workspace modes
+   * (Composer) hide them while still showing the same document header. Defaults
+   * to true.
    */
   showCanvasControls?: boolean;
 }
@@ -74,6 +81,8 @@ export function DocumentHeader({
   onTogglePreview,
   railOpen,
   onToggleRail,
+  toolsOpen,
+  onToggleTools,
   showCanvasControls = true,
 }: DocumentHeaderProps) {
   const saveVariant =
@@ -113,6 +122,17 @@ export function DocumentHeader({
                   title="Insert a composition element into the document"
                 >
                   Insert
+                </Button>
+              )}
+              {canEdit && (
+                <Button
+                  variant={toolsOpen ? 'secondary' : 'outline'}
+                  size="sm"
+                  aria-pressed={toolsOpen}
+                  onClick={onToggleTools}
+                  title="Outline, SEO, media and insights"
+                >
+                  Tools
                 </Button>
               )}
               <Button

@@ -23,6 +23,7 @@ import { EditorShell } from '../editor/EditorShell';
 import { ContextualToolbar } from './ContextualToolbar';
 import { PreviewPane } from './PreviewPane';
 import { IntelligenceRail, type IntelligenceRailProps } from './IntelligenceRail';
+import { cn } from '@/lib/utils';
 
 export interface EditorWorkspaceProps {
   /** Live document, used only for the preview render. */
@@ -32,6 +33,11 @@ export interface EditorWorkspaceProps {
   preview: boolean;
   /** Shell-owned insert rail toggle. */
   railOpen: boolean;
+  /**
+   * Shell-owned intelligence rail toggle. Since R5.6.2 the rail is on-demand so
+   * the writing canvas dominates; it still reads the same document-scoped state.
+   */
+  toolsOpen: boolean;
   toolbarAi?: ContentAiToolbar;
   writing: {
     editorKey: string;
@@ -63,6 +69,7 @@ export function EditorWorkspace({
   editor,
   preview,
   railOpen,
+  toolsOpen,
   toolbarAi,
   writing,
   banners,
@@ -74,7 +81,12 @@ export function EditorWorkspace({
   return (
     <div className="grid gap-3" data-testid="editor-workspace">
       {banners}
-      <div className="mt-1 grid grid-cols-1 items-start gap-3.5 lg:grid-cols-[minmax(0,1fr)_280px]">
+      <div
+        className={cn(
+          'mt-1 grid grid-cols-1 items-start gap-3.5',
+          toolsOpen && 'lg:grid-cols-[minmax(0,1fr)_280px]',
+        )}
+      >
         <div className="min-w-0">
           <div className={preview ? 'hidden' : undefined}>
             <EditorShell
@@ -95,7 +107,7 @@ export function EditorWorkspace({
           {preview && <PreviewPane doc={doc} />}
           {review}
         </div>
-        <IntelligenceRail {...rail} />
+        {toolsOpen && <IntelligenceRail {...rail} />}
       </div>
       {secondary}
       {knowledge}
