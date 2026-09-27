@@ -8,10 +8,11 @@
  * menu so the header stays calm. Role gates and the status-based publish
  * semantics are unchanged.
  */
-import { ArrowLeft, MoreHorizontal } from 'lucide-react';
+import { ArrowLeft, MoreHorizontal, Plug, Settings } from 'lucide-react';
 import type { AutosaveStatus } from '../useAutosave';
 import { fmtDate } from '../../../lib/ui';
 import { surfaceControls, type WorkspaceSurface } from './workspaceContext';
+import type { WorkspaceProjectInfo } from '../../../workspace/projectInfo';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -57,6 +58,17 @@ export interface DocumentHeaderProps {
    * Designer show none of them. Defaults to the editable canvas.
    */
   surface?: WorkspaceSurface;
+  /**
+   * Canonical project context (R5.9): the project this document belongs to, from
+   * the account's `/me` payload. Read-only; the workspace consumes it so the user
+   * can see "Document X in Project Y" and reach project administration without
+   * the header becoming an admin surface.
+   */
+  project?: WorkspaceProjectInfo;
+  /** Open the canonical project settings surface. */
+  onOpenSettings?: () => void;
+  /** Open the canonical project integrations surface. */
+  onOpenIntegrations?: () => void;
 }
 
 const STATUSES = ['draft', 'in_review', 'published', 'archived'];
@@ -85,12 +97,19 @@ export function DocumentHeader({
   toolsOpen,
   onToggleTools,
   surface = 'canvas',
+  project,
+  onOpenSettings,
+  onOpenIntegrations,
 }: DocumentHeaderProps) {
   const controls = surfaceControls(surface);
   const saveVariant =
     saveState === 'saving' ? 'warning' : saveState === 'failed' ? 'destructive' : saveState === 'saved' ? 'success' : 'outline';
   const savedLabel =
     saveState === 'saved' && savedAt ? `Saved ${fmtDate(savedAt)}` : SAVE_LABEL[saveState] ?? SAVE_LABEL.saved;
+  const integrationLabel =
+    project && project.totalIntegrations != null
+      ? `Integrations ${project.connectedIntegrations ?? 0}/${project.totalIntegrations}`
+      : 'Integrations';
 
   return (
     <header className="grid gap-2" data-testid="document-header">
@@ -203,7 +222,40 @@ export function DocumentHeader({
           </details>
         </div>
       </div>
-      <div className="flex flex-wrap gap-3.5 px-0.5">
+      <div className="flex flex-wrap items-center gap-3.5 px-0.5">
+        {project?.name &&
+          (onOpenSettings ? (
+            <button
+              type="button"
+              onClick={onOpenSettings}
+              title={project.websiteUrl ? `Project settings · ${project.websiteUrl}` : 'Project settings'}
+              className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+              data-testid="workspace-project-settings"
+            >
+              <Settings className="size-3.5" aria-hidden />
+              <span>{project.name}</span>
+            </button>
+          ) : (
+            <span
+              className="inline-flex items-center gap-1 text-xs text-muted-foreground"
+              data-testid="workspace-project"
+            >
+              <Settings className="size-3.5" aria-hidden />
+              <span>{project.name}</span>
+            </span>
+          ))}
+        {onOpenIntegrations && (
+          <button
+            type="button"
+            onClick={onOpenIntegrations}
+            title="Project integrations"
+            className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+            data-testid="workspace-project-integrations"
+          >
+            <Plug className="size-3.5" aria-hidden />
+            <span>{integrationLabel}</span>
+          </button>
+        )}
         <span className="font-mono text-xs text-muted-foreground">{slug ? `/${slug}` : 'no slug yet'}</span>
         <span className="text-sm text-muted-foreground">{wordCount} words</span>
         {!canEdit && <span className="text-sm text-muted-foreground">Read-only project access.</span>}

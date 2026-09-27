@@ -71,6 +71,28 @@ describe('DocumentHeader', () => {
     expect(screen.queryByRole('button', { name: 'Preview' })).toBeNull();
   });
 
+  it('shows the canonical project context and routes to project admin (R5.9)', () => {
+    const onOpenSettings = vi.fn();
+    const onOpenIntegrations = vi.fn();
+    render(
+      <DocumentHeader
+        {...makeProps({
+          project: { name: 'Acme', websiteUrl: 'https://acme.test', connectedIntegrations: 2, totalIntegrations: 3 },
+          onOpenSettings,
+          onOpenIntegrations,
+        })}
+      />,
+    );
+
+    // The user can see which project the document belongs to and reach admin.
+    expect(screen.getByTestId('workspace-project-settings').textContent).toContain('Acme');
+    expect(screen.getByTestId('workspace-project-integrations').textContent).toContain('2/3');
+    fireEvent.click(screen.getByTestId('workspace-project-settings'));
+    fireEvent.click(screen.getByTestId('workspace-project-integrations'));
+    expect(onOpenSettings).toHaveBeenCalledTimes(1);
+    expect(onOpenIntegrations).toHaveBeenCalledTimes(1);
+  });
+
   it('keeps secondary and destructive actions in the overflow menu', () => {
     const onViewPublications = vi.fn();
     const onOpenCalendar = vi.fn();

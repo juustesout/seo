@@ -20,6 +20,7 @@
 import { docWordCount } from '@seo/contracts';
 import { DocumentHeader } from '../components/content/workspace/DocumentHeader';
 import type { WorkspaceSurface } from '../components/content/workspace/workspaceContext';
+import type { WorkspaceProjectInfo } from './projectInfo';
 import { useWorkspaceSessionContext } from './workspaceSession';
 
 export interface WorkspaceChromeProps {
@@ -33,6 +34,11 @@ export interface WorkspaceChromeProps {
   onBack: () => void;
   onOpenCalendar?: () => void;
   onOpenPublications?: (contentId: string) => void;
+  /** Canonical project context for the document header (R5.9). */
+  project?: WorkspaceProjectInfo;
+  /** Navigate to the canonical project administration surfaces (R5.9). */
+  onOpenSettings?: () => void;
+  onOpenIntegrations?: () => void;
   /**
    * The active workspace surface (R5.8), passed straight to the document header.
    * It decides which editor-canvas controls render: the header stays present in
@@ -52,6 +58,9 @@ export function WorkspaceChrome({
   onBack,
   onOpenCalendar,
   onOpenPublications,
+  project,
+  onOpenSettings,
+  onOpenIntegrations,
   surface = 'canvas',
 }: WorkspaceChromeProps) {
   const {
@@ -97,6 +106,9 @@ export function WorkspaceChrome({
         onToggleRail={onToggleRail}
         toolsOpen={toolsOpen}
         onToggleTools={onToggleTools}
+        project={project}
+        onOpenSettings={onOpenSettings}
+        onOpenIntegrations={onOpenIntegrations}
         surface={surface}
       />
       {auto.status === 'failed' && (

@@ -7,8 +7,19 @@
  * for free. App listens to `popstate`, so this helper pushes the new history
  * entry and then dispatches a synthetic `popstate` to make App re-parse the
  * route - exactly as if the user had pressed back/forward.
+ *
+ * R5.9: like the App's own navigation helpers, this crosses the workspace save
+ * barrier first, so leaving an open document for a project view (publications,
+ * calendar, …) flushes pending edits and is refused when the save failed.
  */
-export function openProjectView(projectId: string, view: string, params?: Record<string, string | null>): void {
+import { runNavigationBarrier } from './navigationBarrier';
+
+export async function openProjectView(
+  projectId: string,
+  view: string,
+  params?: Record<string, string | null>,
+): Promise<boolean> {
+  if (!(await runNavigationBarrier())) return false;
   const search = new URLSearchParams();
   if (params) {
     for (const [key, value] of Object.entries(params)) {
@@ -19,4 +30,5 @@ export function openProjectView(projectId: string, view: string, params?: Record
   const path = `/p/${projectId}/${view}${qs ? `?${qs}` : ''}`;
   window.history.pushState({}, '', path);
   window.dispatchEvent(new PopStateEvent('popstate'));
+  return true;
 }

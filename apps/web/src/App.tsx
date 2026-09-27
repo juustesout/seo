@@ -12,7 +12,7 @@
  * exist, then `/me` (account + project memberships) must resolve before any
  * workspace renders - children assume `me.projects` is already loaded.
  */
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   BookOpen,
   CalendarDays,
@@ -43,6 +43,7 @@ import { ContentSchedule } from './views/ContentSchedule';
 import { Publications } from './views/Publications';
 import { ProjectWorkspaceShell, normalizeWorkspaceMode } from './workspace';
 import { openProjectView } from './lib/nav';
+import { runNavigationBarrier } from './lib/navigationBarrier';
 import { canonicalWorkspaceRoute, parseRoute, routePath, type Route, type TopArea } from './lib/projectRoute';
 import { DesignSystemProvider } from './lib/designSystem';
 import { Overview } from './views/Overview';
@@ -163,16 +164,37 @@ export function App() {
     setRoute(target);
   }, [route, me]);
 
+  // R5.9: route navigation crosses the workspace save barrier. While a workspace
+  // with an open document is mounted it registers a barrier; navigation awaits it
+  // and is refused when the document could not be saved, so a project switch (or
+  // any route change away from the workspace) never abandons unsaved edits. A
+  // same-project workspace mode change reuses the mounted session, so it skips the
+  // barrier. The in-flight flag keeps a double click from pushing twice.
+  const navigatingRef = useRef(false);
+  const navigate = async (r: Route) => {
+    if (navigatingRef.current) return;
+    const staysInWorkspace =
+      route.area === 'project' &&
+      r.area === 'project' &&
+      route.projectId === r.projectId &&
+      route.view === 'workspace' &&
+      r.view === 'workspace';
+    navigatingRef.current = true;
+    try {
+      if (!staysInWorkspace && !(await runNavigationBarrier())) return;
+      window.history.pushState({}, '', routePath(r));
+      setRoute(r);
+    } finally {
+      navigatingRef.current = false;
+    }
+  };
+
   const goArea = (area: TopArea) => {
-    const r: Route = { area };
-    window.history.pushState({}, '', routePath(r));
-    setRoute(r);
+    void navigate({ area });
   };
 
   const goProject = (projectId: string, view: string, sub?: string, sub2?: string) => {
-    const r: Route = { area: 'project', projectId, view, sub: sub ?? null, sub2: sub2 ?? null, search: '' };
-    window.history.pushState({}, '', routePath(r));
-    setRoute(r);
+    void navigate({ area: 'project', projectId, view, sub: sub ?? null, sub2: sub2 ?? null, search: '' });
   };
 
   const refreshMe = async () => {
@@ -323,11 +345,19 @@ export function App() {
                 <ProjectWorkspaceShell
                   projectId={pid}
                   role={project.role}
+                  project={{
+                    name: project.name,
+                    websiteUrl: project.website_url,
+                    connectedIntegrations: project.connected_count,
+                    totalIntegrations: project.integration_count,
+                  }}
                   mode={workspaceMode}
                   initialContentId={workspaceContentId}
                   onModeChange={(mode) => goProject(pid, 'workspace', mode)}
                   onOpenCalendar={() => goProject(pid, 'calendar')}
                   onOpenPublications={(contentId) => openProjectView(pid, 'publications', { content_id: contentId })}
+                  onOpenSettings={() => goProject(pid, 'settings')}
+                  onOpenIntegrations={() => goProject(pid, 'integrations')}
                 />
               )}
               {view === 'calendar' && <ContentSchedule projectId={pid} role={project.role} onViewPublication={(scheduleId) => openProjectView(pid, 'publications', { schedule_id: scheduleId })} />}

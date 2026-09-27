@@ -45,11 +45,16 @@ import { DesignerMode } from './DesignerMode';
 import { EditorMode } from './EditorMode';
 import { WorkspaceChrome } from './WorkspaceChrome';
 import { WorkspaceModeSwitcher, normalizeWorkspaceMode, type WorkspaceMode } from './WorkspaceModeSwitcher';
+import type { WorkspaceProjectInfo } from './projectInfo';
 import { WorkspaceSessionProvider, useWorkspaceSession, useWorkspaceSessionContext } from './workspaceSession';
+
+export type { WorkspaceProjectInfo } from './projectInfo';
 
 export interface ProjectWorkspaceShellProps {
   projectId: string;
   role?: string;
+  /** Canonical project metadata for the workspace header (from `/me`). */
+  project?: WorkspaceProjectInfo;
   /** Active mode; defaults to editor. */
   mode?: WorkspaceMode;
   /** Deep link to a document to open once the shell mounts. */
@@ -58,16 +63,34 @@ export interface ProjectWorkspaceShellProps {
   onModeChange?: (mode: WorkspaceMode) => void;
   onOpenCalendar?: () => void;
   onOpenPublications?: (contentId: string) => void;
+  /** Navigate to the canonical project administration surfaces. */
+  onOpenSettings?: () => void;
+  onOpenIntegrations?: () => void;
 }
 
-export function ProjectWorkspaceShell({
+/**
+ * Product-level workspace shell. The workspace is project-scoped: its document
+ * session lives below the canonical project id it is handed. Keying the session
+ * subtree by that id means a project change remounts the session instead of
+ * reusing it, so Project P's document, selection, preview and project-scoped
+ * state can never leak into Project Q. The id is consumed from the route and is
+ * never re-minted here.
+ */
+export function ProjectWorkspaceShell(props: ProjectWorkspaceShellProps) {
+  return <ProjectWorkspaceSession key={props.projectId} {...props} />;
+}
+
+function ProjectWorkspaceSession({
   projectId,
   role = 'viewer',
+  project,
   mode = 'editor',
   initialContentId = null,
   onModeChange,
   onOpenCalendar,
   onOpenPublications,
+  onOpenSettings,
+  onOpenIntegrations,
 }: ProjectWorkspaceShellProps) {
   const ws = useWorkspaceSession({ projectId, role });
 
@@ -78,9 +101,12 @@ export function ProjectWorkspaceShell({
           <WorkspaceBody
             mode={mode}
             initialContentId={initialContentId}
+            project={project}
             onModeChange={onModeChange}
             onOpenCalendar={onOpenCalendar}
             onOpenPublications={onOpenPublications}
+            onOpenSettings={onOpenSettings}
+            onOpenIntegrations={onOpenIntegrations}
           />
         </WorkspaceStateProvider>
       </DocumentSessionProvider>
@@ -101,14 +127,20 @@ function compositionGapSummary(gaps: CompositionGap[]): string {
 function WorkspaceBody({
   mode,
   initialContentId,
+  project,
   onModeChange,
   onOpenCalendar,
   onOpenPublications,
+  onOpenSettings,
+  onOpenIntegrations,
 }: Required<Pick<ProjectWorkspaceShellProps, 'mode'>> & {
   initialContentId: string | null;
+  project?: WorkspaceProjectInfo;
   onModeChange?: (mode: WorkspaceMode) => void;
   onOpenCalendar?: () => void;
   onOpenPublications?: (contentId: string) => void;
+  onOpenSettings?: () => void;
+  onOpenIntegrations?: () => void;
 }) {
   const ws = useWorkspaceSessionContext();
   const { session, lifecycle, canEdit } = ws;
@@ -395,6 +427,9 @@ function WorkspaceBody({
           onBack={goList}
           onOpenCalendar={onOpenCalendar}
           onOpenPublications={onOpenPublications}
+          project={project}
+          onOpenSettings={onOpenSettings}
+          onOpenIntegrations={onOpenIntegrations}
           surface={surface}
         />
       )}

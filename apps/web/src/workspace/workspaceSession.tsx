@@ -15,6 +15,7 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState, type Dispatch, type MutableRefObject, type ReactNode, type SetStateAction } from 'react';
 import { asTipDoc, tiptapEmptyDoc, type TipDoc } from '@seo/contracts';
 import { api } from '../lib/api';
+import { registerNavigationBarrier } from '../lib/navigationBarrier';
 import { useAsync } from '../lib/ui';
 import { useAutosave } from '../components/content/useAutosave';
 import { canonicalFromEditorDocument } from '../components/content/editorDraft';
@@ -198,6 +199,21 @@ export function useWorkspaceSession({ projectId, role = 'viewer' }: { projectId:
 
   // The session barrier flushes through the live autosave instance.
   flushRef.current = auto.flush;
+
+  // R5.9: the workspace participates in route navigation's save barrier, so a
+  // project switch (or any route change away from the workspace) flushes pending
+  // edits through the same autosave the document switch barrier uses. The barrier
+  // is cleared on unmount, where one final flush runs for navigation that could
+  // not be intercepted (e.g. browser back/forward), so a dirty document is never
+  // abandoned without a save attempt. Both paths call `flush`; neither adds a
+  // second unsaved-change mechanism.
+  useEffect(() => {
+    registerNavigationBarrier(() => flushRef.current());
+    return () => {
+      registerNavigationBarrier(null);
+      void flushRef.current();
+    };
+  }, []);
 
   const sessionValue = useMemo<DocumentSessionValue>(
     () => ({
