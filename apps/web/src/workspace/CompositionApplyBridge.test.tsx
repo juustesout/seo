@@ -8,7 +8,7 @@
  * for the editor instead of dropping the staged composition.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { render, waitFor } from '@testing-library/react';
+import { act, render, waitFor } from '@testing-library/react';
 import { Editor } from '@tiptap/core';
 import {
   CANONICAL_DOCUMENT_VERSION,
@@ -365,5 +365,92 @@ describe('CompositionApplyBridge', () => {
     );
 
     await waitFor(() => expect(onResult).toHaveBeenCalledWith({ status: 'failed' }));
+  });
+});
+
+/**
+ * R5.6.4: immediate-change hardening. The apply is a normal editor transaction,
+ * so these tests pin the behaviour the shell relies on - one undoable step, one
+ * emitted update for the existing autosave boundary, and exactly one apply per
+ * staged mutation - without introducing any new mechanism. The shell-level
+ * "staged while the editor is already mounted" variant is unreachable by
+ * construction: staging only happens in Composer/Designer, which unmount the
+ * editor (section 8 of `docs/r5.6.0-editor-integration-recon.md`).
+ */
+describe('CompositionApplyBridge immediate-change hardening (R5.6.4)', () => {
+  it('applies the composed document as one undoable, redoable transaction', async () => {
+    const editor = makeEditor();
+    const onResult = vi.fn();
+    render(
+      <Bridge
+        editor={editor}
+        pending={pendingCompositionOf(COMPOSED, documentRevisionOf(EMPTY), CURRENT_BOUNDARY)}
+        onResult={onResult}
+      />,
+    );
+    await waitFor(() => expect(onResult).toHaveBeenCalledWith({ status: 'applied' }));
+
+    // The whole composed page is a single history step within the live editor.
+    expect(editor.can().undo()).toBe(true);
+    act(() => {
+      editor.commands.undo();
+    });
+    expect(editor.getText()).not.toContain('Composed heading');
+    act(() => {
+      editor.commands.redo();
+    });
+    expect(editor.getText()).toContain('Composed heading');
+  });
+
+  it('emits one normal document update so the existing autosave boundary persists it', async () => {
+    const editor = makeEditor();
+    const onResult = vi.fn();
+    const updates: TipDoc[] = [];
+    editor.on('update', () => updates.push(editor.getJSON() as unknown as TipDoc));
+    render(
+      <Bridge
+        editor={editor}
+        pending={pendingCompositionOf(COMPOSED, documentRevisionOf(EMPTY), CURRENT_BOUNDARY)}
+        onResult={onResult}
+      />,
+    );
+    await waitFor(() => expect(onResult).toHaveBeenCalledWith({ status: 'applied' }));
+
+    expect(updates).toHaveLength(1);
+    expect(JSON.stringify(updates[0])).toContain('Composed heading');
+  });
+
+  it('applies a staged mutation exactly once and ignores a re-render with the same pending', async () => {
+    const editor = makeEditor();
+    const onResult = vi.fn();
+    const pending = pendingCompositionOf(COMPOSED, documentRevisionOf(EMPTY), CURRENT_BOUNDARY);
+    const { rerender } = render(<Bridge editor={editor} pending={pending} onResult={onResult} />);
+    await waitFor(() => expect(onResult).toHaveBeenCalledTimes(1));
+    expect(onResult).toHaveBeenCalledWith({ status: 'applied' });
+
+    // A context re-render must not replay the apply or report a spurious result.
+    rerender(<Bridge editor={editor} pending={pending} onResult={onResult} />);
+    expect(onResult).toHaveBeenCalledTimes(1);
+  });
+
+  it('applies a second, distinct staged mutation after the first', async () => {
+    const editor = makeEditor();
+    const onResult = vi.fn();
+    const first = pendingCompositionOf(COMPOSED, documentRevisionOf(EMPTY), CURRENT_BOUNDARY);
+    const { rerender } = render(<Bridge editor={editor} pending={first} onResult={onResult} />);
+    await waitFor(() => expect(onResult).toHaveBeenCalledWith({ status: 'applied' }));
+
+    // A following handoff is bound to the document as it now stands.
+    const second = pendingAppendCompositionOf(
+      EXISTING,
+      APPEND_OPERATIONS,
+      documentRevisionOf(editor.getJSON() as unknown as TipDoc),
+      CURRENT_BOUNDARY,
+    );
+    rerender(<Bridge editor={editor} pending={second} onResult={onResult} />);
+
+    await waitFor(() => expect(onResult).toHaveBeenCalledTimes(2));
+    expect(onResult).toHaveBeenLastCalledWith({ status: 'applied' });
+    expect(editor.getText()).toContain('Body copy');
   });
 });

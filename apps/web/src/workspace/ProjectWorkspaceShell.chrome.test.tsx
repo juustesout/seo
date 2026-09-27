@@ -28,13 +28,30 @@ const ROW = vi.hoisted(() => ({
   meta_description: null,
 }));
 
+const ROW2 = vi.hoisted(() => ({
+  id: 'c2',
+  title: 'Doc 2',
+  slug: 'doc-2',
+  status: 'draft',
+  url: null,
+  excerpt: null,
+  target_keyword: null,
+  seo_score: null,
+  updated_at: '2026-01-01T00:00:00.000Z',
+  published_at: null,
+  meta_title: null,
+  meta_description: null,
+}));
+
 vi.mock('../lib/api', async () => {
   const { tiptapEmptyDoc } = await import('@seo/contracts');
   return {
     api: vi.fn(async (path: string) => {
-      if (path.includes('/content?')) return { content: [ROW], total: 1 };
+      if (path.includes('/content?')) return { content: [ROW, ROW2], total: 2 };
       if (/\/content\/c1$/.test(path))
         return { ...ROW, content_json: tiptapEmptyDoc(), content_html: '<p>hi</p>', outline: null };
+      if (/\/content\/c2$/.test(path))
+        return { ...ROW2, content_json: tiptapEmptyDoc(), content_html: '<p>two</p>', outline: null };
       if (/\/ai$/.test(path)) return { configured: false };
       if (path.includes('/jobs')) return [];
       if (path.includes('/publications') || path.includes('/schedules')) return [];
@@ -88,6 +105,21 @@ describe('ProjectWorkspaceShell chrome integration', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Tools' }));
     expect(screen.getByTestId('intelligence-rail')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Tools' }));
+    expect(screen.queryByTestId('intelligence-rail')).toBeNull();
+  });
+
+  it('closes the on-demand tools rail when the document changes', async () => {
+    render(<Harness />);
+    await openDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Tools' }));
+    expect(screen.getByTestId('intelligence-rail')).toBeTruthy();
+
+    // The tools toggle is document-scoped (R5.6.2): a switch to another document
+    // starts from the canvas-dominant default, not the previous document's rail.
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }));
+    const cell = await screen.findByText('Doc 2');
+    fireEvent.click(cell.closest('tr')!);
+    await screen.findByTestId('document-header');
     expect(screen.queryByTestId('intelligence-rail')).toBeNull();
   });
 
