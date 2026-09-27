@@ -86,6 +86,7 @@ export function EditorWorkspace({
           'mt-1 grid grid-cols-1 items-start gap-3.5',
           toolsOpen && 'lg:grid-cols-[minmax(0,1fr)_280px]',
         )}
+        data-tools-open={toolsOpen}
       >
         <div className="min-w-0">
           <div className={preview ? 'hidden' : undefined}>

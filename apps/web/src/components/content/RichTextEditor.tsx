@@ -79,13 +79,21 @@ export const RichTextEditor = forwardRef<RichTextEditorHandle, RichTextEditorPro
         editor.state.doc.descendants((node, pos) => {
           if (found !== -1) return false;
           if (node.type.name === 'heading') {
-            if (seen === index) found = pos;
-            seen += 1;
+            // Mirror `docHeadings` (the outline's source) exactly: it lists only
+            // headings with text, so an empty heading must not consume an outline
+            // index here either - otherwise the outline jumps to the wrong node.
+            if (node.textContent.trim()) {
+              if (seen === index) found = pos;
+              seen += 1;
+            }
           }
           return true;
         });
         if (found === -1) return;
-        editor.chain().focus().setTextSelection(found).scrollIntoView().run();
+        // `found` is the position before the heading node; +1 places the caret
+        // inside the heading's inline content (selecting the boundary itself is
+        // not a valid text position).
+        editor.chain().focus().setTextSelection(found + 1).scrollIntoView().run();
       },
     }),
     [editor],

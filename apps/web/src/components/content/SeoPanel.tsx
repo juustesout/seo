@@ -6,6 +6,12 @@
  * When `editable` the panel is bound to the workspace's target keyword and
  * meta fields so the score updates live as you type; read-only variants (viewer
  * screen) just render the stored row's assessment.
+ *
+ * Since R5.6.3 the panel is the contextual SEO surface of the on-demand
+ * Intelligence Rail: it also surfaces the measured document signals
+ * (`SeoResult.stats`) and promotes each non-pass check's existing `suggestion`
+ * from a tooltip to an inline, actionable line. No new metric is introduced -
+ * both are already computed by the shared evaluator for the open document.
  */
 import type { SeoCategory, SeoCheck, SeoResult } from '@seo/contracts';
 import { seoScoreLabel } from '@seo/contracts';
@@ -58,6 +64,9 @@ function CheckRow({ check }: { check: SeoCheck }) {
         <div className={cn('mt-px text-[11.5px] leading-snug text-muted-foreground', dim && 'text-muted-foreground')} title={check.suggestion}>
           {check.detail}
         </div>
+        {(status === 'fail' || status === 'warn') && check.suggestion && (
+          <div className="mt-1 text-[11.5px] leading-snug text-foreground/75">→ {check.suggestion}</div>
+        )}
       </div>
     </div>
   );
@@ -92,6 +101,16 @@ export function SeoPanel({
           <span className="text-[13px] text-muted-foreground"> / 100</span>
         </div>
         <div className={cn('text-[13px] font-semibold', verdictClass(result.score))}>{seoScoreLabel(result.score)}</div>
+      </div>
+
+      <div
+        className="mb-2.5 flex flex-wrap gap-x-3 gap-y-0.5 border-t pt-2 text-[11px] text-muted-foreground"
+        data-testid="seo-document-signals"
+      >
+        <span>{result.stats.words} words</span>
+        <span>{result.stats.headings} headings</span>
+        <span>{result.stats.links} links</span>
+        <span>{result.stats.images} images</span>
       </div>
 
       <div className="mb-1.5 grid gap-2 border-t pt-1">

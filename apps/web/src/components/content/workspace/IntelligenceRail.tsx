@@ -81,7 +81,14 @@ export function IntelligenceRail({ outline, onSelectHeading, seo, media, intelli
           <MediaPanel projectId={media.projectId} editor={media.editor} canEdit={media.canEdit} canDelete={media.canDelete} />
         )}
         {active === 'insights' && intelligence && (
-          <IntelligencePanel projectId={intelligence.projectId} contentId={intelligence.contentId} />
+          // Keyed by document identity so a document switch remounts the panel:
+          // its fetch, AI toggle and dismissed-recommendation state all reset,
+          // so a previous document's context can never stay visible.
+          <IntelligencePanel
+            key={`${intelligence.projectId}:${intelligence.contentId}`}
+            projectId={intelligence.projectId}
+            contentId={intelligence.contentId}
+          />
         )}
       </div>
     </aside>

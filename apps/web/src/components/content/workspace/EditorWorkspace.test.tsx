@@ -88,10 +88,14 @@ describe('EditorWorkspace canvas', () => {
   });
 
   it('shows the intelligence rail only when the shell opens tools', () => {
+    const grid = () => document.querySelector('[data-tools-open]');
     const { rerender } = render(<Harness />);
     expect(screen.queryByTestId('intelligence-rail')).toBeNull();
+    // Closing the rail leaves the canvas as the single, full-width column.
+    expect(grid()?.getAttribute('data-tools-open')).toBe('false');
     rerender(<Harness toolsOpen />);
     expect(screen.getByTestId('intelligence-rail')).toBeTruthy();
+    expect(grid()?.getAttribute('data-tools-open')).toBe('true');
   });
 
   it('hides the canvas and shows the rendered preview when the shell toggles preview', async () => {
