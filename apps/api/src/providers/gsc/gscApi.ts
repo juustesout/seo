@@ -41,6 +41,14 @@ const BASE = 'https://searchconsole.googleapis.com/webmasters/v3';
 export class UnauthorizedError extends Error {}
 
 /**
+ * Per-request usage reporter (R5.10.5). Invoked once for every actual GSC API
+ * request, after the outcome is known. It is deliberately decoupled from scope:
+ * the adapter binds project/user/usage and this client only reports the
+ * operation kind and whether the request succeeded.
+ */
+export type GscRequestObserver = (operation: string, success: boolean) => Promise<void>;
+
+/**
  * One access token's worth of Search Console calls. `request` attaches the
  * Bearer token server-side; tokens never appear in error messages.
  */
@@ -48,37 +56,65 @@ export class GscApiClient {
   constructor(
     private readonly accessToken: string,
     private readonly fetchFn: typeof fetch = fetch,
+    private readonly observe?: GscRequestObserver,
   ) {}
+
+  /**
+   * Report one actual request outcome, best-effort. A misbehaving observer must
+   * never fail the GSC call, so any observer error is swallowed here as well as
+   * inside the shared append seam.
+   */
+  private async record(operation: string, success: boolean): Promise<void> {
+    if (!this.observe) return;
+    try {
+      await this.observe(operation, success);
+    } catch {
+      // Usage is observability, never the request's transaction boundary.
+    }
+  }
 
   /**
    * Authenticated request shared by every method. 401/403 map to
    * UnauthorizedError (the adapter reacts by refreshing); other failures
    * become a plain Error with a truncated body. JSON parsing happens here so
    * callers receive typed results or a thrown error, never a half-parsed body.
+   *
+   * Every real HTTP request is reported exactly once (success = the HTTP
+   * exchange succeeded), including a request that then triggers a token-refresh
+   * retry. Local failures before `fetch` report nothing.
    */
-  private async request<T>(path: string, init?: RequestInit): Promise<T> {
-    const res = await this.fetchFn(`${BASE}${path}`, {
-      ...init,
-      headers: {
-        authorization: `Bearer ${this.accessToken}`,
-        accept: 'application/json',
-        'content-type': 'application/json',
-        ...(init?.headers ?? {}),
-      },
-    });
+  private async request<T>(operation: string, path: string, init?: RequestInit): Promise<T> {
+    let res: Response;
+    try {
+      res = await this.fetchFn(`${BASE}${path}`, {
+        ...init,
+        headers: {
+          authorization: `Bearer ${this.accessToken}`,
+          accept: 'application/json',
+          'content-type': 'application/json',
+          ...(init?.headers ?? {}),
+        },
+      });
+    } catch (err) {
+      await this.record(operation, false);
+      throw err;
+    }
     if (res.status === 401 || res.status === 403) {
+      await this.record(operation, false);
       throw new UnauthorizedError(`Google returned ${res.status}`);
     }
     if (!res.ok) {
+      await this.record(operation, false);
       const text = await res.text().catch(() => '');
       throw new Error(`Search Console API ${res.status}: ${text.slice(0, 300)}`);
     }
+    await this.record(operation, true);
     return (await res.json()) as T;
   }
 
   /** List every Search Console property visible to the access token. */
   async listSites(): Promise<SiteEntry[]> {
-    const data = await this.request<{ siteEntry?: SiteEntry[] }>('/sites');
+    const data = await this.request<{ siteEntry?: SiteEntry[] }>('list_sites', '/sites');
     return data.siteEntry ?? [];
   }
 
@@ -100,7 +136,7 @@ export class GscApiClient {
     },
   ): Promise<SearchAnalyticsResponse> {
     const path = `/sites/${encodeURIComponent(siteUrl)}/searchAnalytics/query`;
-    return this.request<SearchAnalyticsResponse>(path, {
+    return this.request<SearchAnalyticsResponse>('search_analytics', path, {
       method: 'POST',
       body: JSON.stringify({
         startDate: body.startDate,

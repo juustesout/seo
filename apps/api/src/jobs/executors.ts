@@ -168,6 +168,7 @@ const gscSync: JobExecutor = async ({ container, job, writer, report }) => {
     userId: job.created_by,
     owner: { integrationId: String(ds.integration_id), providerType: 'gsc' },
     config: { siteUrl },
+    usageSourceId: job.id,
   });
 
   await report(5, `Fetching daily totals ${startDate}..${endDate}`);

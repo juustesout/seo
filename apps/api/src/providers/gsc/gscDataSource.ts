@@ -21,8 +21,9 @@ import type {
   ProviderDeps,
   SeoDataSource,
 } from '@seo/contracts';
-import { GscApiClient, UnauthorizedError } from './gscApi.js';
+import { GscApiClient, UnauthorizedError, type GscRequestObserver } from './gscApi.js';
 import { refreshAccessToken } from './oauth.js';
+import { emitGscRequestUsage } from './providerUsage.js';
 import { delay } from '../../util.js';
 
 /**
@@ -114,11 +115,29 @@ export class GscDataSource implements SeoDataSource {
   }
 
   /**
+   * Bind this request's scope to the R5.10.5 usage seam. The client only sees
+   * the resulting (operation, success) callback, so every real Search Console
+   * request is recorded once regardless of which adapter method made it. No
+   * usage context (or an account-scoped context with no real project id) emits
+   * nothing - see buildGscRequestUsageEvent.
+   */
+  private usageObserver(ctx: ProviderContext): GscRequestObserver | undefined {
+    const usage = ctx.usage;
+    if (!usage) return undefined;
+    return (operation, success) =>
+      emitGscRequestUsage({ usage, projectId: ctx.projectId, userId: ctx.userId, operation, success });
+  }
+
+  /**
    * Run an authenticated GSC call with a single retry after a token refresh.
    * On UnauthorizedError the stored refresh token is exchanged for a new
    * access token (persisted under the same integration) and the call is
    * retried once - two consecutive 401s then propagate as a real error, which
    * means the refresh token itself is invalid and the user must reconnect.
+   *
+   * The token exchange itself is NOT instrumented: it targets
+   * oauth2.googleapis.com, not Search Console. Both actual GSC requests (the
+   * failed one and the retry) are reported through the request seam.
    */
   private async apiWithRefresh<T>(ctx: ProviderContext, fn: (api: GscApiClient) => Promise<T>): Promise<T> {
     const access = await ctx.credentials.get(TOKEN_KEYS.access);
@@ -126,7 +145,8 @@ export class GscDataSource implements SeoDataSource {
     if (!access || !refresh) {
       throw new Error('Search Console connection is missing OAuth tokens; reconnect the integration');
     }
-    const attempt = (token: string) => fn(new GscApiClient(token));
+    const observe = this.usageObserver(ctx);
+    const attempt = (token: string) => fn(new GscApiClient(token, fetch, observe));
     try {
       return await attempt(access);
     } catch (err) {
