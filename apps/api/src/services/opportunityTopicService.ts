@@ -83,6 +83,8 @@ export interface TopicRecommendationDeps {
   search?: (projectId: string, input: { query: string; limit?: number }) => Promise<{
     results: Array<{ source_id: string; score: number }>;
   }>;
+  /** Acting user threaded from the route edge into embedding usage facts (R5.10.8). */
+  actorUserId?: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -304,12 +306,17 @@ export async function getTopicRecommendations(
   const knowledgeService = new KnowledgeService(container);
   // R5.10.7: the topic relevance batch is a real embeddings request on a read
   // path; record one fact per physical request. No durable execution id exists
-  // here, so the fact is not deduplicated.
-  const usage = usageScopeContext({ sink: container.usageEvents, sourceId: null });
-  const embeddingObserver = usage ? embeddingUsageObserver({ usage, projectId, userId: null }) : undefined;
+  // here, so the fact is not deduplicated. R5.10.8: the acting user is threaded
+  // from the route edge where one exists (null for system/agent callers).
+  const actorUserId = deps.actorUserId ?? null;
+  const usage = usageScopeContext({ sink: container.usageEvents, sourceId: null, userId: actorUserId });
+  const embeddingObserver = usage
+    ? embeddingUsageObserver({ usage, projectId, userId: actorUserId })
+    : undefined;
   const searchFn =
     deps.search ??
-    ((pid: string, input: { query: string; limit?: number }) => knowledgeService.search(pid, input));
+    ((pid: string, input: { query: string; limit?: number }) =>
+      knowledgeService.search(pid, input, actorUserId));
   let knowledgeConfigured = true;
   if (!deps.search) {
     try {

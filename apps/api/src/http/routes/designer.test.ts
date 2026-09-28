@@ -364,7 +364,7 @@ describe('/api/projects/:projectId/designer/intent delegation', () => {
 
   it('always constructs the service with the LLM planner', async () => {
     await post(`/${PROJECT}/designer/intent`, 'editor-token', EDIT);
-    expect(svc.instances).toEqual([{ options: { llmPlanner: true } }]);
+    expect(svc.instances).toEqual([{ options: { llmPlanner: true, actorUserId: 'editor-user' } }]);
   });
 });
 

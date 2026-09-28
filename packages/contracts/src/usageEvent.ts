@@ -275,6 +275,21 @@ export interface UsageAggregate {
   eventCount: number;
 }
 
+/**
+ * The stable usage report returned by the read surface (R5.10.8). This is the
+ * one shape both the project and account endpoints return and the shape the web
+ * view (and future MCP tools) consume: the exact scope that was read plus the
+ * aggregate rows for it. It never carries raw events, cost, pricing or any other
+ * derived/forecast value - cost is a future derivation from usage + pricing.
+ */
+export interface UsageReportDto {
+  scope: {
+    accountId: string | null;
+    projectId: string | null;
+  };
+  totals: UsageAggregate[];
+}
+
 /** The inputs a deterministic ledger idempotency key is derived from. */
 export interface UsageIdempotencyParts {
   category: UsageCategory;

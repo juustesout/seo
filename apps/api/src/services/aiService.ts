@@ -161,6 +161,7 @@ export class AIService {
   /** Returns the effective AI provider instance for a project. */
   async resolve(
     projectId: string,
+    actorUserId: string | null = null,
   ): Promise<{ provider: AIProvider; configured: boolean; keySource: AiKeySource }> {
     const row = await this.readProjectRow(projectId);
     const settings = (row.settings.ai ?? {}) as Partial<AiSettings>;
@@ -180,12 +181,14 @@ export class AIService {
     const keySource: AiKeySource = accountKey ? 'account' : projectKey ? 'project' : envKey ? 'env' : 'none';
     // R5.10.3: this is the one gate every text/embedding caller goes through, so
     // wrapping the resolved provider here records exactly one usage event per
-    // actual provider call with no per-caller double counting.
+    // actual provider call with no per-caller double counting. R5.10.8: the
+    // acting user is threaded from the authenticated route edge where one exists;
+    // background/system callers pass null (never a placeholder identity).
     return {
       provider: instrumentAiProvider({
         provider: provider ?? this.openAiProvider(null),
         sink: this.container.usageEvents,
-        scope: { accountId: row.account_id, projectId, userId: null },
+        scope: { accountId: row.account_id, projectId, userId: actorUserId },
       }),
       configured: Boolean(effectiveKey),
       keySource,

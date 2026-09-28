@@ -116,13 +116,16 @@ import { defaultWriterCheckpointProvider, type WriterCheckpointProvider } from '
  *  read-only project context adapters plus AI planner/section writer/revision
  *  writer resolved through the existing AIService.resolve boundary. The
  *  deterministic review allowlist is left to its canonical contracts default. */
-export function writerDependenciesFor(container: ServiceContainer): WriterRunDependencies {
+export function writerDependenciesFor(
+  container: ServiceContainer,
+  actorUserId: string | null = null,
+): WriterRunDependencies {
   const ai = new AIService(container);
   const resolve: WriterAiResolver = async (projectId) => {
-    const resolved = await ai.resolve(projectId);
+    const resolved = await ai.resolve(projectId, actorUserId);
     return { provider: resolved.provider, configured: resolved.configured };
   };
-  const context = createWriterContextDependencies(container);
+  const context = createWriterContextDependencies(container, actorUserId);
   return {
     context,
     planner: createAiWriterPlanner(resolve),
@@ -365,7 +368,7 @@ export class WriterRunService {
   }
 
   private depsFor(): WriterRunDependencies {
-    return this.deps ?? writerDependenciesFor(this.container);
+    return this.deps ?? writerDependenciesFor(this.container, this.actor?.userId ?? null);
   }
 
   private async checkpointer(): Promise<BaseCheckpointSaver> {

@@ -16,14 +16,14 @@
  * usage is unavailable on the error path and must not be invented).
  *
  * Scope is real request scope taken from the resolved project/provider, never
- * from arbitrary caller input. The acting user is null at this seam: the
- * canonical `AIService.resolve(projectId)` gate has no user context, and
- * worker/background callers legitimately have no acting user.
+ * from arbitrary caller input. The acting user is threaded from the
+ * authenticated route edge where one exists (`AIService.resolve(projectId,
+ * actorUserId)`); worker/background callers legitimately have no acting user and
+ * pass null, and job facts use the durable `job.created_by` instead (R5.10.8).
  */
 
 import type {
   AIChatResult,
-  AIEmbeddingResult,
   AIProvider,
   NewUsageEvent,
   ProviderUsageContext,
@@ -68,6 +68,8 @@ export function usageScopeContext(args: {
   sink: UsageSink | null | undefined;
   sourceId?: string | null;
   occurrenceBase?: number;
+  /** Acting user threaded from the authenticated edge; null for system/job work. */
+  userId?: string | null;
 }): ProviderUsageContext | undefined {
   if (!args.sink) return undefined;
   const occurrences = new Map<string, number>();
@@ -78,6 +80,7 @@ export function usageScopeContext(args: {
   return {
     sink: args.sink,
     sourceId: args.sourceId ?? null,
+    userId: args.userId ?? null,
     nextOccurrence: (operation: string) => {
       const next = occurrences.get(operation) ?? base;
       occurrences.set(operation, next + 1);
@@ -145,64 +148,20 @@ function chatTokenEvents(args: {
 }
 
 /**
- * One input-token event for an embed call. The provider batches internally and
- * returns the summed usage, so this is the total for the logical operation -
- * never one event per internal batch.
- */
-function embeddingEvents(args: {
-  result: AIEmbeddingResult;
-  providerId: string;
-  scope: UsageScope;
-}): NewUsageEvent[] {
-  const input = args.result.usage?.inputTokens;
-  if (typeof input !== 'number' || input <= 0) return [];
-  return [
-    {
-      ...args.scope,
-      category: 'ai',
-      provider: args.providerId,
-      operation: 'embed',
-      quantity: input,
-      unit: 'input_token',
-      success: true,
-      sourceId: null,
-      metadata: { model: args.result.model },
-    },
-  ];
-}
-
-/**
- * The image-generation usage fact (external resource consumption, distinct from
- * the later `seo_media` row that records the application asset).
- */
-export function imageGenerationUsageEvent(args: {
-  providerId: string;
-  model: string;
-  scope: UsageScope;
-  success: boolean;
-}): NewUsageEvent {
-  return {
-    ...args.scope,
-    category: 'media',
-    provider: args.providerId,
-    operation: 'image_generate',
-    quantity: 1,
-    unit: 'image_generation',
-    success: args.success,
-    sourceId: null,
-    metadata: { model: args.model },
-  };
-}
-
-/**
- * Wrap a resolved `AIProvider` so chat/generate/embed record usage after the
- * real provider call. This is the one central text/embedding seam: every caller
- * reaches AI through `AIService.resolve`, so wrapping there guarantees exactly
- * one event per actual provider operation with no per-caller double counting.
+ * Wrap a resolved `AIProvider` so chat/generate record usage after the real
+ * provider call. This is the one central text seam: every text caller reaches AI
+ * through `AIService.resolve`, so wrapping there guarantees exactly one event
+ * per actual provider chat/generate operation with no per-caller double counting.
  *
  * `generate()` is instrumented separately from `chat()` because the provider
  * implements generate on top of its own (unwrapped) chat, so the wrapper sees a
  * single logical operation either way.
+ *
+ * `embed()` is a deliberate passthrough (R5.10.8, C3): embedding facts are owned
+ * by the physical request observer at the concrete embedder
+ * (`providers/knowledge/embeddingUsage.ts`, R5.10.7), which counts one fact per
+ * real `POST /embeddings` request. The logical `embed()` result sums several
+ * physical requests, so emitting here too would double count the same tokens.
  */
 export function instrumentAiProvider(args: {
   provider: AIProvider;
@@ -235,11 +194,9 @@ export function instrumentAiProvider(args: {
       await appendUsage(sink, chatTokenEvents({ result, providerId: provider.id, operation: 'generate', scope }));
       return result;
     },
-    async embed(req) {
-      const result = await provider.embed(req);
-      await appendUsage(sink, embeddingEvents({ result, providerId: provider.id, scope }));
-      return result;
-    },
+    // Passthrough by design: embedding usage is recorded at the physical request
+    // observer, never here (R5.10.8, C3).
+    embed: (req) => provider.embed(req),
   };
 }
 

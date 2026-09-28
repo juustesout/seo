@@ -217,7 +217,7 @@ contentRouter.post(
       context: body.context ?? null,
       keyword: body.keyword ?? null,
       useKnowledge: body.use_knowledge ?? true,
-    });
+    }, user!.sub);
     res.json({ data: suggestion });
   }),
 );
@@ -235,7 +235,7 @@ contentRouter.post(
     await container.access.requireRole(user!.sub, projectId, 'editor');
     const body = contentAiEditSchema.parse(req.body);
     const svc = new ContentAiEditService(container);
-    const result = await svc.run(projectId, parseId(req, 'id'), body);
+    const result = await svc.run(projectId, parseId(req, 'id'), body, user!.sub);
     res.json({ data: result });
   }),
 );
@@ -288,6 +288,7 @@ contentRouter.get(
     const svc = new ContentIntelligenceService(container);
     const report = await svc.report(projectId, parseId(req, 'id'), {
       withAi: req.query.with_ai === 'true' || req.query.with_ai === '1',
+      actorUserId: user!.sub,
     });
     res.json({ data: report });
   }),

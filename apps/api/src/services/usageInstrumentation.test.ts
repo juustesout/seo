@@ -149,35 +149,18 @@ describe('instrumentAiProvider - generate and embed', () => {
     expect(byUnit).toEqual({ input_token: ['generate', 20], output_token: ['generate', 9] });
   });
 
-  it('emits exactly one summed input-token event for an embed call', async () => {
+  // R5.10.8 (C3): the logical wrapper must never meter embeddings. The physical
+  // request observer at the concrete embedder owns that fact; emitting here too
+  // would double count a summed multi-batch embed.
+  it('delegates embed without emitting any usage fact even when tokens are reported', async () => {
     const store = new InMemoryUsageEventStore();
-    await instrumentAiProvider({
-      provider: fakeProvider({
-        embed: async () => ({ vectors: [[0], [1]], model: 'text-embedding-3-small', usage: { inputTokens: 42 } }),
-      }),
+    const expected = { vectors: [[0], [1]], model: 'text-embedding-3-small', usage: { inputTokens: 42 } };
+    const result = await instrumentAiProvider({
+      provider: fakeProvider({ embed: async () => expected }),
       sink: store,
       scope,
     }).embed({ input: ['a', 'b'] });
-    const events = await store.list({ projectId: PROJECT });
-    expect(events).toHaveLength(1);
-    expect(events[0]).toMatchObject({
-      category: 'ai',
-      provider: 'openai',
-      operation: 'embed',
-      quantity: 42,
-      unit: 'input_token',
-      success: true,
-      metadata: { model: 'text-embedding-3-small' },
-    });
-  });
-
-  it('does not estimate embedding tokens when usage is absent', async () => {
-    const store = new InMemoryUsageEventStore();
-    await instrumentAiProvider({
-      provider: fakeProvider({ embed: async () => ({ vectors: [[0]], model: 'm' }) }),
-      sink: store,
-      scope,
-    }).embed({ input: 'a' });
+    expect(result).toBe(expected);
     expect(await store.list({ projectId: PROJECT })).toHaveLength(0);
   });
 });
@@ -220,6 +203,31 @@ describe('AIService.resolve instrumentation seam', () => {
       output_token: 2,
     });
     expect(events[0]).toMatchObject({ accountId: ACCOUNT, projectId: PROJECT, userId: null, provider: 'openai' });
+  });
+
+  // R5.10.8 (C2): the acting user is threaded from the authenticated edge, so an
+  // interactive AI call is attributed to that user; system/background callers
+  // that do not pass one keep null (honest "no acting user").
+  it('attributes chat usage to the acting user when one is threaded', async () => {
+    const ACTOR = '55555555-5555-4555-8555-555555555555';
+    vi.stubGlobal(
+      'fetch',
+      (async () =>
+        new Response(
+          JSON.stringify({
+            model: 'gpt-4o-mini',
+            choices: [{ message: { content: 'Hello' } }],
+            usage: { prompt_tokens: 5, completion_tokens: 2 },
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        )) as unknown as typeof fetch,
+    );
+    const store = new InMemoryUsageEventStore();
+    const resolved = await new AIService(container(store)).resolve(PROJECT, ACTOR);
+    await resolved.provider.chat({ messages: [{ role: 'user', content: 'hi' }] });
+    const events = await store.list({ projectId: PROJECT });
+    expect(events).toHaveLength(2);
+    expect(events.every((e) => e.userId === ACTOR)).toBe(true);
   });
 });
 

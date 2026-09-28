@@ -7,7 +7,7 @@
  * (`/p/:id/knowledge/sources`) or the unified workspace carry a mode plus a
  * document id (`/p/:id/workspace/:mode/:contentId`).
  */
-export type TopArea = 'overview' | 'projects' | 'compose' | 'integrations' | 'keys';
+export type TopArea = 'overview' | 'projects' | 'compose' | 'integrations' | 'keys' | 'usage';
 
 export type Route =
   | { area: TopArea }
@@ -26,7 +26,7 @@ export function parseRoute(): Route {
       search: window.location.search,
     };
   }
-  const area = seg[0] === 'projects' || seg[0] === 'compose' || seg[0] === 'integrations' || seg[0] === 'keys' ? seg[0] : 'overview';
+  const area = seg[0] === 'projects' || seg[0] === 'compose' || seg[0] === 'integrations' || seg[0] === 'keys' || seg[0] === 'usage' ? seg[0] : 'overview';
   return { area };
 }
 

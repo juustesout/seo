@@ -50,6 +50,7 @@ import { keywordResearchRouter } from './http/routes/keywordResearch.js';
 import { keywordExpansionRouter } from './http/routes/keywordExpansion.js';
 import { competitorResearchRouter } from './http/routes/competitorResearch.js';
 import { opportunitiesRouter } from './http/routes/opportunities.js';
+import { usageRouter, accountUsageRouter } from './http/routes/usage.js';
 import { seoRouter } from './http/routes/seo.js';
 import { projectApiKeysRouter } from './http/routes/projectApiKeys.js';
 import { projectGscRouter } from './http/routes/projectGsc.js';
@@ -117,6 +118,7 @@ export function createApp(): Express {
   app.use('/api/oauth', oauthRouter);
 
   app.use('/api/me', meRouter);
+  app.use('/api/account/usage', accountUsageRouter);
   app.use('/api/account', accountRouter);
   app.use('/api/account/ai', accountAiRouter);
   app.use('/api/account/api-keys', accountApiKeysRouter);
@@ -163,6 +165,7 @@ export function createApp(): Express {
   app.use('/api/projects/:projectId/keyword', opportunitiesRouter);
   app.use('/api/projects/:projectId/api-keys', projectApiKeysRouter);
   app.use('/api/projects/:projectId/gsc', projectGscRouter);
+  app.use('/api/projects/:projectId/usage', usageRouter);
   app.use('/api/v1', v1Router);
   app.use('/api/projects/:projectId', seoRouter);
 

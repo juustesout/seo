@@ -1459,7 +1459,11 @@ export class KnowledgeService {
    * inside this boundary only (never a raw provider payload, origin list or
    * score detail).
    */
-  async search(projectId: string, input: KnowledgeSearchInput): Promise<KnowledgeSearchResponse> {
+  async search(
+    projectId: string,
+    input: KnowledgeSearchInput,
+    actorUserId: string | null = null,
+  ): Promise<KnowledgeSearchResponse> {
     const reason = this.configuredReason();
     if (reason) throw ApiError.notConfigured(`Knowledge search is not available. ${reason}`);
     const provider = this.knowledgeProvider();
@@ -1474,7 +1478,7 @@ export class KnowledgeService {
     // R5.10.7: a semantic search embeds the query once; the embedding provider
     // records one input-token fact per physical request. No durable execution id
     // exists on the read path, so the fact is not deduplicated.
-    const searchUsage = usageScopeContext({ sink: this.container.usageEvents, sourceId: null });
+    const searchUsage = usageScopeContext({ sink: this.container.usageEvents, sourceId: null, userId: actorUserId });
     let outcome: RetrievalOutcome;
     try {
       const plan = await buildKnowledgeQueryPlan(this.sb, {

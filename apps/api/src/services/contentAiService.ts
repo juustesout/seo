@@ -381,13 +381,14 @@ export class ContentAiService {
     projectId: string,
     contentId: string,
     input: ContentAiActionInput,
+    actorUserId: string | null = null,
   ): Promise<ContentAiSuggestionDto> {
     if (input.action !== 'generate_section' && !input.selection?.trim()) {
       throw ApiError.badRequest('Select text to edit first.');
     }
 
     const row = await this.content.get(projectId, contentId);
-    const resolved = await this.ai.resolve(projectId);
+    const resolved = await this.ai.resolve(projectId, actorUserId);
     if (!resolved.configured || !resolved.provider.isConfigured()) {
       throw ApiError.notConfigured(
         'AI is not configured for this account or project. Add an OpenAI key under Account → Integrations.',

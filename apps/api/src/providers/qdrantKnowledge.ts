@@ -188,7 +188,11 @@ export class QdrantKnowledgeProvider implements KnowledgeProvider {
    */
   async search(opts: KnowledgeSearchOptions): Promise<KnowledgeSearchResult[]> {
     this.assertConfigured();
-    const observer = embeddingUsageObserver({ usage: opts.usage, projectId: opts.projectId, userId: null });
+    const observer = embeddingUsageObserver({
+      usage: opts.usage,
+      projectId: opts.projectId,
+      userId: opts.usage?.userId ?? null,
+    });
     const vectors = await this.embedder!.embed([opts.query], observer);
     const filter: { must: Array<Record<string, unknown>> } = {
       must: [matchOn('project_id', opts.projectId)],

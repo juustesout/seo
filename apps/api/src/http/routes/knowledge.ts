@@ -94,7 +94,7 @@ knowledgeRouter.post(
       collectionId: body.collection_id,
       uncategorized: body.uncategorized,
       freshness: body.freshness,
-    });
+    }, user!.sub);
     res.json({ data: result });
   }),
 );

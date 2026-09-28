@@ -138,7 +138,9 @@ opportunitiesRouter.get(
     const { container, user } = req;
     await container.access.requireRole(user!.sub, projectId, 'viewer');
     const { competitors, domain } = topicQuerySchema.parse(req.query);
-    const result = await getTopicRecommendations(container, projectId, competitors, domain);
+    const result = await getTopicRecommendations(container, projectId, competitors, domain, {
+      actorUserId: user!.sub,
+    });
     res.json({ data: result });
   }),
 );

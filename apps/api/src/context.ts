@@ -238,6 +238,7 @@ export function buildProviderContext(
     usage: {
       sink: container.usageEvents,
       sourceId: args.usageSourceId ?? null,
+      userId: args.userId,
       nextOccurrence: (operation: string) => {
         const next = occurrences.get(operation) ?? occurrenceBase;
         occurrences.set(operation, next + 1);

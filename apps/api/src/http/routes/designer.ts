@@ -199,7 +199,7 @@ designerRouter.post(
     const { container, user } = req;
     await container.access.requireRole(user!.sub, projectId, 'editor');
     const body = executeSchema.parse(req.body ?? {});
-    const proposal = await new DesignerService(container).execute(projectId, {
+    const proposal = await new DesignerService(container, { actorUserId: user!.sub }).execute(projectId, {
       plan: body.plan,
       brief: body.brief,
       contentId: body.content_id,
@@ -241,7 +241,7 @@ designerRouter.post(
       ...(body.brief !== undefined ? { brief: body.brief } : {}),
     };
 
-    const service = new DesignerService(container, { llmPlanner: true });
+    const service = new DesignerService(container, { llmPlanner: true, actorUserId: user!.sub });
     const proposal = await service.executeIntent(projectId, intent, {
       ...(body.base_revision !== undefined ? { baseRevision: body.base_revision } : {}),
     });

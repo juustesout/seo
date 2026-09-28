@@ -105,6 +105,8 @@ export interface DesignerServiceOptions {
   planner?: DesignerPlanner;
   /** When true and no `planner` is injected, use the LLM planner (Phase 3.2). */
   llmPlanner?: boolean;
+  /** Acting user threaded from the route edge into AI/media usage facts (R5.10.8). */
+  actorUserId?: string | null;
 }
 
 /** Optional invocation state for intent execution that is not part of the intent. */
@@ -164,13 +166,16 @@ function mapVisualDesignError(err: unknown): never {
  * reuses `AIService`. Kept in the service layer so the planner itself stays
  * container-free and unit-testable.
  */
-export function createLlmDesignerPlanner(container: ServiceContainer): LlmDesignerPlanner {
+export function createLlmDesignerPlanner(
+  container: ServiceContainer,
+  actorUserId: string | null = null,
+): LlmDesignerPlanner {
   const ai = new AIService(container);
   const context = new DesignerPlannerContextService(container);
   return new LlmDesignerPlanner({
     loadContext: (intent) => context.load(intent),
     resolveAi: async (projectId) => {
-      const resolved = await ai.resolve(projectId);
+      const resolved = await ai.resolve(projectId, actorUserId);
       return { provider: resolved.provider, configured: resolved.configured && resolved.provider.isConfigured() };
     },
   });
@@ -178,13 +183,18 @@ export function createLlmDesignerPlanner(container: ServiceContainer): LlmDesign
 
 export class DesignerService {
   private readonly planner: DesignerPlanner;
+  private readonly actorUserId: string | null;
 
   constructor(
     private readonly container: ServiceContainer,
     options: DesignerServiceOptions = {},
   ) {
+    this.actorUserId = options.actorUserId ?? null;
     this.planner =
-      options.planner ?? (options.llmPlanner ? createLlmDesignerPlanner(container) : new DeterministicDesignerPlanner());
+      options.planner ??
+      (options.llmPlanner
+        ? createLlmDesignerPlanner(container, this.actorUserId)
+        : new DeterministicDesignerPlanner());
   }
 
   /** Production capability wiring, one method per specialist step kind. */
@@ -216,7 +226,7 @@ export class DesignerService {
         }
         const selected = requested.map((slot) => bySlot.get(slot)!);
 
-        const writer = createAiCompositionWriter((id) => ai.resolve(id));
+        const writer = createAiCompositionWriter((id) => ai.resolve(id, this.actorUserId));
         const outcome = await writer.fill({
           projectId,
           brief: briefToText(brief),
@@ -243,7 +253,7 @@ export class DesignerService {
           return mapDesignerRevisionError(err);
         }
 
-        const writer = createAiDesignerRevisionWriter((id) => ai.resolve(id));
+        const writer = createAiDesignerRevisionWriter((id) => ai.resolve(id, this.actorUserId));
         const outcome = await writer.revise({
           projectId,
           brief: briefToText(brief),
@@ -414,9 +424,20 @@ export class DesignerService {
     if (insertionContext) {
       const sectionRequest = sectionCreationFromInstruction(intent.instruction);
       if (sectionRequest) {
-        return new SectionCreationService(this.container).buildProposal(projectId, intent, insertionContext, sectionRequest);
+        return new SectionCreationService(this.container).buildProposal(
+          projectId,
+          intent,
+          insertionContext,
+          sectionRequest,
+          this.actorUserId,
+        );
       }
-      return new ImageInsertionService(this.container).buildProposal(projectId, intent, insertionContext);
+      return new ImageInsertionService(this.container).buildProposal(
+        projectId,
+        intent,
+        insertionContext,
+        this.actorUserId,
+      );
     }
     const plan = await runDesignerPlanner(this.planner, intent);
     return this.execute(projectId, {

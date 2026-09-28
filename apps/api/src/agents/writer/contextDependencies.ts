@@ -80,7 +80,10 @@ function hasEvidence(row: WriterIntelligenceKeyword): boolean {
 }
 
 /** Builds the production context adapters for a live service container. */
-export function createWriterContextDependencies(container: ServiceContainer): WriterContextDependencies {
+export function createWriterContextDependencies(
+  container: ServiceContainer,
+  actorUserId: string | null = null,
+): WriterContextDependencies {
   const contentService = new ContentService(container.sb);
   const knowledgeService = new KnowledgeService(container);
 
@@ -96,7 +99,7 @@ export function createWriterContextDependencies(container: ServiceContainer): Wr
       const { results } = await knowledgeService.search(input.projectId, {
         query: input.topic,
         limit: KNOWLEDGE_SEARCH_LIMIT,
-      });
+      }, actorUserId);
       const chunks: WriterKnowledgeChunk[] = results
         .filter((r) => r.content.trim().length > 0)
         .map((r) => ({

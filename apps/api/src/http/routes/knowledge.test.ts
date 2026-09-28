@@ -454,7 +454,7 @@ describe('knowledge retrieval route (KB6)', () => {
       sourceIds: undefined,
       collectionId: undefined,
       uncategorized: undefined,
-    });
+    }, 'v-user');
     expect(res.json).toMatchObject({
       data: {
         project_id: PROJECT,
@@ -484,7 +484,7 @@ describe('knowledge retrieval route (KB6)', () => {
       sourceIds: [SOURCE],
       collectionId: undefined,
       uncategorized: undefined,
-    });
+    }, 'v-user');
   });
 
   it('rejects an invalid query at the edge', async () => {
@@ -771,7 +771,7 @@ describe('knowledge collections routes (KB8)', () => {
       sourceIds: undefined,
       collectionId: COLLECTION,
       uncategorized: undefined,
-    });
+    }, 'v-user');
 
     const uncategorized = await request('/search', {
       method: 'POST',
@@ -782,6 +782,7 @@ describe('knowledge collections routes (KB8)', () => {
     expect(vi.mocked(KnowledgeService.prototype.search)).toHaveBeenLastCalledWith(
       PROJECT,
       expect.objectContaining({ collectionId: undefined, uncategorized: true }),
+      'v-user',
     );
   });
 

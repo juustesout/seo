@@ -80,7 +80,7 @@ export class ContentIntelligenceService {
   async report(
     projectId: string,
     contentId: string,
-    opts: { withAi?: boolean } = {},
+    opts: { withAi?: boolean; actorUserId?: string | null } = {},
   ): Promise<ContentIntelligenceReport> {
     const row = await this.content.get(projectId, contentId);
     const targetKeyword = text(row.target_keyword);
@@ -179,6 +179,7 @@ export class ContentIntelligenceService {
         docText,
         seoScore: seoResult.score,
         deterministic: [...seoRecs, ...gscRecs, ...dfRecs, ...knowledgeRecs],
+        actorUserId: opts.actorUserId ?? null,
       });
       ai = pass.state;
       aiRecs = pass.recommendations;
@@ -508,12 +509,13 @@ export class ContentIntelligenceService {
       docText: string;
       seoScore: number;
       deterministic: ContentIntelligenceReport['recommendations'];
+      actorUserId: string | null;
     },
   ): Promise<{ state: ContentIntelligenceReport['ai']; recommendations: ContentIntelligenceReport['recommendations'] }> {
     const ai = new AIService(this.container);
     let resolved;
     try {
-      resolved = await ai.resolve(projectId);
+      resolved = await ai.resolve(projectId, input.actorUserId);
     } catch (err) {
       logger.warn({ err }, 'intelligence AI resolve failed');
       return {

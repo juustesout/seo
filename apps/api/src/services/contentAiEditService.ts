@@ -295,6 +295,7 @@ export class ContentAiEditService {
     projectId: string,
     contentId: string,
     input: ContentAiEditRequestDto,
+    actorUserId: string | null = null,
   ): Promise<ContentAiEditResponseDto> {
     if (!CONTENT_AI_EDIT_OPERATIONS.includes(input.operation)) {
       throw ApiError.badRequest('Unsupported AI edit operation.');
@@ -307,7 +308,7 @@ export class ContentAiEditService {
     }
 
     const row = await this.content.get(projectId, contentId);
-    const resolved = await this.ai.resolve(projectId);
+    const resolved = await this.ai.resolve(projectId, actorUserId);
     if (!resolved.configured || !resolved.provider.isConfigured()) {
       throw ApiError.notConfigured(
         'AI is not configured for this account or project. Add an OpenAI key under Account → Integrations.',

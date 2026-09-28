@@ -72,7 +72,7 @@ export class ContentAnalysisService {
 
     let aiRecommendations: string[] = [];
     if (opts.withAi) {
-      const resolved = await this.ai.resolve(projectId);
+      const resolved = await this.ai.resolve(projectId, userId);
       if (resolved.configured && resolved.provider.isConfigured()) {
         const provider = resolved.provider;
         let lastError: unknown;

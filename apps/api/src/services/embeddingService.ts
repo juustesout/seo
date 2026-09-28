@@ -17,6 +17,13 @@ import { dimensionsForModel, type Embedder } from '../providers/knowledge/embedd
  * OpenAI-compatible; the vector dimension is resolved up front from the shared
  * table (dimensionsForModel) so a Qdrant collection can be created with the
  * correct size before any vector is written. Unknown models fall back to 1536.
+ *
+ * @deprecated R5.10.8 (C3): superseded by the concrete
+ * `OpenAiCompatibleEmbedder` reached through `embedderFromConfig`/`embedding.ts`,
+ * which owns physical-request usage metering. This logical wrapper has no
+ * production caller; if it is ever revived it must not meter embeddings itself,
+ * or it will double count alongside the physical observer. Retained temporarily
+ * until the dead seam is removed.
  */
 export class ProjectEmbedder implements Embedder {
   readonly dimensions: number;
@@ -36,7 +43,12 @@ export class ProjectEmbedder implements Embedder {
   }
 }
 
-/** Builds project-bound embedders from the project's effective AI setup. */
+/**
+ * Builds project-bound embedders from the project's effective AI setup.
+ *
+ * @deprecated R5.10.8 (C3): no production caller; knowledge indexing/search use
+ * the concrete embedder with the physical usage observer. See `ProjectEmbedder`.
+ */
 export class EmbeddingService {
   constructor(private readonly ai: AIService) {}
 

@@ -77,6 +77,7 @@ export class SectionCreationService {
     intent: DesignerIntent,
     context: ImageInsertionContext,
     request: SectionCreationRequest,
+    actorUserId: string | null = null,
   ): Promise<DesignerProposal> {
     if (intent.contentId === undefined) {
       throw new ApiError(
@@ -157,6 +158,7 @@ export class SectionCreationService {
         baseRevision,
         baseDocument,
         scope: request.kind === 'hero' ? 'this hero' : 'this section',
+        userId: actorUserId,
       });
       if (acquisition.status === 'generation_required') return acquisition.proposal;
       image = acquisition.image;

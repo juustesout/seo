@@ -51,6 +51,7 @@ import { AccountIntegrations } from './views/AccountIntegrations';
 import { AccountApiKeys } from './views/AccountApiKeys';
 import { ProjectsPage } from './views/ProjectsPage';
 import { ProjectSettings } from './views/ProjectSettings';
+import { Usage } from './views/Usage';
 
 interface ProjectRow {
   id: string;
@@ -76,6 +77,7 @@ const TOP_NAV: Array<{ id: TopArea; label: string; icon: NavIcon }> = [
   { id: 'projects', label: 'Projects', icon: FolderKanban },
   { id: 'integrations', label: 'Integrations', icon: Plug },
   { id: 'keys', label: 'API keys', icon: KeyRound },
+  { id: 'usage', label: 'Usage', icon: LineChart },
 ];
 
 const PROJECT_NAV: Array<{ id: string; label: string; icon: NavIcon }> = [
@@ -87,6 +89,7 @@ const PROJECT_NAV: Array<{ id: string; label: string; icon: NavIcon }> = [
   { id: 'calendar', label: 'Calendar', icon: CalendarDays },
   { id: 'publications', label: 'Publications', icon: Newspaper },
   { id: 'publishing', label: 'Publishing', icon: Send },
+  { id: 'usage', label: 'Usage', icon: LineChart },
   { id: 'settings', label: 'Settings', icon: Settings },
 ];
 
@@ -363,6 +366,7 @@ export function App() {
               {view === 'calendar' && <ContentSchedule projectId={pid} role={project.role} onViewPublication={(scheduleId) => openProjectView(pid, 'publications', { schedule_id: scheduleId })} />}
               {view === 'publications' && <Publications projectId={pid} />}
               {view === 'publishing' && <Publishing projectId={pid} />}
+              {view === 'usage' && <Usage projectId={pid} />}
               {view === 'settings' && <ProjectSettings projectId={pid} role={project.role} />}
             </main>
           </div>
@@ -388,6 +392,7 @@ export function App() {
         {route.area === 'compose' && <p className="text-sm text-muted-foreground">Opening the workspace Composer...</p>}
         {route.area === 'integrations' && <AccountIntegrations onOpenProject={goProject} />}
         {route.area === 'keys' && <AccountApiKeys />}
+        {route.area === 'usage' && <Usage />}
       </main>
     </div>
   );

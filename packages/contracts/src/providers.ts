@@ -85,6 +85,13 @@ export interface ProviderContext {
 export interface ProviderUsageContext {
   sink: UsageEventSink;
   sourceId: string | null;
+  /**
+   * Acting user for facts emitted from this context (R5.10.8). Null/absent when
+   * the execution has no acting user (background jobs, system work). It mirrors
+   * the scope `ProviderContext.userId` so read-path usage (which has no full
+   * `ProviderContext`, e.g. knowledge search) can still attribute the user.
+   */
+  userId?: string | null;
   nextOccurrence: (operation: string) => number;
 }
 
@@ -215,8 +222,9 @@ export interface KnowledgeSearchOptions {
   /**
    * Optional append-only usage correlation (R5.10.7). When present, a vector
    * search records one `ai`/`embed`/`input_token` fact per physical embedding
-   * request it issues, using the provider-reported token count. The acting user
-   * is null at this read seam; project attribution comes from `projectId`.
+   * request it issues, using the provider-reported token count. Project comes
+   * from `projectId`; the acting user comes from `usage.userId` (null on the
+   * background/system read seam) - R5.10.8.
    */
   usage?: ProviderUsageContext;
 }

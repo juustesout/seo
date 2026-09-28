@@ -155,6 +155,8 @@ export interface ImageAcquisitionInput {
   baseRevision: string;
   baseDocument: CanonicalDocument;
   scope: string;
+  /** Acting user for media usage attribution (R5.10.8); null for agent/system runs. */
+  userId?: string | null;
 }
 
 /**
@@ -178,6 +180,7 @@ export class ImageInsertionService {
     projectId: string,
     intent: DesignerIntent,
     context: ImageInsertionContext,
+    actorUserId: string | null = null,
   ): Promise<DesignerProposal> {
     const resolution = resolveVisualDesignIntent(intent.instruction, context);
     if (resolution.status === 'needs_clarification') {
@@ -250,6 +253,7 @@ export class ImageInsertionService {
       baseRevision,
       baseDocument: editorDocumentToCanonical(content.content_json),
       scope,
+      userId: actorUserId,
     });
     if (acquisition.status === 'generation_required') return acquisition.proposal;
 
@@ -287,13 +291,13 @@ export class ImageInsertionService {
    * batch-building paths so the policy lives in exactly one place.
    */
   async acquireImage(input: ImageAcquisitionInput): Promise<ImageAcquisitionResult> {
-    const { projectId, context, visual, subject, baseRevision, baseDocument, scope } = input;
+    const { projectId, context, visual, subject, baseRevision, baseDocument, scope, userId } = input;
     const mediaService = new MediaService(this.container.sb, new SupabaseStorageStore(this.container.sb));
     // R5.10.7: external search and confirmed generation are distinct physical
     // requests, each counted once by the media provider. No durable execution id
     // exists on this agent-run path, so the fact is not deduplicated.
     const usage = usageScopeContext({ sink: this.container.usageEvents });
-    const mediaUsage: MediaUsageScope | undefined = usage ? { projectId, userId: null, usage } : undefined;
+    const mediaUsage: MediaUsageScope | undefined = usage ? { projectId, userId: userId ?? null, usage } : undefined;
     const media = await mediaService.list(projectId);
     const selection = selectImageInsertionCandidate(context, media.map(toVisualCandidate), {
       visual,
