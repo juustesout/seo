@@ -16,6 +16,7 @@
  */
 
 import type { OAuthAccountIdentity, OAuthTokenResult, ProviderContext, ProviderDeps, PublisherOAuthConnector } from '@seo/contracts';
+import type { PublishOperation, PublishRequestObserver } from '../publishing/providerUsage.js';
 
 /**
  * X API base. api.x.com is the API host (token + tweets + users/me) and wants
@@ -108,10 +109,25 @@ export class XOAuthClient {
   constructor(
     private readonly clientId: string,
     private readonly fetchFn: typeof fetch = fetch,
+    private readonly observe?: PublishRequestObserver,
   ) {}
 
   get configured(): boolean {
     return Boolean(this.clientId);
+  }
+
+  /**
+   * Report a publication request outcome, best-effort. `operation` is present
+   * only for the publication call (`POST /2/tweets`); token and identity calls
+   * never pass one, so OAuth traffic never counts as a `publish_attempt`.
+   */
+  private async report(operation: PublishOperation | undefined, success: boolean): Promise<void> {
+    if (!this.observe || !operation) return;
+    try {
+      await this.observe(operation, success);
+    } catch {
+      // Usage is observability, never the request's transaction boundary.
+    }
   }
 
   /** Consent URL the browser is sent to (S256 PKCE, offline refresh). */
@@ -177,7 +193,7 @@ export class XOAuthClient {
 
   /** Create a text post. Only a real X success returns a tweet id. */
   async createPost(accessToken: string, text: string): Promise<XTweet> {
-    const json = await this.jsonRequest('POST', '/2/tweets', accessToken, { text });
+    const json = await this.jsonRequest('POST', '/2/tweets', accessToken, { text }, 'publish');
     const data = (json?.data ?? {}) as Record<string, unknown>;
     if (!json || typeof data.id !== 'string') {
       throw new XApiError('X /tweets returned an unexpected response', 200);
@@ -191,27 +207,40 @@ export class XOAuthClient {
    * converted to XApiError carrying the (safe) X problem object; a non-JSON
    * body is tolerated as null so callers can detect "unexpected response"
    * instead of crashing on a parse error.
+   *
+   * When `operation` is set (the publication call only) the request is reported
+   * to the usage observer once, after the HTTP outcome is known.
    */
   private async jsonRequest(
     method: 'GET' | 'POST',
     path: string,
     accessToken: string,
     body?: Record<string, unknown>,
+    operation?: PublishOperation,
   ): Promise<Record<string, unknown> | null> {
-    const res = await this.fetchFn(`${X_API_BASE}${path}`, {
-      method,
-      headers: {
-        authorization: `Bearer ${accessToken}`,
-        ...(body ? { 'content-type': 'application/json' } : {}),
-      },
-      body: body ? JSON.stringify(body) : undefined,
-    });
+    let res: Response;
+    try {
+      res = await this.fetchFn(`${X_API_BASE}${path}`, {
+        method,
+        headers: {
+          authorization: `Bearer ${accessToken}`,
+          ...(body ? { 'content-type': 'application/json' } : {}),
+        },
+        body: body ? JSON.stringify(body) : undefined,
+      });
+    } catch (err) {
+      // The request was initiated but did not complete; record the attempt.
+      await this.report(operation, false);
+      throw err;
+    }
     const json = (await res.json().catch(() => null)) as Record<string, unknown> | null;
     if (!res.ok) {
+      await this.report(operation, false);
       const problem = problemFromJson(json);
       const message = problem.detail ?? problem.title ?? `X returned HTTP ${res.status}`;
       throw new XApiError(message, res.status, problem);
     }
+    await this.report(operation, true);
     return json;
   }
 }

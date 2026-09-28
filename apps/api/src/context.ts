@@ -198,6 +198,13 @@ export function buildProviderContext(
     config?: Record<string, unknown>;
     /** Stable identity of the logical execution (e.g. a job id) for usage dedup. */
     usageSourceId?: string | null;
+    /**
+     * Seed for the per-execution occurrence counter (R5.10.6). Defaults to 0.
+     * A caller whose re-execution is a genuinely new external attempt (a retried
+     * publish job) raises this per execution so the attempt is not deduplicated
+     * against the previous execution's identical operation.
+     */
+    usageOccurrenceBase?: number;
   },
 ): ProviderContext {
   const providerType =
@@ -213,9 +220,15 @@ export function buildProviderContext(
     'integrationId' in args.owner
       ? container.credentials.reader({ integrationId: args.owner.integrationId }, providerType)
       : container.credentials.reader({ publisherId: args.owner.publisherId }, providerType);
-  // One occurrence counter per execution: a re-execution (retry) starts fresh,
-  // so repeated facts of the same operation reuse the same keys and dedup.
+  // One occurrence counter per execution: a re-execution (retry) starts at
+  // `usageOccurrenceBase` (0 by default), so repeated facts of the same
+  // operation reuse the same keys and dedup - unless the caller declares the
+  // execution a new external attempt (R5.10.6 publishing) by raising the base.
   const occurrences = new Map<string, number>();
+  const occurrenceBase =
+    typeof args.usageOccurrenceBase === 'number' && Number.isFinite(args.usageOccurrenceBase) && args.usageOccurrenceBase > 0
+      ? Math.floor(args.usageOccurrenceBase)
+      : 0;
   return {
     projectId: args.projectId,
     userId: args.userId,
@@ -226,7 +239,7 @@ export function buildProviderContext(
       sink: container.usageEvents,
       sourceId: args.usageSourceId ?? null,
       nextOccurrence: (operation: string) => {
-        const next = occurrences.get(operation) ?? 0;
+        const next = occurrences.get(operation) ?? occurrenceBase;
         occurrences.set(operation, next + 1);
         return next;
       },

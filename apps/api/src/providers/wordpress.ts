@@ -14,6 +14,11 @@ import type {
   PublisherProvider,
   PublishResult,
 } from '@seo/contracts';
+import {
+  publishUsageObserver,
+  type PublishOperation,
+  type PublishRequestObserver,
+} from './publishing/providerUsage.js';
 
 const CRED = { username: 'wordpress_username', appPassword: 'wordpress_application_password' } as const;
 
@@ -40,6 +45,7 @@ export class WordPressClient {
     private readonly username: string,
     private readonly appPassword: string,
     private readonly fetchFn: typeof fetch = fetch,
+    private readonly observe?: PublishRequestObserver,
   ) {}
 
   private endpoint(path: string): string {
@@ -53,17 +59,40 @@ export class WordPressClient {
     };
   }
 
-  private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
-    const res = await this.fetchFn(this.endpoint(path), {
-      method,
-      headers: this.authHeaders(),
-      body: body === undefined ? undefined : JSON.stringify(body),
-    });
+  /**
+   * Report a publication request outcome, best-effort. `operation` is absent
+   * for non-publication calls (e.g. `whoami`), which must never count as a
+   * `publish_attempt`. A misbehaving observer never fails the WordPress call.
+   */
+  private async report(operation: PublishOperation | undefined, success: boolean): Promise<void> {
+    if (!this.observe || !operation) return;
+    try {
+      await this.observe(operation, success);
+    } catch {
+      // Usage is observability, never the request's transaction boundary.
+    }
+  }
+
+  private async request<T>(method: string, path: string, body?: unknown, operation?: PublishOperation): Promise<T> {
+    let res: Response;
+    try {
+      res = await this.fetchFn(this.endpoint(path), {
+        method,
+        headers: this.authHeaders(),
+        body: body === undefined ? undefined : JSON.stringify(body),
+      });
+    } catch (err) {
+      // The request was initiated but did not complete; record the attempt.
+      await this.report(operation, false);
+      throw err;
+    }
     const json = (await res.json().catch(() => ({}))) as Record<string, unknown>;
     if (!res.ok) {
+      await this.report(operation, false);
       const message = (json.message as string) ?? `WordPress HTTP ${res.status}`;
       throw new WordPressError(message, res.status);
     }
+    await this.report(operation, true);
     return json as T;
   }
 
@@ -85,15 +114,15 @@ export class WordPressClient {
       status: input.status,
       excerpt: input.excerpt ?? '',
       slug: input.slug ?? undefined,
-    });
+    }, 'publish');
   }
 
   async updatePost(id: string, input: Partial<{ title: string; content: string; status: string; excerpt: string; slug: string }>): Promise<WordPressPostResponse> {
-    return this.request('POST', `/posts/${id}`, input);
+    return this.request('POST', `/posts/${id}`, input, 'publish_update');
   }
 
   async deletePost(id: string): Promise<void> {
-    await this.request('DELETE', `/posts/${id}?force=true`);
+    await this.request('DELETE', `/posts/${id}?force=true`, undefined, 'publish_delete');
   }
 }
 
@@ -113,7 +142,7 @@ export class WordPressPublisher implements PublisherProvider {
     if (!username || !appPassword) {
       throw new Error('WordPress credentials are missing; add the application password in Publishing settings');
     }
-    return new WordPressClient(baseUrl, username, appPassword);
+    return new WordPressClient(baseUrl, username, appPassword, fetch, publishUsageObserver(ctx, this.id));
   }
 
   async connect(ctx: ProviderContext): Promise<DataSourceConnectionResult> {

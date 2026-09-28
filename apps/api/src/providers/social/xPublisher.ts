@@ -23,6 +23,7 @@ import type {
   PublishResult,
 } from '@seo/contracts';
 import { PublisherError } from '../publisherError.js';
+import { publishUsageObserver } from '../publishing/providerUsage.js';
 import { buildSocialTextPost } from './textPayload.js';
 import {
   XApiError,
@@ -54,9 +55,17 @@ export class XPublisher implements PublisherProvider {
 
   constructor(private readonly deps: ProviderDeps) {}
 
-  /** Fresh, stateless X API client bound to the server's OAuth client id. */
-  private client(): XOAuthClient {
-    return new XOAuthClient(this.deps.config.X_OAUTH_CLIENT_ID ?? '', this.deps.fetchFn);
+  /**
+   * Fresh, stateless X API client bound to the server's OAuth client id and, on
+   * the publication path, to this request's usage observer. Only `createPost`
+   * reports usage; token and identity calls on the same client never do.
+   */
+  private client(ctx: ProviderContext): XOAuthClient {
+    return new XOAuthClient(
+      this.deps.config.X_OAUTH_CLIENT_ID ?? '',
+      this.deps.fetchFn,
+      publishUsageObserver(ctx, this.id),
+    );
   }
 
   /** Terminal auth error: the user must reconnect the channel; retrying cannot help. */
@@ -124,7 +133,7 @@ export class XPublisher implements PublisherProvider {
     }
     let fresh: Awaited<ReturnType<XOAuthClient['refreshAccessToken']>>;
     try {
-      fresh = await this.client().refreshAccessToken(refresh);
+      fresh = await this.client(ctx).refreshAccessToken(refresh);
     } catch (err) {
       if (err instanceof XApiError && (err.status === 400 || err.status === 401 || err.status === 403)) {
         // Invalid/expired/revoked grant -> the user must reconnect.
@@ -170,7 +179,7 @@ export class XPublisher implements PublisherProvider {
     const stored = await ctx.credentials.get(X_CRED.access);
     if (!stored) return { ok: false, message: NOT_CONNECTED };
     try {
-      const user = await this.withToken(ctx, (token) => this.client().fetchAuthenticatedUser(token));
+      const user = await this.withToken(ctx, (token) => this.client(ctx).fetchAuthenticatedUser(token));
       return { ok: true, message: `Authenticated as @${user.username}`, user };
     } catch (err) {
       if (err instanceof PublisherError) return { ok: false, message: err.message };
@@ -214,7 +223,7 @@ export class XPublisher implements PublisherProvider {
         { retryable: false },
       );
     }
-    const tweet = await this.withToken(ctx, (access) => this.client().createPost(access, body));
+    const tweet = await this.withToken(ctx, (access) => this.client(ctx).createPost(access, body));
     ctx.logger.info('X post created', { remoteId: tweet.id });
     const username = ctx.config[X_IDENTITY_CONFIG_KEYS.username];
     const handle = typeof username === 'string' && username.trim() ? username.trim() : null;

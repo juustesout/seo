@@ -15,6 +15,7 @@ import type { KnowledgeDocumentInput, ProviderContext } from '@seo/contracts';
 import { GscDataSource } from '../providers/gsc/gscDataSource.js';
 import { DataForSeoDataSource } from '../providers/dataforseo/dataSource.js';
 import { urlBelongsToDomain } from '../providers/dataforseo/normalize.js';
+import { publishUsageOccurrenceBase } from '../providers/publishing/providerUsage.js';
 import { delay } from '../util.js';
 import type { ServiceContainer } from '../context.js';
 import { ContentService } from '../services/contentService.js';
@@ -752,6 +753,11 @@ const publish: JobExecutor = async ({ container, job, report }) => {
     userId: job.created_by,
     owner: { publisherId: String(publisher.id), providerType: String(publisher.provider) },
     config: (publisher.config as Record<string, unknown>) ?? {},
+    // Publishing usage records actual remote attempts: a durable job retry that
+    // sends another publication request is a new `publish_attempt`, so the
+    // occurrence base advances per execution instead of deduplicating.
+    usageSourceId: job.id,
+    usageOccurrenceBase: publishUsageOccurrenceBase(job.retry_count),
   });
 
   const operation = job.job_type; // publish | publish_update | publish_delete

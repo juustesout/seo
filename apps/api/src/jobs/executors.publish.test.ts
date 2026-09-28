@@ -8,9 +8,10 @@
  * ENABLE_TEST_PUBLISHERS=true.
  */
 
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { getExecutor } from './executors.js';
 import { buildRegistry } from '../providers/registry.js';
+import { InMemoryUsageEventStore } from '../services/usageEventRepository.js';
 import type { ServiceContainer } from '../context.js';
 import type { JobRecord } from './types.js';
 import type { SeoWriter } from '../persistence/seoWriter.js';
@@ -101,13 +102,23 @@ function job(overrides: Partial<JobRecord> = {}): JobRecord {
   };
 }
 
-function container(registry: ReturnType<typeof buildRegistry>, sb: Store): ServiceContainer {
+function container(
+  registry: ReturnType<typeof buildRegistry>,
+  sb: Store,
+  usageEvents: ServiceContainer['usageEvents'] = new InMemoryUsageEventStore(),
+  credentials: Record<string, string> = {},
+): ServiceContainer {
   return {
     config: { env: {} },
     sb: fakeSb(sb) as never,
     registry,
+    usageEvents,
     credentials: {
-      reader: () => ({ get: async () => null, set: async () => undefined, delete: async () => undefined }),
+      reader: () => ({
+        get: async (key: string) => credentials[key] ?? null,
+        set: async () => undefined,
+        delete: async () => undefined,
+      }),
     },
   } as unknown as ServiceContainer;
 }
@@ -209,5 +220,107 @@ describe('publish executor routing to a social publisher (Content Studio Phase H
     expect(sbStores.seo_publications[0].status).toBe('queued');
     expect(sbStores.seo_publications[0].remote_id).toBeNull();
     expect(sbStores.seo_publications[0].target_url).toBeNull();
+  });
+});
+
+describe('publish executor usage accounting (R5.10.6)', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  const PROJECT = '11111111-1111-4111-8111-111111111111';
+  const USER = '33333333-3333-4333-8333-333333333333';
+
+  function response(body: unknown, status = 200): Response {
+    return {
+      status,
+      ok: status >= 200 && status < 300,
+      json: async () => body,
+      text: async () => JSON.stringify(body),
+    } as unknown as Response;
+  }
+
+  function wordpressStores(): Store {
+    const s = stores();
+    s.seo_publications[0].project_id = PROJECT;
+    s.seo_publishers = [
+      { id: 'pb-1', project_id: PROJECT, provider: 'wordpress', name: 'Blog', status: 'connected', config: { base_url: 'https://blog.example.com' } },
+    ];
+    return s;
+  }
+
+  function wordpressJob(retryCount = 0): JobRecord {
+    return job({ project_id: PROJECT, provider: 'wordpress', created_by: USER, retry_count: retryCount });
+  }
+
+  function run(c: ServiceContainer, j: JobRecord) {
+    return executorFor('publish')({ container: c, job: j, writer: {} as SeoWriter, report: async () => undefined });
+  }
+
+  const creds = { wordpress_username: 'admin', wordpress_application_password: 'app-pass' };
+
+  it('records one publish_attempt correlated to the job', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => response({ id: 7, link: 'https://blog.example.com/?p=7' }, 201)));
+    const sbStores = wordpressStores();
+    const store = new InMemoryUsageEventStore();
+    const c = container(buildRegistry({ config: {}, logger: silentLogger() }), sbStores, store, creds);
+
+    const result = await run(c, wordpressJob());
+
+    expect(result.remoteId).toBe('7');
+    expect(sbStores.seo_publications[0].status).toBe('published');
+    const events = await store.list({ projectId: PROJECT });
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      category: 'publishing',
+      provider: 'wordpress',
+      operation: 'publish',
+      unit: 'publish_attempt',
+      success: true,
+      sourceId: 'job-1',
+      projectId: PROJECT,
+      userId: USER,
+    });
+  });
+
+  it('strides the occurrence so a retried execution is a distinct attempt', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => response({ id: 8, link: 'https://blog.example.com/?p=8' }, 201)));
+    const store = new InMemoryUsageEventStore();
+    const reg = buildRegistry({ config: {}, logger: silentLogger() });
+
+    await run(container(reg, wordpressStores(), store, creds), wordpressJob(0));
+    await run(container(reg, wordpressStores(), store, creds), wordpressJob(0));
+    expect(await store.list({ projectId: PROJECT })).toHaveLength(1);
+
+    await run(container(reg, wordpressStores(), store, creds), wordpressJob(1));
+    const events = await store.list({ projectId: PROJECT });
+    expect(events).toHaveLength(2);
+    expect(events.map((e) => e.sourceId)).toEqual(['job-1', 'job-1']);
+  });
+
+  it('records nothing for the mock social publisher (no external request)', async () => {
+    const sbStores = stores();
+    const store = new InMemoryUsageEventStore();
+    const reg = buildRegistry({ config: { ENABLE_TEST_PUBLISHERS: 'true' }, logger: silentLogger() });
+
+    const result = await run(container(reg, sbStores, store), job());
+
+    expect(result.remoteId).toMatch(/^demo:/);
+    expect(await store.list({ projectId: 'p1' })).toHaveLength(0);
+  });
+
+  it('never fails a successful publication when the ledger append fails', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => response({ id: 9, link: 'https://blog.example.com/?p=9' }, 201)));
+    const sbStores = wordpressStores();
+    const failing = {
+      append: async () => {
+        throw new Error('ledger down');
+      },
+      list: async () => [],
+    } as unknown as ServiceContainer['usageEvents'];
+    const c = container(buildRegistry({ config: {}, logger: silentLogger() }), sbStores, failing, creds);
+
+    const result = await run(c, wordpressJob());
+
+    expect(result.remoteId).toBe('9');
+    expect(sbStores.seo_publications[0].status).toBe('published');
   });
 });
