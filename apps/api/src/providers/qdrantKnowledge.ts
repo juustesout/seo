@@ -25,6 +25,7 @@ import type {
 } from '@seo/contracts';
 import { QdrantClient, matchOn } from './knowledge/qdrantClient.js';
 import { embedderFromConfig, type Embedder } from './knowledge/embedding.js';
+import { embeddingUsageObserver } from './knowledge/embeddingUsage.js';
 import { chunkKnowledgeText } from '../knowledge/chunker.js';
 
 /** Shared vector collection name (project separation is by payload, not name). */
@@ -92,11 +93,12 @@ export class QdrantKnowledgeProvider implements KnowledgeProvider {
    */
   async index(ctx: ProviderContext, documents: KnowledgeDocumentInput[]): Promise<{ indexed: number }> {
     this.assertConfigured();
+    const observer = embeddingUsageObserver(ctx);
     const points: Array<{ id: string; vector: number[]; payload: Record<string, unknown> }> = [];
     for (const doc of documents) {
       const chunks = chunkKnowledgeText(doc.text);
       if (chunks.length === 0) continue;
-      const embeddings = await this.embedder!.embed(chunks);
+      const embeddings = await this.embedder!.embed(chunks, observer);
       const indexedAt = new Date().toISOString();
       chunks.forEach((text, i) => {
         points.push({
@@ -186,7 +188,8 @@ export class QdrantKnowledgeProvider implements KnowledgeProvider {
    */
   async search(opts: KnowledgeSearchOptions): Promise<KnowledgeSearchResult[]> {
     this.assertConfigured();
-    const vectors = await this.embedder!.embed([opts.query]);
+    const observer = embeddingUsageObserver({ usage: opts.usage, projectId: opts.projectId, userId: null });
+    const vectors = await this.embedder!.embed([opts.query], observer);
     const filter: { must: Array<Record<string, unknown>> } = {
       must: [matchOn('project_id', opts.projectId)],
     };

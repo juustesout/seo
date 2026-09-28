@@ -67,6 +67,7 @@ import type {
   KnowledgeSourceSummaryDto,
   KnowledgeSourceType,
   ProviderContext,
+  ProviderUsageContext,
 } from '@seo/contracts';
 import {
   KNOWLEDGE_COLLECTION_DESCRIPTION_MAX_CHARS,
@@ -84,6 +85,7 @@ import {
 import { logger } from '../logger.js';
 import { ApiError } from '../apiErrors.js';
 import type { ServiceContainer } from '../context.js';
+import { usageScopeContext } from './usageInstrumentation.js';
 import { assertTransition } from './knowledgeLifecycle.js';
 import { extractSourceText, normalizeText } from './knowledgeText.js';
 import { chunkKnowledgeText } from '../knowledge/chunker.js';
@@ -564,8 +566,9 @@ export class KnowledgeService {
 
   /** ProviderContext handed to the Qdrant provider. Credentials are a no-op on
    *  purpose (see NOOP_CREDENTIALS) and the logger is namespaced per project so
-   *  provider-side noise is attributable. */
-  private context(projectId: string): ProviderContext {
+   *  provider-side noise is attributable. An optional usage context is threaded
+   *  so the embedding provider records one fact per physical request (R5.10.7). */
+  private context(projectId: string, usage?: ProviderUsageContext): ProviderContext {
     const child = logger.child({ projectId, provider: 'qdrant' });
     return {
       projectId,
@@ -578,6 +581,7 @@ export class KnowledgeService {
         error: (m: string, meta?: Record<string, unknown>) => child.error(meta ?? {}, m),
         debug: (m: string, meta?: Record<string, unknown>) => child.debug(meta ?? {}, m),
       },
+      ...(usage ? { usage } : {}),
     };
   }
 
@@ -1467,6 +1471,10 @@ export class KnowledgeService {
     const mode = resolveRetrievalMode(this.container.config.env);
 
     const started = Date.now();
+    // R5.10.7: a semantic search embeds the query once; the embedding provider
+    // records one input-token fact per physical request. No durable execution id
+    // exists on the read path, so the fact is not deduplicated.
+    const searchUsage = usageScopeContext({ sink: this.container.usageEvents, sourceId: null });
     let outcome: RetrievalOutcome;
     try {
       const plan = await buildKnowledgeQueryPlan(this.sb, {
@@ -1483,7 +1491,7 @@ export class KnowledgeService {
         },
       });
       outcome = await retrieveCandidates(
-        { provider, sb: this.sb, reranker: this.container.knowledgeReranker },
+        { provider, sb: this.sb, reranker: this.container.knowledgeReranker, ...(searchUsage ? { usage: searchUsage } : {}) },
         plan,
       );
     } catch (err) {
@@ -1998,7 +2006,12 @@ export class KnowledgeService {
    * index work, and if a delete wins the race during indexing the just-written
    * vectors are compensated away rather than left searchable.
    */
-  async ingestSource(projectId: string, sourceId: string, report?: ProgressFn): Promise<Record<string, unknown>> {
+  async ingestSource(
+    projectId: string,
+    sourceId: string,
+    report?: ProgressFn,
+    usage?: ProviderUsageContext,
+  ): Promise<Record<string, unknown>> {
     let row: SourceRow;
     try {
       row = await this.sourceRow(projectId, sourceId);
@@ -2028,7 +2041,7 @@ export class KnowledgeService {
       return { source_id: sourceId, skipped: true, message: 'Source is not ingestable right now' };
     }
 
-    const ctx = this.context(projectId);
+    const ctx = this.context(projectId, usage);
     try {
       const resolved = await this.resolveDocument(row);
       if (!resolved) {
@@ -2096,7 +2109,12 @@ export class KnowledgeService {
    * Claiming uses the same CAS as ingest, so a delete that wins the race can
    * never be resurrected and two refreshes can never run in parallel.
    */
-  async refreshSource(projectId: string, sourceId: string, report?: ProgressFn): Promise<Record<string, unknown>> {
+  async refreshSource(
+    projectId: string,
+    sourceId: string,
+    report?: ProgressFn,
+    usage?: ProviderUsageContext,
+  ): Promise<Record<string, unknown>> {
     let row: SourceRow;
     try {
       row = await this.sourceRow(projectId, sourceId);
@@ -2124,7 +2142,7 @@ export class KnowledgeService {
       return { source_id: sourceId, skipped: true, message: 'Source is already refreshing' };
     }
 
-    const ctx = this.context(projectId);
+    const ctx = this.context(projectId, usage);
     const hasExistingContent = typeof row.content_text === 'string' && row.content_text.trim().length > 0;
     const existingHash = typeof row.content_hash === 'string' ? row.content_hash : '';
     const policy = normalizeRefreshPolicy(row.refresh_policy);

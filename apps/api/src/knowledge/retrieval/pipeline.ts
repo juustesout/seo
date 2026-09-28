@@ -19,7 +19,7 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js';
-import type { KnowledgeProvider } from '@seo/contracts';
+import type { KnowledgeProvider, ProviderUsageContext } from '@seo/contracts';
 import { logger } from '../../logger.js';
 import { fuseCandidates } from './fusion.js';
 import { retrieveLexicalCandidates } from './lexical.js';
@@ -37,6 +37,8 @@ export interface RetrievalDependencies {
   loadSourceFacts?: ManagedSourceFactsLoader;
   /** Optional reranking layer (KB10.3); absent means RRF is the final order. */
   reranker?: KnowledgeReranker;
+  /** Optional usage scope (R5.10.7); forwarded to the provider's embedding calls. */
+  usage?: ProviderUsageContext;
 }
 
 function emptyOutcome(plan: KnowledgeQueryPlan): RetrievalOutcome {
@@ -71,7 +73,7 @@ export async function retrieveCandidates(
 
   if (!plan.retrieval.lexical) {
     // Safe fallback: the previous vector-only behavior, including its errors.
-    const candidates = await retrieveVectorCandidates(deps.provider, plan, plan.limit);
+    const candidates = await retrieveVectorCandidates(deps.provider, plan, plan.limit, deps.usage);
     const sourceFacts = await resolveFacts(loadFacts, plan, candidates);
     const scoped = filterCandidatesToScope(plan.scope, candidates, sourceFacts);
     const reranked = await rerankCandidates(reranker, plan, scoped);
@@ -93,7 +95,7 @@ export async function retrieveCandidates(
   }
 
   const [vectorResult, lexicalResult] = await Promise.allSettled([
-    retrieveVectorCandidates(deps.provider, plan, plan.budgets.vector),
+    retrieveVectorCandidates(deps.provider, plan, plan.budgets.vector, deps.usage),
     retrieveLexicalCandidates(deps.sb, plan),
   ]);
 

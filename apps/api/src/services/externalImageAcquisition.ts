@@ -29,6 +29,7 @@ import {
   type MediaProvider,
   type MediaResult,
   type MediaItemDto,
+  type MediaUsageScope,
   type VisualDesignIntent,
 } from '@seo/contracts';
 import { ApiError } from '../apiErrors.js';
@@ -132,6 +133,8 @@ export interface AcquireExternalImageParams {
   projectId: string;
   /** Persist the downloaded bytes as a normal library row. */
   persist: (input: ImportExternalMediaInput) => Promise<MediaItemDto>;
+  /** R5.10.7: when present, the provider records one `media_search` fact for the search request. */
+  usage?: MediaUsageScope;
   fetchFn?: typeof fetch;
   timeoutMs?: number;
   maxBytes?: number;
@@ -168,7 +171,12 @@ export async function acquireExternalImage(params: AcquireExternalImageParams): 
 
   let results: MediaResult[];
   try {
-    results = await provider.search({ query, limit: 8, ...(orientation ? { orientation } : {}) });
+    results = await provider.search({
+      query,
+      limit: 8,
+      ...(orientation ? { orientation } : {}),
+      ...(params.usage ? { usage: params.usage } : {}),
+    });
   } catch {
     throw new ApiError(502, 'external_search_unavailable', 'The external image search failed. Try again in a moment.');
   }

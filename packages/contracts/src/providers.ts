@@ -212,6 +212,13 @@ export interface KnowledgeSearchOptions {
   query: string;
   limit?: number;
   filter?: KnowledgeSearchFilter;
+  /**
+   * Optional append-only usage correlation (R5.10.7). When present, a vector
+   * search records one `ai`/`embed`/`input_token` fact per physical embedding
+   * request it issues, using the provider-reported token count. The acting user
+   * is null at this read seam; project attribution comes from `projectId`.
+   */
+  usage?: ProviderUsageContext;
 }
 
 export interface KnowledgeProvider {
@@ -540,6 +547,13 @@ export interface MediaSearchOptions {
   query: string;
   limit?: number;
   orientation?: 'landscape' | 'portrait' | 'squarish';
+  /**
+   * Optional append-only usage correlation (R5.10.7). When present, one
+   * `media`/`media_search`/`request` fact is recorded per external search
+   * request the provider actually issues (best-effort, never the transaction
+   * boundary).
+   */
+  usage?: MediaUsageScope;
 }
 
 export interface MediaResult extends MediaAttribution {
@@ -557,6 +571,24 @@ export interface MediaResult extends MediaAttribution {
 export interface MediaGenerateOptions {
   prompt: string;
   size?: '1024x1024' | '1792x1024' | '1024x1792';
+  /**
+   * Optional append-only usage correlation (R5.10.7). When present, one
+   * `media`/`image_generate`/`image_generation` fact is recorded per external
+   * generation request the provider actually issues.
+   */
+  usage?: MediaUsageScope;
+}
+
+/**
+ * Scope for one external media operation (R5.10.7). Media providers are
+ * resolved from the registry with no request context, so the caller supplies
+ * the real project/user attribution together with the append-only usage
+ * correlation (`sourceId` + per-execution occurrence counter).
+ */
+export interface MediaUsageScope {
+  projectId: string;
+  userId: string | null;
+  usage: ProviderUsageContext;
 }
 
 export interface MediaProvider {

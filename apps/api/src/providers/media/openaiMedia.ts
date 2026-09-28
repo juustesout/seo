@@ -15,8 +15,10 @@ import type {
   MediaProvider,
   MediaResult,
   MediaCapability,
+  MediaUsageScope,
   ProviderLogger,
 } from '@seo/contracts';
+import { emitMediaUsage } from './mediaUsage.js';
 
 export interface OpenAiMediaProviderDeps {
   config: Record<string, string | undefined>;
@@ -49,6 +51,20 @@ export class OpenAiMediaProvider implements MediaProvider {
   }
 
   /**
+   * Report one external generation request outcome, best-effort (R5.10.7). A
+   * misbehaving usage sink never fails the generation; a missing key issues no
+   * request and records nothing.
+   */
+  private async reportUsage(scope: MediaUsageScope | undefined, success: boolean, model: string): Promise<void> {
+    if (!scope) return;
+    try {
+      await emitMediaUsage({ scope, provider: this.id, operation: 'image_generate', success, model });
+    } catch {
+      // Usage is observability, never the request's transaction boundary.
+    }
+  }
+
+  /**
    * Generate one image. The prompt doubles as the description (truncated) so
    * the media library has meaningful alt/caption text without an extra call.
    * A response with neither URL nor b64_json is treated as a failure - an
@@ -60,15 +76,23 @@ export class OpenAiMediaProvider implements MediaProvider {
     }
     const model = this.deps.config.OPENAI_IMAGE_MODEL ?? 'dall-e-3';
     const size = this.normalizeSize(opts.size, model);
-    const res = await this.fetchFn(`${this.baseUrl}/images/generations`, {
-      method: 'POST',
-      headers: {
-        authorization: `Bearer ${this.deps.config.OPENAI_API_KEY}`,
-        'content-type': 'application/json',
-      },
-      body: JSON.stringify({ model, prompt: opts.prompt, size, n: 1 }),
-    });
+    let res: Response;
+    try {
+      res = await this.fetchFn(`${this.baseUrl}/images/generations`, {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${this.deps.config.OPENAI_API_KEY}`,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({ model, prompt: opts.prompt, size, n: 1 }),
+      });
+    } catch (err) {
+      // The request was initiated but did not complete; record the attempt.
+      await this.reportUsage(opts.usage, false, model);
+      throw err;
+    }
     if (!res.ok) {
+      await this.reportUsage(opts.usage, false, model);
       const text = await res.text().catch(() => '');
       throw new Error(`OpenAI images API ${res.status}: ${text.slice(0, 300)}`);
     }
@@ -77,8 +101,10 @@ export class OpenAiMediaProvider implements MediaProvider {
     const url = item?.url ?? null;
     const b64 = item?.b64_json ?? null;
     if (!url && !b64) {
+      await this.reportUsage(opts.usage, false, model);
       throw new Error('OpenAI images returned no image');
     }
+    await this.reportUsage(opts.usage, true, model);
     return {
       id: `openai:${Date.now()}`,
       url: url ?? `data:image/png;base64,${b64}`,

@@ -43,7 +43,9 @@ import { ApiError } from '../apiErrors.js';
 import type { ServiceContainer } from '../context.js';
 import { readProjectSettings } from './projectSettings.js';
 import { embedderFromConfig, type Embedder } from '../providers/knowledge/embedding.js';
+import { embeddingUsageObserver, type EmbedUsageObserver } from '../providers/knowledge/embeddingUsage.js';
 import { KnowledgeService } from './knowledgeService.js';
+import { usageScopeContext } from './usageInstrumentation.js';
 import { canonicalKeywordKey } from './keywordCanonical.js';
 import { significantTokens } from './contentIntelligence.js';
 import { getOpportunities } from './opportunityService.js';
@@ -189,13 +191,14 @@ async function buildPairScores(
   topics: CoreTopicDto[],
   opportunities: Array<{ keyword: string; variants: string[] }>,
   embedder: Embedder | null,
+  observer?: EmbedUsageObserver,
 ): Promise<PairScores> {
   const topicTexts = topics.map(topicText);
   const keywordTexts = opportunities.map(opportunityText);
 
   if (embedder) {
     try {
-      const vectors = await embedder.embed([...topicTexts, ...keywordTexts]);
+      const vectors = await embedder.embed([...topicTexts, ...keywordTexts], observer);
       if (vectors.length === topicTexts.length + keywordTexts.length) {
         const matrix = topics.map((_topic, ti) => {
           const topicVector = vectors[ti]!;
@@ -299,6 +302,11 @@ export async function getTopicRecommendations(
         });
 
   const knowledgeService = new KnowledgeService(container);
+  // R5.10.7: the topic relevance batch is a real embeddings request on a read
+  // path; record one fact per physical request. No durable execution id exists
+  // here, so the fact is not deduplicated.
+  const usage = usageScopeContext({ sink: container.usageEvents, sourceId: null });
+  const embeddingObserver = usage ? embeddingUsageObserver({ usage, projectId, userId: null }) : undefined;
   const searchFn =
     deps.search ??
     ((pid: string, input: { query: string; limit?: number }) => knowledgeService.search(pid, input));
@@ -341,7 +349,7 @@ export async function getTopicRecommendations(
   }
 
   const opportunities = opportunitiesDto.opportunities;
-  const { origin, matrix } = await buildPairScores(topics, opportunities, embedder);
+  const { origin, matrix } = await buildPairScores(topics, opportunities, embedder, embeddingObserver);
 
   // Assign each opportunity to its single best-matching topic, dropping any
   // pairing that does not clear the weakest relevance state. The per-topic best

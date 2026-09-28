@@ -13,14 +13,19 @@
  * mismatch error instead of silently truncated vectors.
  */
 
+import type { EmbedUsageObserver } from './embeddingUsage.js';
+
 /**
  * Something that turns text into equal-length vectors. The dimension must be
  * known ahead of time (Qdrant collections are dimension-locked) and every
  * returned vector must match it.
+ *
+ * The optional observer (R5.10.7) is invoked once per physical embeddings
+ * request, after the provider has answered, with the authoritative token count.
  */
 export interface Embedder {
   readonly dimensions: number;
-  embed(texts: string[]): Promise<number[][]>;
+  embed(texts: string[], observer?: EmbedUsageObserver): Promise<number[][]>;
 }
 
 /** OpenAI-compatible embeddings endpoint settings (baseUrl optional -> OpenAI default). */
@@ -55,7 +60,7 @@ export class OpenAiCompatibleEmbedder implements Embedder {
     this.dimensions = dimensions;
   }
 
-  async embed(texts: string[]): Promise<number[][]> {
+  async embed(texts: string[], observer?: EmbedUsageObserver): Promise<number[][]> {
     const baseUrl = this.config.baseUrl ?? 'https://api.openai.com/v1';
     const apiKey = this.config.apiKey;
     const model = this.config.model ?? 'text-embedding-3-small';
@@ -74,7 +79,17 @@ export class OpenAiCompatibleEmbedder implements Embedder {
         const body = await res.text().catch(() => '');
         throw new Error(`Embedding API ${res.status}: ${body.slice(0, 200)}`);
       }
-      const json = (await res.json()) as { data?: Array<{ embedding: number[] }> };
+      const json = (await res.json()) as {
+        data?: Array<{ embedding: number[] }>;
+        usage?: { prompt_tokens?: number };
+      };
+      // R5.10.7: this is one physical POST /embeddings request; report its
+      // authoritative token usage (never estimated) before validating the vector
+      // count, because the request was really issued and really consumed tokens.
+      const promptTokens = json.usage?.prompt_tokens;
+      if (observer && typeof promptTokens === 'number' && Number.isFinite(promptTokens)) {
+        observer({ model, inputTokens: promptTokens, batchSize: batch.length });
+      }
       const vectors = (json.data ?? []).map((d) => d.embedding);
       if (vectors.length !== batch.length) {
         throw new Error('Embedding API returned fewer vectors than requested');

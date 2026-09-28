@@ -11,7 +11,7 @@
  * an unbounded list.
  */
 
-import type { KnowledgeProvider, KnowledgeSearchResult } from '@seo/contracts';
+import type { KnowledgeProvider, KnowledgeSearchResult, ProviderUsageContext } from '@seo/contracts';
 import { buildSearchContent } from './content.js';
 import { candidateKey, chunkIndexFromPayload, managedSourceIdFromPayload } from './identity.js';
 import type { KnowledgeQueryPlan } from './plan.js';
@@ -48,12 +48,14 @@ export async function retrieveVectorCandidates(
   provider: KnowledgeProvider,
   plan: KnowledgeQueryPlan,
   candidateLimit: number,
+  usage?: ProviderUsageContext,
 ): Promise<KnowledgeCandidate[]> {
   const hits = await provider.search({
     projectId: plan.projectId,
     query: plan.query,
     limit: candidateLimit,
     filter: toProviderSearchFilter(plan.scope),
+    ...(usage ? { usage } : {}),
   });
   const candidates: KnowledgeCandidate[] = [];
   for (const hit of hits) {

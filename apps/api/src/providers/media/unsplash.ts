@@ -19,8 +19,10 @@ import type {
   MediaSearchOptions,
   MediaProvider,
   MediaCapability,
+  MediaUsageScope,
   ProviderLogger,
 } from '@seo/contracts';
+import { emitMediaUsage } from './mediaUsage.js';
 
 export interface UnsplashProviderDeps {
   config: Record<string, string | undefined>;
@@ -50,6 +52,20 @@ export class UnsplashMediaProvider implements MediaProvider {
   }
 
   /**
+   * Report one external search request outcome, best-effort (R5.10.7). A
+   * misbehaving usage sink never fails the search; a missing key issues no
+   * request and records nothing.
+   */
+  private async reportUsage(scope: MediaUsageScope | undefined, success: boolean): Promise<void> {
+    if (!scope) return;
+    try {
+      await emitMediaUsage({ scope, provider: this.id, operation: 'media_search', success });
+    } catch {
+      // Usage is observability, never the request's transaction boundary.
+    }
+  }
+
+  /**
    * Search photos. The API is called with the Client-ID header (not Bearer) -
    * the only auth shape Unsplash accepts. Each result maps to MediaResult with
    * the regular-size image as the primary url and the small crop as thumbnail;
@@ -66,13 +82,22 @@ export class UnsplashMediaProvider implements MediaProvider {
       per_page: String(opts.limit ?? 8),
     });
     if (opts.orientation) params.set('orientation', opts.orientation);
-    const res = await this.fetchFn(`https://api.unsplash.com/search/photos?${params.toString()}`, {
-      headers: { authorization: `Client-ID ${key}` },
-    });
+    let res: Response;
+    try {
+      res = await this.fetchFn(`https://api.unsplash.com/search/photos?${params.toString()}`, {
+        headers: { authorization: `Client-ID ${key}` },
+      });
+    } catch (err) {
+      // The request was initiated but did not complete; record the attempt.
+      await this.reportUsage(opts.usage, false);
+      throw err;
+    }
     if (!res.ok) {
+      await this.reportUsage(opts.usage, false);
       const text = await res.text().catch(() => '');
       throw new Error(`Unsplash API ${res.status}: ${text.slice(0, 200)}`);
     }
+    await this.reportUsage(opts.usage, true);
     const json = (await res.json()) as {
       results?: Array<{
         id: string;

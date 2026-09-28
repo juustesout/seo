@@ -27,7 +27,7 @@ describe('knowledge_source_refresh executor (KB7)', () => {
       report,
     });
 
-    expect(spy).toHaveBeenCalledWith(PROJECT, SOURCE, report);
+    expect(spy).toHaveBeenCalledWith(PROJECT, SOURCE, report, undefined);
     spy.mockRestore();
   });
 

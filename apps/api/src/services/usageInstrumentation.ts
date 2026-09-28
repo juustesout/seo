@@ -26,6 +26,7 @@ import type {
   AIEmbeddingResult,
   AIProvider,
   NewUsageEvent,
+  ProviderUsageContext,
 } from '@seo/contracts';
 import { usageEventIdempotencyKey } from '@seo/contracts';
 import { logger } from '../logger.js';
@@ -40,6 +41,50 @@ export interface UsageScope {
 
 /** Minimal append surface instrumentation depends on (the R5.10.2 store). */
 export type UsageSink = Pick<UsageEventStore, 'append'>;
+
+/**
+ * Occurrence stride between successive executions of the same durable job
+ * (R5.10.7, following R5.10.6). Each retry increments `retry_count`, so seeding
+ * the per-execution occurrence counter at `retry_count * stride` keeps a retried
+ * execution's physical-attempt facts distinct from the prior execution's. The
+ * stride is far above any realistic number of requests one execution makes.
+ */
+export const USAGE_RETRY_OCCURRENCE_STRIDE = 1_000_000;
+
+/** Occurrence base for one job execution, derived from the durable retry counter. */
+export function retryOccurrenceBase(retryCount: number | null | undefined): number {
+  const retries = typeof retryCount === 'number' && Number.isInteger(retryCount) && retryCount > 0 ? retryCount : 0;
+  return retries * USAGE_RETRY_OCCURRENCE_STRIDE;
+}
+
+/**
+ * Build the append-only usage correlation for a provider operation (R5.10.7).
+ * Returns undefined when there is no sink, so callers can skip usage entirely.
+ * `sourceId` is the stable identity of the logical execution (a job id);
+ * `occurrenceBase` seeds the per-execution counter so a retried physical attempt
+ * is not deduplicated against the previous execution.
+ */
+export function usageScopeContext(args: {
+  sink: UsageSink | null | undefined;
+  sourceId?: string | null;
+  occurrenceBase?: number;
+}): ProviderUsageContext | undefined {
+  if (!args.sink) return undefined;
+  const occurrences = new Map<string, number>();
+  const base =
+    typeof args.occurrenceBase === 'number' && Number.isFinite(args.occurrenceBase) && args.occurrenceBase > 0
+      ? Math.floor(args.occurrenceBase)
+      : 0;
+  return {
+    sink: args.sink,
+    sourceId: args.sourceId ?? null,
+    nextOccurrence: (operation: string) => {
+      const next = occurrences.get(operation) ?? base;
+      occurrences.set(operation, next + 1);
+      return next;
+    },
+  };
+}
 
 /**
  * Best-effort append: usage evidence is observability, not the operation's

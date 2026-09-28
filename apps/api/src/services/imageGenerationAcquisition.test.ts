@@ -9,9 +9,11 @@
 import { describe, expect, it, vi } from 'vitest';
 import type {
   ImageInsertionContext,
+  MediaGenerateOptions,
   MediaItemDto,
   MediaProvider,
   MediaResult,
+  MediaUsageScope,
   VisualDesignIntent,
 } from '@seo/contracts';
 import {
@@ -270,12 +272,71 @@ describe('acquireGeneratedImage', () => {
   });
 });
 
-describe('acquireGeneratedImage usage instrumentation (R5.10.3)', () => {
+describe('acquireGeneratedImage usage scope forwarding (R5.10.7)', () => {
   const GEN_PROJECT = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
-  const GEN_ACCOUNT = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
-  const usageScope = { accountId: GEN_ACCOUNT, projectId: GEN_PROJECT, userId: null } as const;
 
-  it('records one media/image_generation event with the applied model', async () => {
+  function mediaScope(store: InMemoryUsageEventStore): MediaUsageScope {
+    const occurrences = new Map<string, number>();
+    return {
+      projectId: GEN_PROJECT,
+      userId: null,
+      usage: {
+        sink: store,
+        sourceId: null,
+        nextOccurrence: (operation: string) => {
+          const next = occurrences.get(operation) ?? 0;
+          occurrences.set(operation, next + 1);
+          return next;
+        },
+      },
+    };
+  }
+
+  it('forwards the media usage scope into the provider generation call', async () => {
+    const bytes = pngBuffer();
+    const store = new InMemoryUsageEventStore();
+    const usage = mediaScope(store);
+    const generate = vi.fn(async (_opts: MediaGenerateOptions): Promise<MediaResult> => ({
+      id: 'g1',
+      url: `data:image/png;base64,${bytes.toString('base64')}`,
+      source: 'openai',
+    }));
+    await acquireGeneratedImage({
+      projectId: GEN_PROJECT,
+      context,
+      visual,
+      apiKey: 'sk-test',
+      model: 'dall-e-3',
+      provider: provider(generate),
+      persist: vi.fn(async () => item()),
+      usage,
+    });
+
+    expect(generate).toHaveBeenCalledTimes(1);
+    expect(generate.mock.calls[0]?.[0]?.usage).toBe(usage);
+  });
+
+  it('omits usage from the provider call when no scope is supplied', async () => {
+    const bytes = pngBuffer();
+    const generate = vi.fn(async (_opts: MediaGenerateOptions): Promise<MediaResult> => ({
+      id: 'g1',
+      url: `data:image/png;base64,${bytes.toString('base64')}`,
+      source: 'openai',
+    }));
+    await acquireGeneratedImage({
+      projectId: GEN_PROJECT,
+      context,
+      visual,
+      apiKey: 'sk-test',
+      provider: provider(generate),
+      persist: vi.fn(async () => item()),
+    });
+
+    expect(generate).toHaveBeenCalledTimes(1);
+    expect(generate.mock.calls[0]?.[0]).not.toHaveProperty('usage');
+  });
+
+  it('does not append usage itself - the meter lives on the provider seam', async () => {
     const bytes = pngBuffer();
     const store = new InMemoryUsageEventStore();
     await acquireGeneratedImage({
@@ -283,33 +344,19 @@ describe('acquireGeneratedImage usage instrumentation (R5.10.3)', () => {
       context,
       visual,
       apiKey: 'sk-test',
-      model: 'dall-e-3',
       provider: provider(async () => ({
         id: 'g1',
         url: `data:image/png;base64,${bytes.toString('base64')}`,
         source: 'openai',
       })),
       persist: vi.fn(async () => item()),
-      usage: { sink: store, scope: usageScope },
+      usage: mediaScope(store),
     });
 
-    const events = await store.list({ projectId: GEN_PROJECT });
-    expect(events).toHaveLength(1);
-    expect(events[0]).toMatchObject({
-      category: 'media',
-      provider: 'openai_media',
-      operation: 'image_generate',
-      quantity: 1,
-      unit: 'image_generation',
-      success: true,
-      sourceId: null,
-      accountId: GEN_ACCOUNT,
-      projectId: GEN_PROJECT,
-      metadata: { model: 'dall-e-3' },
-    });
+    expect(await store.list({ projectId: GEN_PROJECT })).toHaveLength(0);
   });
 
-  it('does not record usage when generation is not configured', async () => {
+  it('does not append usage when generation is not configured', async () => {
     const store = new InMemoryUsageEventStore();
     await expectApiError(
       acquireGeneratedImage({
@@ -319,13 +366,13 @@ describe('acquireGeneratedImage usage instrumentation (R5.10.3)', () => {
         apiKey: null,
         provider: provider(async () => ({ id: 'x', url: 'https://x/y.png', source: 'openai' }), false),
         persist: vi.fn(),
-        usage: { sink: store, scope: usageScope },
+        usage: mediaScope(store),
       }),
     );
     expect(await store.list({ projectId: GEN_PROJECT })).toHaveLength(0);
   });
 
-  it('records a failed external generation without claiming an image was produced', async () => {
+  it('does not append when generation fails and persistence never runs', async () => {
     const store = new InMemoryUsageEventStore();
     const err = await expectApiError(
       acquireGeneratedImage({
@@ -337,18 +384,24 @@ describe('acquireGeneratedImage usage instrumentation (R5.10.3)', () => {
           throw new Error('moderation blocked');
         }),
         persist: vi.fn(),
-        usage: { sink: store, scope: usageScope },
+        usage: mediaScope(store),
       }),
     );
     expect(err).toMatchObject({ status: 502, code: 'image_generation_failed' });
-
-    const events = await store.list({ projectId: GEN_PROJECT });
-    expect(events).toHaveLength(1);
-    expect(events[0]).toMatchObject({ operation: 'image_generate', quantity: 1, success: false });
+    expect(await store.list({ projectId: GEN_PROJECT })).toHaveLength(0);
   });
 
-  it('does not break a successful generation when the usage append fails', async () => {
+  it('does not break a successful generation when the usage store would fail', async () => {
     const bytes = pngBuffer();
+    const failing: MediaUsageScope = {
+      projectId: GEN_PROJECT,
+      userId: null,
+      usage: {
+        sink: { append: async () => { throw new Error('ledger down'); } },
+        sourceId: null,
+        nextOccurrence: () => 0,
+      },
+    };
     const candidate = await acquireGeneratedImage({
       projectId: GEN_PROJECT,
       context,
@@ -360,17 +413,13 @@ describe('acquireGeneratedImage usage instrumentation (R5.10.3)', () => {
         source: 'openai',
       })),
       persist: vi.fn(async () => item()),
-      usage: {
-        sink: { append: async () => { throw new Error('ledger down'); } },
-        scope: usageScope,
-      },
+      usage: failing,
     });
     expect(candidate).toMatchObject({ assetId: 'm-gen', source: 'openai_generated' });
   });
 
-  it('keeps the successful generation event when persistence later fails', async () => {
+  it('keeps generation success independent of later persistence failure', async () => {
     const bytes = pngBuffer();
-    const store = new InMemoryUsageEventStore();
     const err = await expectApiError(
       acquireGeneratedImage({
         projectId: GEN_PROJECT,
@@ -385,13 +434,9 @@ describe('acquireGeneratedImage usage instrumentation (R5.10.3)', () => {
         persist: async () => {
           throw new Error('db down');
         },
-        usage: { sink: store, scope: usageScope },
+        usage: mediaScope(new InMemoryUsageEventStore()),
       }),
     );
     expect(err).toMatchObject({ status: 502, code: 'asset_persistence_failed' });
-
-    const events = await store.list({ projectId: GEN_PROJECT });
-    expect(events).toHaveLength(1);
-    expect(events[0]).toMatchObject({ operation: 'image_generate', success: true });
   });
 });

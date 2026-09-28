@@ -49,6 +49,7 @@ import {
   type ImageInsertionHeroTarget,
   type ImageInsertionSectionTarget,
   type InsertImageOperation,
+  type MediaUsageScope,
   type VisualAssetCandidate,
   type VisualDesignIntent,
 } from '@seo/contracts';
@@ -60,6 +61,7 @@ import { ContentService } from './contentService.js';
 import { MediaService } from './mediaService.js';
 import { acquireExternalImage } from './externalImageAcquisition.js';
 import { acquireGeneratedImage, imageGenerationModel } from './imageGenerationAcquisition.js';
+import { usageScopeContext } from './usageInstrumentation.js';
 
 /**
  * Reads the typed image-insertion context out of the opaque intent `selection`
@@ -287,6 +289,11 @@ export class ImageInsertionService {
   async acquireImage(input: ImageAcquisitionInput): Promise<ImageAcquisitionResult> {
     const { projectId, context, visual, subject, baseRevision, baseDocument, scope } = input;
     const mediaService = new MediaService(this.container.sb, new SupabaseStorageStore(this.container.sb));
+    // R5.10.7: external search and confirmed generation are distinct physical
+    // requests, each counted once by the media provider. No durable execution id
+    // exists on this agent-run path, so the fact is not deduplicated.
+    const usage = usageScopeContext({ sink: this.container.usageEvents });
+    const mediaUsage: MediaUsageScope | undefined = usage ? { projectId, userId: null, usage } : undefined;
     const media = await mediaService.list(projectId);
     const selection = selectImageInsertionCandidate(context, media.map(toVisualCandidate), {
       visual,
@@ -325,6 +332,7 @@ export class ImageInsertionService {
           visual,
           projectId,
           persist: (input2) => mediaService.importExternal(projectId, null, input2),
+          ...(mediaUsage ? { usage: mediaUsage } : {}),
         });
         rationale = 'Selected a stock photo for the surrounding text.';
       } catch (err) {
@@ -372,10 +380,7 @@ export class ImageInsertionService {
         baseUrl: this.container.config.env.OPENAI_BASE_URL,
         model: this.container.config.env.OPENAI_IMAGE_MODEL,
         persist: (input2) => mediaService.importExternal(projectId, null, input2),
-        usage: {
-          sink: this.container.usageEvents,
-          scope: { accountId: credentials.accountId, projectId, userId: null },
-        },
+        ...(mediaUsage ? { usage: mediaUsage } : {}),
       });
       rationale = 'Generated an image for the surrounding text.';
     }

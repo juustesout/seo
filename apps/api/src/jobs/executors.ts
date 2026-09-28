@@ -11,11 +11,12 @@ import { buildProviderContext } from '../context.js';
 import type { JobRecord } from './types.js';
 import { ApiError } from '../apiErrors.js';
 import { logger } from '../logger.js';
-import type { KnowledgeDocumentInput, ProviderContext } from '@seo/contracts';
+import type { KnowledgeDocumentInput, MediaUsageScope, ProviderContext } from '@seo/contracts';
 import { GscDataSource } from '../providers/gsc/gscDataSource.js';
 import { DataForSeoDataSource } from '../providers/dataforseo/dataSource.js';
 import { urlBelongsToDomain } from '../providers/dataforseo/normalize.js';
 import { publishUsageOccurrenceBase } from '../providers/publishing/providerUsage.js';
+import { retryOccurrenceBase, usageScopeContext } from '../services/usageInstrumentation.js';
 import { delay } from '../util.js';
 import type { ServiceContainer } from '../context.js';
 import { ContentService } from '../services/contentService.js';
@@ -605,6 +606,11 @@ const knowledgeIndex: JobExecutor = async ({ container, job, report }) => {
     config: {},
     credentials: noopCredentialReader(),
     logger: logger.child({ projectId: job.project_id, provider: 'qdrant' }) as unknown as ProviderContext['logger'],
+    usage: usageScopeContext({
+      sink: container.usageEvents,
+      sourceId: job.id,
+      occurrenceBase: retryOccurrenceBase(job.retry_count),
+    }),
   };
   const docs = await collectKnowledgeDocuments(container.sb, job.project_id);
   if (docs.length === 0) return { message: 'Nothing to index yet - add pages, content or keywords first', documents: 0 };
@@ -624,6 +630,11 @@ const knowledgeReindex: JobExecutor = async ({ container, job, report }) => {
     config: {},
     credentials: noopCredentialReader(),
     logger: logger.child({ projectId: job.project_id, provider: 'qdrant' }) as unknown as ProviderContext['logger'],
+    usage: usageScopeContext({
+      sink: container.usageEvents,
+      sourceId: job.id,
+      occurrenceBase: retryOccurrenceBase(job.retry_count),
+    }),
   };
   const docs = await collectKnowledgeDocuments(container.sb, job.project_id);
   await provider.ensureProject(ctx);
@@ -658,7 +669,12 @@ const knowledgeSourceIngest: JobExecutor = async ({ container, job, report }) =>
   const sourceId = typeof job.params?.source_id === 'string' ? job.params.source_id : '';
   if (!sourceId) throw new ApiError(400, 'bad_request', 'knowledge_source_ingest requires a source_id');
   const service = new KnowledgeService(container);
-  return service.ingestSource(job.project_id, sourceId, report);
+  const usage = usageScopeContext({
+    sink: container.usageEvents,
+    sourceId: job.id,
+    occurrenceBase: retryOccurrenceBase(job.retry_count),
+  });
+  return service.ingestSource(job.project_id, sourceId, report, usage);
 };
 
 /**
@@ -671,7 +687,12 @@ const knowledgeSourceRefresh: JobExecutor = async ({ container, job, report }) =
   const sourceId = typeof job.params?.source_id === 'string' ? job.params.source_id : '';
   if (!sourceId) throw new ApiError(400, 'bad_request', 'knowledge_source_refresh requires a source_id');
   const service = new KnowledgeService(container);
-  return service.refreshSource(job.project_id, sourceId, report);
+  const usage = usageScopeContext({
+    sink: container.usageEvents,
+    sourceId: job.id,
+    occurrenceBase: retryOccurrenceBase(job.retry_count),
+  });
+  return service.refreshSource(job.project_id, sourceId, report, usage);
 };
 
 /** Remove one user-managed knowledge source: vectors first, then the row. */
@@ -900,6 +921,18 @@ async function contentImages(ctx: JobExecContext): Promise<Record<string, unknow
     throw ApiError.notConfigured(`Media provider "${providerId}" is not configured on this server`);
   }
 
+  // R5.10.7: each placeholder can issue a real search and/or generation request;
+  // every external request is counted once by the media provider itself, with a
+  // retry-aware occurrence base so a retried job is not deduplicated.
+  const mediaUsageScope = usageScopeContext({
+    sink: container.usageEvents,
+    sourceId: job.id,
+    occurrenceBase: retryOccurrenceBase(job.retry_count),
+  });
+  const mediaUsage: MediaUsageScope | undefined = mediaUsageScope
+    ? { projectId: job.project_id, userId: job.created_by, usage: mediaUsageScope }
+    : undefined;
+
   let resolved = 0;
   for (const target of placeholders) {
     if (resolved >= cap) break;
@@ -907,13 +940,19 @@ async function contentImages(ctx: JobExecContext): Promise<Record<string, unknow
     const alt = String(target.block.attrs.alt || title || 'illustration').slice(0, 500);
     let src: string | null = null;
     if (media.capabilities.includes('search') && media.search) {
-      const hits = await media.search({ query: alt, limit: 1, orientation: 'landscape' });
+      const hits = await media.search({
+        query: alt,
+        limit: 1,
+        orientation: 'landscape',
+        ...(mediaUsage ? { usage: mediaUsage } : {}),
+      });
       src = hits[0]?.url ?? null;
     }
     if (!src && media.capabilities.includes('generate') && media.generate) {
       const gen = await media.generate({
         prompt: `High-quality editorial image for an article section: ${alt}`,
         size: '1792x1024',
+        ...(mediaUsage ? { usage: mediaUsage } : {}),
       });
       src = gen.url;
     }
