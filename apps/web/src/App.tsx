@@ -56,6 +56,7 @@ import { ProjectsPage } from './views/ProjectsPage';
 import { ProjectSettings } from './views/ProjectSettings';
 import { Usage } from './views/Usage';
 import { AdminArea } from './views/admin/AdminArea';
+import { LegalFooter, LegalPage } from './views/Legal';
 
 interface ProjectRow {
   id: string;
@@ -212,6 +213,13 @@ export function App() {
   };
 
   const meEmail = me?.email ?? session?.email ?? null;
+
+  // Legal documents are public: they must stay reachable for anonymous visitors
+  // (GDPR), independent of Supabase config or session state, so this is handled
+  // before every boot/auth gate.
+  if (route.area === 'legal') {
+    return <LegalPage view={route.view} />;
+  }
 
   if (bootError && authed === false) {
     return (
@@ -429,6 +437,7 @@ export function App() {
         {route.area === 'keys' && <AccountApiKeys />}
         {route.area === 'usage' && <Usage />}
       </main>
+      <LegalFooter />
     </div>
   );
 }
@@ -670,6 +679,7 @@ function CreateProject({ email, onCreated }: { email: string | null; onCreated: 
           </CardContent>
         </Card>
       </CenteredCard>
+      <LegalFooter />
     </div>
   );
 }
@@ -759,15 +769,17 @@ function AuthScreen() {
   };
 
   return (
-    <CenteredCard>
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">SEO Operating Platform</CardTitle>
-          <CardDescription>
-            Modular SEO platform: Search Console data, SERP tracking, keyword research and publishing in one workspace.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="grid gap-4">
+    <div className="flex min-h-screen flex-col">
+      <div className="flex flex-1 items-start justify-center">
+        <CenteredCard>
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">SEO Operating Platform</CardTitle>
+              <CardDescription>
+                Modular SEO platform: Search Console data, SERP tracking, keyword research and publishing in one workspace.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="grid gap-4">
           {!supabaseConfigured && (
             <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
               Missing VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY.
@@ -843,7 +855,10 @@ function AuthScreen() {
             </div>
           )}
         </CardContent>
-      </Card>
-    </CenteredCard>
+          </Card>
+        </CenteredCard>
+      </div>
+      <LegalFooter />
+    </div>
   );
 }

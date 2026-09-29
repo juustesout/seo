@@ -9,16 +9,31 @@
  */
 export type TopArea = 'overview' | 'projects' | 'compose' | 'integrations' | 'keys' | 'usage';
 
+/** Public legal documents reachable without a session (`/privacy`, `/terms`, `/cookies`). */
+export type LegalPage = 'privacy' | 'terms' | 'cookies';
+
+export const LEGAL_PAGES: LegalPage[] = ['privacy', 'terms', 'cookies'];
+
+export function isLegalPage(value: string): value is LegalPage {
+  return (LEGAL_PAGES as string[]).includes(value);
+}
+
 export type Route =
   | { area: TopArea }
   | { area: 'project'; projectId: string; view: string; sub: string | null; sub2: string | null; search: string }
   // Platform administration is separate from project administration and carries
   // its own section (`/admin`, `/admin/users`, ...).
-  | { area: 'admin'; view: string };
+  | { area: 'admin'; view: string }
+  // Legal documents are public: they must render for anonymous visitors (GDPR),
+  // so they are a route area the auth gate never blocks.
+  | { area: 'legal'; view: LegalPage };
 
 /** Derive the current Route from the URL. */
 export function parseRoute(): Route {
   const seg = window.location.pathname.split('/').filter(Boolean);
+  if (seg[0] && isLegalPage(seg[0])) {
+    return { area: 'legal', view: seg[0] };
+  }
   if (seg[0] === 'p' && seg[1]) {
     return {
       area: 'project',
@@ -40,6 +55,7 @@ export function parseRoute(): Route {
 export function routePath(r: Route): string {
   if (r.area === 'project') return `/p/${r.projectId}/${r.view}${r.sub ? `/${r.sub}` : ''}${r.sub2 ? `/${r.sub2}` : ''}`;
   if (r.area === 'admin') return r.view === 'overview' ? '/admin' : `/admin/${r.view}`;
+  if (r.area === 'legal') return `/${r.view}`;
   return `/${r.area === 'overview' ? 'overview' : r.area}`;
 }
 
@@ -58,6 +74,7 @@ export function routeUrl(r: Route): string {
 export function routesEqual(a: Route, b: Route): boolean {
   if (a.area !== b.area) return false;
   if (a.area === 'admin' && b.area === 'admin') return a.view === b.view;
+  if (a.area === 'legal' && b.area === 'legal') return a.view === b.view;
   if (a.area !== 'project' || b.area !== 'project') return true;
   return (
     a.projectId === b.projectId &&

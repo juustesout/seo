@@ -146,4 +146,20 @@ describe('project route contract', () => {
     expect(routesEqual(users, { area: 'overview' })).toBe(false);
     expect(routeUrl({ area: 'admin', view: 'users' })).toBe('/admin/users');
   });
+
+  it('parses and renders the public legal pages', () => {
+    at('/privacy');
+    expect(parseRoute()).toEqual({ area: 'legal', view: 'privacy' });
+    at('/terms');
+    expect(parseRoute()).toEqual({ area: 'legal', view: 'terms' });
+    at('/cookies');
+    expect(parseRoute()).toEqual({ area: 'legal', view: 'cookies' });
+    expect(routePath({ area: 'legal', view: 'privacy' })).toBe('/privacy');
+    expect(routePath({ area: 'legal', view: 'cookies' })).toBe('/cookies');
+    expect(routesEqual({ area: 'legal', view: 'terms' }, { area: 'legal', view: 'terms' })).toBe(true);
+    expect(routesEqual({ area: 'legal', view: 'terms' }, { area: 'legal', view: 'privacy' })).toBe(false);
+    // A legal page is never confused with an account area or a project view.
+    expect(routesEqual({ area: 'legal', view: 'privacy' }, { area: 'overview' })).toBe(false);
+    expect(canonicalWorkspaceRoute({ area: 'legal', view: 'privacy' }) as unknown).toBeNull();
+  });
 });
