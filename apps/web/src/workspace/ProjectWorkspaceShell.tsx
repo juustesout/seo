@@ -163,7 +163,10 @@ function WorkspaceBody({
   // R5.4.3.2: a composed page staged for the open document. It survives the
   // composer -> editor mode switch (this shell stays mounted) and is consumed by
   // the editor through the single external-document mutation path once ready.
-  const [pendingComposition, setPendingComposition] = useState<PendingComposition | null>(null);
+  // Scoped to the document boundary (R5.11.3 H5): a staged handoff is discarded
+  // at the owner when the document changes, rather than lingering until the
+  // bridge rejects it with `stale-document`.
+  const [pendingComposition, setPendingComposition] = useDocumentScopedState<PendingComposition | null>(null);
 
   // The canonical projection of the open document, shared by the apply/append
   // eligibility checks. Null when the live editor document is not representable.

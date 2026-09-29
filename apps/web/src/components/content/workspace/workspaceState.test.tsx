@@ -204,4 +204,24 @@ describe('workspace UI state scoped to the document session (R5.2.7)', () => {
     expect(api.scoped()).toBe(false);
     expect(api.identity()).toEqual({ documentId: 'b', creating: false });
   });
+
+  it('cannot let a replayed setter from a previous document discard the current value', async () => {
+    const api = makeApi();
+    render(<Harness flush={clean} api={api} />);
+
+    await act(async () => {
+      await api.open('a');
+    });
+    const setUnderA = api.setScoped;
+
+    await act(async () => {
+      await api.open('b');
+    });
+    act(() => api.setScoped(true));
+    expect(api.scoped()).toBe(true);
+
+    // Replaying A's setter must not overwrite the entry and reset B to `initial`.
+    act(() => setUnderA(false));
+    expect(api.scoped()).toBe(true);
+  });
 });

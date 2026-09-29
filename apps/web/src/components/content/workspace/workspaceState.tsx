@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, type Dispatch, type ReactNode, type SetStateAction } from 'react';
+import { createContext, useContext, useRef, useState, type Dispatch, type ReactNode, type SetStateAction } from 'react';
 
 const STANDALONE_SCOPE = 'standalone';
 const WorkspaceStateContext = createContext<string | null>(null);
@@ -26,17 +26,26 @@ export function useWorkspaceScope(): string {
  * moves on (a successful document switch, new document or close) the stored
  * entry no longer matches and reads return `initial`; a setter captured under
  * the previous scope can only write under that stale scope, so it can never be
- * read back. No effect and no remount are involved, and a plain rerender or a
- * failed switch leaves the boundary key unchanged and therefore the value
- * intact.
+ * read back. A replayed setter from a previous scope is additionally refused, so
+ * it cannot overwrite (and discard) the current scope's stored value. No effect
+ * and no remount are involved, and a plain rerender or a failed switch leaves the
+ * boundary key unchanged and therefore the value intact.
  */
 export function useDocumentScopedState<T>(initial: T): [T, Dispatch<SetStateAction<T>>] {
   const scope = useWorkspaceScope();
   const [entry, setEntry] = useState<{ scope: string; value: T }>(() => ({ scope, value: initial }));
 
+  // The live scope, so a setter captured under an earlier scope can detect that
+  // the boundary has moved and refuse to write. Without this, replaying an old
+  // setter would overwrite the entry with the stale scope, discarding whatever
+  // the current scope had stored.
+  const scopeRef = useRef(scope);
+  scopeRef.current = scope;
+
   const value = entry.scope === scope ? entry.value : initial;
 
   const setValue: Dispatch<SetStateAction<T>> = (next) => {
+    if (scopeRef.current !== scope) return;
     setEntry((current) => {
       const base = current.scope === scope ? current.value : initial;
       const value = typeof next === 'function' ? (next as (prev: T) => T)(base) : next;
