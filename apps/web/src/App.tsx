@@ -27,6 +27,7 @@ import {
   Search,
   Send,
   Settings,
+  ShieldCheck,
 } from 'lucide-react';
 import { supabase, configured as supabaseConfigured, currentUser, sessionToken } from './lib/supabase';
 import { api } from './lib/api';
@@ -52,6 +53,7 @@ import { AccountApiKeys } from './views/AccountApiKeys';
 import { ProjectsPage } from './views/ProjectsPage';
 import { ProjectSettings } from './views/ProjectSettings';
 import { Usage } from './views/Usage';
+import { AdminArea } from './views/admin/AdminArea';
 
 interface ProjectRow {
   id: string;
@@ -68,6 +70,7 @@ interface Me {
   user_id: string;
   email: string | null;
   projects: ProjectRow[];
+  is_platform_admin: boolean;
 }
 
 type NavIcon = React.ComponentType<{ className?: string }>;
@@ -192,6 +195,10 @@ export function App() {
     void nav.navigate({ area: 'project', projectId, view, sub: sub ?? null, sub2: sub2 ?? null, search: '' });
   };
 
+  const goAdmin = (view = 'overview') => {
+    void nav.navigate({ area: 'admin', view });
+  };
+
   const refreshMe = async () => {
     try {
       const m = await api<Me>('/me');
@@ -262,7 +269,30 @@ export function App() {
     );
   }
 
-  const activeTop: TopArea | null = route.area === 'project' ? 'projects' : route.area;
+  const activeTop: TopArea | null = route.area === 'project' ? 'projects' : route.area === 'admin' ? null : route.area;
+  // Server-derived platform-admin flag. The client only uses it to decide what to
+  // show; every /api/admin/* call is authorized independently on the server.
+  const isAdmin = me.is_platform_admin === true;
+
+  if (route.area === 'admin') {
+    return (
+      <div className="flex min-h-screen flex-col">
+        <AppHeader
+          meEmail={meEmail}
+          onSignOut={() => void signOut()}
+          active={activeTop}
+          onArea={goArea}
+          projects={me.projects}
+          currentProjectId={null}
+          onOpenProject={goProject}
+          isAdmin={isAdmin}
+          adminActive
+          onAdmin={() => goAdmin()}
+        />
+        <AdminArea view={route.view} isAdmin={isAdmin} onNavigate={goAdmin} />
+      </div>
+    );
+  }
 
   if (route.area === 'project') {
     const project = me.projects.find((p) => p.id === route.projectId) ?? null;
@@ -277,6 +307,9 @@ export function App() {
             projects={me.projects}
             currentProjectId={null}
             onOpenProject={goProject}
+            isAdmin={isAdmin}
+            adminActive={false}
+            onAdmin={() => goAdmin()}
           />
           <main className="mx-auto w-full max-w-3xl flex-1 px-6 py-10">
             <Card>
@@ -315,6 +348,9 @@ export function App() {
             projects={me.projects}
             currentProjectId={pid}
             onOpenProject={goProject}
+            isAdmin={isAdmin}
+            adminActive={false}
+            onAdmin={() => goAdmin()}
           />
           <div className="flex flex-1">
             <ProjectSidebar projectId={pid} view={workspaceActive ? 'workspace' : view} onNavigate={goProject} />
@@ -377,6 +413,9 @@ export function App() {
         projects={me.projects}
         currentProjectId={null}
         onOpenProject={goProject}
+        isAdmin={isAdmin}
+        adminActive={false}
+        onAdmin={() => goAdmin()}
       />
       <main className="mx-auto w-full max-w-5xl flex-1 px-6 py-6">
         {route.area === 'overview' && <Overview onOpenProject={goProject} onGoProjects={() => goArea('projects')} />}
@@ -406,7 +445,7 @@ function CenteredCard({ children, className }: { children: React.ReactNode; clas
  * account areas, shows the current user, and offers a project switcher that
  * routes straight into any project the user belongs to (via onOpenProject).
  */
-function AppHeader({
+export function AppHeader({
   meEmail,
   onSignOut,
   active,
@@ -414,6 +453,9 @@ function AppHeader({
   projects,
   currentProjectId,
   onOpenProject,
+  isAdmin,
+  adminActive,
+  onAdmin,
 }: {
   meEmail: string | null;
   onSignOut: () => void;
@@ -422,6 +464,9 @@ function AppHeader({
   projects: ProjectRow[];
   currentProjectId: string | null;
   onOpenProject: (id: string, view: string) => void;
+  isAdmin: boolean;
+  adminActive: boolean;
+  onAdmin: () => void;
 }) {
   return (
     <header className="sticky top-0 z-30 flex h-14 items-center gap-2 border-b bg-background/85 px-4 backdrop-blur">
@@ -454,6 +499,19 @@ function AppHeader({
           );
         })}
       </nav>
+      {isAdmin && (
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          onClick={onAdmin}
+          aria-label="Platform administration"
+          className={cn('gap-1.5 text-muted-foreground', adminActive && 'bg-secondary text-foreground')}
+        >
+          <ShieldCheck className="size-4" />
+          <span className="hidden md:inline">Admin</span>
+        </Button>
+      )}
       {projects.length > 0 && (
         <select
           className="ml-1 h-8 max-w-[180px] rounded-md border border-input bg-background px-2 text-sm shadow-xs outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"

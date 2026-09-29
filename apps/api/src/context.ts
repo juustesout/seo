@@ -24,6 +24,7 @@ import { SupabaseJobStore } from './jobs/supabaseJobStore.js';
 import { PostgresJobStore } from './jobs/postgresJobStore.js';
 import type { JobStore } from './jobs/types.js';
 import { SupabaseUsageEventStore, type UsageEventStore } from './services/usageEventRepository.js';
+import { SupabasePlatformAdminService, type PlatformAdminReadService } from './services/platformAdminService.js';
 import type { Pool } from 'pg';
 import pg from 'pg';
 import type {
@@ -64,6 +65,12 @@ export interface ServiceContainer {
    * the application domain.
    */
   usageEvents: UsageEventStore;
+  /**
+   * Platform-administrator operational reads (P3). Separate trust boundary from
+   * project membership; every method re-verifies the actor against the
+   * platform-admin registry in the database.
+   */
+  platformAdmin: PlatformAdminReadService;
   /** Direct Postgres pool, present when SUPABASE_DB_URL is configured. */
   pgPool: Pool | null;
 }
@@ -160,6 +167,7 @@ export function getContainer(): ServiceContainer {
     knowledgeFileExtractors: createKnowledgeFileExtractors(),
     jobStore,
     usageEvents: new SupabaseUsageEventStore(sb),
+    platformAdmin: new SupabasePlatformAdminService(sb),
     pgPool,
   };
   cached = container;

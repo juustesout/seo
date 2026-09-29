@@ -1447,6 +1447,12 @@ export interface MeDto {
   user_id: string;
   email: string | null;
   projects: ProjectSummary[];
+  /**
+   * True when this user id is a registered platform administrator (P3). This is
+   * a display hint only: every /api/admin route re-checks the registry
+   * server-side, so the client is never the authorization boundary.
+   */
+  is_platform_admin: boolean;
 }
 
 // ---------------------------------------------------------------------------

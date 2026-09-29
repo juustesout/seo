@@ -11,7 +11,10 @@ export type TopArea = 'overview' | 'projects' | 'compose' | 'integrations' | 'ke
 
 export type Route =
   | { area: TopArea }
-  | { area: 'project'; projectId: string; view: string; sub: string | null; sub2: string | null; search: string };
+  | { area: 'project'; projectId: string; view: string; sub: string | null; sub2: string | null; search: string }
+  // Platform administration is separate from project administration and carries
+  // its own section (`/admin`, `/admin/users`, ...).
+  | { area: 'admin'; view: string };
 
 /** Derive the current Route from the URL. */
 export function parseRoute(): Route {
@@ -26,6 +29,9 @@ export function parseRoute(): Route {
       search: window.location.search,
     };
   }
+  if (seg[0] === 'admin') {
+    return { area: 'admin', view: seg[1] || 'overview' };
+  }
   const area = seg[0] === 'projects' || seg[0] === 'compose' || seg[0] === 'integrations' || seg[0] === 'keys' || seg[0] === 'usage' ? seg[0] : 'overview';
   return { area };
 }
@@ -33,6 +39,7 @@ export function parseRoute(): Route {
 /** Render a Route back to its canonical URL path. */
 export function routePath(r: Route): string {
   if (r.area === 'project') return `/p/${r.projectId}/${r.view}${r.sub ? `/${r.sub}` : ''}${r.sub2 ? `/${r.sub2}` : ''}`;
+  if (r.area === 'admin') return r.view === 'overview' ? '/admin' : `/admin/${r.view}`;
   return `/${r.area === 'overview' ? 'overview' : r.area}`;
 }
 
@@ -50,6 +57,7 @@ export function routeUrl(r: Route): string {
 /** True when two routes describe the same URL (path and query). */
 export function routesEqual(a: Route, b: Route): boolean {
   if (a.area !== b.area) return false;
+  if (a.area === 'admin' && b.area === 'admin') return a.view === b.view;
   if (a.area !== 'project' || b.area !== 'project') return true;
   return (
     a.projectId === b.projectId &&

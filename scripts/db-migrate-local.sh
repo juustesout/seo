@@ -39,7 +39,8 @@ PSQL -d "${DB_NAME}" <<'SQL'
 create schema if not exists auth;
 create table if not exists auth.users (
   id uuid primary key,
-  email text
+  email text,
+  created_at timestamptz not null default now()
 );
 create or replace function auth.uid() returns uuid
 language sql stable
@@ -1727,5 +1728,79 @@ if [ -z "${USAGE_ACCOUNT_LEAK_COUNT}" ] || [ "${USAGE_ACCOUNT_LEAK_COUNT}" != "0
   exit 1
 fi
 echo "   smoke: non-owner cannot read foreign account usage events (RLS isolation OK)"
+
+echo "==> smoke test: platform administration (phase 3) + authorization boundaries"
+PSQL -d "${DB_NAME}" <<'SQL'
+do $$
+declare
+  v_owner   uuid := '00000000-0000-0000-0000-000000000001';
+  v_admin   uuid := '00000000-0000-0000-0000-000000000002';
+  v_overview jsonb;
+  v_users   int;
+  v_rows    int;
+begin
+  -- Register one user as a platform administrator out of band. This is the only
+  -- supported provisioning path - there is no self-service insert.
+  insert into public.seo_platform_admins (user_id, created_by)
+  values (v_admin, v_owner)
+  on conflict (user_id) do nothing;
+
+  if not public.seo_is_platform_admin(v_admin) then
+    raise exception 'smoke: registered admin not recognized';
+  end if;
+  if public.seo_is_platform_admin(v_owner) then
+    raise exception 'smoke: unregistered user recognized as platform admin';
+  end if;
+
+  -- The demo project owner is a legitimate project owner but not a platform
+  -- admin; project roles never imply platform-admin access.
+  begin
+    perform public.seo_platform_admin_overview(v_owner);
+    raise exception 'smoke: project owner was allowed a platform-admin read';
+  exception when insufficient_privilege then null;
+  end;
+
+  -- A registered admin can read every operational view.
+  v_overview := public.seo_platform_admin_overview(v_admin);
+  if (v_overview->>'projects')::int < 1 then
+    raise exception 'smoke: platform overview missing projects (%)', v_overview;
+  end if;
+
+  select count(*) into v_users from public.seo_platform_admin_users(v_admin);
+  if v_users < 1 then raise exception 'smoke: platform-admin users read was empty'; end if;
+
+  select count(*) into v_rows from public.seo_platform_admin_usage_totals(v_admin, null, null);
+  if v_rows < 0 then raise exception 'smoke: platform-admin usage read failed'; end if;
+
+  perform 1 from public.seo_platform_admin_jobs(v_admin, 5);
+  perform 1 from public.seo_platform_admin_accounts(v_admin);
+  perform 1 from public.seo_platform_admin_projects(v_admin);
+
+  raise notice 'smoke: platform administration + authorization boundaries OK';
+end $$;
+SQL
+
+# The registry and read RPCs are server-only: browser roles hold no access.
+PSQL -d "${DB_NAME}" -t -A <<'SQL' >/dev/null
+do $$
+begin
+  if has_table_privilege('authenticated', 'public.seo_platform_admins', 'select') then
+    raise exception 'smoke: authenticated can read the platform-admin registry';
+  end if;
+  if has_table_privilege('anon', 'public.seo_platform_admins', 'insert') then
+    raise exception 'smoke: anon can write the platform-admin registry';
+  end if;
+  if not has_table_privilege('service_role', 'public.seo_platform_admins', 'select') then
+    raise exception 'smoke: service_role cannot read the platform-admin registry';
+  end if;
+  if has_function_privilege('authenticated', 'public.seo_platform_admin_overview(uuid)', 'execute') then
+    raise exception 'smoke: authenticated can execute a platform-admin RPC';
+  end if;
+  if not has_function_privilege('service_role', 'public.seo_platform_admin_overview(uuid)', 'execute') then
+    raise exception 'smoke: service_role cannot execute a platform-admin RPC';
+  end if;
+end $$;
+SQL
+echo "   smoke: platform-admin registry + RPCs are server-only"
 
 echo "==> migration validation OK (${DB_NAME})"

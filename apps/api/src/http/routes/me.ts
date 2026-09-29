@@ -95,7 +95,12 @@ meRouter.get(
       }
     }
 
-    const dto: MeDto = { user_id: userId, email: user!.email ?? null, projects };
+    const dto: MeDto = {
+      user_id: userId,
+      email: user!.email ?? null,
+      projects,
+      is_platform_admin: await container.access.isPlatformAdmin(userId),
+    };
     res.json({ data: dto });
   }),
 );

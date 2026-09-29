@@ -153,6 +153,39 @@ export class AccessService {
   }
 
   /**
+   * Platform-administrator lookup (P3). Reads the seo_platform_admins registry
+   * by the authenticated Supabase user id - never by email. This is the ONE
+   * platform-admin authorization primitive; every /api/admin route and the MCP
+   * surface must go through it. A project `admin`/`owner` is not a platform
+   * admin unless their user id is registered here.
+   *
+   * Storage errors surface as 500, never as "forbidden" (a DB outage must not
+   * masquerade as an authorization decision).
+   */
+  async isPlatformAdmin(userId: string): Promise<boolean> {
+    const { data, error } = await this.sb
+      .from('seo_platform_admins')
+      .select('user_id')
+      .eq('user_id', userId)
+      .maybeSingle();
+    if (error) {
+      logger.error({ error }, 'platform-admin lookup failed');
+      throw new ApiError(500, 'storage_error', 'Could not verify platform administrator access');
+    }
+    return Boolean(data);
+  }
+
+  /**
+   * Authorize a platform-admin operation. Rejects anyone whose user id is not in
+   * the platform-admin registry, independently of any project role.
+   */
+  async requirePlatformAdmin(userId: string): Promise<void> {
+    if (!(await this.isPlatformAdmin(userId))) {
+      throw ApiError.forbidden('Platform administrator access required');
+    }
+  }
+
+  /**
    * True when the project row exists. Lets a route distinguish "the project is
    * unknown" from "the user is not a member" so it can answer 404 vs 403.
    */

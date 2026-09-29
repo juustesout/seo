@@ -31,6 +31,7 @@ import { meRouter } from './http/routes/me.js';
 import { accountRouter } from './http/routes/account.js';
 import { accountApiKeysRouter } from './http/routes/accountApiKeys.js';
 import { accountAiRouter } from './http/routes/accountAi.js';
+import { adminRouter } from './http/routes/admin.js';
 import { catalogRouter } from './http/routes/catalog.js';
 import { oauthRouter } from './http/routes/oauth.js';
 import { integrationsRouter } from './http/routes/integrations.js';
@@ -122,6 +123,9 @@ export function createApp(): Express {
   app.use('/api/account', accountRouter);
   app.use('/api/account/ai', accountAiRouter);
   app.use('/api/account/api-keys', accountApiKeysRouter);
+  // Platform administration is a separate trust boundary (owner/operator), not
+  // project administration; it authorizes against the platform-admin registry.
+  app.use('/api/admin', adminRouter);
   app.use('/api/providers', catalogRouter);
 
   app.use('/api/projects/:projectId/integrations', integrationsRouter);

@@ -132,4 +132,18 @@ describe('project route contract', () => {
     ).toBe(false);
     expect(isSameWorkspaceSession({ area: 'usage' }, composer)).toBe(false);
   });
+
+  it('parses and renders the admin section without colliding with account areas', () => {
+    at('/admin');
+    expect(parseRoute()).toEqual({ area: 'admin', view: 'overview' });
+    at('/admin/users');
+    expect(parseRoute()).toEqual({ area: 'admin', view: 'users' });
+    expect(routePath({ area: 'admin', view: 'overview' })).toBe('/admin');
+    expect(routePath({ area: 'admin', view: 'usage' })).toBe('/admin/usage');
+    const users: Route = { area: 'admin', view: 'users' };
+    expect(routesEqual(users, { area: 'admin', view: 'users' })).toBe(true);
+    expect(routesEqual(users, { area: 'admin', view: 'projects' })).toBe(false);
+    expect(routesEqual(users, { area: 'overview' })).toBe(false);
+    expect(routeUrl({ area: 'admin', view: 'users' })).toBe('/admin/users');
+  });
 });

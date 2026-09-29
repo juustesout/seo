@@ -65,18 +65,18 @@ infrastructure to reuse).
 
 | Capability | Classification | Evidence |
 | --- | --- | --- |
-| `/admin` routes | **MISSING** | No admin router registered in the API |
-| Admin-only API routes | **MISSING** | No admin middleware or admin route group |
-| service-role/admin helpers | EXISTS (not platform-scoped) | Service-role Supabase client is the API's normal client; it is not a platform-admin identity |
-| Platform-admin tables/claims/roles | **MISSING** | No platform-admin table, no `app_metadata` flag, no platform-admin claim |
-| Internal/admin UI | **MISSING** | No admin view or route |
-| Audit/admin infrastructure | PARTIAL | `seo_activity`-style activity rows exist for account activity, but there is no platform-wide audit/admin surface |
+| `/admin` routes | EXISTS (Phase C) | `adminRouter` (`apps/api/src/http/routes/admin.ts`), mounted at `/api/admin` in `apps/api/src/app.ts` |
+| Admin-only API routes | EXISTS (Phase C) | Router-level `container.access.requirePlatformAdmin(user.sub)` guard on every route |
+| service-role/admin helpers | EXISTS | Service-role Supabase client is the API's normal client; `AccessService.isPlatformAdmin`/`requirePlatformAdmin` is the platform-admin identity |
+| Platform-admin tables/claims/roles | EXISTS (Phase C) | `seo_platform_admins` registry (`supabase/migrations/20260101000032_platform_admins.sql`), keyed by user id, populated out of band |
+| Internal/admin UI | EXISTS (Phase C) | `apps/web/src/views/admin/*`, top-level `/admin` area, nav gated on `me.is_platform_admin` |
+| Audit/admin infrastructure | PARTIAL | `seo_activity`-style activity rows exist for account activity, but there is still no platform-wide mutation audit surface (this phase is read-only) |
 
-Conclusion: there is **no adequate existing platform-admin surface and no
-trusted platform-admin mechanism**. Implementing one requires a security model
-or product decision (how the operator identity is provisioned and verified),
-which the brief says to stop and document rather than guess. See
-**Phase C decision** below. Phase C is **not implemented**.
+Conclusion: the trusted mechanism is a server-only registry (`seo_platform_admins`)
+keyed by the authenticated user id - never email, never a project role, never a
+client claim. Phase C **is implemented** as a read-only operational surface:
+overview, users, accounts, projects and cross-account usage. See **Phase C
+decision** below for the mechanism and its rationale.
 
 ## Usage / metering
 
@@ -101,36 +101,34 @@ contract. No new billing engine is added, per the brief.
 | Project settings | EXISTS | `apps/web/src/views/ProjectSettings.tsx`; `PROJECT_NAV` (`App.tsx:83`, id `settings`) |
 | Integrations | EXISTS | Account + project Integrations views |
 | Usage | EXISTS | Account + project Usage |
-| Where admin would live | N/A | No admin surface exists; would be a separate top-level area, not project nav |
+| Where admin lives | EXISTS (Phase C) | Separate top-level `/admin` area (`AdminArea`), deliberately outside project navigation |
 
-Conclusion: Phase E is **reconciled, no navigation change needed**. Member
-administration is a project-level concern and lives in Project Settings.
-Platform admin, if it is ever built, must be a separate top-level area and must
-not be placed in project navigation.
+Conclusion: Phase E is **reconciled**. Member administration is a project-level
+concern and lives in Project Settings. Platform administration is a separate
+top-level area (`/admin`) and is not placed in project navigation.
 
 ---
 
-## Phase C decision (platform administration: STOP)
+## Phase C decision (platform administration)
 
-The brief: if platform-admin authorization requires a new security model or a
-product decision, stop after the recon and identify the decision instead of
-guessing. That condition is met:
+The Phase A recon stopped here because platform admin needed a security
+decision. That decision is now made explicitly:
 
-- No trusted platform-admin mechanism exists (no table, flag, claim or route).
-- A correct implementation needs a decision on **how the platform-operator
-  identity is provisioned and verified**, and that is a security decision, not
-  an implementation detail. Candidate options (all require an explicit
-  decision) include:
-  1. A dedicated `seo_platform_admins` table keyed by user id, populated out of
-     band via SQL (no UI path to grant it). Simplest and auditable.
-  2. A Supabase `app_metadata.platform_admin` JWT claim checked server-side.
-     Ties the grant to the auth provider's admin API.
-- Whichever is chosen, the gate must be explicit and server-side, must not read
-  project membership roles, and must have its own tests proving that a normal
-  user and a project `admin` are both refused.
-
-Per the brief, no platform-admin code is added until that decision is made.
-This is a deliberate deferral, recorded here, not an oversight.
+- **Registry, not claims.** The operator identity is a row in a server-only
+  `seo_platform_admins` table keyed by the authenticated Supabase **user id**.
+  RLS is enabled with no policies, privileges are revoked from
+  `anon`/`authenticated` and granted only to `service_role`. It is populated out
+  of band (SQL / operator action); there is no self-service grant path. See
+  `docs/platform-admin-bootstrap.md`.
+- **One primitive.** `AccessService.isPlatformAdmin(userId)` /
+  `requirePlatformAdmin(userId)` is the only gate. Every `/api/admin` route and
+  the MCP surface must use it. Project `owner`/`admin` roles are explicitly not
+  platform admins; the decision is never derived from the client or from email.
+- **Defense in depth.** The admin read RPCs are `security definer`, re-check the
+  actor with `seo_assert_platform_admin`, and are executable only by
+  `service_role`.
+- **Fail loud.** A registry lookup fault is a `500`, never a `403`, so a storage
+  outage cannot masquerade as an authorization denial.
 
 ## Phase A/B implementation summary
 
@@ -146,6 +144,30 @@ Implemented (Phase B, project member administration):
   boundaries (editor/viewer refused, admin cannot grant owner, owner protection,
   role change, removal) against a fresh local database.
 
+Implemented (Phase C, platform administration - read-only):
+
+- `supabase/migrations/20260101000032_platform_admins.sql` - the
+  `seo_platform_admins` registry, `seo_is_platform_admin` /
+  `seo_assert_platform_admin`, and six service-role-only read RPCs.
+- `apps/api/src/supabase.ts` - `AccessService.isPlatformAdmin` /
+  `requirePlatformAdmin` (the single gate).
+- `apps/api/src/services/platformAdminService.ts` - read-only service mapping
+  the RPCs to DTOs; `42501` -> `403`, any other RPC error -> `500`.
+- `apps/api/src/http/routes/admin.ts` - `adminRouter` with the router-level gate
+  and `/overview`, `/users`, `/accounts`, `/projects`, `/usage`.
+- `packages/contracts/src/admin.ts` + `MeDto.is_platform_admin` - the admin DTOs
+  and the flag the UI gates on.
+- `apps/web/src/lib/admin.ts`, `apps/web/src/views/admin/*`, `AppHeader` admin
+  entry, top-level `/admin` route - the operator UI (no secrets, read-only).
+- Tests: `apps/api/src/http/routes/admin.test.ts`,
+  `apps/api/src/services/platformAdminService.test.ts`,
+  `apps/web/src/views/admin/AdminArea.test.tsx`,
+  `apps/web/src/App.adminNav.test.tsx`, plus route-contract cases in
+  `apps/web/src/lib/projectRoute.test.ts`.
+- `scripts/db-migrate-local.sh` - smoke test proving a project owner is refused,
+  a registered admin is allowed, and the registry/RPCs are server-only.
+- `docs/platform-admin-bootstrap.md` - how an operator is provisioned.
+
 ## Final State
 
 ```text
@@ -154,7 +176,7 @@ Account administration      COMPLETE
 Member administration       PARTIAL
 Project administration      COMPLETE
 Usage / metering            COMPLETE
-Platform administration     OUT OF SCOPE
+Platform administration     COMPLETE (read-only operational surface)
 Settings/navigation         COMPLETE
 ```
 
@@ -165,7 +187,10 @@ Notes:
   account-level member model and none was invented. Invitations are limited to
   users that already have an account (no invitation infrastructure exists to
   reuse); building one is left out deliberately.
-- **Platform administration is OUT OF SCOPE** pending the security/product
-  decision documented above. It was not guessed.
-- No billing engine, no new roles, no second authorization system, and no GSC
-  changes were introduced.
+- **Platform administration is COMPLETE as a read-only surface.** Dashboard,
+  users, accounts, projects and usage are served from existing data through a
+  single server-side gate. There are deliberately no billing/subscription
+  concepts, no destructive account/project controls and no self-service admin
+  grant.
+- No billing engine, no new project roles, no second authorization system, and
+  no GSC changes were introduced.
