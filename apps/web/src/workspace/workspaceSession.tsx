@@ -16,6 +16,7 @@ import { createContext, useContext, useEffect, useMemo, useRef, useState, type D
 import { asTipDoc, tiptapEmptyDoc, type TipDoc } from '@seo/contracts';
 import { api } from '../lib/api';
 import { registerNavigationBarrier } from '../lib/navigationBarrier';
+import { useUnloadGuard } from '../lib/unloadGuard';
 import { useAsync } from '../lib/ui';
 import { useAutosave } from '../components/content/useAutosave';
 import { canonicalFromEditorDocument } from '../components/content/editorDraft';
@@ -200,13 +201,21 @@ export function useWorkspaceSession({ projectId, role = 'viewer' }: { projectId:
   // The session barrier flushes through the live autosave instance.
   flushRef.current = auto.flush;
 
-  // R5.9: the workspace participates in route navigation's save barrier, so a
-  // project switch (or any route change away from the workspace) flushes pending
-  // edits through the same autosave the document switch barrier uses. The barrier
-  // is cleared on unmount, where one final flush runs for navigation that could
-  // not be intercepted (e.g. browser back/forward), so a dirty document is never
-  // abandoned without a save attempt. Both paths call `flush`; neither adds a
-  // second unsaved-change mechanism.
+  // R5.11.1: reload/close/crash cannot be intercepted, so a dirty document is
+  // protected by the browser's native `beforeunload` prompt, installed only while
+  // dirty and removed once saved. It persists nothing.
+  useUnloadGuard(auto.dirty);
+
+  // R5.9/R5.11.1: the workspace participates in route navigation's save barrier,
+  // so a project switch (or any route change away from the workspace) flushes
+  // pending edits through the same autosave the document switch barrier uses.
+  // Route popstate is now gated in App too, so browser Back/Forward crosses this
+  // barrier rather than unmounting dirty. The unmount flush below is the
+  // remaining best-effort backstop for teardown that cannot be intercepted (the
+  // shell unmounting because its parent route/project changed, or a programmatic
+  // path that did not cross the barrier); it is fire-and-forget by nature and
+  // cannot block unmount. Both paths call `flush`; neither adds a second
+  // unsaved-change mechanism.
   useEffect(() => {
     registerNavigationBarrier(() => flushRef.current());
     return () => {

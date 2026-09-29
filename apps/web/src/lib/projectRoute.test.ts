@@ -8,7 +8,15 @@
  * `routePath` writes.
  */
 import { describe, expect, it, afterEach } from 'vitest';
-import { canonicalWorkspaceRoute, parseRoute, routePath, type Route } from './projectRoute';
+import {
+  canonicalWorkspaceRoute,
+  isSameWorkspaceSession,
+  parseRoute,
+  routePath,
+  routesEqual,
+  routeUrl,
+  type Route,
+} from './projectRoute';
 
 const original = window.location.href;
 
@@ -90,5 +98,38 @@ describe('project route contract', () => {
     }
     expect(canonicalWorkspaceRoute({ area: 'compose' })).toBeNull();
     expect(canonicalWorkspaceRoute({ area: 'overview' })).toBeNull();
+  });
+
+  // R5.11.1 history restore helpers.
+
+  it('routeUrl keeps a project route query so a restore does not drop filters', () => {
+    expect(
+      routeUrl({ area: 'project', projectId: 'p', view: 'publications', sub: null, sub2: null, search: '?content_id=c9' }),
+    ).toBe('/p/p/publications?content_id=c9');
+    expect(routeUrl({ area: 'project', projectId: 'p', view: 'workspace', sub: 'editor', sub2: 'd1', search: '' })).toBe(
+      '/p/p/workspace/editor/d1',
+    );
+    expect(routeUrl({ area: 'usage' })).toBe('/usage');
+  });
+
+  it('routesEqual compares every field, including the query', () => {
+    const a: Route = { area: 'project', projectId: 'p', view: 'workspace', sub: 'editor', sub2: 'd1', search: '' };
+    expect(routesEqual(a, { ...a })).toBe(true);
+    expect(routesEqual(a, { ...a, sub2: 'd2' })).toBe(false);
+    expect(routesEqual(a, { ...a, search: '?x=1' })).toBe(false);
+    expect(routesEqual({ area: 'projects' }, { area: 'projects' })).toBe(true);
+    expect(routesEqual({ area: 'projects' }, { area: 'usage' })).toBe(false);
+    expect(routesEqual(a, { area: 'projects' })).toBe(false);
+  });
+
+  it('isSameWorkspaceSession is true only for the same project workspace', () => {
+    const editor: Route = { area: 'project', projectId: 'p', view: 'workspace', sub: 'editor', sub2: 'd1', search: '' };
+    const composer: Route = { area: 'project', projectId: 'p', view: 'workspace', sub: 'composer', sub2: null, search: '' };
+    expect(isSameWorkspaceSession(editor, composer)).toBe(true);
+    expect(isSameWorkspaceSession(editor, { ...editor, projectId: 'q' })).toBe(false);
+    expect(
+      isSameWorkspaceSession(editor, { area: 'project', projectId: 'p', view: 'dashboard', sub: null, sub2: null, search: '' }),
+    ).toBe(false);
+    expect(isSameWorkspaceSession({ area: 'usage' }, composer)).toBe(false);
   });
 });

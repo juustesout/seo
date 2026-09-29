@@ -12,7 +12,7 @@
  * exist, then `/me` (account + project memberships) must resolve before any
  * workspace renders - children assume `me.projects` is already loaded.
  */
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   BookOpen,
   CalendarDays,
@@ -43,7 +43,7 @@ import { ContentSchedule } from './views/ContentSchedule';
 import { Publications } from './views/Publications';
 import { ProjectWorkspaceShell, normalizeWorkspaceMode } from './workspace';
 import { openProjectView } from './lib/nav';
-import { runNavigationBarrier } from './lib/navigationBarrier';
+import { createRouteNavigation } from './lib/historyNavigation';
 import { canonicalWorkspaceRoute, parseRoute, routePath, type Route, type TopArea } from './lib/projectRoute';
 import { DesignSystemProvider } from './lib/designSystem';
 import { Overview } from './views/Overview';
@@ -109,11 +109,25 @@ export function App() {
   const [session, setSession] = useState<{ email: string | null } | null>(null);
   const [bootError, setBootError] = useState<string | null>(null);
 
+  // The route the UI currently renders, read by the navigation controller. It is
+  // a ref because the controller is created once and must never close over a
+  // stale route (the committed route is not known until the state update lands).
+  const routeRef = useRef(route);
+  routeRef.current = route;
+
+  // R5.11.1: the one route-transition controller. Both programmatic navigation
+  // (`navigate`) and browser Back/Forward (`handlePop`) cross the workspace save
+  // barrier, so leaving an open document flushes its pending edit first and is
+  // refused - with the workspace left mounted and the URL restored - when the
+  // save failed. This replaced the bare `setRoute(parseRoute())` popstate handler
+  // that let Back/Forward abandon a dirty document.
+  const nav = useMemo(() => createRouteNavigation({ getRoute: () => routeRef.current, setRoute }), []);
+
   useEffect(() => {
-    const onLoc = () => setRoute(parseRoute());
+    const onLoc = (event: PopStateEvent) => void nav.handlePop(event);
     window.addEventListener('popstate', onLoc);
     return () => window.removeEventListener('popstate', onLoc);
-  }, []);
+  }, [nav]);
 
   // Re-runs whenever `authed` flips so a freshly signed-in user is loaded into
   // /me without a page reload; guards against stale state after sign-out.
@@ -167,37 +181,15 @@ export function App() {
     setRoute(target);
   }, [route, me]);
 
-  // R5.9: route navigation crosses the workspace save barrier. While a workspace
-  // with an open document is mounted it registers a barrier; navigation awaits it
-  // and is refused when the document could not be saved, so a project switch (or
-  // any route change away from the workspace) never abandons unsaved edits. A
-  // same-project workspace mode change reuses the mounted session, so it skips the
-  // barrier. The in-flight flag keeps a double click from pushing twice.
-  const navigatingRef = useRef(false);
-  const navigate = async (r: Route) => {
-    if (navigatingRef.current) return;
-    const staysInWorkspace =
-      route.area === 'project' &&
-      r.area === 'project' &&
-      route.projectId === r.projectId &&
-      route.view === 'workspace' &&
-      r.view === 'workspace';
-    navigatingRef.current = true;
-    try {
-      if (!staysInWorkspace && !(await runNavigationBarrier())) return;
-      window.history.pushState({}, '', routePath(r));
-      setRoute(r);
-    } finally {
-      navigatingRef.current = false;
-    }
-  };
-
+  // R5.9/R5.11.1: route navigation crosses the workspace save barrier through the
+  // controller above. The controller keeps the double-click guard and the
+  // same-project workspace skip, so this stays a thin set of route builders.
   const goArea = (area: TopArea) => {
-    void navigate({ area });
+    void nav.navigate({ area });
   };
 
   const goProject = (projectId: string, view: string, sub?: string, sub2?: string) => {
-    void navigate({ area: 'project', projectId, view, sub: sub ?? null, sub2: sub2 ?? null, search: '' });
+    void nav.navigate({ area: 'project', projectId, view, sub: sub ?? null, sub2: sub2 ?? null, search: '' });
   };
 
   const refreshMe = async () => {

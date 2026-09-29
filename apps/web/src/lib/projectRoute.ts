@@ -37,6 +37,47 @@ export function routePath(r: Route): string {
 }
 
 /**
+ * Render a Route to the exact URL it was parsed from, path plus query. Used
+ * when a refused navigation has to put the browser URL back to the route the UI
+ * is still showing (R5.11.1), so the filter query a project surface carries is
+ * not dropped.
+ */
+export function routeUrl(r: Route): string {
+  const path = routePath(r);
+  return r.area === 'project' && r.search ? `${path}${r.search}` : path;
+}
+
+/** True when two routes describe the same URL (path and query). */
+export function routesEqual(a: Route, b: Route): boolean {
+  if (a.area !== b.area) return false;
+  if (a.area !== 'project' || b.area !== 'project') return true;
+  return (
+    a.projectId === b.projectId &&
+    a.view === b.view &&
+    a.sub === b.sub &&
+    a.sub2 === b.sub2 &&
+    a.search === b.search
+  );
+}
+
+/**
+ * True when both routes are the unified workspace of the same project. Such a
+ * transition reuses the one mounted document session (the shell is keyed by
+ * project id), so it is not a document-leaving transition and does not need the
+ * route barrier; a document switch it may trigger is still guarded by the
+ * session's own barrier.
+ */
+export function isSameWorkspaceSession(a: Route, b: Route): boolean {
+  return (
+    a.area === 'project' &&
+    b.area === 'project' &&
+    a.projectId === b.projectId &&
+    a.view === 'workspace' &&
+    b.view === 'workspace'
+  );
+}
+
+/**
  * Canonical workspace target for a retired project view (R5.4.7, R5.5.5).
  *
  * The former `content`, `compose` and `designer` project views are superseded by

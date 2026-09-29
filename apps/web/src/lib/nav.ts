@@ -13,6 +13,7 @@
  * calendar, …) flushes pending edits and is refused when the save failed.
  */
 import { runNavigationBarrier } from './navigationBarrier';
+import { PRE_GATED_POP_STATE } from './historyNavigation';
 
 export async function openProjectView(
   projectId: string,
@@ -29,6 +30,10 @@ export async function openProjectView(
   const qs = search.toString();
   const path = `/p/${projectId}/${view}${qs ? `?${qs}` : ''}`;
   window.history.pushState({}, '', path);
-  window.dispatchEvent(new PopStateEvent('popstate'));
+  // The barrier has already been crossed above. Mark the synthetic popstate so
+  // App's route controller applies the route without consulting the same barrier
+  // again; the flag rides the event only, so a later real Back/Forward to this
+  // entry is still gated (R5.11.1).
+  window.dispatchEvent(new PopStateEvent('popstate', { state: { [PRE_GATED_POP_STATE]: true } }));
   return true;
 }

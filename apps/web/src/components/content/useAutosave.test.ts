@@ -117,6 +117,38 @@ describe('useAutosave', () => {
     vi.useRealTimers();
   });
 
+  it('stays dirty while a save is in flight', async () => {
+    vi.useFakeTimers();
+    let release = () => {};
+    const persist = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve;
+        }),
+    );
+    const { result, rerender } = mount('{"t":"a"}', persist);
+
+    act(() => result.current.setBaseline('{"t":"a"}'));
+    rerender({ snapshot: '{"t":"b"}' });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(100);
+    });
+
+    // The save is running but the baseline has not advanced, so the document is
+    // still dirty and the exit guard must stay installed.
+    expect(result.current.status).toBe('saving');
+    expect(result.current.dirty).toBe(true);
+
+    await act(async () => {
+      release();
+      await Promise.resolve();
+    });
+    expect(result.current.status).toBe('saved');
+    expect(result.current.dirty).toBe(false);
+
+    vi.useRealTimers();
+  });
+
   it('reports a failed save without losing dirty state', async () => {
     vi.useFakeTimers();
     const persist = vi.fn(async () => {
