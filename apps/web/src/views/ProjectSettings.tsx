@@ -15,6 +15,7 @@ import { api } from '../lib/api';
 import { connectGoogle } from '../lib/gsc';
 import { CosmosPanel } from '../components/content/CosmosPanel';
 import { MembersPanel } from '../components/members/MembersPanel';
+import { AnalyticsPropertyPanel } from '../components/analytics/AnalyticsPropertyPanel';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -112,6 +113,8 @@ export function ProjectSettings({ projectId, role = 'viewer' }: { projectId: str
       <CosmosPanel projectId={projectId} canEdit={canEdit} />
 
       <MembersPanel projectId={projectId} role={role} />
+
+      <AnalyticsPropertyPanel projectId={projectId} role={role} />
 
       {state.error && (
         <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">

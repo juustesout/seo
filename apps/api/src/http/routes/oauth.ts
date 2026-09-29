@@ -9,6 +9,9 @@
  *    or tampered callback cannot attach tokens to an integration/project the
  *    user never authorized. Tokens are stored encrypted under the integration
  *    and the flow redirects back into the app.
+ *  - GET /ga4/callback   - account-scoped Google Analytics (GA4) connect. Same
+ *    signed-state handshake, stored under the account's separate 'ga4'
+ *    integration so the GSC connection is never altered.
  *  - GET /publisher/callback - generic publisher connect-by-consent (e.g. X);
  *    all flow logic lives in publisherOAuthService so no vendor logic is here.
  *
@@ -22,6 +25,8 @@ import { z } from 'zod';
 import { asyncHandler } from '../asyncHandler.js';
 import { ApiError } from '../../apiErrors.js';
 import { exchangeCode, verifyState, GSC_SCOPES } from '../../providers/gsc/oauth.js';
+import { GA4_SCOPES } from '../../providers/ga4/scopes.js';
+import { GoogleAnalyticsClient } from '../../providers/ga4/googleAnalyticsClient.js';
 import { publisherOAuthComplete } from '../../services/publisherOAuthService.js';
 import { redirectBase } from './utils.js';
 import { logger } from '../../logger.js';
@@ -107,6 +112,85 @@ oauthRouter.get(
     } else {
       res.redirect(`${base}/overview`);
     }
+  }),
+);
+
+/**
+ * Google Analytics (GA4) consent callback. Account-scoped like the GSC
+ * callback: the signed state carries the account + integration ids. Tokens are
+ * stored encrypted under the account's 'ga4' integration (a separate provider
+ * integration, so the GSC token/scope is never touched), the granted Google
+ * identity is sealed into the integration config, and the browser is sent back
+ * to the account Integrations view.
+ */
+oauthRouter.get(
+  '/ga4/callback',
+  asyncHandler(async (req, res) => {
+    const container = req.container;
+    const parsed = z.object({ code: z.string().optional(), state: z.string().optional(), error: z.string().optional() }).parse(req.query);
+    const base = redirectBase(req);
+
+    if (parsed.error) {
+      logger.warn({ error: parsed.error }, 'ga4 oauth error');
+      res.redirect(`${base}/integrations?analytics_error=${encodeURIComponent(parsed.error)}`);
+      return;
+    }
+    if (!parsed.code || !parsed.state) {
+      throw ApiError.badRequest('Missing OAuth code or state');
+    }
+
+    const key = container.config.env.CREDENTIALS_ENCRYPTION_KEY;
+    const clientId = container.config.env.GOOGLE_CLIENT_ID;
+    const clientSecret = container.config.env.GOOGLE_CLIENT_SECRET;
+    if (!key || !clientId || !clientSecret) {
+      throw ApiError.notConfigured('Google OAuth or credential storage is not configured');
+    }
+
+    let state;
+    try {
+      state = verifyState(parsed.state, key);
+    } catch (err) {
+      logger.warn({ err: (err as Error).message }, 'ga4 oauth state verification failed');
+      throw ApiError.forbidden('Invalid OAuth state');
+    }
+    if (!state.accountId) throw ApiError.badRequest('OAuth state has no account scope');
+
+    // The signed state is scoped to this exact account-scoped GA4 integration.
+    const { data: integration } = await container.sb
+      .from('seo_integrations')
+      .select('id, config')
+      .eq('id', state.integrationId)
+      .eq('account_id', state.accountId)
+      .is('project_id', null)
+      .eq('provider_type', 'ga4')
+      .maybeSingle();
+    if (!integration) throw ApiError.notFound('Integration no longer exists');
+
+    const redirectUri = `${base}/api/oauth/ga4/callback`;
+    const tokens = await exchangeCode({ clientId, clientSecret, code: parsed.code, redirectUri });
+
+    const creds = container.credentials.reader({ integrationId: state.integrationId }, 'ga4');
+    await creds.set('google_access_token', tokens.access_token, { scope: tokens.scope ?? GA4_SCOPES });
+    if (tokens.refresh_token) {
+      await creds.set('google_refresh_token', tokens.refresh_token, { scope: tokens.scope ?? GA4_SCOPES });
+    }
+
+    // Best-effort identity so the UI can show "Connected as ...". A failure to
+    // read it must not fail the connect itself.
+    let email: string | null = null;
+    try {
+      email = await new GoogleAnalyticsClient(tokens.access_token).getUserEmail();
+    } catch (err) {
+      logger.warn({ err: (err as Error).message }, 'ga4 identity lookup failed');
+    }
+    const config = { ...((integration.config as Record<string, unknown> | null) ?? {}), ...(email ? { google_email: email } : {}) };
+    await container.sb
+      .from('seo_integrations')
+      .update({ status: 'connected', last_error: null, config })
+      .eq('id', state.integrationId);
+
+    logger.info({ integrationId: state.integrationId, accountId: state.accountId }, 'ga4 oauth completed');
+    res.redirect(`${base}/integrations?analytics=connected`);
   }),
 );
 

@@ -552,3 +552,35 @@ bounded addition. Alongside it, the Vercel build command, the plain-HTTP bare-IP
 API rewrite, unchecked migrations and the absent branch-protection
 configuration are bounded hardening items. None of these require re-architecting
 deployment.
+
+---
+
+## Update: Google Analytics integration (P4)
+
+This section supersedes the Google data-source classification above where it
+conflicts. Search Console status is unchanged; Analytics was added as a
+separate, additive data source.
+
+| Capability | Status |
+| --- | --- |
+| Google Analytics integration | COMPLETE |
+| Basic page traffic intelligence | COMPLETE |
+| Google Ads | OUT OF SCOPE |
+| Competitor intelligence | OUT OF SCOPE |
+
+- **Google Analytics integration: COMPLETE.** Account-scoped
+  `provider_type = 'ga4'` integration reusing the existing Google OAuth client,
+  signed state, callback helper and encrypted credential store (`analytics.readonly`
+  + `openid` + `email`). GSC row and scope are untouched.
+- **Basic page traffic intelligence: COMPLETE.** One GA4 property per project
+  (`seo_project_analytics`, migration `20260101000033`), live page-traffic reads
+  for 7 / 28 / 90 days, project member read RLS, server-only writes.
+- **Google Ads: OUT OF SCOPE.** No Ads API, scope or surface is present.
+- **Competitor intelligence: OUT OF SCOPE.** No competitor data path is present.
+
+Production operation still depends on external configuration that cannot be
+verified from the repository: enabling the Google Analytics Admin API and Data
+API on the existing Cloud project, adding the `analytics.readonly` consent
+scope, and authorizing the GA4 redirect URI
+`https://<domain>/api/oauth/ga4/callback`. See `docs/google-analytics-setup.md`.
+No new environment variables are required.

@@ -14,6 +14,7 @@
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  BarChart3,
   BookOpen,
   CalendarDays,
   FolderKanban,
@@ -38,6 +39,7 @@ import { cn } from '@/lib/utils';
 import { Dashboard } from './views/Dashboard';
 import { Integrations } from './views/Integrations';
 import { Keywords } from './views/Keywords';
+import { Analytics } from './views/Analytics';
 import { Knowledge } from './views/Knowledge';
 import { Publishing } from './views/Publishing';
 import { ContentSchedule } from './views/ContentSchedule';
@@ -86,6 +88,7 @@ const TOP_NAV: Array<{ id: TopArea; label: string; icon: NavIcon }> = [
 const PROJECT_NAV: Array<{ id: string; label: string; icon: NavIcon }> = [
   { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { id: 'keywords', label: 'Keywords', icon: Search },
+  { id: 'analytics', label: 'Analytics', icon: BarChart3 },
   { id: 'integrations', label: 'Integrations', icon: Plug },
   { id: 'knowledge', label: 'Knowledge Base', icon: BookOpen },
   { id: 'workspace', label: 'Workspace', icon: PenSquare },
@@ -357,6 +360,7 @@ export function App() {
             <main className="min-w-0 flex-1 px-6 py-6">
               {view === 'dashboard' && <Dashboard projectId={pid} onOpenSettings={() => goProject(pid, 'settings')} />}
               {view === 'keywords' && <Keywords projectId={pid} role={project.role} />}
+              {view === 'analytics' && <Analytics projectId={pid} onOpenSettings={() => goProject(pid, 'settings')} />}
               {view === 'integrations' && <Integrations projectId={pid} />}
               {view === 'knowledge' && (
                 <Knowledge

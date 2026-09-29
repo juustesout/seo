@@ -20,6 +20,8 @@ import { ApiError } from '../../apiErrors.js';
 import { buildProviderContext } from '../../context.js';
 import { redirectBase } from './utils.js';
 import { buildAuthorizationUrl, signState } from '../../providers/gsc/oauth.js';
+import { GA4_SCOPES } from '../../providers/ga4/scopes.js';
+import { GoogleAnalyticsService } from '../../services/googleAnalyticsService.js';
 import { GscDataSource } from '../../providers/gsc/gscDataSource.js';
 import { logger } from '../../logger.js';
 import {
@@ -273,6 +275,116 @@ accountRouter.post(
         await adapter.disconnect(ctx);
       } catch (err) {
         logger.warn({ err: (err as Error).message }, 'gsc disconnect token cleanup failed');
+      }
+    }
+    await container.sb.from('seo_integrations').update({ status: 'disconnected', last_error: null }).eq('id', integration.id as string);
+    res.json({ data: { ok: true, was_connected: true } });
+  }),
+);
+
+// ---------------------------------------------------------------------------
+// Google Analytics (GA4) connect (account level, read-only)
+// ---------------------------------------------------------------------------
+
+/**
+ * GA4 connection state: whether the account has authorized Google Analytics and
+ * which Google identity it belongs to. Separate from the GSC integration so
+ * authorizing Analytics never touches the Search Console connection.
+ */
+accountRouter.get(
+  '/analytics/state',
+  asyncHandler(async (req, res) => {
+    const { container, user } = req;
+    const { account_id: accountId } = await requireAccount(container, user!.sub);
+    const state = await new GoogleAnalyticsService(container).connectionState(accountId);
+    res.json({ data: state });
+  }),
+);
+
+/**
+ * Build the Google consent URL for an account-level Google Analytics connect.
+ * Reuses any existing account-scoped 'ga4' integration as the token owner, signs
+ * the state (account + integration ids) so the callback cannot be replayed
+ * against another account, and requests only the read-only Analytics scope.
+ */
+accountRouter.get(
+  '/analytics/connect-url',
+  asyncHandler(async (req, res) => {
+    const { container, user } = req;
+    const { account_id: accountId } = await requireAccount(container, user!.sub);
+
+    requireConfigured(container.config.googleConfigured, 'Google OAuth');
+    requireConfigured(container.config.encryptionConfigured, 'Credential storage');
+
+    let integrationId: string | null = null;
+    const existing = await container.sb
+      .from('seo_integrations')
+      .select('id')
+      .eq('account_id', accountId)
+      .is('project_id', null)
+      .eq('provider_type', 'ga4')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    integrationId = (existing.data as { id: string } | null)?.id ?? null;
+
+    if (!integrationId) {
+      const insert = await container.sb
+        .from('seo_integrations')
+        .insert({
+          account_id: accountId,
+          project_id: null,
+          provider_type: 'ga4',
+          name: 'Google Analytics',
+          status: 'disconnected',
+          capabilities: ['page_traffic'],
+          config: {},
+          created_by: user!.sub,
+        } as never)
+        .select()
+        .single();
+      if (insert.error) throw new ApiError(500, 'storage_error', 'Could not create the Google Analytics connection');
+      integrationId = (insert.data as { id: string }).id;
+    }
+
+    await container.sb.from('seo_integrations').update({ status: 'connecting', last_error: null }).eq('id', integrationId);
+
+    const state = signState({ accountId, integrationId, userId: user!.sub, nonce: crypto.randomUUID() }, requireKey(container));
+    const redirectUri = `${redirectBase(req)}/api/oauth/ga4/callback`;
+    const url = buildAuthorizationUrl({
+      clientId: container.config.env.GOOGLE_CLIENT_ID!,
+      redirectUri,
+      state,
+      scope: GA4_SCOPES,
+    });
+    res.json({ data: { url, redirect_uri: redirectUri } });
+  }),
+);
+
+/** Disconnect Google Analytics: drop the stored GA4 tokens and mark it disconnected. */
+accountRouter.post(
+  '/analytics/disconnect',
+  asyncHandler(async (req, res) => {
+    const { container, user } = req;
+    const { account_id: accountId } = await requireAccount(container, user!.sub);
+    const { data } = await container.sb
+      .from('seo_integrations')
+      .select('*')
+      .eq('account_id', accountId)
+      .is('project_id', null)
+      .eq('provider_type', 'ga4')
+      .maybeSingle();
+    if (!data) {
+      res.json({ data: { ok: true, was_connected: false } });
+      return;
+    }
+    const integration = data as Record<string, unknown>;
+    const creds = container.credentials.reader({ integrationId: String(integration.id) }, 'ga4');
+    for (const keyName of ['google_access_token', 'google_refresh_token', 'google_token_scope']) {
+      try {
+        await creds.delete(keyName);
+      } catch (err) {
+        logger.warn({ err: (err as Error).message }, 'ga4 disconnect token cleanup failed');
       }
     }
     await container.sb.from('seo_integrations').update({ status: 'disconnected', last_error: null }).eq('id', integration.id as string);

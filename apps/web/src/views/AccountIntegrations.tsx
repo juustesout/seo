@@ -13,6 +13,12 @@ import { useState } from 'react';
 import { useAsync, fmtDate, StatusPill } from '../lib/ui';
 import { api } from '../lib/api';
 import { connectGoogle } from '../lib/gsc';
+import {
+  connectAnalytics,
+  disconnectAnalytics,
+  analyticsAccountState,
+  type AnalyticsConnection,
+} from '../lib/analytics';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -64,6 +70,7 @@ export function AccountIntegrations({ onOpenProject }: { onOpenProject: (id: str
   const account = useAsync<AccountDto>(() => api('/account'), []);
   const registry = useAsync<{ properties: RegistryProperty[] }>(() => api('/account/gsc/registry'), [account.data?.google.connected]);
   const ai = useAsync<{ providers: AiProviderStatus[] }>(() => api('/account/ai'), []);
+  const analytics = useAsync<AnalyticsConnection>(() => analyticsAccountState(), []);
   const [busy, setBusy] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [aiKeyProvider, setAiKeyProvider] = useState<string | null>(null);
@@ -102,6 +109,31 @@ export function AccountIntegrations({ onOpenProject }: { onOpenProject: (id: str
       await connectGoogle();
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
+      setBusy(null);
+    }
+  };
+
+  const connectGa = async () => {
+    setBusy('connect-ga');
+    setErr(null);
+    try {
+      await connectAnalytics();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+      setBusy(null);
+    }
+  };
+
+  const disconnectGa = async () => {
+    if (!window.confirm('Disconnect Google Analytics? Projects that use page traffic will stop showing it until you reconnect.')) return;
+    setBusy('disconnect-ga');
+    setErr(null);
+    try {
+      await disconnectAnalytics();
+      analytics.reload();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
       setBusy(null);
     }
   };
@@ -160,6 +192,41 @@ export function AccountIntegrations({ onOpenProject }: { onOpenProject: (id: str
             ) : (
               <Button variant="outline" onClick={() => void disconnect()} disabled={busy !== null}>
                 {busy === 'disconnect' ? 'Disconnecting…' : 'Disconnect'}
+              </Button>
+            )}
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardContent className="flex flex-wrap items-center justify-between gap-3">
+          <div className="grid gap-1">
+            <h2 className="text-sm font-semibold">Google Analytics</h2>
+            <p className="text-sm text-muted-foreground">
+              {analytics.loading
+                ? 'Loading…'
+                : analytics.data?.connected
+                  ? `Connected as ${analytics.data.account_email ?? 'your Google account'}`
+                  : analytics.data?.status === 'connecting'
+                    ? 'Waiting for Google authorization…'
+                    : analytics.data?.error
+                      ? `Connection error: ${analytics.data.error}`
+                      : "Not connected"}
+            </p>
+            <p className="text-xs text-muted-foreground">
+              Read-only access to GA4 page traffic. Authorizing Analytics is separate from Search Console.
+            </p>
+            {err && <span className="text-sm text-destructive">{err}</span>}
+            {analytics.data?.connected && <StatusPill status="connected" />}
+          </div>
+          <div className="flex gap-2">
+            {!analytics.data?.connected ? (
+              <Button onClick={() => void connectGa()} disabled={busy !== null || analytics.loading}>
+                {busy === 'connect-ga' ? 'Redirecting to Google…' : 'Connect Google Analytics'}
+              </Button>
+            ) : (
+              <Button variant="outline" onClick={() => void disconnectGa()} disabled={busy !== null}>
+                {busy === 'disconnect-ga' ? 'Disconnecting…' : 'Disconnect'}
               </Button>
             )}
           </div>

@@ -1803,4 +1803,105 @@ end $$;
 SQL
 echo "   smoke: platform-admin registry + RPCs are server-only"
 
+echo "==> smoke test: Google Analytics project binding (phase 4) + RLS isolation"
+PSQL -d "${DB_NAME}" <<'SQL'
+do $$
+declare
+  v_project uuid;
+  v_owner   uuid := '00000000-0000-0000-0000-000000000001';
+  v_denied  boolean;
+begin
+  select id into v_project from public.seo_projects where slug = 'demo' limit 1;
+  if v_project is null then raise exception 'smoke: demo project missing for analytics binding'; end if;
+
+  -- Bind a real GA4 property to the project.
+  insert into public.seo_project_analytics (project_id, property_id, property_name, property_url, created_by)
+  values (v_project, '123456789', 'My Website', 'https://example.com', v_owner);
+
+  if not exists (select 1 from public.seo_project_analytics where project_id = v_project and property_id = '123456789') then
+    raise exception 'smoke: analytics binding was not stored';
+  end if;
+
+  -- Replacing the property upserts on the project primary key.
+  insert into public.seo_project_analytics (project_id, property_id, property_name, created_by)
+  values (v_project, '987654321', 'Renamed', v_owner)
+  on conflict (project_id) do update
+    set property_id = excluded.property_id, property_name = excluded.property_name;
+  if (select property_id from public.seo_project_analytics where project_id = v_project) <> '987654321' then
+    raise exception 'smoke: analytics property replacement failed';
+  end if;
+
+  -- One property per project: a second plain insert must conflict.
+  v_denied := false;
+  begin
+    insert into public.seo_project_analytics (project_id, property_id, property_name)
+    values (v_project, '555000111', 'Another');
+  exception when unique_violation then v_denied := true; end;
+  if not v_denied then raise exception 'smoke: a project was allowed two analytics properties'; end if;
+
+  -- A non-numeric property id is rejected by the format check.
+  v_denied := false;
+  begin
+    insert into public.seo_project_analytics (project_id, property_id, property_name)
+    values (gen_random_uuid(), 'properties/1', 'bad');
+  exception when check_violation then v_denied := true; end;
+  if not v_denied then raise exception 'smoke: invalid analytics property id was accepted'; end if;
+
+  raise notice 'smoke: analytics binding + replacement + format check OK';
+end $$;
+SQL
+
+# RLS + write-privilege boundary: members may read, nobody may write via PostgREST.
+ANALYTICS_MEMBER_COUNT="$(PSQL -d "${DB_NAME}" -t -A <<'SQL'
+grant usage on schema public to authenticated;
+grant select on public.seo_project_analytics to authenticated;
+set role authenticated;
+set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-000000000001"}';
+select count(*) from public.seo_project_analytics;
+SQL
+)"
+if [ -z "${ANALYTICS_MEMBER_COUNT}" ] || [ "${ANALYTICS_MEMBER_COUNT}" = "0" ]; then
+  echo "!! RLS: project owner could not read the project analytics binding (${ANALYTICS_MEMBER_COUNT})" >&2
+  exit 1
+fi
+echo "   smoke: project member can read the analytics binding (RLS OK)"
+
+ANALYTICS_LEAK_COUNT="$(PSQL -d "${DB_NAME}" -t -A <<'SQL'
+grant usage on schema public to authenticated;
+grant select on public.seo_project_analytics to authenticated;
+set role authenticated;
+set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-000000000002"}';
+select count(*) from public.seo_project_analytics;
+SQL
+)"
+if [ -z "${ANALYTICS_LEAK_COUNT}" ] || [ "${ANALYTICS_LEAK_COUNT}" != "0" ]; then
+  echo "!! RLS leak: non-member read ${ANALYTICS_LEAK_COUNT} analytics bindings" >&2
+  exit 1
+fi
+echo "   smoke: non-member cannot read a foreign analytics binding (RLS isolation OK)"
+
+PSQL -d "${DB_NAME}" -t -A <<'SQL' >/dev/null
+do $$
+declare
+  v_write_policies int;
+begin
+  -- The API/worker write with the service role; there is deliberately no
+  -- insert/update/delete policy, so browser/PostgREST traffic can never write
+  -- an analytics binding (only the SELECT policy exists).
+  select count(*) into v_write_policies
+  from pg_policies
+  where tablename = 'seo_project_analytics' and cmd in ('INSERT', 'UPDATE', 'DELETE');
+  if v_write_policies <> 0 then
+    raise exception 'smoke: analytics binding has a write policy (%)', v_write_policies;
+  end if;
+  if has_table_privilege('authenticated', 'public.seo_project_analytics', 'insert') then
+    raise exception 'smoke: authenticated can insert an analytics binding';
+  end if;
+  if has_table_privilege('authenticated', 'public.seo_project_analytics', 'update') then
+    raise exception 'smoke: authenticated can update an analytics binding';
+  end if;
+end $$;
+SQL
+echo "   smoke: analytics bindings are server-write only (read-only RLS OK)"
+
 echo "==> migration validation OK (${DB_NAME})"
