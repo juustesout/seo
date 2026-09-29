@@ -77,7 +77,7 @@ export function ComposerMode({
   canAppendToDocument = false,
   onReviewOpenChange,
 }: ComposerModeProps) {
-  const { projectId, role, session, err } = useWorkspaceSessionContext();
+  const { projectId, role, session, err, setRefresh } = useWorkspaceSessionContext();
 
   // Guard for the draft-creation handoff. The workspace boundary is captured
   // when the task starts; leaving the composer mode (this boundary component
@@ -113,6 +113,7 @@ export function ComposerMode({
         onAppendToDocument={onAppendToDocument}
         canAppendToDocument={canAppendToDocument}
         onReviewOpenChange={onReviewOpenChange}
+        onHandoffStale={() => setRefresh((value) => value + 1)}
       />
     </div>
   );

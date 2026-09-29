@@ -254,9 +254,12 @@ publicationsRouter.post(
       params: { publication_id: publicationId, remote_status: body.remote_status },
     });
     if (!reused) {
+      // `queued` is the pending state for both publish and delete; there is no
+      // dedicated delete-in-progress status (see seo_publications_status_check).
       await container.sb
         .from('seo_publications')
-        .update({ status: body.action === 'delete' ? 'queued' : 'queued', error: null })
+        .update({ status: 'queued', error: null })
+        .eq('project_id', projectId)
         .eq('id', publicationId);
     }
     res.status(202).json({ data: { publicationId, job, reused } });

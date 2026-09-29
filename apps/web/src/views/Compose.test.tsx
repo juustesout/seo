@@ -288,16 +288,18 @@ describe('Compose -> Content Studio handoff', () => {
     await waitFor(() => expect(onOpenEditor).toHaveBeenCalledWith('content-9'));
   });
 
-  it('does not perform a handoff whose captured boundary is stale', async () => {
+  it('does not perform a handoff whose captured boundary is stale, and reports the saved draft', async () => {
     const flow = mockHandoffFlow();
     generateFilled(flow);
     const onOpenEditor = vi.fn();
+    const onHandoffStale = vi.fn();
     render(
       <Compose
         projectId={PROJECT}
         role="editor"
         onOpenEditor={onOpenEditor}
         beginHandoff={() => ({ isStale: () => true })}
+        onHandoffStale={onHandoffStale}
       />,
     );
 
@@ -310,6 +312,9 @@ describe('Compose -> Content Studio handoff', () => {
       expect((screen.getByRole('button', { name: 'Open in Editor' }) as HTMLButtonElement).disabled).toBe(false),
     );
     expect(onOpenEditor).not.toHaveBeenCalled();
+    // The created draft is surfaced, not silently dropped.
+    expect(onHandoffStale).toHaveBeenCalledTimes(1);
+    expect((await screen.findByTestId('compose-handoff-notice')).textContent).toContain('saved in your content list');
   });
 
   it('re-opens the created draft on retry instead of posting a duplicate', async () => {

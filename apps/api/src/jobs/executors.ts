@@ -794,7 +794,11 @@ const publish: JobExecutor = async ({ container, job, report }) => {
     }
     if (!remoteId) throw new ApiError(400, 'bad_request', 'Nothing to delete: publication has no remote id');
     await adapter.delete(ctx, remoteId);
-    await container.sb.from('seo_publications').update({ status: 'deleted', published_at: null }).eq('id', publicationId);
+    await container.sb
+      .from('seo_publications')
+      .update({ status: 'deleted', published_at: null })
+      .eq('project_id', job.project_id)
+      .eq('id', publicationId);
     await report(100, 'Publication deleted remotely');
     return { remoteId, deleted: true };
   }
@@ -812,6 +816,7 @@ const publish: JobExecutor = async ({ container, job, report }) => {
     await container.sb
       .from('seo_publications')
       .update({ status: 'updated', target_url: result.url, remote_id: result.remoteId, published_at: new Date().toISOString(), error: null })
+      .eq('project_id', job.project_id)
       .eq('id', publicationId);
     await report(100, 'Publication updated');
     return { remoteId: result.remoteId, url: result.url };
@@ -831,6 +836,7 @@ const publish: JobExecutor = async ({ container, job, report }) => {
       await container.sb
         .from('seo_publications')
         .update({ status: 'published', error: null })
+        .eq('project_id', job.project_id)
         .eq('id', publicationId);
     }
     await report(100, 'Publication already created');
@@ -842,6 +848,7 @@ const publish: JobExecutor = async ({ container, job, report }) => {
   await container.sb
     .from('seo_publications')
     .update({ status: 'published', target_url: result.url, remote_id: result.remoteId, published_at: new Date().toISOString(), error: null })
+    .eq('project_id', job.project_id)
     .eq('id', publicationId);
   await report(100, 'Publication published');
   return { remoteId: result.remoteId, url: result.url };

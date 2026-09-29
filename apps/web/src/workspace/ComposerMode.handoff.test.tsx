@@ -17,23 +17,32 @@ import { ComposerMode } from './ComposerMode';
 const probe = vi.hoisted(() => ({
   beginHandoff: null as null | (() => { isStale: () => boolean }),
   onOpenEditor: null as null | ((contentId: string) => void),
+  onHandoffStale: null as null | (() => void),
 }));
 
 vi.mock('../views/Compose', () => ({
-  Compose: (props: { beginHandoff: () => { isStale: () => boolean }; onOpenEditor: (id: string) => void }) => {
+  Compose: (props: {
+    beginHandoff: () => { isStale: () => boolean };
+    onOpenEditor: (id: string) => void;
+    onHandoffStale?: () => void;
+  }) => {
     probe.beginHandoff = props.beginHandoff;
     probe.onOpenEditor = props.onOpenEditor;
+    probe.onHandoffStale = props.onHandoffStale ?? null;
     return <div data-testid="compose-stub" />;
   },
 }));
 
-function sessionStub(overrides: { documentId?: string | null; err?: string | null } = {}): WorkspaceSessionValue {
-  const { documentId = 'doc-9', err = null } = overrides;
+function sessionStub(
+  overrides: { documentId?: string | null; err?: string | null; setRefresh?: () => void } = {},
+): WorkspaceSessionValue {
+  const { documentId = 'doc-9', err = null, setRefresh = () => {} } = overrides;
   const id = documentId ?? 'closed';
   return {
     projectId: 'canon-1',
     role: 'editor',
     err,
+    setRefresh,
     session: { identity: { documentId, creating: false }, boundary: `${id}#0`, hasDocument: documentId !== null },
   } as unknown as WorkspaceSessionValue;
 }
@@ -80,5 +89,12 @@ describe('ComposerMode handoff guard', () => {
   it('surfaces the workspace error (e.g. a blocked save barrier)', () => {
     const { getByText } = renderComposer(sessionStub({ err: 'Could not switch documents.' }));
     expect(getByText('Could not switch documents.')).toBeTruthy();
+  });
+
+  it('refreshes the content list when a handoff is abandoned as stale', () => {
+    let refreshes = 0;
+    renderComposer(sessionStub({ documentId: 'doc-9', setRefresh: () => (refreshes += 1) }));
+    probe.onHandoffStale!();
+    expect(refreshes).toBe(1);
   });
 });

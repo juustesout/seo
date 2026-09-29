@@ -93,6 +93,7 @@ export function Compose({
   onAppendToDocument,
   canAppendToDocument = false,
   onReviewOpenChange,
+  onHandoffStale,
 }: {
   projectId: string;
   role?: string;
@@ -128,6 +129,13 @@ export function Compose({
    * never leaves this component.
    */
   onReviewOpenChange?: (open: boolean) => void;
+  /**
+   * Called when a draft was created but the handoff was abandoned because the
+   * workspace document boundary moved. The workspace uses it to refresh the
+   * content list, so the orphaned draft is discoverable. The draft is never
+   * deleted server-side.
+   */
+  onHandoffStale?: () => void;
 }) {
   const canEdit = (ROLE_RANK[role] ?? 0) >= 1;
   const [brief, setBrief] = useState(DEFAULT_BRIEF);
@@ -139,6 +147,9 @@ export function Compose({
   const [tab, setTab] = useState<OutputTab>('preview');
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
+  // A draft that was persisted but not opened because the workspace boundary
+  // moved during the handoff. Reported so the user knows the draft exists.
+  const [handoffNotice, setHandoffNotice] = useState<string | null>(null);
   // R5.4.5: the run under review. Opening it is inert - no document mutation -
   // and only Apply hands the batch to the workspace's existing staging path.
   const [review, setReview] = useState<PendingReview | null>(null);
@@ -174,6 +185,7 @@ export function Compose({
     createdIdRef.current = null;
     setError(null);
     setCreateError(null);
+    setHandoffNotice(null);
     setReview(null);
     setReviewError(null);
     setPlan(null);
@@ -224,6 +236,7 @@ export function Compose({
     const handoff = beginHandoff?.();
     setCreating(true);
     setCreateError(null);
+    setHandoffNotice(null);
     try {
       const draft = editorDraftFromCanonical(document, brief.trim());
       const row = await api<CreatedContentRow>(`/projects/${projectId}/content`, {
@@ -231,9 +244,13 @@ export function Compose({
         body: { title: draft.title, status: 'draft', content_json: draft.doc },
       });
       // A result for a boundary the workspace has left must not initiate a
-      // handoff; the created draft is abandoned rather than opened into the
-      // wrong workspace state.
-      if (handoff?.isStale()) return;
+      // handoff; the draft is kept (not deleted) but reported instead of opened
+      // into the wrong workspace state.
+      if (handoff?.isStale()) {
+        setHandoffNotice('The draft was created but not opened because the workspace changed. It is saved in your content list.');
+        onHandoffStale?.();
+        return;
+      }
       createdIdRef.current = row.id;
       onOpenEditor(row.id);
     } catch (e) {
@@ -415,6 +432,15 @@ export function Compose({
         {createError && (
           <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
             Could not open in editor: {createError}
+          </div>
+        )}
+
+        {handoffNotice && (
+          <div
+            className="rounded-md border border-warning/30 bg-warning/5 px-3 py-2 text-sm text-warning"
+            data-testid="compose-handoff-notice"
+          >
+            {handoffNotice}
           </div>
         )}
 
