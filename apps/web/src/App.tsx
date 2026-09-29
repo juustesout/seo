@@ -226,7 +226,7 @@ export function App() {
       <CenteredCard>
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">SEO Operating Platform</CardTitle>
+            <CardTitle className="text-base">OldSkoolSEO</CardTitle>
             <CardDescription>
               Configure Supabase keys, then reload. The API server must be running on :3001 for /api calls.
             </CardDescription>
@@ -491,7 +491,7 @@ export function AppHeader({
         <span className="flex size-7 items-center justify-center rounded-md bg-primary text-primary-foreground">
           <LineChart className="size-4" />
         </span>
-        <span className="hidden sm:inline">SEO Ops</span>
+        <span className="hidden sm:inline">OldSkoolSEO</span>
       </button>
       <nav className="ml-1 flex items-center gap-0.5">
         {TOP_NAV.map((n) => {
@@ -631,7 +631,7 @@ function CreateProject({ email, onCreated }: { email: string | null; onCreated: 
         <span className="flex size-7 items-center justify-center rounded-md bg-primary text-primary-foreground">
           <LineChart className="size-4" />
         </span>
-        <span className="text-sm font-semibold tracking-tight">SEO Ops</span>
+        <span className="text-sm font-semibold tracking-tight">OldSkoolSEO</span>
         <div className="flex-1" />
         <span className="hidden text-sm text-muted-foreground sm:inline">{email}</span>
         <Button type="button" variant="outline" size="sm" onClick={() => void signOut()}>
@@ -774,7 +774,7 @@ function AuthScreen() {
         <CenteredCard>
           <Card>
             <CardHeader>
-              <CardTitle className="text-base">SEO Operating Platform</CardTitle>
+              <CardTitle className="text-base">OldSkoolSEO</CardTitle>
               <CardDescription>
                 Modular SEO platform: Search Console data, SERP tracking, keyword research and publishing in one workspace.
               </CardDescription>
