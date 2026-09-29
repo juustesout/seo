@@ -86,6 +86,7 @@ export function Publishing({ projectId }: { projectId: string }) {
   const [refresh, setRefresh] = useState(0);
   const [err, setErr] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [busyPub, setBusyPub] = useState<string | null>(null);
   const reload = () => setRefresh((x) => x + 1);
   const pubs = useAsync<PubWrap[]>(() => api(`/projects/${projectId}/publishers`), [projectId, refresh]);
   const catalog = useAsync<{ publishers: { id: string; name: string }[] }>(() => api('/providers'), []);
@@ -123,6 +124,22 @@ export function Publishing({ projectId }: { projectId: string }) {
 
   const addPublisher = (provider: string) =>
     action(() => api(`/projects/${projectId}/publishers`, { method: 'POST', body: { provider } }));
+
+  // A publication only accepts the Publish action when its previous attempt is
+  // terminal-failed; queued/publishing rows already have an in-flight job and
+  // published/updated/scheduled/deleted rows must not issue a duplicate remote
+  // operation. The API enforces the same rule with its idempotency guard.
+  const canPublish = (status: string) => status === 'failed';
+  const requestPublish = async (id: string) => {
+    setBusyPub(id);
+    await action(() =>
+      api(`/projects/${projectId}/publications/${id}/actions`, {
+        method: 'POST',
+        body: { action: 'publish', remote_status: 'publish' },
+      }),
+    );
+    setBusyPub(null);
+  };
 
   // Group connected/configured publisher cards by category (website/social).
   const grouped = useMemo(() => {
@@ -216,16 +233,15 @@ export function Publishing({ projectId }: { projectId: string }) {
                       <Button
                         variant="outline"
                         size="sm"
-                        onClick={() =>
-                          void action(() =>
-                            api(`/projects/${projectId}/publications/${p.id}/actions`, {
-                              method: 'POST',
-                              body: { action: 'publish', remote_status: 'publish' },
-                            }),
-                          )
+                        disabled={busyPub === p.id || !canPublish(p.status)}
+                        title={
+                          canPublish(p.status)
+                            ? 'Retry this publication'
+                            : 'Already queued or completed; a new publication starts from the composer'
                         }
+                        onClick={() => void requestPublish(p.id)}
                       >
-                        Publish
+                        {busyPub === p.id ? 'Queuing…' : 'Publish'}
                       </Button>
                     </TableCell>
                   </TableRow>

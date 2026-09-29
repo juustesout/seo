@@ -25,7 +25,7 @@ import { retryDelayMs, type EnqueueJobInput, type JobRecord, type JobStore } fro
  * shape, applying the same null-defaults as the pg store's mapRow so the two
  * backends behave identically to every caller.
  */
-function rowToRecord(row: Record<string, unknown>): JobRecord {
+export function rowToRecord(row: Record<string, unknown>): JobRecord {
   return {
     id: row.id as string,
     project_id: row.project_id as string,

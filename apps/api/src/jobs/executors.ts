@@ -786,6 +786,12 @@ const publish: JobExecutor = async ({ container, job, report }) => {
 
   if (operation === 'publish_delete') {
     const remoteId = pub.remote_id as string | null;
+    if (pub.status === 'deleted') {
+      // A retry/re-enqueue after a delete already completed must not issue a
+      // second remote delete against a post that no longer exists.
+      await report(100, 'Publication already deleted');
+      return { remoteId, deleted: true };
+    }
     if (!remoteId) throw new ApiError(400, 'bad_request', 'Nothing to delete: publication has no remote id');
     await adapter.delete(ctx, remoteId);
     await container.sb.from('seo_publications').update({ status: 'deleted', published_at: null }).eq('id', publicationId);
@@ -809,6 +815,26 @@ const publish: JobExecutor = async ({ container, job, report }) => {
       .eq('id', publicationId);
     await report(100, 'Publication updated');
     return { remoteId: result.remoteId, url: result.url };
+  }
+
+  const existingRemoteId = pub.remote_id as string | null;
+  if (existingRemoteId) {
+    // Idempotency boundary: a confirmed remote id means a prior execution
+    // already created the remote post but the job was retried/re-queued before
+    // its completion was durable (at-least-once worker, stale-running sweep, or
+    // a re-enqueued duplicate). The remote effect must not be repeated. This
+    // cannot close the failure window where the provider created the post but
+    // crashed before the remote id was persisted (the next attempt then still
+    // sees no id); that residual duplicate is inherent without provider-side
+    // idempotency keys and is not claimed as exactly-once.
+    if (pub.status !== 'published') {
+      await container.sb
+        .from('seo_publications')
+        .update({ status: 'published', error: null })
+        .eq('id', publicationId);
+    }
+    await report(100, 'Publication already created');
+    return { remoteId: existingRemoteId, url: (pub.target_url as string | null) ?? null };
   }
 
   await report(40, 'Creating remote post');

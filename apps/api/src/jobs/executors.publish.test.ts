@@ -323,4 +323,60 @@ describe('publish executor usage accounting (R5.10.6)', () => {
     expect(result.remoteId).toBe('9');
     expect(sbStores.seo_publications[0].status).toBe('published');
   });
+
+  it('does not call the provider again when a retry finds a confirmed remote id (H3)', async () => {
+    const fetchSpy = vi.fn(async () => response({ id: 42, link: 'https://blog.example.com/?p=42' }, 201));
+    vi.stubGlobal('fetch', fetchSpy);
+    const sbStores = wordpressStores();
+    sbStores.seo_publications[0].status = 'published';
+    sbStores.seo_publications[0].remote_id = '42';
+    sbStores.seo_publications[0].target_url = 'https://blog.example.com/?p=42';
+    const store = new InMemoryUsageEventStore();
+    const c = container(buildRegistry({ config: {}, logger: silentLogger() }), sbStores, store, creds);
+
+    const result = await run(c, wordpressJob(1));
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(result.remoteId).toBe('42');
+    expect(result.url).toBe('https://blog.example.com/?p=42');
+    expect(await store.list({ projectId: PROJECT })).toHaveLength(0);
+  });
+
+  it('does not issue a second remote delete when the row is already deleted (H3)', async () => {
+    const fetchSpy = vi.fn(async () => response({}, 200));
+    vi.stubGlobal('fetch', fetchSpy);
+    const sbStores = wordpressStores();
+    sbStores.seo_publications[0].status = 'deleted';
+    sbStores.seo_publications[0].remote_id = '42';
+    const c = container(buildRegistry({ config: {}, logger: silentLogger() }), sbStores, undefined, creds);
+
+    const result = await executorFor('publish')({
+      container: c,
+      job: { ...wordpressJob(1), job_type: 'publish_delete' },
+      writer: {} as SeoWriter,
+      report: async () => undefined,
+    });
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ deleted: true, remoteId: '42' });
+  });
+
+  it('records a failed physical attempt and a later real retry as separate attempts', async () => {
+    const fetchSpy = vi.fn(async () => response({ message: 'boom' }, 500));
+    vi.stubGlobal('fetch', fetchSpy);
+    const sbStores = wordpressStores();
+    const store = new InMemoryUsageEventStore();
+    const reg = buildRegistry({ config: {}, logger: silentLogger() });
+
+    await expect(run(container(reg, sbStores, store, creds), wordpressJob(0))).rejects.toBeTruthy();
+    expect(sbStores.seo_publications[0].remote_id).toBeNull();
+
+    fetchSpy.mockImplementation(async () => response({ id: 11, link: 'https://blog.example.com/?p=11' }, 201));
+    const result = await run(container(reg, sbStores, store, creds), wordpressJob(1));
+
+    expect(result.remoteId).toBe('11');
+    const events = await store.list({ projectId: PROJECT });
+    expect(events).toHaveLength(2);
+    expect(events.map((e) => e.success).sort()).toEqual([false, true]);
+  });
 });

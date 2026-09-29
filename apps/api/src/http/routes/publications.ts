@@ -20,6 +20,13 @@ import { asyncHandler } from '../asyncHandler.js';
 import { ApiError } from '../../apiErrors.js';
 import { parseId, parseProjectId } from './utils.js';
 import { PublicationService, PUBLICATION_STATUSES } from '../../services/publicationService.js';
+import {
+  actionPublishIdentity,
+  directPublishIdentity,
+  enqueuePublicationJob,
+  publishJobType,
+  reusablePublicationJob,
+} from '../../services/publicationJobs.js';
 
 export const publicationsRouter: Router = Router({ mergeParams: true });
 
@@ -128,6 +135,35 @@ publicationsRouter.post(
       if (!data) throw ApiError.notFound('Referenced content does not exist in this project');
     }
 
+    const scheduledFor = body.schedule_for ? new Date(body.schedule_for).toISOString() : null;
+
+    // The logical operation is the publish intent itself (publisher + payload
+    // snapshot), so a repeated identical submission collapses onto the first
+    // one instead of publishing twice, while a changed/new document is a
+    // genuinely new operation.
+    const identity = directPublishIdentity({
+      projectId,
+      publisherId: body.publisher_id,
+      publishKind: body.publish_kind,
+      remoteStatus: body.remote_status,
+      contentId: body.content_id ?? null,
+      title: body.title,
+      slug: body.slug ?? null,
+      content: body.content,
+      excerpt: body.excerpt ?? null,
+      scheduledFor,
+    });
+
+    const inFlight = await reusablePublicationJob(container, projectId, identity);
+    if (inFlight) {
+      const existingId = typeof inFlight.params.publication_id === 'string' ? inFlight.params.publication_id : null;
+      const { data: existing } = existingId
+        ? await container.sb.from('seo_publications').select('*').eq('project_id', projectId).eq('id', existingId).maybeSingle()
+        : { data: null };
+      res.status(202).json({ data: { publication: existing ?? null, job: inFlight, reused: true } });
+      return;
+    }
+
     const { data: publication, error } = await container.sb
       .from('seo_publications')
       .insert({
@@ -140,23 +176,40 @@ publicationsRouter.post(
         slug: body.slug ?? null,
         content: body.content,
         excerpt: body.excerpt ?? null,
-        scheduled_for: body.schedule_for ? new Date(body.schedule_for).toISOString() : null,
+        scheduled_for: scheduledFor,
         created_by: user!.sub,
       } as never)
       .select()
       .single();
     if (error) throw ApiError.badRequest(`Could not create publication: ${error.message}`);
 
-    const job = await container.jobStore.enqueue({
-      project_id: projectId,
+    const { job, reused } = await enqueuePublicationJob(container, {
+      projectId,
+      userId: user!.sub,
+      identity,
       provider: String(publisher.provider),
-      job_type: 'publish',
+      jobType: 'publish',
       params: { publication_id: publication.id, remote_status: body.remote_status },
-      created_by: user!.sub,
-      run_after: body.schedule_for ? new Date(body.schedule_for).toISOString() : undefined,
+      runAfter: scheduledFor ?? undefined,
     });
 
-    res.status(202).json({ data: { publication, job } });
+    if (reused) {
+      // A concurrent identical submission won the idempotency key; this row was
+      // never backed by a job, so record it honestly instead of leaving it stuck.
+      await container.sb
+        .from('seo_publications')
+        .update({ status: 'failed', error: 'Duplicate publish submission collapsed onto an in-flight publication' })
+        .eq('project_id', projectId)
+        .eq('id', publication.id);
+      const existingId = typeof job.params.publication_id === 'string' ? job.params.publication_id : null;
+      const { data: winner } = existingId
+        ? await container.sb.from('seo_publications').select('*').eq('project_id', projectId).eq('id', existingId).maybeSingle()
+        : { data: null };
+      res.status(202).json({ data: { publication: winner ?? publication, job, reused: true } });
+      return;
+    }
+
+    res.status(202).json({ data: { publication, job, reused: false } });
   }),
 );
 
@@ -181,18 +234,31 @@ publicationsRouter.post(
     const publisher = await loadPublisher(container, projectId, String(pub.publisher_id));
     if (publisher.status !== 'connected') throw ApiError.badRequest('Publisher is not connected');
 
-    const type = { publish: 'publish', update: 'publish_update', delete: 'publish_delete' }[body.action];
-    await container.sb
-      .from('seo_publications')
-      .update({ status: body.action === 'delete' ? 'queued' : 'queued', error: null })
-      .eq('id', publicationId);
-    const job = await container.jobStore.enqueue({
-      project_id: projectId,
+    // Creating a remote post is a once-per-publication operation: refuse a
+    // second create for a row that already has a confirmed remote id (the
+    // executor short-circuits the same way for a racing/retried job).
+    if (body.action === 'publish' && pub.remote_id) {
+      throw ApiError.conflict('This publication already exists remotely; publish creates it at most once');
+    }
+    if (body.action === 'delete' && pub.status === 'deleted') {
+      throw ApiError.conflict('This publication has already been deleted remotely');
+    }
+
+    const identity = actionPublishIdentity(publicationId, body.action);
+    const { job, reused } = await enqueuePublicationJob(container, {
+      projectId,
+      userId: user!.sub,
+      identity,
       provider: String(publisher.provider),
-      job_type: type,
+      jobType: publishJobType(body.action),
       params: { publication_id: publicationId, remote_status: body.remote_status },
-      created_by: user!.sub,
     });
-    res.status(202).json({ data: { publicationId, job } });
+    if (!reused) {
+      await container.sb
+        .from('seo_publications')
+        .update({ status: body.action === 'delete' ? 'queued' : 'queued', error: null })
+        .eq('id', publicationId);
+    }
+    res.status(202).json({ data: { publicationId, job, reused } });
   }),
 );
