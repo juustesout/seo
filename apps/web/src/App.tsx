@@ -672,6 +672,30 @@ function AuthScreen() {
     }
   };
 
+  // Google is an identity provider for Supabase Auth, not a second auth
+  // system: it produces the same session the password/magic-link flows do, so
+  // the existing bootstrap, session restoration and routing take over on
+  // return. The redirect target is the running app's own origin (never a
+  // hardcoded URL); the provider credentials live only in the Supabase project.
+  const google = async () => {
+    setErr(null);
+    setInfo(null);
+    setBusy(true);
+    try {
+      if (!supabase) throw new Error('Supabase not configured');
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: { redirectTo: window.location.origin },
+      });
+      if (error) throw new Error(error.message);
+      // On success Supabase navigates the browser to Google and then back to
+      // redirectTo; leave the button disabled if the tab is still here.
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+      setBusy(false);
+    }
+  };
+
   return (
     <CenteredCard>
       <Card>
@@ -687,6 +711,19 @@ function AuthScreen() {
               Missing VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY.
             </div>
           )}
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => void google()}
+            disabled={busy || !supabaseConfigured}
+          >
+            Continue with Google
+          </Button>
+          <div className="flex items-center gap-3 text-xs text-muted-foreground">
+            <span className="h-px flex-1 bg-border" />
+            <span>or</span>
+            <span className="h-px flex-1 bg-border" />
+          </div>
           <div className="grid gap-1.5">
             <label className="text-sm font-medium" htmlFor="auth-email">
               Email
