@@ -1,0 +1,89 @@
+/**
+ * Shared data-hook tests (R5.11.2 H4).
+ *
+ * Pins the scope-freshness contract of `useAsync`: a change in the identity
+ * deps drops the previous payload before the new one resolves, while a manual
+ * `reload()` refreshes in place. The API is not involved; only the hook runs.
+ */
+import { describe, expect, it, vi } from 'vitest';
+import { act, renderHook, waitFor } from '@testing-library/react';
+import { useAsync } from './ui';
+
+interface Deferred<T> {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+}
+
+function deferred<T>(): Deferred<T> {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+}
+
+describe('useAsync', () => {
+  it('resolves the payload for the current deps', async () => {
+    const load = vi.fn(async (id: string) => ({ id }));
+    const { result } = renderHook(() => useAsync(() => load('p-1'), ['p-1']));
+
+    expect(result.current.loading).toBe(true);
+    await waitFor(() => expect(result.current.data).toEqual({ id: 'p-1' }));
+    expect(result.current.loading).toBe(false);
+    expect(result.current.error).toBeNull();
+  });
+
+  it('drops the previous scope payload as soon as the deps change', async () => {
+    const first = deferred<{ id: string }>();
+    const second = deferred<{ id: string }>();
+    const { result, rerender } = renderHook(
+      ({ id }: { id: string }) => useAsync(() => (id === 'p-1' ? first.promise : second.promise), [id]),
+      { initialProps: { id: 'p-1' } },
+    );
+
+    await act(async () => {
+      first.resolve({ id: 'p-1' });
+    });
+    expect(result.current.data).toEqual({ id: 'p-1' });
+
+    rerender({ id: 'p-2' });
+    expect(result.current.data).toBeNull();
+    expect(result.current.loading).toBe(true);
+
+    await act(async () => {
+      second.resolve({ id: 'p-2' });
+    });
+    expect(result.current.data).toEqual({ id: 'p-2' });
+  });
+
+  it('keeps data during a manual reload so polling refreshes in place', async () => {
+    let n = 0;
+    const { result } = renderHook(() => useAsync(async () => ({ v: (n += 1) }), []));
+    await waitFor(() => expect(result.current.data).toEqual({ v: 1 }));
+
+    act(() => result.current.reload());
+    expect(result.current.data).toEqual({ v: 1 });
+
+    await waitFor(() => expect(result.current.data).toEqual({ v: 2 }));
+  });
+
+  it('ignores a late response from the previous deps run', async () => {
+    const first = deferred<{ id: string }>();
+    const second = deferred<{ id: string }>();
+    const { result, rerender } = renderHook(
+      ({ id }: { id: string }) => useAsync(() => (id === 'p-1' ? first.promise : second.promise), [id]),
+      { initialProps: { id: 'p-1' } },
+    );
+
+    rerender({ id: 'p-2' });
+    await act(async () => {
+      second.resolve({ id: 'p-2' });
+    });
+    expect(result.current.data).toEqual({ id: 'p-2' });
+
+    await act(async () => {
+      first.resolve({ id: 'p-1' });
+    });
+    expect(result.current.data).toEqual({ id: 'p-2' });
+  });
+});

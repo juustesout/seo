@@ -21,6 +21,11 @@ export interface AsyncState<T> {
   reload: () => void;
 }
 
+/** Element-wise compare of two dependency arrays (all callers pass primitives). */
+function sameDeps(a: unknown[], b: unknown[]): boolean {
+  return a.length === b.length && a.every((v, i) => Object.is(v, b[i]));
+}
+
 /**
  * Fetch-on-mount + manual reload hook for API calls. `deps` re-runs the load;
  * `reload` bumps an internal tick to force a refetch without changing deps.
@@ -28,6 +33,11 @@ export interface AsyncState<T> {
  * effect only restarts on real deps - that is what lets `reload()` be called
  * from polling loops without resubscribing. An `alive` guard drops results
  * after unmount.
+ *
+ * When `deps` change the payload belongs to the previous scope and is dropped
+ * during render, so a project-scoped view never paints another project's data
+ * while the new request is in flight. `reload()` deliberately does not clear
+ * `data`, so polling refreshes in place.
  */
 export function useAsync<T>(fn: () => Promise<T>, deps: unknown[] = []): AsyncState<T> {
   const [data, setData] = useState<T | null>(null);
@@ -36,6 +46,14 @@ export function useAsync<T>(fn: () => Promise<T>, deps: unknown[] = []): AsyncSt
   const [tick, setTick] = useState(0);
   const fnRef = useRef(fn);
   fnRef.current = fn;
+
+  const prevDepsRef = useRef<unknown[] | null>(null);
+  if (prevDepsRef.current === null || !sameDeps(prevDepsRef.current, deps)) {
+    prevDepsRef.current = deps;
+    setData(null);
+    setError(null);
+    setLoading(true);
+  }
 
   useEffect(() => {
     let alive = true;
