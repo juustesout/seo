@@ -279,6 +279,105 @@ begin
 end $$;
 SQL
 
+echo "==> smoke test: project member administration (phase B) + authorization boundaries"
+PSQL -d "${DB_NAME}" <<'SQL'
+set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-000000000001"}';
+insert into auth.users (id, email) values
+  ('00000000-0000-0000-0000-000000000002', 'member2@example.com'),
+  ('00000000-0000-0000-0000-000000000003', 'admin3@example.com'),
+  ('00000000-0000-0000-0000-000000000004', 'owner4@example.com')
+on conflict (id) do nothing;
+do $$
+declare
+  v_project uuid;
+  v_owner  uuid := '00000000-0000-0000-0000-000000000001';
+  v_editor uuid := '00000000-0000-0000-0000-000000000002';
+  v_admin  uuid := '00000000-0000-0000-0000-000000000003';
+  v_owner2 uuid := '00000000-0000-0000-0000-000000000004';
+  v_role text;
+  v_denied boolean;
+begin
+  select id into v_project from public.seo_projects where slug = 'demo' limit 1;
+  if v_project is null then raise exception 'smoke: demo project missing for member admin'; end if;
+
+  -- Owner adds an editor, an admin and a second owner.
+  perform set_config('request.jwt.claims', json_build_object('sub', v_owner)::text, true);
+  perform public.seo_add_project_member(v_project, 'member2@example.com', 'editor');
+  perform public.seo_add_project_member(v_project, 'admin3@example.com', 'admin');
+  perform public.seo_add_project_member(v_project, 'owner4@example.com', 'owner');
+
+  select role into v_role from public.seo_list_project_members(v_project) where user_id = v_admin;
+  if v_role is distinct from 'admin' then raise exception 'smoke: added admin role not visible to owner (role=%)', v_role; end if;
+  if (select count(*) from public.seo_list_project_members(v_project)) < 4 then
+    raise exception 'smoke: owner member list incomplete';
+  end if;
+
+  -- An editor cannot list or add members.
+  perform set_config('request.jwt.claims', json_build_object('sub', v_editor)::text, true);
+  v_denied := false;
+  begin perform public.seo_list_project_members(v_project);
+  exception when insufficient_privilege then v_denied := true; end;
+  if not v_denied then raise exception 'smoke: editor was allowed to list members'; end if;
+
+  v_denied := false;
+  begin perform public.seo_add_project_member(v_project, 'owner4@example.com', 'viewer');
+  exception when insufficient_privilege then v_denied := true; end;
+  if not v_denied then raise exception 'smoke: editor was allowed to add a member'; end if;
+
+  -- An admin cannot grant the owner/admin role, nor remove an owner.
+  perform set_config('request.jwt.claims', json_build_object('sub', v_admin)::text, true);
+  v_denied := false;
+  begin perform public.seo_add_project_member(v_project, 'member2@example.com', 'owner');
+  exception when insufficient_privilege then v_denied := true; end;
+  if not v_denied then raise exception 'smoke: admin was allowed to grant the owner role'; end if;
+
+  v_denied := false;
+  begin perform public.seo_remove_project_member(v_project, v_owner);
+  exception when insufficient_privilege then v_denied := true; end;
+  if not v_denied then raise exception 'smoke: admin was allowed to remove an owner'; end if;
+
+  -- Owner changes a role, then removes the member.
+  perform set_config('request.jwt.claims', json_build_object('sub', v_owner)::text, true);
+  perform public.seo_update_project_member_role(v_project, v_editor, 'viewer');
+  select role into v_role from public.seo_project_members where project_id = v_project and user_id = v_editor;
+  if v_role is distinct from 'viewer' then raise exception 'smoke: role change did not take effect (role=%)', v_role; end if;
+
+  perform public.seo_remove_project_member(v_project, v_editor);
+  if exists (select 1 from public.seo_project_members where project_id = v_project and user_id = v_editor) then
+    raise exception 'smoke: owner removal did not take effect';
+  end if;
+
+  -- Owner protection: the last owner cannot be demoted.
+  perform public.seo_update_project_member_role(v_project, v_owner, 'editor');
+  if (select role from public.seo_project_members where project_id = v_project and user_id = v_owner) is distinct from 'editor' then
+    raise exception 'smoke: owner demotion with a second owner did not take effect';
+  end if;
+
+  perform set_config('request.jwt.claims', json_build_object('sub', v_owner2)::text, true);
+  v_denied := false;
+  begin perform public.seo_update_project_member_role(v_project, v_owner2, 'editor');
+  exception when raise_exception then
+    if sqlerrm like '%at least one owner%' then v_denied := true; else raise; end if;
+  end;
+  if not v_denied then raise exception 'smoke: last owner was allowed to be demoted'; end if;
+
+  v_denied := false;
+  begin perform public.seo_remove_project_member(v_project, v_owner2);
+  exception when raise_exception then
+    if sqlerrm like '%at least one owner%' then v_denied := true; else raise; end if;
+  end;
+  if not v_denied then raise exception 'smoke: last owner was allowed to be removed'; end if;
+
+  -- A remaining owner can restore the other owner.
+  perform public.seo_update_project_member_role(v_project, v_owner, 'owner');
+  if (select role from public.seo_project_members where project_id = v_project and user_id = v_owner) is distinct from 'owner' then
+    raise exception 'smoke: owner restore did not take effect';
+  end if;
+
+  raise notice 'smoke: member administration + authorization boundaries OK';
+end $$;
+SQL
+
 echo "==> smoke test: knowledge sources (phase E) + canonical vocabulary + isolation"
 PSQL -d "${DB_NAME}" <<'SQL'
 set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-000000000001"}';
