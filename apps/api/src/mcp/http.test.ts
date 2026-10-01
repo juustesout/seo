@@ -55,7 +55,10 @@ afterEach(() => {
 /** Tiny JSON-RPC client over the streamable HTTP endpoint. */
 class RpcClient {
   private sid: string | null = null;
-  constructor(private readonly auth: string | null) {}
+  constructor(
+    private readonly auth: string | null,
+    private readonly endpoint: string = baseUrl,
+  ) {}
 
   async post(method: string, params: Record<string, unknown> = {}): Promise<{ status: number; sid: string | null; body: unknown }> {
     const headers: Record<string, string> = {
@@ -64,7 +67,7 @@ class RpcClient {
     };
     if (this.auth) headers.authorization = this.auth;
     if (this.sid) headers['mcp-session-id'] = this.sid;
-    const res = await fetch(baseUrl, {
+    const res = await fetch(this.endpoint, {
       method: 'POST',
       headers,
       body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
@@ -77,7 +80,7 @@ class RpcClient {
 
   async delete(): Promise<number> {
     if (!this.sid) return 0;
-    const res = await fetch(baseUrl, { method: 'DELETE', headers: { 'mcp-session-id': this.sid } });
+    const res = await fetch(this.endpoint, { method: 'DELETE', headers: { 'mcp-session-id': this.sid } });
     this.sid = null;
     return res.status;
   }
@@ -214,5 +217,65 @@ describe('mcp http session lifecycle + tools', () => {
     expect(result?.content?.[0]?.text).toContain('project_id does not match');
     expect(scheduleList).not.toHaveBeenCalled();
     await client.delete();
+  });
+});
+
+/** Build an isolated router+server so session TTL/cap can be configured per test. */
+async function makeServer(
+  options: Parameters<typeof createMcpHttpRouter>[0],
+): Promise<{ endpoint: string; close: () => Promise<void> }> {
+  const fakeContainer = { sb: {}, jobStore: { list: async () => [] } } as never;
+  const app = express();
+  app.use(express.json());
+  app.use((req, _res, next) => {
+    (req as unknown as { container: unknown }).container = fakeContainer;
+    next();
+  });
+  app.use('/api/mcp', createMcpHttpRouter(options));
+  const srv = await new Promise<Server>((resolve) => {
+    const s = app.listen(0, () => resolve(s));
+  });
+  const endpoint = `http://127.0.0.1:${(srv.address() as AddressInfo).port}/api/mcp`;
+  return {
+    endpoint,
+    close: () => new Promise<void>((resolve, reject) => srv.close((err) => (err ? reject(err) : resolve()))),
+  };
+}
+
+describe('mcp http session hardening', () => {
+  it('rejects a request whose bearer does not match the session key', async () => {
+    const client = new RpcClient('Bearer seo_live_abc');
+    await client.initialize(['read']);
+    vi.spyOn(ApiKeyStore.prototype, 'authenticate').mockResolvedValue({ ...record(['read']), id: 'key-2' });
+    const out = await client.post('tools/list', {});
+    expect(out.status).toBe(401);
+  });
+
+  it('expires an idle session after the TTL', async () => {
+    let clock = 1_000_000;
+    const { endpoint, close } = await makeServer({ sessionTtlMs: 1000, now: () => clock });
+    try {
+      const client = new RpcClient('Bearer seo_live_abc', endpoint);
+      await client.initialize(['read']);
+      clock += 5000;
+      const out = await client.post('tools/list', {});
+      expect(out.status).toBe(404);
+    } finally {
+      await close();
+    }
+  });
+
+  it('evicts the least-recently-used session when the cap is reached', async () => {
+    const { endpoint, close } = await makeServer({ maxSessions: 1 });
+    try {
+      const first = new RpcClient('Bearer seo_live_first', endpoint);
+      await first.initialize(['read']);
+      const second = new RpcClient('Bearer seo_live_second', endpoint);
+      await second.initialize(['read']);
+      const out = await first.post('tools/list', {});
+      expect(out.status).toBe(404);
+    } finally {
+      await close();
+    }
   });
 });

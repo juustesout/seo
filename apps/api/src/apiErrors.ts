@@ -12,6 +12,7 @@
 import type { NextFunction, Request, Response } from 'express';
 import { ZodError } from 'zod';
 import { logger } from './logger.js';
+import { currentRequestId } from './http/requestContext.js';
 
 export class ApiError extends Error {
   constructor(
@@ -44,6 +45,10 @@ export class ApiError extends Error {
   static conflict(message: string) {
     return new ApiError(409, 'conflict', message);
   }
+  /** 429 - the caller exceeded a rate limit; retry after the window resets. */
+  static rateLimited(message = 'Too many requests', details?: unknown) {
+    return new ApiError(429, 'rate_limited', message, details);
+  }
   /**
    * 503 - the feature/credential is not configured server-side. Distinct from
    * 500 so the UI can show "set this up first" instead of "something broke".
@@ -55,7 +60,9 @@ export class ApiError extends Error {
 
 /** Express 404 for unmatched routes (kept minimal and consistent). */
 export function notFoundHandler(_req: Request, res: Response) {
-  res.status(404).json({ error: { code: 'not_found', message: 'Route not found' } });
+  res.status(404).json({
+    error: { code: 'not_found', message: 'Route not found', request_id: currentRequestId() },
+  });
 }
 
 /**
@@ -63,11 +70,15 @@ export function notFoundHandler(_req: Request, res: Response) {
  * flattened to a stable `validation_error`; ApiError passes its status/code
  * through; anything else is logged in full server-side and reported to the
  * client only as a generic `internal_error` so stack traces and internals
- * never leave the process.
+ * never leave the process. Every error body carries the request id so a user
+ * can quote it and it maps to the log line (which pino also tags).
  */
 export function errorHandler(err: unknown, req: Request, res: Response, _next: NextFunction) {
+  const requestId = currentRequestId();
   if (err instanceof ApiError) {
-    res.status(err.status).json({ error: { code: err.code, message: err.message, details: err.details } });
+    res.status(err.status).json({
+      error: { code: err.code, message: err.message, details: err.details, request_id: requestId },
+    });
     return;
   }
   if (err instanceof ZodError) {
@@ -76,10 +87,13 @@ export function errorHandler(err: unknown, req: Request, res: Response, _next: N
         code: 'validation_error',
         message: 'Invalid request payload',
         details: err.flatten(),
+        request_id: requestId,
       },
     });
     return;
   }
   logger.error({ err, method: req.method, path: req.path }, 'unhandled error');
-  res.status(500).json({ error: { code: 'internal_error', message: 'An unexpected error occurred' } });
+  res.status(500).json({
+    error: { code: 'internal_error', message: 'An unexpected error occurred', request_id: requestId },
+  });
 }

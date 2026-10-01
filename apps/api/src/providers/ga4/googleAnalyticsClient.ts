@@ -15,6 +15,8 @@
  * returned further up - the service exposes application DTOs only.
  */
 
+import { fetchWithTimeout } from '../../http/fetchTimeout.js';
+
 export const GA4_ADMIN_BASE = 'https://analyticsadmin.googleapis.com/v1beta';
 export const GA4_DATA_BASE = 'https://analyticsdata.googleapis.com/v1beta';
 const USERINFO_ENDPOINT = 'https://www.googleapis.com/oauth2/v3/userinfo';
@@ -90,7 +92,7 @@ export class GoogleAnalyticsClient {
   ) {}
 
   private async request(url: string, init?: RequestInit): Promise<Record<string, unknown>> {
-    const res = await this.fetchFn(url, {
+    const res = await fetchWithTimeout(this.fetchFn, url, {
       ...init,
       headers: {
         authorization: `Bearer ${this.accessToken}`,
@@ -117,7 +119,7 @@ export class GoogleAnalyticsClient {
 
   /** The Google account email behind the access token (for "Connected as ..."). */
   async getUserEmail(): Promise<string | null> {
-    const res = await this.fetchFn(USERINFO_ENDPOINT, {
+    const res = await fetchWithTimeout(this.fetchFn, USERINFO_ENDPOINT, {
       headers: { authorization: `Bearer ${this.accessToken}`, accept: 'application/json' },
     });
     if (!res.ok) return null;

@@ -72,8 +72,10 @@ export async function chunkedUpsert(
     });
     const { error } = await query;
     if (error) {
+      // Full driver error stays server-side; the client gets a stable code and
+      // no raw Postgres message (which can disclose schema/constraint internals).
       logger.error({ error, table, chunkStart: i }, 'chunked upsert failed');
-      throw new ApiError(500, 'storage_error', `Failed to store ${table} rows`, error.message);
+      throw new ApiError(500, 'storage_error', `Failed to store ${table} rows`);
     }
     inserted += chunk.length;
   }

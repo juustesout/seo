@@ -7,7 +7,9 @@ set -euo pipefail
 RELEASE_ID="${1:?usage: deploy-release.sh <release-id>}"
 DEPLOY_ROOT="${DEPLOY_ROOT:-/opt/seo-api}"
 KEEP_RELEASES="${KEEP_RELEASES:-3}"
-HEALTH_URL="${HEALTH_URL:-http://127.0.0.1:3001/api/health}"
+# Gate promotion on readiness (database reachable), not mere liveness, so a
+# release that boots but cannot serve project-scoped work rolls back.
+HEALTH_URL="${HEALTH_URL:-http://127.0.0.1:3001/api/ready}"
 HEALTH_RETRIES="${HEALTH_RETRIES:-15}"
 SERVICES="${SERVICES:-seo-api seo-worker}"
 

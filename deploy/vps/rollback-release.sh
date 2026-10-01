@@ -5,7 +5,7 @@
 set -euo pipefail
 
 DEPLOY_ROOT="${DEPLOY_ROOT:-/opt/seo-api}"
-HEALTH_URL="${HEALTH_URL:-http://127.0.0.1:3001/api/health}"
+HEALTH_URL="${HEALTH_URL:-http://127.0.0.1:3001/api/ready}"
 HEALTH_RETRIES="${HEALTH_RETRIES:-15}"
 SERVICES="${SERVICES:-seo-api seo-worker}"
 

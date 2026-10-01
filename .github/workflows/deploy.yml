@@ -25,7 +25,7 @@ jobs:
       DEPLOY_ROOT: /opt/seo-api
       SERVICE_USER: ${{ secrets.VPS_SERVICE_USER || 'root' }}
       KEEP_RELEASES: "3"
-      HEALTH_URL: ${{ secrets.VPS_HEALTH_URL || 'http://127.0.0.1:3001/api/health' }}
+      HEALTH_URL: ${{ secrets.VPS_HEALTH_URL || 'http://127.0.0.1:3001/api/ready' }}
       RELEASE_ID: ${{ github.event.workflow_run.head_sha }}
       ARTIFACT_RUN_ID: ${{ github.event.workflow_run.id }}
     steps:

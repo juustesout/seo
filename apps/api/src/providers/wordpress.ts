@@ -20,6 +20,7 @@ import {
   type PublishRequestObserver,
 } from './publishing/providerUsage.js';
 import { validateExternalUrl } from '../knowledge/url.js';
+import { fetchWithTimeout } from '../http/fetchTimeout.js';
 
 const CRED = { username: 'wordpress_username', appPassword: 'wordpress_application_password' } as const;
 
@@ -77,7 +78,7 @@ export class WordPressClient {
   private async request<T>(method: string, path: string, body?: unknown, operation?: PublishOperation): Promise<T> {
     let res: Response;
     try {
-      res = await this.fetchFn(this.endpoint(path), {
+      res = await fetchWithTimeout(this.fetchFn, this.endpoint(path), {
         method,
         headers: this.authHeaders(),
         body: body === undefined ? undefined : JSON.stringify(body),

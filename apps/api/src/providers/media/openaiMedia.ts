@@ -18,6 +18,7 @@ import type {
   MediaUsageScope,
   ProviderLogger,
 } from '@seo/contracts';
+import { fetchWithTimeout } from '../../http/fetchTimeout.js';
 import { emitMediaUsage } from './mediaUsage.js';
 
 export interface OpenAiMediaProviderDeps {
@@ -78,7 +79,7 @@ export class OpenAiMediaProvider implements MediaProvider {
     const size = this.normalizeSize(opts.size, model);
     let res: Response;
     try {
-      res = await this.fetchFn(`${this.baseUrl}/images/generations`, {
+      res = await fetchWithTimeout(this.fetchFn, `${this.baseUrl}/images/generations`, {
         method: 'POST',
         headers: {
           authorization: `Bearer ${this.deps.config.OPENAI_API_KEY}`,

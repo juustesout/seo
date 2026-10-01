@@ -17,6 +17,7 @@
 
 import type { OAuthAccountIdentity, OAuthTokenResult, ProviderContext, ProviderDeps, PublisherOAuthConnector } from '@seo/contracts';
 import type { PublishOperation, PublishRequestObserver } from '../publishing/providerUsage.js';
+import { fetchWithTimeout } from '../../http/fetchTimeout.js';
 
 /**
  * X API base. api.x.com is the API host (token + tweets + users/me) and wants
@@ -154,7 +155,7 @@ export class XOAuthClient {
       client_id: this.clientId,
       code_verifier: opts.codeVerifier,
     });
-    const res = await this.fetchFn(X_TOKEN_URL, {
+    const res = await fetchWithTimeout(this.fetchFn, X_TOKEN_URL, {
       method: 'POST',
       headers: { 'content-type': 'application/x-www-form-urlencoded' },
       body,
@@ -169,7 +170,7 @@ export class XOAuthClient {
       refresh_token: refreshToken,
       client_id: this.clientId,
     });
-    const res = await this.fetchFn(X_TOKEN_URL, {
+    const res = await fetchWithTimeout(this.fetchFn, X_TOKEN_URL, {
       method: 'POST',
       headers: { 'content-type': 'application/x-www-form-urlencoded' },
       body,
@@ -220,7 +221,7 @@ export class XOAuthClient {
   ): Promise<Record<string, unknown> | null> {
     let res: Response;
     try {
-      res = await this.fetchFn(`${X_API_BASE}${path}`, {
+      res = await fetchWithTimeout(this.fetchFn, `${X_API_BASE}${path}`, {
         method,
         headers: {
           authorization: `Bearer ${accessToken}`,

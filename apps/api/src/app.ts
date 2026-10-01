@@ -25,6 +25,9 @@ import type { Express } from 'express';
 import type { NextFunction, Request, Response } from 'express';
 import { loadConfig } from './config.js';
 import { resolveContainer, optionalAuth } from './http/middleware.js';
+import { requestContext } from './http/requestContext.js';
+import { checkReadiness } from './http/readiness.js';
+import { createRateLimiter } from './http/rateLimit.js';
 import { errorHandler, notFoundHandler } from './apiErrors.js';
 
 import { meRouter } from './http/routes/me.js';
@@ -76,6 +79,9 @@ export function createApp(): Express {
   app.set('trust proxy', true);
 
   const config = loadConfig();
+  // Correlation id first: every response (including errors) and every log line
+  // carries the same id, so a client-reported failure maps to server logs.
+  app.use(requestContext);
   const corsOrigins = [config.publicAppUrl, ...config.env.CORS_ORIGINS.split(',').map((s) => s.trim())].filter(
     (o): o is string => Boolean(o),
   );
@@ -112,25 +118,47 @@ export function createApp(): Express {
   });
   app.use(express.json({ limit: '1mb' }));
 
+  // Rate limiting. The first limiter keys on the proxy-resolved client IP and
+  // covers the unauthenticated surface (health, readiness, the OAuth callback)
+  // before identity is known; the second keys on the authenticated user (IP
+  // fallback) once optionalAuth has run. Both use the shared 429 envelope.
+  if (!config.rateLimit.disabled) {
+    app.use(
+      '/api',
+      createRateLimiter({ windowMs: config.rateLimit.windowMs, max: config.rateLimit.max }),
+    );
+  }
+
   // -- unauthenticated ------------------------------------------------------
+  // Liveness only: proves the process is accepting connections. It deliberately
+  // does not touch the database or disclose which integrations are configured
+  // (that is capability info for authenticated callers, not anonymous probes).
   app.get('/api/health', (_req, res) => {
-    res.json({
-      ok: true,
-      service: 'seo-api',
-      configured: {
-        supabase: config.supabaseConfigured,
-        google: config.googleConfigured,
-        dataforseo: config.dataforseoConfigured,
-        qdrant: config.qdrantConfigured,
-        ai: config.aiConfigured,
-        credentials_encryption: config.encryptionConfigured,
-      },
-    });
+    res.json({ ok: true, service: 'seo-api' });
   });
 
   // -- container + identity (app level) ------------------------------------
   app.use(resolveContainer);
+  // Readiness: proves the system of record is reachable. resolveContainer has
+  // already rejected an unconfigured server with 503 not_configured, so this
+  // only runs when Supabase is wired up.
+  app.get('/api/ready', async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      await checkReadiness(req.container);
+      res.json({ ok: true, service: 'seo-api' });
+    } catch (err) {
+      next(err);
+    }
+  });
   app.use(optionalAuth);
+
+  // Authenticated surface: limit per user (falls back to IP when anonymous).
+  if (!config.rateLimit.disabled) {
+    app.use(
+      '/api',
+      createRateLimiter({ windowMs: config.rateLimit.windowMs, max: config.rateLimit.authMax }),
+    );
+  }
 
   // Google OAuth callback is intentionally unauthenticated (browser redirect).
   app.use('/api/oauth', oauthRouter);

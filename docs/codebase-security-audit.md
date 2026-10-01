@@ -190,11 +190,19 @@ larger, cross-cutting migration and is deferred.
 
 ## 5. Roadmap
 
-- **P0 — done in this pass** (S1, S2, S3, S4, S6, S8, S11).
-- **P1:** S5 rate limiting; S7 HTTPS API origin; S9 error sanitization;
-  S10 MCP session TTL; S12–S16 data-layer fixes; request ids + readiness probe;
-  outbound timeouts + a shared retry budget; expand RLS isolation tests to all
-  tables.
+- **P0 — done** (S1, S2, S3, S4, S6, S8, S11).
+- **P1 — mostly done:**
+  - Error sanitization (S9) and MCP session TTL/cap/re-auth (S10).
+  - Data-layer fixes (S12–S16): migration
+    `20260101000035_harden_data_integrity.sql` (project-teardown audit,
+    project-bound content<->media links, per-project job idempotency,
+    `seo_usage_totals` grant, `storage.objects` policies for `seo-media`).
+  - Request/correlation ids, liveness-only `/api/health`, new DB-aware
+    `/api/ready` (now the deploy gate), and expanded logger redaction (L2/L3).
+  - Outbound timeouts on every provider HTTP client.
+  - **Remaining:** S5 rate limiting; S7 HTTPS API origin (deferred, infra);
+    shared retry budget + circuit breaker; expand RLS isolation tests to all
+    tables.
 - **P2:** ESLint + CI (migration harness, contracts tests, audit/secret
   scanning, Dependabot); coverage thresholds; `noUncheckedIndexedAccess` for
   the API; config consolidation + `.env.example`; web code-splitting; remove

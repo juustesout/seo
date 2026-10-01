@@ -14,6 +14,7 @@
  */
 
 import type { EmbedUsageObserver } from './embeddingUsage.js';
+import { fetchWithTimeout } from '../../http/fetchTimeout.js';
 
 /**
  * Something that turns text into equal-length vectors. The dimension must be
@@ -70,7 +71,7 @@ export class OpenAiCompatibleEmbedder implements Embedder {
     const batches: number[][] = [];
     for (let i = 0; i < texts.length; i += 8) {
       const batch = texts.slice(i, i + 8);
-      const res = await fetch(`${baseUrl}/embeddings`, {
+      const res = await fetchWithTimeout(fetch, `${baseUrl}/embeddings`, {
         method: 'POST',
         headers: { authorization: `Bearer ${apiKey}`, 'content-type': 'application/json' },
         body: JSON.stringify({ model, input: batch }),

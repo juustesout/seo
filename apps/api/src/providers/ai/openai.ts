@@ -22,6 +22,7 @@ import type {
   AIModelInfo,
   ProviderLogger,
 } from '@seo/contracts';
+import { fetchWithTimeout } from '../../http/fetchTimeout.js';
 
 export interface OpenAiProviderDeps {
   config: Record<string, string | undefined>;
@@ -139,7 +140,7 @@ export class OpenAIProvider implements AIProvider {
    */
   private async postJson(path: string, body: Record<string, unknown>): Promise<Record<string, unknown>> {
     this.assertConfigured();
-    const res = await this.fetchFn(`${this.baseUrl}${path}`, {
+    const res = await fetchWithTimeout(this.fetchFn, `${this.baseUrl}${path}`, {
       method: 'POST',
       headers: {
         authorization: `Bearer ${this.apiKey}`,

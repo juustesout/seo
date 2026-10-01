@@ -21,6 +21,7 @@
  */
 
 import { delay } from '../../util.js';
+import { fetchWithTimeout } from '../../http/fetchTimeout.js';
 
 const BASE = 'https://api.dataforseo.com';
 
@@ -268,7 +269,7 @@ export class DataForSeoClient {
       await this.pace();
       let res: Response;
       try {
-        res = await fetchFn(`${BASE}${path}`, {
+        res = await fetchWithTimeout(fetchFn, `${BASE}${path}`, {
           method,
           headers: {
             authorization: this.authHeader,

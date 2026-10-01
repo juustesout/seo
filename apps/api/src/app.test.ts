@@ -47,4 +47,38 @@ describe('app security perimeter', () => {
     expect(res.headers.get('access-control-allow-origin')).toBe('https://app.example');
     expect(res.headers.get('access-control-allow-credentials')).toBe('true');
   });
+
+  it('reports liveness without disclosing configured integrations', async () => {
+    const res = await fetch(`${base}/api/health`);
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body.ok).toBe(true);
+    expect(body.configured).toBeUndefined();
+  });
+});
+
+describe('request correlation', () => {
+  it('generates and echoes a request id on every response', async () => {
+    const res = await fetch(`${base}/api/health`);
+    expect(res.headers.get('x-request-id')).toMatch(/^[A-Za-z0-9._-]{1,128}$/);
+  });
+
+  it('propagates a safe caller-supplied request id', async () => {
+    const res = await fetch(`${base}/api/health`, { headers: { 'x-request-id': 'req-abc.123' } });
+    expect(res.headers.get('x-request-id')).toBe('req-abc.123');
+  });
+
+  it('does not reflect an unsafe request id (regenerates instead)', async () => {
+    const res = await fetch(`${base}/api/health`, { headers: { 'x-request-id': 'bad~id<x>' } });
+    const echoed = res.headers.get('x-request-id');
+    expect(echoed).not.toBe('bad~id<x>');
+    expect(echoed).toMatch(/^[A-Za-z0-9._-]{1,128}$/);
+  });
+
+  it('includes the request id in an error body for support correlation', async () => {
+    const res = await fetch(`${base}/api/definitely-not-a-route`, {
+      headers: { 'x-request-id': 'trace-me-42' },
+    });
+    const body = (await res.json()) as { error?: { request_id?: string } };
+    expect(body.error?.request_id).toBe('trace-me-42');
+  });
 });

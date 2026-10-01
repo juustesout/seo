@@ -19,12 +19,27 @@ import type { ServiceContainer } from '../context.js';
 import { ApiKeyStore } from '../infra/apiKeys.js';
 import type { ApiKeyRecord } from '../infra/apiKeys.js';
 import { ApiError } from '../apiErrors.js';
+import { logger } from '../logger.js';
 import { depsFromApiKey, createSeoMcpServer } from './session.js';
+
+/**
+ * Idle lifetime of an in-memory MCP session. A session that receives no request
+ * for this long is closed and dropped, so a leaked session id cannot be used
+ * forever and idle transports do not accumulate.
+ */
+const SESSION_TTL_MS = 30 * 60 * 1000;
+
+/** Hard ceiling on concurrent sessions per process; the least-recently-used is evicted. */
+const MAX_SESSIONS = 1000;
 
 /** A live MCP session: the tool server plus its streamable-HTTP transport, keyed by mcp-session-id. */
 interface McpHttpSession {
   server: McpServer;
   transport: StreamableHTTPServerTransport;
+  /** API key that opened the session; a later request presenting a different key is rejected. */
+  keyId: string;
+  /** Epoch ms of the last request; drives idle-expiry and LRU eviction. */
+  lastUsedAt: number;
 }
 
 export interface McpHttpRouterOptions {
@@ -33,6 +48,12 @@ export interface McpHttpRouterOptions {
    * ApiKeyStore backed by the request container; injectable for tests.
    */
   authenticate?: (token: string, container: ServiceContainer) => Promise<ApiKeyRecord | null>;
+  /** Idle session lifetime in ms (default SESSION_TTL_MS); injectable for tests. */
+  sessionTtlMs?: number;
+  /** Max concurrent sessions (default MAX_SESSIONS); injectable for tests. */
+  maxSessions?: number;
+  /** Clock injection for deterministic expiry tests. */
+  now?: () => number;
 }
 
 /** Pulls the bare token out of an `Authorization: Bearer ...` header (case-insensitive). */
@@ -65,20 +86,76 @@ function sessionIdOf(req: Request): string | null {
 export function createMcpHttpRouter(options: McpHttpRouterOptions = {}): Router {
   const router = Router();
   const sessions = new Map<string, McpHttpSession>();
+  const ttlMs = options.sessionTtlMs ?? SESSION_TTL_MS;
+  const maxSessions = options.maxSessions ?? MAX_SESSIONS;
+  const now = options.now ?? (() => Date.now());
   const authenticate =
     options.authenticate ??
     ((token: string, container: ServiceContainer) => new ApiKeyStore(container.sb).authenticate(token));
 
   /** Map any thrown error to a JSON-RPC error response (ApiError status preserved). */
   function handleErr(res: Response, err: unknown): void {
-    const message = err instanceof ApiError ? err.message : err instanceof Error ? err.message : 'Internal error';
-    const status = err instanceof ApiError && err.status >= 400 && err.status < 600 ? err.status : 500;
-    respondMpcError(res, status, message);
+    if (err instanceof ApiError) {
+      const status = err.status >= 400 && err.status < 600 ? err.status : 500;
+      respondMpcError(res, status, err.message);
+      return;
+    }
+    // Non-ApiError internals (driver/provider messages, stacks) stay server-side.
+    logger.error({ err }, 'mcp http request failed');
+    respondMpcError(res, 500, 'Internal error');
+  }
+
+  /** Close a session's transport and drop it from the map (used by TTL + LRU eviction). */
+  function dropSession(id: string, reason: string): void {
+    const session = sessions.get(id);
+    if (!session) return;
+    sessions.delete(id);
+    logger.info({ sessionId: id, reason }, 'closing mcp session');
+    void Promise.resolve(session.transport.close()).catch(() => undefined);
+  }
+
+  /** Drop sessions idle beyond the TTL. Called on every request. */
+  function sweepExpired(): void {
+    const cutoff = now() - ttlMs;
+    for (const [id, session] of sessions) {
+      if (session.lastUsedAt < cutoff) dropSession(id, 'idle-expired');
+    }
+  }
+
+  /** Evict the least-recently-used session once the cap is reached. */
+  function enforceCap(): void {
+    while (sessions.size >= maxSessions) {
+      let oldestId: string | null = null;
+      let oldest = Infinity;
+      for (const [id, session] of sessions) {
+        if (session.lastUsedAt < oldest) {
+          oldest = session.lastUsedAt;
+          oldestId = id;
+        }
+      }
+      if (!oldestId) break;
+      dropSession(oldestId, 'capacity');
+    }
+  }
+
+  /**
+   * Re-assert the caller's API key against an existing session. A request that
+   * presents a bearer must present the SAME key that opened the session, so a
+   * stolen session id cannot be paired with a different (even valid) key, and a
+   * revoked key is rejected the moment it is presented. Requests without a
+   * bearer are bounded by the session TTL instead.
+   */
+  async function keyMatchesSession(req: Request, session: McpHttpSession): Promise<boolean> {
+    const token = bearerToken(req);
+    if (!token) return true;
+    const key = await authenticate(token, req.container);
+    return Boolean(key && key.id === session.keyId);
   }
 
   /** Routes a message to the session transport, opening a session first. */
   router.post('/', async (req: Request, res: Response) => {
     try {
+      sweepExpired();
       const existingId = sessionIdOf(req);
       if (existingId) {
         const session = sessions.get(existingId);
@@ -86,6 +163,11 @@ export function createMcpHttpRouter(options: McpHttpRouterOptions = {}): Router 
           respondMpcError(res, 404, 'Unknown MCP session');
           return;
         }
+        if (!(await keyMatchesSession(req, session))) {
+          respondMpcError(res, 401, 'Unauthorized: API key does not match this session');
+          return;
+        }
+        session.lastUsedAt = now();
         await session.transport.handleRequest(req, res, req.body);
         return;
       }
@@ -106,7 +188,8 @@ export function createMcpHttpRouter(options: McpHttpRouterOptions = {}): Router 
         sessionIdGenerator: () => randomUUID(),
         onsessioninitialized: (id: string) => {
           storedId = id;
-          sessions.set(id, { server, transport });
+          enforceCap();
+          sessions.set(id, { server, transport, keyId: key.id, lastUsedAt: now() });
         },
       });
       transport.onclose = () => {
@@ -122,6 +205,7 @@ export function createMcpHttpRouter(options: McpHttpRouterOptions = {}): Router 
   // Optional SSE stream the client can subscribe to for server messages.
   router.get('/', async (req: Request, res: Response) => {
     try {
+      sweepExpired();
       const id = sessionIdOf(req);
       if (!id) {
         respondMpcError(res, 404, 'Unknown MCP session');
@@ -132,6 +216,11 @@ export function createMcpHttpRouter(options: McpHttpRouterOptions = {}): Router 
         respondMpcError(res, 404, 'Unknown MCP session');
         return;
       }
+      if (!(await keyMatchesSession(req, session))) {
+        respondMpcError(res, 401, 'Unauthorized: API key does not match this session');
+        return;
+      }
+      session.lastUsedAt = now();
       await session.transport.handleRequest(req, res);
     } catch (err) {
       handleErr(res, err);
@@ -149,6 +238,10 @@ export function createMcpHttpRouter(options: McpHttpRouterOptions = {}): Router 
       const session = sessions.get(id);
       if (!session) {
         respondMpcError(res, 404, 'Unknown MCP session');
+        return;
+      }
+      if (!(await keyMatchesSession(req, session))) {
+        respondMpcError(res, 401, 'Unauthorized: API key does not match this session');
         return;
       }
       sessions.delete(id);

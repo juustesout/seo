@@ -13,6 +13,7 @@
  */
 
 import { signJsonPayload, verifyJsonPayload } from '../../infra/signedPayload.js';
+import { fetchWithTimeout } from '../../http/fetchTimeout.js';
 
 /** Read-only Search Console scope + openid/email so identity resolves. */
 export const GSC_SCOPES = [
@@ -79,7 +80,7 @@ export async function exchangeCode(opts: {
     grant_type: 'authorization_code',
     redirect_uri: opts.redirectUri,
   });
-  const res = await fetch(TOKEN_ENDPOINT, {
+  const res = await fetchWithTimeout(fetch, TOKEN_ENDPOINT, {
     method: 'POST',
     headers: { 'content-type': 'application/x-www-form-urlencoded' },
     body,
@@ -113,7 +114,7 @@ export async function refreshAccessToken(opts: {
     refresh_token: opts.refreshToken,
     grant_type: 'refresh_token',
   });
-  const res = await fetch(TOKEN_ENDPOINT, {
+  const res = await fetchWithTimeout(fetch, TOKEN_ENDPOINT, {
     method: 'POST',
     headers: { 'content-type': 'application/x-www-form-urlencoded' },
     body,

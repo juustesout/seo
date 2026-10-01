@@ -9,6 +9,8 @@
  * namespace; it never guesses a project from a name.
  */
 
+import { fetchWithTimeout } from '../../http/fetchTimeout.js';
+
 /**
  * A vector point ready for upsert. `id` is our deterministic UUID (see
  * deterministicId) so re-indexing the same external document overwrites its
@@ -64,7 +66,7 @@ export class QdrantClient {
    * with the status preserved and a truncated body for diagnostics.
    */
   private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
-    const res = await this.fetchFn(`${this.baseUrl}${path}`, {
+    const res = await fetchWithTimeout(this.fetchFn, `${this.baseUrl}${path}`, {
       method,
       headers: {
         'api-key': this.apiKey,

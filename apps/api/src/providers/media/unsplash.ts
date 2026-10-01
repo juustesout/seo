@@ -23,6 +23,7 @@ import type {
   ProviderLogger,
 } from '@seo/contracts';
 import { emitMediaUsage } from './mediaUsage.js';
+import { fetchWithTimeout } from '../../http/fetchTimeout.js';
 
 export interface UnsplashProviderDeps {
   config: Record<string, string | undefined>;
@@ -84,7 +85,7 @@ export class UnsplashMediaProvider implements MediaProvider {
     if (opts.orientation) params.set('orientation', opts.orientation);
     let res: Response;
     try {
-      res = await this.fetchFn(`https://api.unsplash.com/search/photos?${params.toString()}`, {
+      res = await fetchWithTimeout(this.fetchFn, `https://api.unsplash.com/search/photos?${params.toString()}`, {
         headers: { authorization: `Client-ID ${key}` },
       });
     } catch (err) {

@@ -313,11 +313,15 @@ export class ContentService {
   }
 
   /** Replace the content<->media links for one content row (delete + insert). */
-  private async syncContentMedia(_projectId: string, contentId: string, mediaIds: string[]): Promise<void> {
-    const { error: del } = await this.sb.from('seo_content_media').delete().eq('content_id', contentId);
+  private async syncContentMedia(projectId: string, contentId: string, mediaIds: string[]): Promise<void> {
+    const { error: del } = await this.sb
+      .from('seo_content_media')
+      .delete()
+      .eq('project_id', projectId)
+      .eq('content_id', contentId);
     if (del) throw ApiError.badRequest('Could not update media references');
     if (mediaIds.length === 0) return;
-    const rows = mediaIds.map((mediaId) => ({ content_id: contentId, media_id: mediaId }));
+    const rows = mediaIds.map((mediaId) => ({ project_id: projectId, content_id: contentId, media_id: mediaId }));
     const { error: ins } = await this.sb.from('seo_content_media').insert(rows as never);
     if (ins) throw ApiError.badRequest('Could not record media references');
   }

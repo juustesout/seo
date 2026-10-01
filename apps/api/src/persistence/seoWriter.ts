@@ -393,7 +393,7 @@ export class SeoWriter {
     );
     if (error) {
       logger.error({ error, type: input.type }, 'source snapshot upsert failed');
-      throw new ApiError(500, 'storage_error', 'Failed to store the source snapshot', error.message);
+      throw new ApiError(500, 'storage_error', 'Failed to store the source snapshot');
     }
   }
 

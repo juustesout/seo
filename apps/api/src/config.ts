@@ -6,7 +6,7 @@
  * GOOGLE_CLIENT_SECRET, DATAFORSEO_BASE64 and CREDENTIALS_ENCRYPTION_KEY are
  * read here and handed to services by reference; they are never logged, echoed
  * or sent to the browser. Only the derived *Configured presence flags below are
- * safe to expose (the /api/health endpoint and catalog reflect them), and they
+ * safe to expose (the authenticated catalog reflects them), and they
  * mean "the server holds credentials" - never that an upstream is reachable.
  *
  * Every variable is optional in the zod schema (barring defaults) so a bare
@@ -100,6 +100,16 @@ const envSchema = z.object({
   // so non-real channels never appear in production catalogs.
   ENABLE_TEST_PUBLISHERS: z.enum(['true', 'false']).default('false'),
 
+  // Rate limiting (in-memory, per process). Disabled automatically in the test
+  // environment so suites can fire many requests without tripping it; explicit
+  // `RATE_LIMIT_DISABLED=true` turns it off anywhere. `RATE_LIMIT_MAX` governs
+  // the pre-auth (per-IP) surface; `RATE_LIMIT_AUTH_MAX` the authenticated
+  // (per-user, IP fallback) surface.
+  RATE_LIMIT_DISABLED: z.enum(['true', 'false']).default('false'),
+  RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(60_000),
+  RATE_LIMIT_MAX: z.coerce.number().int().positive().default(300),
+  RATE_LIMIT_AUTH_MAX: z.coerce.number().int().positive().default(600),
+
   LOG_LEVEL: z.enum(['trace', 'debug', 'info', 'warn', 'error']).default('info'),
 });
 
@@ -126,6 +136,13 @@ export interface AppConfig {
   /** null when the encryption key is missing (credential storage disabled). */
   encryptionConfigured: boolean;
   publicAppUrl: string | null;
+  /** In-memory client rate limiting; disabled under NODE_ENV=test. */
+  rateLimit: {
+    disabled: boolean;
+    windowMs: number;
+    max: number;
+    authMax: number;
+  };
 }
 
 /**
@@ -149,5 +166,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     aiConfigured: Boolean(parsed.OPENAI_API_KEY),
     encryptionConfigured: Boolean(parsed.CREDENTIALS_ENCRYPTION_KEY),
     publicAppUrl: parsed.PUBLIC_APP_URL ?? null,
+    rateLimit: {
+      disabled: parsed.RATE_LIMIT_DISABLED === 'true' || parsed.NODE_ENV === 'test',
+      windowMs: parsed.RATE_LIMIT_WINDOW_MS,
+      max: parsed.RATE_LIMIT_MAX,
+      authMax: parsed.RATE_LIMIT_AUTH_MAX,
+    },
   };
 }

@@ -876,7 +876,7 @@ begin
     raise exception 'smoke: external media provenance was not recorded';
   end if;
 
-  insert into public.seo_content_media (content_id, media_id) values (v_content, v_media_a);
+  insert into public.seo_content_media (project_id, content_id, media_id) values (v_project, v_content, v_media_a);
 
   begin
     delete from public.seo_media where id = v_media_a;
@@ -1967,5 +1967,119 @@ begin
 end $$;
 SQL
 echo "   smoke: definer grants are least-privilege (RLS helpers intact, write helper revoked)"
+
+echo "==> smoke test: data-integrity hardening (S12/S13/S15/S16)"
+PSQL -d "${DB_NAME}" <<'SQL'
+set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-000000000001"}';
+do $$
+declare
+  v_p1 uuid;
+  v_p2 uuid;
+  v_content1 uuid;
+  v_media2 uuid;
+begin
+  select id into v_p1 from public.seo_projects where slug = 'demo' limit 1;
+  select id into v_p2 from public.seo_projects where slug = 'second-user-project' limit 1;
+  if v_p1 is null or v_p2 is null then raise exception 'smoke: S13 projects missing'; end if;
+  select id into v_content1 from public.seo_content where project_id = v_p1 limit 1;
+  if v_content1 is null then raise exception 'smoke: S13 content missing'; end if;
+
+  if exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'seo_content_media'
+      and column_name = 'project_id' and is_nullable = 'YES'
+  ) then raise exception 'smoke: S13 seo_content_media.project_id is still nullable'; end if;
+
+  insert into public.seo_media (project_id, filename, mime_type, size, storage_key)
+  values (v_p2, 'Foreign media.png', 'image/png', 10, v_p2::text || '/foreign.png')
+  returning id into v_media2;
+  if v_media2 is null then raise exception 'smoke: S13 foreign media not created'; end if;
+
+  -- A project-1 content row cannot be recorded under project 2.
+  begin
+    insert into public.seo_content_media (project_id, content_id, media_id)
+    values (v_p2, v_content1, v_media2);
+    raise exception 'smoke: S13 cross-project content link unexpectedly allowed';
+  exception when foreign_key_violation then
+    null;
+  end;
+
+  -- A project-2 media row cannot be linked from project 1.
+  begin
+    insert into public.seo_content_media (project_id, content_id, media_id)
+    values (v_p1, v_content1, v_media2);
+    raise exception 'smoke: S13 cross-project media link unexpectedly allowed';
+  exception when foreign_key_violation then
+    null;
+  end;
+
+  raise notice 'smoke: content<->media links are project-bound (S13) OK';
+end $$;
+SQL
+
+PSQL -d "${DB_NAME}" <<'SQL'
+set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-000000000001"}';
+do $$
+declare
+  v_project uuid;
+  v_job1 uuid;
+  v_job2 uuid;
+  v_audit int;
+begin
+  -- S12: deleting a project with child rows succeeds and keeps the audit trail.
+  insert into public.seo_projects (name, slug, created_by)
+  values ('Teardown project', 'teardown-project', '00000000-0000-0000-0000-000000000001')
+  returning id into v_project;
+  insert into public.seo_content (project_id, title, slug)
+  values (v_project, 'Teardown article', 'teardown-article');
+
+  delete from public.seo_projects where id = v_project;
+  if exists (select 1 from public.seo_projects where id = v_project) then
+    raise exception 'smoke: S12 project delete failed';
+  end if;
+
+  select count(*) into v_audit from public.seo_audit_logs
+  where action = 'delete' and entity_type = 'seo_projects' and entity_id = v_project::text and project_id is null;
+  if v_audit < 1 then raise exception 'smoke: S12 audit trail for the deleted project was lost'; end if;
+
+  -- S15: the same idempotency key is independent per project.
+  select id into v_project from public.seo_projects where slug = 'demo' limit 1;
+  insert into public.seo_sync_jobs (project_id, provider, job_type, idempotency_key)
+  values (v_project, 'wordpress', 'publish', 'cross-project-idem') returning id into v_job1;
+  insert into public.seo_sync_jobs (project_id, provider, job_type, idempotency_key)
+  values ((select id from public.seo_projects where slug = 'second-user-project' limit 1), 'wordpress', 'publish', 'cross-project-idem')
+  returning id into v_job2;
+  if v_job1 is null or v_job2 is null then
+    raise exception 'smoke: S15 per-project idempotency key collided across projects';
+  end if;
+
+  begin
+    insert into public.seo_sync_jobs (project_id, provider, job_type, idempotency_key)
+    values (v_project, 'wordpress', 'publish', 'cross-project-idem');
+    raise exception 'smoke: S15 duplicate per-project idempotency key unexpectedly allowed';
+  exception when unique_violation then
+    null;
+  end;
+
+  raise notice 'smoke: project delete + audit trail + per-project idempotency (S12/S15) OK';
+end $$;
+SQL
+
+PSQL -d "${DB_NAME}" -t -A <<'SQL' >/dev/null
+do $$
+begin
+  -- S16: usage totals is service-role only.
+  if has_function_privilege('authenticated', 'public.seo_usage_totals(uuid, uuid, uuid, timestamptz, timestamptz, text, text, text, text, boolean)', 'execute') then
+    raise exception 'smoke: S16 authenticated can execute seo_usage_totals';
+  end if;
+  if has_function_privilege('anon', 'public.seo_usage_totals(uuid, uuid, uuid, timestamptz, timestamptz, text, text, text, text, boolean)', 'execute') then
+    raise exception 'smoke: S16 anon can execute seo_usage_totals';
+  end if;
+  if not has_function_privilege('service_role', 'public.seo_usage_totals(uuid, uuid, uuid, timestamptz, timestamptz, text, text, text, text, boolean)', 'execute') then
+    raise exception 'smoke: S16 service_role lost execute on seo_usage_totals';
+  end if;
+end $$;
+SQL
+echo "   smoke: usage totals is service-role only (S16 OK)"
 
 echo "==> migration validation OK (${DB_NAME})"

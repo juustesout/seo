@@ -11,6 +11,8 @@
  * Error; it never fabricates rows.
  */
 
+import { fetchWithTimeout } from '../../http/fetchTimeout.js';
+
 export interface SearchAnalyticsRow {
   keys: string[];
   clicks: number;
@@ -86,7 +88,7 @@ export class GscApiClient {
   private async request<T>(operation: string, path: string, init?: RequestInit): Promise<T> {
     let res: Response;
     try {
-      res = await this.fetchFn(`${BASE}${path}`, {
+      res = await fetchWithTimeout(this.fetchFn, `${BASE}${path}`, {
         ...init,
         headers: {
           authorization: `Bearer ${this.accessToken}`,

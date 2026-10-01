@@ -45,7 +45,7 @@ Set these under Settings -> Secrets and variables -> Actions.
 | `VPS_PORT` | no | SSH port, default `22` |
 | `VPS_KNOWN_HOSTS` | no | Pinned host key; otherwise `ssh-keyscan` |
 | `VPS_SERVICE_USER` | no | Systemd service user, default `root` |
-| `VPS_HEALTH_URL` | no | Default `http://127.0.0.1:3001/api/health` |
+| `VPS_HEALTH_URL` | no | Default `http://127.0.0.1:3001/api/ready` |
 
 The `production` environment in `deploy.yml` can be used to require manual
 approval before a deploy.
@@ -131,7 +131,7 @@ together so there is no window where a unit points at a missing `current`.
    ```bash
    systemctl status seo-api seo-worker
    journalctl -u seo-api -n 50
-   curl -fsS http://127.0.0.1:3001/api/health
+   curl -fsS http://127.0.0.1:3001/api/ready
    ```
 6. Only after the new deployment is proven, remove the old `/opt/seo-api/repo`
    checkout and its files.
