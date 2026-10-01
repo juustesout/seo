@@ -40,6 +40,7 @@ import {
 } from '@seo/contracts';
 import { api } from '../lib/api';
 import { fmtDate, Empty } from '../lib/ui';
+import { sanitizeArticleHtml } from '../lib/sanitizeHtml';
 import type { RichTextEditorHandle } from '../components/content/RichTextEditor';
 import { CollapsibleSection, EditorWorkspace, type PreviewViewport } from '../components/content/workspace';
 import { SeoPanel } from '../components/content/SeoPanel';
@@ -510,7 +511,7 @@ export function EditorView({
         {d.content_html ? (
           <Card>
             <CardContent>
-              <div className="article-body" dangerouslySetInnerHTML={{ __html: d.content_html }} />
+              <div className="article-body" dangerouslySetInnerHTML={{ __html: sanitizeArticleHtml(d.content_html) }} />
             </CardContent>
           </Card>
         ) : (

@@ -29,10 +29,18 @@ describe('OAuth PKCE primitives (RFC 7636)', () => {
 });
 
 describe('HMAC-signed state payloads', () => {
-  it('round-trips a payload through sign + verify', () => {
+  it('round-trips a payload through sign + verify with an expiry claim', () => {
     const state = { projectId: 'p1', publisherId: 'pub1', nonce: 'n' };
     const token = signJsonPayload(state, 'secret');
-    expect(verifyJsonPayload<typeof state>(token, 'secret')).toEqual(state);
+    const decoded = verifyJsonPayload<typeof state & { iat?: number; exp?: number }>(token, 'secret');
+    expect(decoded).toMatchObject(state);
+    expect(typeof decoded.exp).toBe('number');
+    expect(decoded.exp! > Date.now()).toBe(true);
+  });
+
+  it('rejects an expired payload', () => {
+    const token = signJsonPayload({ a: 1 }, 'secret', { ttlMs: -1 });
+    expect(() => verifyJsonPayload(token, 'secret')).toThrow(/expired/i);
   });
 
   it('rejects tampered tokens and wrong secrets', () => {

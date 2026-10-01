@@ -11,6 +11,7 @@
  */
 
 import type { ContentBlock, ContentHeadingLevel, ContentOutlineItem } from './content.js';
+import { safeHref } from './content.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -198,7 +199,8 @@ function renderInline(node: TipNode): string {
       else if (mark.type === 'link') {
         const href = (mark.attrs as { href?: unknown } | undefined)?.href;
         const target = (mark.attrs as { target?: unknown } | undefined)?.target;
-        const safe = typeof href === 'string' ? href : '';
+        const safe = safeHref(href);
+        if (!safe) continue;
         const rel = typeof target === 'string' && target === '_blank' ? ' rel="noopener"' : '';
         text = `<a href="${escapeHtml(safe)}"${rel}>${text}</a>`;
       }
@@ -279,12 +281,8 @@ export function renderDocHtml(doc: TipDoc): string {
         case 'compositionButton': {
           const label = renderInlineChildren(node);
           if (!label) break;
-          const href = (node.attrs as { href?: unknown } | undefined)?.href;
-          out.push(
-            typeof href === 'string' && href
-              ? `<p><a href="${escapeHtml(href)}">${label}</a></p>`
-              : `<p>${label}</p>`,
-          );
+          const href = safeHref((node.attrs as { href?: unknown } | undefined)?.href);
+          out.push(href ? `<p><a href="${escapeHtml(href)}">${label}</a></p>` : `<p>${label}</p>`);
           break;
         }
         default:

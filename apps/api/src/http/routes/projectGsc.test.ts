@@ -207,7 +207,7 @@ describe('GET /api/projects/:projectId/gsc/keywords', () => {
       queryRow({ query: 'other project', project_id: '44444444-4444-4444-8444-444444444444', clicks: 99, impressions: 9999 }),
       queryRow({ query: 'other property', property_id: OTHER_PROPERTY, clicks: 99, impressions: 9999 }),
     ];
-    const res = await request('/keywords', 'viewer-token');
+    const res = await request('/keywords?startDate=2026-09-01&endDate=2026-09-30', 'viewer-token');
     expect(res.status).toBe(200);
     expect(res.json.data).toEqual({
       propertyId: PROPERTY,

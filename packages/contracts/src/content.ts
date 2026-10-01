@@ -51,6 +51,25 @@ function escapeHtml(value: string): string {
     .replace(/"/g, '&quot;');
 }
 
+/**
+ * Link/URL scheme allowlist for rendered content. Authored text is escaped,
+ * but an escaped `href` still carries whatever scheme the author typed, so a
+ * `javascript:`/`data:` URL would survive into a rendered anchor. Only schemes
+ * that cannot execute script are allowed; relative URLs pass through.
+ */
+const SAFE_HREF_SCHEMES = new Set(['http:', 'https:', 'mailto:', 'tel:']);
+
+/** Return `value` when it is a safe link target (relative or an allowed
+ *  scheme), otherwise `undefined` so callers render plain text instead. */
+export function safeHref(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const href = value.trim();
+  if (!href) return undefined;
+  const scheme = /^([a-zA-Z][a-zA-Z0-9+.-]*):/.exec(href);
+  if (!scheme) return href;
+  return SAFE_HREF_SCHEMES.has(`${scheme[1]!.toLowerCase()}:`) ? href : undefined;
+}
+
 /** Render blocks to semantic HTML. Escapes all authored text. */
 export function renderContentHtml(blocks: ContentBlock[]): string {
   const parts: string[] = [];
@@ -100,9 +119,15 @@ export function renderContentHtml(blocks: ContentBlock[]): string {
         }
         break;
       }
-      case 'link':
-        parts.push(`<p><a href="${escapeHtml(block.attrs.href)}">${escapeHtml(block.attrs.text)}</a></p>`);
+      case 'link': {
+        const href = safeHref(block.attrs.href);
+        if (href) {
+          parts.push(`<p><a href="${escapeHtml(href)}">${escapeHtml(block.attrs.text)}</a></p>`);
+        } else if (block.attrs.text.trim()) {
+          parts.push(`<p>${escapeHtml(block.attrs.text)}</p>`);
+        }
         break;
+      }
       default:
         break;
     }

@@ -19,6 +19,7 @@ import { asyncHandler } from '../asyncHandler.js';
 import { ApiError } from '../../apiErrors.js';
 import { buildPublisherProviderContext } from '../../context.js';
 import { publisherOAuthStart } from '../../services/publisherOAuthService.js';
+import { validateExternalUrl } from '../../knowledge/url.js';
 import { parseId, parseProjectId, redirectBase } from './utils.js';
 
 export const publishersRouter: Router = Router({ mergeParams: true });
@@ -128,6 +129,14 @@ publishersRouter.post(
     const patch: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(incoming)) {
       if (!allowed.includes(key)) throw ApiError.badRequest(`Config key '${key}' is not allowed for publisher '${publisher.provider}'`);
+      if (key === 'base_url' || key === 'site_url') {
+        if (typeof value !== 'string') throw ApiError.badRequest(`Config key '${key}' must be a URL string`);
+        try {
+          validateExternalUrl(value);
+        } catch {
+          throw ApiError.badRequest(`Config key '${key}' must be a public http(s) URL`);
+        }
+      }
       patch[key] = value;
     }
     await container.sb

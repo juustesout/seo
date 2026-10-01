@@ -79,9 +79,25 @@ export function createApp(): Express {
   const corsOrigins = [config.publicAppUrl, ...config.env.CORS_ORIGINS.split(',').map((s) => s.trim())].filter(
     (o): o is string => Boolean(o),
   );
+  // Baseline security headers for every API response. The API only ever emits
+  // JSON, so a lockdown CSP is safe here; the SPA's own policy is served with
+  // the web app. HSTS is only meaningful once the reverse proxy terminates TLS.
+  app.use((_req: Request, res: Response, next: NextFunction) => {
+    res.setHeader('x-content-type-options', 'nosniff');
+    res.setHeader('x-frame-options', 'DENY');
+    res.setHeader('referrer-policy', 'no-referrer');
+    res.setHeader('cross-origin-resource-policy', 'same-site');
+    res.setHeader('permissions-policy', 'camera=(), microphone=(), geolocation=()');
+    res.setHeader('content-security-policy', "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'");
+    res.setHeader('strict-transport-security', 'max-age=31536000; includeSubDomains');
+    next();
+  });
   app.use((req: Request, res: Response, next: NextFunction) => {
     const origin = req.header('origin');
-    if (origin && (corsOrigins.length === 0 || corsOrigins.includes(origin))) {
+    // Fail closed: reflect an origin only when it is explicitly allow-listed.
+    // An empty allow-list means no cross-origin browser access (same-origin
+    // requests and non-browser callers carry no Origin and are unaffected).
+    if (origin && corsOrigins.includes(origin)) {
       res.setHeader('access-control-allow-origin', origin);
       res.setHeader('vary', 'Origin');
       res.setHeader('access-control-allow-credentials', 'true');

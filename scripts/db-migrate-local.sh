@@ -1904,4 +1904,68 @@ end $$;
 SQL
 echo "   smoke: analytics bindings are server-write only (read-only RLS OK)"
 
+echo "==> smoke test: RLS hardening (creator backdoor + definer grants)"
+PSQL -d "${DB_NAME}" <<'SQL'
+do $$
+declare
+  v_project uuid;
+begin
+  -- A project whose creator is user 0002, then that creator is removed from
+  -- the roster entirely (user 0001 is left as the sole owner).
+  insert into public.seo_projects (name, slug, created_by)
+  values ('Edge project', 'edge-project', '00000000-0000-0000-0000-000000000002')
+  returning id into v_project;
+
+  insert into public.seo_project_members (project_id, user_id, role)
+  values (v_project, '00000000-0000-0000-0000-000000000001', 'owner')
+  on conflict (project_id, user_id) do nothing;
+
+  delete from public.seo_project_members
+  where project_id = v_project and user_id = '00000000-0000-0000-0000-000000000002';
+
+  if exists (select 1 from public.seo_project_members where project_id = v_project and user_id = '00000000-0000-0000-0000-000000000002') then
+    raise exception 'smoke: creator membership was not removed';
+  end if;
+end $$;
+SQL
+
+CREATOR_LEAK_COUNT="$(PSQL -d "${DB_NAME}" -t -A <<'SQL'
+grant usage on schema public to authenticated;
+grant select on public.seo_projects to authenticated;
+set role authenticated;
+set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-000000000002"}';
+select count(*) from public.seo_projects where slug = 'edge-project';
+SQL
+)"
+if [ -z "${CREATOR_LEAK_COUNT}" ] || [ "${CREATOR_LEAK_COUNT}" != "0" ]; then
+  echo "!! RLS: removed creator still reads the project (${CREATOR_LEAK_COUNT})" >&2
+  exit 1
+fi
+echo "   smoke: a removed creator loses project access (created_by backdoor closed)"
+
+PSQL -d "${DB_NAME}" -t -A <<'SQL' >/dev/null
+do $$
+begin
+  if has_function_privilege('anon', 'public.seo_is_member(uuid, uuid)', 'execute') then
+    raise exception 'smoke: anon can execute seo_is_member';
+  end if;
+  if not has_function_privilege('authenticated', 'public.seo_is_member(uuid, uuid)', 'execute') then
+    raise exception 'smoke: authenticated lost execute on seo_is_member (RLS would break)';
+  end if;
+  if not has_function_privilege('authenticated', 'public.seo_has_role(uuid, text[])', 'execute') then
+    raise exception 'smoke: authenticated lost execute on seo_has_role (RLS would break)';
+  end if;
+  if not has_function_privilege('authenticated', 'public.seo_account_id_for_user(uuid)', 'execute') then
+    raise exception 'smoke: authenticated lost execute on seo_account_id_for_user (RLS would break)';
+  end if;
+  if has_function_privilege('authenticated', 'public.seo_ensure_account(uuid)', 'execute') then
+    raise exception 'smoke: authenticated can execute seo_ensure_account';
+  end if;
+  if not has_function_privilege('service_role', 'public.seo_ensure_account(uuid)', 'execute') then
+    raise exception 'smoke: service_role cannot execute seo_ensure_account';
+  end if;
+end $$;
+SQL
+echo "   smoke: definer grants are least-privilege (RLS helpers intact, write helper revoked)"
+
 echo "==> migration validation OK (${DB_NAME})"

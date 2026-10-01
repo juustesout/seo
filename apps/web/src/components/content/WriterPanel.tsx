@@ -55,6 +55,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/utils';
+import { sanitizeArticleHtml } from '../../lib/sanitizeHtml';
 
 /** Canonical Section Magic actions surfaced in the picker, mirroring the API
  *  vocabulary. change_tone requires a tone; custom requires an instruction;
@@ -820,7 +821,7 @@ function ReviewResult({
         </span>
       </div>
       <div className="rounded-lg border bg-card p-4">
-        <div className="article-body" dangerouslySetInnerHTML={{ __html: review.contentHtml }} />
+        <div className="article-body" dangerouslySetInnerHTML={{ __html: sanitizeArticleHtml(review.contentHtml) }} />
       </div>
       <p className="text-xs text-muted-foreground">
         To use this draft in the editor you would explicitly apply it as content - this panel does not do that for you.

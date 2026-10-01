@@ -152,4 +152,25 @@ describe('WordPress publishing usage', () => {
     expect(fetchFn).not.toHaveBeenCalled();
     expect(await store.list({ projectId: PROJECT })).toHaveLength(0);
   });
+
+  it('rejects an internal/private site URL before any request (SSRF guard)', async () => {
+    const store = new InMemoryUsageEventStore();
+    const fetchFn = vi.fn(async () => response({ id: 42 }));
+    vi.stubGlobal('fetch', fetchFn);
+    const c = ctx(store, { config: { base_url: 'http://169.254.169.254/latest/meta-data' } });
+    await expect(publisher().publish(c, input)).rejects.toThrow('public http(s) URL');
+
+    expect(fetchFn).not.toHaveBeenCalled();
+    expect(await store.list({ projectId: PROJECT })).toHaveLength(0);
+  });
+
+  it('rejects a non-http(s) scheme before any request', async () => {
+    const store = new InMemoryUsageEventStore();
+    const fetchFn = vi.fn(async () => response({ id: 42 }));
+    vi.stubGlobal('fetch', fetchFn);
+    const c = ctx(store, { config: { base_url: 'file:///etc/passwd' } });
+    await expect(publisher().publish(c, input)).rejects.toThrow('public http(s) URL');
+
+    expect(fetchFn).not.toHaveBeenCalled();
+  });
 });

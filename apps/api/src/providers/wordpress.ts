@@ -19,6 +19,7 @@ import {
   type PublishOperation,
   type PublishRequestObserver,
 } from './publishing/providerUsage.js';
+import { validateExternalUrl } from '../knowledge/url.js';
 
 const CRED = { username: 'wordpress_username', appPassword: 'wordpress_application_password' } as const;
 
@@ -139,6 +140,11 @@ export class WordPressPublisher implements PublisherProvider {
     const username = await ctx.credentials.get(CRED.username);
     const appPassword = await ctx.credentials.get(CRED.appPassword);
     if (!baseUrl) throw new Error('WordPress site URL is not configured');
+    try {
+      validateExternalUrl(baseUrl);
+    } catch {
+      throw new Error('WordPress site URL must be a public http(s) URL');
+    }
     if (!username || !appPassword) {
       throw new Error('WordPress credentials are missing; add the application password in Publishing settings');
     }
