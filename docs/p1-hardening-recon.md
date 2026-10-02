@@ -18,7 +18,7 @@ rate limiter) are already on `main` and are **not** redone here.
 | Item | Status | Where |
 |---|---|---|
 | S5 rate limiting (class tiers) | COMPLETE | `apps/api/src/http/rateLimitClasses.ts`, `config.ts` (`RATE_LIMIT_{STRICT,EXPENSIVE,MODERATE}_MAX`), `app.ts` mount before raw body parsers |
-| S7 HTTPS API origin | INFRA ACTION REQUIRED | `vercel.json` + `apps/web/vercel.json` → `https://api.peerdisco.com/api/:path*`; Cloudflare Full (strict) live; `deploy/vps/nginx-api.conf` origin-cert 443 block + `deploy/README.md` |
+| S7 HTTPS API origin | COMPLETE (verified 2026-10-02) | `vercel.json` + `apps/web/vercel.json` → `https://api.peerdisco.com/api/:path*`; Cloudflare Full (strict) + Origin Certificate; `deploy/vps/nginx-api.conf` 443 block live; `deploy/README.md` |
 | Retry policy + budget | COMPLETE | `apps/api/src/reliability/retry.ts`; worker `runWithRetryBudget`; `jobErrorPayload` uses `isRetryableError`; DataForSEO `request()` via `withRetry` |
 | Circuit breaker | COMPLETE | `apps/api/src/reliability/circuitBreaker.ts`; DataForSEO client |
 | Stale-running sweep | COMPLETE | `worker.ts` `sweepStaleRunning` reuses `jobStore.fail` (crash = attempt, terminal `stale_worker`) |
@@ -134,9 +134,10 @@ an external TLS terminator.
 
 - Replace the hardcoded cleartext IP in **both** `vercel.json` files with a
   stable HTTPS origin.
-- **S7 is not marked COMPLETE** until the production path is actually end-to-end
-  HTTPS; it is marked **INFRA ACTION REQUIRED** with the exact steps recorded in
-  `docs/production-readiness-recon.md`.
+- S7 was not to be marked COMPLETE until the production path was actually
+  end-to-end HTTPS; while pending it was tracked as INFRA ACTION REQUIRED with
+  the exact steps in `docs/production-readiness-recon.md`. That condition is now
+  satisfied (see Resolution below).
 
 ### Resolution (2026-10-02)
 
@@ -154,16 +155,17 @@ Live probing changed the plan. Findings:
   app); on port 80 `api.peerdisco.com` does not match it and lands on the
   default server, i.e. our API.
 
-Chosen origin: **`https://api.peerdisco.com/api/:path*`**. The Cloudflare `api`
-DNS record is live, and Cloudflare SSL/TLS is set to **Full (strict)** with a
-Cloudflare Origin Certificate installed on the VPS, so the whole path is intended
-to be TLS end to end. One fix remains: on port 443 the VPS default server routes
-`api.peerdisco.com` to the Bridge app (it answers `400 Invalid Host header`), so
-`api.peerdisco.com` needs its own `listen 443 ssl` nginx server block that reuses
-the Origin Certificate and proxies to `127.0.0.1:3001`. Both `vercel.json` files,
-`deploy/vps/nginx-api.conf` (now the Cloudflare Origin Certificate variant) and
-`deploy/README.md` are updated. S7 stays **INFRA ACTION REQUIRED** until that
-block is applied and `https://api.peerdisco.com/api/health` returns the API.
+Chosen origin: **`https://api.peerdisco.com/api/:path*`**. Verified 2026-10-02:
+the Cloudflare `api` DNS record is live, Cloudflare SSL/TLS is **Full (strict)**
+with a Cloudflare Origin Certificate on the VPS, and the `listen 443 ssl` server
+block for `api.peerdisco.com` now proxies to `127.0.0.1:3001` instead of the
+Bridge app. Checks: `https://api.peerdisco.com/api/health` and `/api/ready`
+return `200 {"ok":true,"service":"seo-api"}`, an unknown path returns the API's
+`404`, `http://api.peerdisco.com/...` returns `301` to HTTPS, and
+`https://oldskoolseo.com/api/health` (Vercel -> Cloudflare -> origin) returns
+`200`. The whole path is TLS end to end, so **S7 is COMPLETE**. Both
+`vercel.json` files, `deploy/vps/nginx-api.conf` (Cloudflare Origin Certificate
+variant) and `deploy/README.md` are updated.
 
 No second API hostname beyond the `api.` subdomain is introduced.
 
@@ -289,8 +291,9 @@ account-scoped usage rows. Platform-admin access never flows through membership.
 
 ## 5. Deferred / infra-only items
 
-- **S7**: external DNS + TLS termination for the API subdomain; documented as
-  INFRA ACTION REQUIRED, repository config made ready.
+- **S7**: resolved 2026-10-02 - `api.peerdisco.com` over Cloudflare Full (strict)
+  to the VPS nginx 443 block (Cloudflare Origin Certificate) and the API. No
+  deferred infra item remains for S7.
 - Process-local rate limiter and circuit breaker are **per process**. With the
   current single-API/single-worker systemd topology that is the real protection;
   if the API is later scaled horizontally, a shared store (Redis/table) can

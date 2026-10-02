@@ -120,13 +120,15 @@ Two things on the VPS matter:
 - Port **80**'s default server proxies `/api/*` to the API on `127.0.0.1:3001`,
   but Cloudflare Full (strict) connects on **443**, not 80.
 - Port **443**'s default server routes to a different app (an unrelated "Bridge"
-  that rejects non-loopback `Host` headers), so `api.peerdisco.com` currently
-  gets a `400` there. The VPS already has a Cloudflare Origin Certificate
-  installed; `api.peerdisco.com` needs its **own `listen 443 ssl` server block**
-  that reuses that certificate and proxies to the API.
+  that rejects non-loopback `Host` headers). `api.peerdisco.com` therefore has its
+  **own `listen 443 ssl` server block** that reuses the existing Cloudflare Origin
+  Certificate and proxies to the API.
 
-Status: DNS record is live. **Remaining: install the 443 server block below**
-(otherwise Full (strict) hits the Bridge and the API returns 400).
+Status: **DONE / verified 2026-10-02**. The `api` DNS record is live, Cloudflare
+is Full (strict), and `https://api.peerdisco.com/api/health` +
+`https://oldskoolseo.com/api/health` both return `200 {"ok":true,"service":"seo-api"}`.
+The steps below are the reference for the block that is installed (and for a
+rebuild/recovery).
 
 ### 1. DNS (Cloudflare)
 

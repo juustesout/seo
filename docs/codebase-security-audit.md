@@ -122,13 +122,13 @@ explicit range.
    allowlist; `competitorResearch` query isn't validated). Prefer a single
    shared fetch-URL module.
 2. **Perimeter and transport.** Rate limiting is now in place (global IP/user
-   tiers plus OAuth/expensive/job endpoint classes, S5 FIXED). S7 remains
-   **infra action required**: both `vercel.json` files target
-   `https://api.peerdisco.com/api/:path*`; the Cloudflare `api` DNS record is
-   live and SSL/TLS is Full (strict) with a Cloudflare Origin Certificate on the
-   VPS. The VPS still needs a `server_name api.peerdisco.com` block on 443
-   proxying to `127.0.0.1:3001` (template: `deploy/vps/nginx-api.conf`);
-   `deploy/README.md` has the exact steps. A CSP/header set for the web app is
+   tiers plus OAuth/expensive/job endpoint classes, S5 FIXED). S7 is FIXED: both
+   `vercel.json` files target `https://api.peerdisco.com/api/:path*`; the
+   Cloudflare `api` DNS record is live, SSL/TLS is Full (strict) with a
+   Cloudflare Origin Certificate on the VPS, and the
+   `deploy/vps/nginx-api.conf` 443 block proxies `api.peerdisco.com` to
+   `127.0.0.1:3001` (verified end-to-end: `api.peerdisco.com/api/health` and
+   `oldskoolseo.com/api/health` both `200`). A CSP/header set for the web app is
    still open.
 3. **Observability and resilience.** Request/correlation ids, DB/Qdrant
    readiness, and outbound timeouts are in place. Retry amplification is bounded
@@ -151,9 +151,9 @@ explicit range.
 
 ## 3. Remaining findings (severity)
 
-Status as of 2026-10-02: **S5 FIXED**, **S9 FIXED**, **S10 FIXED**, **S12–S16
-FIXED**, **S7 INFRA ACTION REQUIRED** (repository config ready, external
-DNS/TLS pending). Rows are retained unchanged as the original audit snapshot.
+Status as of 2026-10-02: **S5 FIXED**, **S7 FIXED**, **S9 FIXED**, **S10
+FIXED**, **S12–S16 FIXED**. Rows are retained unchanged as the original audit
+snapshot.
 
 | # | Sev | Finding | Evidence |
 |---|-----|---------|----------|
@@ -216,9 +216,10 @@ larger, cross-cutting migration and is deferred.
   - RLS isolation matrix expanded to every project-scoped `seo_*` table
     (schema-generated) plus focused write-denial and platform-admin boundary
     checks.
-  - **Remaining:** S7 HTTPS API origin (repository config ready; external
-    DNS/TLS/firewall action pending) — tracked as INFRA ACTION REQUIRED in
-    `docs/production-readiness-recon.md`.
+  - S7 HTTPS API origin resolved: Vercel -> `https://api.peerdisco.com` ->
+    Cloudflare Full (strict) -> VPS nginx 443 (Origin Certificate) -> API,
+    verified end to end on 2026-10-02.
+  - **P1 remaining:** none of the original four items; see the P2 list below.
 - **P2:** ESLint + CI (migration harness, contracts tests, audit/secret
   scanning, Dependabot); coverage thresholds; `noUncheckedIndexedAccess` for
   the API; config consolidation + `.env.example`; web code-splitting; remove
