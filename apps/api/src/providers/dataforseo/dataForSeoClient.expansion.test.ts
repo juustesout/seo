@@ -28,8 +28,8 @@ describe('DataForSeoClient.relatedKeywords', () => {
 
     const out = await client.relatedKeywords('seo', { depth: 2, limit: 150, minSearchVolume: 50 });
 
-    expect(calls[0].url).toContain('/v3/dataforseo_labs/google/related_keywords/live');
-    const body = calls[0].body?.[0] ?? {};
+    expect(calls[0]!.url).toContain('/v3/dataforseo_labs/google/related_keywords/live');
+    const body = calls[0]!.body?.[0] ?? {};
     expect(body).toMatchObject({ keyword: 'seo', depth: 2, limit: 150, include_serp_info: false });
     expect(body.filters).toEqual([['keyword_data.keyword_info.search_volume', '>=', 50]]);
     expect(out).toEqual(items);
@@ -39,8 +39,8 @@ describe('DataForSeoClient.relatedKeywords', () => {
     const calls: CapturedCall[] = [];
     const client = clientWith(calls, { status_code: 20000, tasks: [{ result: [{ items: [] }] }] });
     await client.relatedKeywords('seo');
-    expect(calls[0].body?.[0]).toMatchObject({ depth: 1, limit: 100 });
-    expect(calls[0].body?.[0].filters).toBeUndefined();
+    expect(calls[0]!.body?.[0]).toMatchObject({ depth: 1, limit: 100 });
+    expect(calls[0]!.body?.[0]?.filters).toBeUndefined();
   });
 });
 
@@ -51,8 +51,8 @@ describe('DataForSeoClient.keywordIdeas', () => {
 
     await client.keywordIdeas(['seo', 'seo tools'], { limit: 200, minSearchVolume: 10 });
 
-    expect(calls[0].url).toContain('/v3/dataforseo_labs/google/keyword_ideas/live');
-    const body = calls[0].body?.[0] ?? {};
+    expect(calls[0]!.url).toContain('/v3/dataforseo_labs/google/keyword_ideas/live');
+    const body = calls[0]!.body?.[0] ?? {};
     expect(body).toMatchObject({ keywords: ['seo', 'seo tools'], limit: 200, closely_variants: false, include_serp_info: false });
     expect(body.filters).toEqual([['keyword_info.search_volume', '>=', 10]]);
   });
@@ -63,15 +63,15 @@ describe('DataForSeoClient.keywordSuggestions (KW4 opts)', () => {
     const calls: CapturedCall[] = [];
     const client = clientWith(calls, { status_code: 20000, tasks: [{ result: [{ items: [] }] }] });
     await client.keywordSuggestions('seo', { limit: 200, minSearchVolume: 25 });
-    expect(calls[0].body?.[0]).toMatchObject({ keyword: 'seo', limit: 200 });
-    expect(calls[0].body?.[0].filters).toEqual([['keyword_info.search_volume', '>=', 25]]);
+    expect(calls[0]!.body?.[0]).toMatchObject({ keyword: 'seo', limit: 200 });
+    expect(calls[0]!.body?.[0]?.filters).toEqual([['keyword_info.search_volume', '>=', 25]]);
   });
 
   it('keeps the legacy request shape when called without opts', async () => {
     const calls: CapturedCall[] = [];
     const client = clientWith(calls, { status_code: 20000, tasks: [{ result: [{ items: [] }] }] });
     await client.keywordSuggestions('seo');
-    expect(calls[0].body?.[0]).toMatchObject({ keyword: 'seo', limit: 20 });
-    expect(calls[0].body?.[0].filters).toBeUndefined();
+    expect(calls[0]!.body?.[0]).toMatchObject({ keyword: 'seo', limit: 20 });
+    expect(calls[0]!.body?.[0]?.filters).toBeUndefined();
   });
 });

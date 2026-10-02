@@ -177,7 +177,7 @@ describe('acquireGeneratedImage', () => {
     });
 
     expect(persist).toHaveBeenCalledTimes(1);
-    const input = persist.mock.calls[0][0];
+    const input = persist.mock.calls[0]![0];
     expect(input.source).toBe('openai_generated');
     expect(input.sourceMeta).toEqual({ provider: 'openai', model: 'dall-e-3' });
     expect(input.bytes).toHaveLength(bytes.length);

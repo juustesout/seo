@@ -93,7 +93,7 @@ describe('buildWriterAgentPrompt (injection defence)', () => {
     const { user } = buildWriterAgentPrompt(
       input({ evidence: { gatheredAt: null, sources: [{ source: 'knowledge', status: 'available', note: null, itemCount: many.length, items: many }] } as never }),
     );
-    const untrusted = user.split('UNTRUSTED RETRIEVED MATERIAL')[1];
+    const untrusted = user.split('UNTRUSTED RETRIEVED MATERIAL')[1] ?? '';
     expect(untrusted.split('[evidence:').length - 1).toBeLessThanOrEqual(20);
   });
 });

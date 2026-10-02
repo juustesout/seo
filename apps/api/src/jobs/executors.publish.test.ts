@@ -17,7 +17,10 @@ import type { JobRecord } from './types.js';
 import type { SeoWriter } from '../persistence/seoWriter.js';
 
 type Row = Record<string, unknown>;
-type Store = Record<string, Row[]>;
+type Store = Record<string, Row[]> & {
+  seo_publications: Row[];
+  seo_publishers: Row[];
+};
 
 function silentLogger() {
   const noop = () => undefined;
@@ -161,9 +164,9 @@ describe('publish executor routing to a social publisher (Content Studio Phase H
     });
 
     expect(result.remoteId).toMatch(/^demo:/);
-    expect(sbStores.seo_publications[0].status).toBe('published');
-    expect(sbStores.seo_publications[0].remote_id).toMatch(/^demo:/);
-    expect(sbStores.seo_publications[0].target_url).toBeNull();
+    expect(sbStores.seo_publications[0]!.status).toBe('published');
+    expect(sbStores.seo_publications[0]!.remote_id).toMatch(/^demo:/);
+    expect(sbStores.seo_publications[0]!.target_url).toBeNull();
   });
 
   it('fails safely when the publisher provider is not registered (default production registry)', async () => {
@@ -183,7 +186,7 @@ describe('publish executor routing to a social publisher (Content Studio Phase H
 
   it('routes publish_update to the same social adapter and keeps the demo remote id', async () => {
     const sbStores = stores();
-    sbStores.seo_publications[0].remote_id = 'demo:abcdef123456';
+    sbStores.seo_publications[0]!.remote_id = 'demo:abcdef123456';
     const reg = buildRegistry({ config: { ENABLE_TEST_PUBLISHERS: 'true' }, logger: silentLogger() });
     const c = container(reg, sbStores);
 
@@ -195,8 +198,8 @@ describe('publish executor routing to a social publisher (Content Studio Phase H
     });
 
     expect(result.remoteId).toBe('demo:abcdef123456');
-    expect(sbStores.seo_publications[0].status).toBe('updated');
-    expect(sbStores.seo_publications[0].remote_id).toBe('demo:abcdef123456');
+    expect(sbStores.seo_publications[0]!.status).toBe('updated');
+    expect(sbStores.seo_publications[0]!.remote_id).toBe('demo:abcdef123456');
   });
 
   it('fails an X publish safely when the account is not connected and never marks it successful (Phase H6.2)', async () => {
@@ -204,7 +207,7 @@ describe('publish executor routing to a social publisher (Content Studio Phase H
     sbStores.seo_publishers = [
       { id: 'pb-x', project_id: 'p1', provider: 'x', name: 'X', status: 'disconnected', config: {}, capabilities: ['publish_text', 'schedule'] },
     ];
-    sbStores.seo_publications[0].publisher_id = 'pb-x';
+    sbStores.seo_publications[0]!.publisher_id = 'pb-x';
     const reg = buildRegistry({ config: {}, logger: silentLogger() });
     const c = container(reg, sbStores);
 
@@ -217,9 +220,9 @@ describe('publish executor routing to a social publisher (Content Studio Phase H
       }),
     ).rejects.toMatchObject({ code: 'publisher_auth_failed', retryable: false });
 
-    expect(sbStores.seo_publications[0].status).toBe('queued');
-    expect(sbStores.seo_publications[0].remote_id).toBeNull();
-    expect(sbStores.seo_publications[0].target_url).toBeNull();
+    expect(sbStores.seo_publications[0]!.status).toBe('queued');
+    expect(sbStores.seo_publications[0]!.remote_id).toBeNull();
+    expect(sbStores.seo_publications[0]!.target_url).toBeNull();
   });
 });
 
@@ -240,7 +243,7 @@ describe('publish executor usage accounting (R5.10.6)', () => {
 
   function wordpressStores(): Store {
     const s = stores();
-    s.seo_publications[0].project_id = PROJECT;
+    s.seo_publications[0]!.project_id = PROJECT;
     s.seo_publishers = [
       { id: 'pb-1', project_id: PROJECT, provider: 'wordpress', name: 'Blog', status: 'connected', config: { base_url: 'https://blog.example.com' } },
     ];
@@ -266,7 +269,7 @@ describe('publish executor usage accounting (R5.10.6)', () => {
     const result = await run(c, wordpressJob());
 
     expect(result.remoteId).toBe('7');
-    expect(sbStores.seo_publications[0].status).toBe('published');
+    expect(sbStores.seo_publications[0]!.status).toBe('published');
     const events = await store.list({ projectId: PROJECT });
     expect(events).toHaveLength(1);
     expect(events[0]).toMatchObject({
@@ -321,16 +324,16 @@ describe('publish executor usage accounting (R5.10.6)', () => {
     const result = await run(c, wordpressJob());
 
     expect(result.remoteId).toBe('9');
-    expect(sbStores.seo_publications[0].status).toBe('published');
+    expect(sbStores.seo_publications[0]!.status).toBe('published');
   });
 
   it('does not call the provider again when a retry finds a confirmed remote id (H3)', async () => {
     const fetchSpy = vi.fn(async () => response({ id: 42, link: 'https://blog.example.com/?p=42' }, 201));
     vi.stubGlobal('fetch', fetchSpy);
     const sbStores = wordpressStores();
-    sbStores.seo_publications[0].status = 'published';
-    sbStores.seo_publications[0].remote_id = '42';
-    sbStores.seo_publications[0].target_url = 'https://blog.example.com/?p=42';
+    sbStores.seo_publications[0]!.status = 'published';
+    sbStores.seo_publications[0]!.remote_id = '42';
+    sbStores.seo_publications[0]!.target_url = 'https://blog.example.com/?p=42';
     const store = new InMemoryUsageEventStore();
     const c = container(buildRegistry({ config: {}, logger: silentLogger() }), sbStores, store, creds);
 
@@ -346,8 +349,8 @@ describe('publish executor usage accounting (R5.10.6)', () => {
     const fetchSpy = vi.fn(async () => response({}, 200));
     vi.stubGlobal('fetch', fetchSpy);
     const sbStores = wordpressStores();
-    sbStores.seo_publications[0].status = 'deleted';
-    sbStores.seo_publications[0].remote_id = '42';
+    sbStores.seo_publications[0]!.status = 'deleted';
+    sbStores.seo_publications[0]!.remote_id = '42';
     const c = container(buildRegistry({ config: {}, logger: silentLogger() }), sbStores, undefined, creds);
 
     const result = await executorFor('publish')({
@@ -369,7 +372,7 @@ describe('publish executor usage accounting (R5.10.6)', () => {
     const reg = buildRegistry({ config: {}, logger: silentLogger() });
 
     await expect(run(container(reg, sbStores, store, creds), wordpressJob(0))).rejects.toBeTruthy();
-    expect(sbStores.seo_publications[0].remote_id).toBeNull();
+    expect(sbStores.seo_publications[0]!.remote_id).toBeNull();
 
     fetchSpy.mockImplementation(async () => response({ id: 11, link: 'https://blog.example.com/?p=11' }, 201));
     const result = await run(container(reg, sbStores, store, creds), wordpressJob(1));

@@ -107,7 +107,6 @@ export function Publishing({ projectId }: { projectId: string }) {
       setErr(`X connect failed (${oauthError}).`);
       window.history.replaceState({}, '', window.location.pathname + window.location.search.replace(/[?&](x|oauth_error)=[^&]*/g, '').replace(/^&/, '?'));
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const catalogProviders = catalog.data?.publishers ?? [];
@@ -154,7 +153,6 @@ export function Publishing({ projectId }: { projectId: string }) {
       (a, b) => CATEGORY_ORDER.indexOf(a) - CATEGORY_ORDER.indexOf(b),
     );
     return keys.map((category) => ({ category, wraps: groups.get(category) ?? [] }));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pubs.data]);
 
   const connectedCapable = (pubs.data ?? []).filter(

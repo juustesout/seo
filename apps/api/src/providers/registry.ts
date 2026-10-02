@@ -163,31 +163,31 @@ class Registry implements ProviderRegistry {
   listDataSources() {
     return this.order
       .filter((id) => this.entries.get(id)?.kind === 'datasource')
-      .map((id) => this.entries.get(id)!.descriptor) as ProviderDescriptor<'datasource'>[];
+      .map((id) => this.entries.get(id)!.descriptor) as ProviderDescriptor[];
   }
 
   listKnowledge() {
     return this.order
       .filter((id) => this.entries.get(id)?.kind === 'knowledge')
-      .map((id) => this.entries.get(id)!.descriptor) as ProviderDescriptor<'knowledge'>[];
+      .map((id) => this.entries.get(id)!.descriptor) as ProviderDescriptor[];
   }
 
   listPublishers() {
     return this.order
       .filter((id) => this.entries.get(id)?.kind === 'publisher')
-      .map((id) => this.entries.get(id)!.descriptor) as ProviderDescriptor<'publisher'>[];
+      .map((id) => this.entries.get(id)!.descriptor) as ProviderDescriptor[];
   }
 
   listAI() {
     return this.order
       .filter((id) => this.entries.get(id)?.kind === 'ai')
-      .map((id) => this.entries.get(id)!.descriptor) as ProviderDescriptor<'ai'>[];
+      .map((id) => this.entries.get(id)!.descriptor) as ProviderDescriptor[];
   }
 
   listMedia() {
     return this.order
       .filter((id) => this.entries.get(id)?.kind === 'media')
-      .map((id) => this.entries.get(id)!.descriptor) as ProviderDescriptor<'media'>[];
+      .map((id) => this.entries.get(id)!.descriptor) as ProviderDescriptor[];
   }
 }
 

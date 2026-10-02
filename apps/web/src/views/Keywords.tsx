@@ -297,7 +297,6 @@ function useRunPoll(
     if (!run || (run.status !== 'queued' && run.status !== 'running')) return;
     let alive = true;
     let done = false;
-    let id: ReturnType<typeof setInterval> | undefined;
     const tick = async () => {
       try {
         const next = await api<CompetitorResearchRunDto>(`/projects/${projectId}/keyword/competitors/${run.jobId}`);
@@ -305,17 +304,17 @@ function useRunPoll(
         setRun(next);
         if (next.status === 'completed' || next.status === 'failed') {
           done = true;
-          if (id !== undefined) clearInterval(id);
+          clearInterval(id);
           onDone?.(next);
         }
       } catch {
         /* transient poll error: the next tick retries */
       }
     };
-    void tick();
-    id = setInterval(() => {
+    const id = setInterval(() => {
       if (!done) void tick();
     }, 2500);
+    void tick();
     return () => {
       alive = false;
       clearInterval(id);

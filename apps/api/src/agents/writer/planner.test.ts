@@ -113,6 +113,7 @@ function fakeProvider(options: { replies: Array<string | Error>; configured?: bo
       const reply = options.replies[index];
       index += 1;
       if (reply instanceof Error) throw reply;
+      if (typeof reply !== 'string') throw new Error('fake provider ran out of replies');
       return { content: reply, model: 'fake-ai' };
     },
     generate: async () => {
@@ -131,7 +132,7 @@ describe('writerPlanSchema bounds', () => {
     expect(parsed.success).toBe(true);
     if (!parsed.success) return;
     expect(parsed.data.title).toBe(VALID_PLAN.title);
-    expect(parsed.data.sections[0].suggestedKeywords).toEqual(['content operations']);
+    expect(parsed.data.sections[0]!.suggestedKeywords).toEqual(['content operations']);
   });
 
   it('accepts a null metaDescription but rejects an empty string', () => {
@@ -214,8 +215,8 @@ describe('relatedContentFromContext', () => {
     const related = relatedContentFromContext(context({ items }), 'content ops', 'seo ops');
 
     expect(related).toHaveLength(1);
-    expect(related[0].title).toBe('Our SEO content ops workflow');
-    expect(related[0].reason).toContain('Topically overlaps');
+    expect(related[0]!.title).toBe('Our SEO content ops workflow');
+    expect(related[0]!.reason).toContain('Topically overlaps');
   });
 
   it('ignores unrelated content and returns nothing when there are no matches', () => {
@@ -350,7 +351,7 @@ describe('createAiWriterPlanner', () => {
 
     expect(outcome.ok).toBe(true);
     expect(callCount()).toBe(2);
-    const secondUser = requests()[1].messages.find((m) => m.role === 'user')?.content ?? '';
+    const secondUser = requests()[1]!.messages.find((m) => m.role === 'user')?.content ?? '';
     expect(secondUser).toContain('previous reply was not valid plan JSON');
   });
 

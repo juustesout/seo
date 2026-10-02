@@ -13,7 +13,6 @@ afterEach(() => vi.restoreAllMocks());
 
 const PROJECT = '00000000-0000-0000-0000-0000000000bb';
 const SESSION = '00000000-0000-0000-0000-0000000000cc';
-const COLLECTION = '00000000-0000-0000-0000-0000000000dd';
 const EXISTING = '00000000-0000-0000-0000-0000000000ee';
 const ENV = { QDRANT_URL: 'http://q', QDRANT_API_KEY: 'k', OPENAI_API_KEY: 'sk' };
 
@@ -273,7 +272,7 @@ describe('KnowledgeService.applyDiscovery (KB9)', () => {
     const created = (tables.seo_knowledge_sources ?? []).find((r) => r.url === 'https://example.com/a');
     expect(created).toMatchObject({ project_id: PROJECT, source_type: 'url', status: 'draft' });
     expect(enqueueIngest).toHaveBeenCalledTimes(1);
-    expect((tables.seo_knowledge_discovery_sessions[0]! as Row).status).toBe('applied');
+    expect((tables.seo_knowledge_discovery_sessions![0]! as Row).status).toBe('applied');
   });
 
   it('re-running apply never duplicates an already-created source', async () => {
@@ -288,7 +287,7 @@ describe('KnowledgeService.applyDiscovery (KB9)', () => {
 
     expect(first.created).toBe(1);
     expect(second).toMatchObject({ created: 0, alreadyExists: 1 });
-    expect(tables.seo_knowledge_sources.filter((r) => r.url === 'https://example.com/a')).toHaveLength(1);
+    expect(tables.seo_knowledge_sources!.filter((r) => r.url === 'https://example.com/a')).toHaveLength(1);
   });
 
   it('refuses to apply while discovery is still running', async () => {

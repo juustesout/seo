@@ -84,6 +84,7 @@ function fakeProvider(options: { replies: Array<string | Error>; configured?: bo
       const reply = options.replies[index];
       index += 1;
       if (reply instanceof Error) throw reply;
+      if (typeof reply !== 'string') throw new Error('fake provider ran out of replies');
       return { content: reply, model: 'fake-ai' };
     },
     generate: async () => {
@@ -226,7 +227,7 @@ describe('createAiWriterSectionWriter', () => {
     const outcome = await writer.writeSection(sectionInput());
     expect(outcome.ok).toBe(true);
     expect(callCount()).toBe(2);
-    const secondUser = requests()[1].messages.find((m) => m.role === 'user')?.content ?? '';
+    const secondUser = requests()[1]!.messages.find((m) => m.role === 'user')?.content ?? '';
     expect(secondUser).toContain('previous reply was not valid section JSON');
   });
 
@@ -290,7 +291,7 @@ describe('createAiWriterSectionWriter', () => {
 
     const outcome = await writer.writeSection(sectionInput());
     expect(outcome.ok).toBe(true);
-    const request = requests()[0];
+    const request = requests()[0]!;
     expect(request.json).toBe(true);
     expect(request.temperature).toBe(0.5);
     expect(request.maxTokens).toBe(WRITER_SECTION_MAX_TOKENS);

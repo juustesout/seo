@@ -110,8 +110,8 @@ describe('content intelligence recommendation builders', () => {
     const recs = seoRecommendations(result);
     expect(recs).toHaveLength(2);
     expect(recs[0]).toMatchObject({ id: 'seo:meta_desc', source: 'seo', type: 'issue', priority: 'high' });
-    expect(recs[0].action).toEqual({ text: 'Add one' });
-    expect(recs[1].priority).toBe('medium');
+    expect(recs[0]!.action).toEqual({ text: 'Add one' });
+    expect(recs[1]!.priority).toBe('medium');
     expect(recs.some((r) => r.code === 'ok')).toBe(false);
   });
 
@@ -152,10 +152,10 @@ describe('content intelligence recommendation builders', () => {
       docText: 'How to configure the seo panel for your content.',
     });
     expect(recs).toHaveLength(1);
-    expect(recs[0].code).toBe('low_ctr_query');
-    expect(recs[0].id).toMatch(/^gsc:low_ctr_query:/);
-    expect(recs[0].title).toContain('seo content writing tips');
-    expect(recs[0].description).toContain('500');
+    expect(recs[0]!.code).toBe('low_ctr_query');
+    expect(recs[0]!.id).toMatch(/^gsc:low_ctr_query:/);
+    expect(recs[0]!.title).toContain('seo content writing tips');
+    expect(recs[0]!.description).toContain('500');
   });
 
   it('does not recommend when terms are already covered', () => {
@@ -177,7 +177,7 @@ describe('content intelligence recommendation builders', () => {
   });
 
   it('builds knowledge health recommendations from source counts', () => {
-    expect(knowledgeRecommendations({ total: 0, indexed: 0, error: 0, pending: 0 })[0].code).toBe('no_sources');
+    expect(knowledgeRecommendations({ total: 0, indexed: 0, error: 0, pending: 0 })[0]!.code).toBe('no_sources');
     const withError = knowledgeRecommendations({ total: 5, indexed: 3, error: 2, pending: 0 });
     expect(withError).toHaveLength(1);
     expect(withError[0]).toMatchObject({ code: 'source_errors', priority: 'high' });

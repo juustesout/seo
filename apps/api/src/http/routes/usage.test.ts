@@ -80,7 +80,7 @@ describe('usage read routes', () => {
           requireRole: async (userId: string, _projectId: string, minRole: string) => {
             const role = ROLE_BY_USER[userId];
             if (!role) throw ApiError.forbidden('You do not have access to this project');
-            if ((ROLE_ORDER[role] ?? -1) < ROLE_ORDER[minRole]) {
+            if ((ROLE_ORDER[role] ?? -1) < (ROLE_ORDER[minRole] ?? -1)) {
               throw ApiError.forbidden(`This action requires the ${minRole} role`);
             }
           },

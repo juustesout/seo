@@ -61,16 +61,6 @@ interface AgentBrief {
   outline: OutlineItem[];
 }
 
-/** Deterministic copy-length vocabulary per requested bucket
- *  (short/medium/long). Defined in one place so any prompt builder (here or in
- *  MCP) can phrase the writer stage with the same word targets instead of
- *  inventing per-call numbers. */
-const WORD_TARGETS: Record<ContentLengthValue, string> = {
-  short: 'aim for roughly 300 words of body copy',
-  medium: 'aim for roughly 600 words of body copy',
-  long: 'aim for roughly 1000 words of body copy',
-};
-
 /** Strip a single markdown code fence (```json ... ```) that models add around
  *  JSON even when told not to, so parsing only ever sees the raw object. */
 function stripCodeFence(text: string): string {
@@ -124,7 +114,6 @@ export class ContentAgentService {
     system: string,
     user: string,
   ): Promise<Record<string, unknown>> {
-    let lastError: unknown;
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const messages = [
         { role: 'system' as const, content: system },
@@ -138,8 +127,8 @@ export class ContentAgentService {
       try {
         const parsed = JSON.parse(stripCodeFence(result.content)) as Record<string, unknown>;
         if (parsed && typeof parsed === 'object') return parsed;
-      } catch (err) {
-        lastError = err;
+      } catch {
+        // fall through to the retry attempt
       }
     }
     throw new ApiError(422, 'agent_invalid_output', `The ${stage} stage of the content agent returned invalid output`);

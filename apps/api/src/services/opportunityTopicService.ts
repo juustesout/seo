@@ -294,10 +294,10 @@ export async function getTopicRecommendations(
     'embedder' in deps
       ? deps.embedder ?? null
       : embedderFromConfig({
-          EMBEDDINGS_API_KEY: process.env.EMBEDDINGS_API_KEY,
-          EMBEDDINGS_BASE_URL: process.env.EMBEDDINGS_BASE_URL,
-          EMBEDDINGS_MODEL: process.env.EMBEDDINGS_MODEL,
-          EMBEDDINGS_DIMENSIONS: process.env.EMBEDDINGS_DIMENSIONS,
+          EMBEDDINGS_API_KEY: container.config.env.EMBEDDINGS_API_KEY,
+          EMBEDDINGS_BASE_URL: container.config.env.EMBEDDINGS_BASE_URL,
+          EMBEDDINGS_MODEL: container.config.env.EMBEDDINGS_MODEL,
+          EMBEDDINGS_DIMENSIONS: container.config.env.EMBEDDINGS_DIMENSIONS,
           OPENAI_API_KEY: container.config.env.OPENAI_API_KEY,
           OPENAI_BASE_URL: container.config.env.OPENAI_BASE_URL,
           OPENAI_EMBEDDING_MODEL: container.config.env.OPENAI_EMBEDDING_MODEL,

@@ -13,10 +13,15 @@ set -euo pipefail
 
 DB_NAME="${DB_NAME:-seo_dev}"
 MIGRATIONS_DIR="$(cd "$(dirname "$0")/.." && pwd)/supabase/migrations"
-PSQL() { runuser -u postgres -- psql -v ON_ERROR_STOP=1 -X -q "$@"; }
+# How to reach the Postgres superuser. Locally the script runs as root and drops
+# to the postgres OS user; CI overrides PSQL_CMD/CREATEDB_CMD to talk to a
+# service container over TCP (e.g. "psql -h 127.0.0.1 -U postgres" + PGPASSWORD).
+PSQL_CMD="${PSQL_CMD:-runuser -u postgres -- psql}"
+CREATEDB_CMD="${CREATEDB_CMD:-runuser -u postgres -- createdb}"
+PSQL() { $PSQL_CMD -v ON_ERROR_STOP=1 -X -q "$@"; }
 
 echo "==> ensuring roles + database (${DB_NAME})"
-runuser -u postgres -- psql -X -q -d postgres <<'SQL'
+$PSQL_CMD -X -q -d postgres <<'SQL'
 do $$
 begin
   if not exists (select 1 from pg_roles where rolname = 'anon') then create role anon nologin; end if;
@@ -24,10 +29,10 @@ begin
   if not exists (select 1 from pg_roles where rolname = 'service_role') then create role service_role nologin bypassrls; end if;
 end $$;
 SQL
-runuser -u postgres -- psql -X -q -d postgres -c "select 1 from pg_database where datname = '${DB_NAME}'" | grep -q 1 \
-  || runuser -u postgres -- createdb "${DB_NAME}"
+$PSQL_CMD -X -q -d postgres -c "select 1 from pg_database where datname = '${DB_NAME}'" | grep -q 1 \
+  || $CREATEDB_CMD "${DB_NAME}"
 
-if runuser -u postgres -- psql -X -q -t -A -d "${DB_NAME}" -c "select count(*) from pg_tables where schemaname='public' and tablename like 'seo_%'" | grep -vq '^0$'; then
+if $PSQL_CMD -X -q -t -A -d "${DB_NAME}" -c "select count(*) from pg_tables where schemaname='public' and tablename like 'seo_%'" | grep -vq '^0$'; then
   echo "!! database '${DB_NAME}' already contains seo_* tables from a previous run." >&2
   echo "   This harness never drops databases; re-run with a fresh name, e.g.:" >&2
   echo "   DB_NAME=seo_dev_2 bash ${0}" >&2

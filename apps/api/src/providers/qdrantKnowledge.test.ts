@@ -102,14 +102,14 @@ describe('indexing (extract -> chunk -> embed -> Qdrant)', () => {
     expect(res.indexed).toBe(1);
     const embeds = calls.filter((c) => c.url.includes('/embeddings'));
     expect(embeds.length).toBeGreaterThan(0);
-    expect((embeds[0].body as { model: string }).model).toBe('text-embedding-3-small');
+    expect((embeds[0]!.body as { model: string }).model).toBe('text-embedding-3-small');
 
     const upserts = calls.filter((c) => c.method === 'PUT' && c.url.includes('/points?wait=true'));
     expect(upserts).toHaveLength(1);
-    const points = (upserts[0].body as { points: Array<Record<string, unknown>> }).points;
+    const points = (upserts[0]!.body as { points: Array<Record<string, unknown>> }).points;
     expect(points).toHaveLength(1);
-    const payload = points[0].payload as Record<string, unknown>;
-    expect(points[0].id).toBe(deterministicId('p1', 'source:abc', 0));
+    const payload = points[0]!.payload as Record<string, unknown>;
+    expect(points[0]!.id).toBe(deterministicId('p1', 'source:abc', 0));
     expect(payload.project_id).toBe('p1');
     expect(payload.external_id).toBe('source:abc');
     expect(payload.source_id).toBe('source:abc');
@@ -130,7 +130,7 @@ describe('indexing (extract -> chunk -> embed -> Qdrant)', () => {
     const res = await p.index(CONTEXT('p1'), [{ externalId: 'source:long', kind: 'note', title: 'Long', text: longText }]);
 
     const upserts = calls.filter((c) => c.method === 'PUT' && c.url.includes('/points?wait=true'));
-    const points = (upserts[upserts.length - 1].body as { points: Array<Record<string, unknown>> }).points;
+    const points = (upserts[upserts.length - 1]!.body as { points: Array<Record<string, unknown>> }).points;
     expect(points.length).toBeGreaterThan(1);
     expect(res.indexed).toBe(points.length);
     const total = points.length;
@@ -160,8 +160,8 @@ describe('search (embed -> Qdrant with project filter)', () => {
     expect(body.limit).toBe(5);
 
     expect(results).toHaveLength(2);
-    expect(results[0].payload.title).toBe('Note A');
-    expect(results[0].score).toBeCloseTo(0.92);
+    expect(results[0]!.payload.title).toBe('Note A');
+    expect(results[0]!.score).toBeCloseTo(0.92);
   });
 
   it('adds a kind filter when requested', async () => {

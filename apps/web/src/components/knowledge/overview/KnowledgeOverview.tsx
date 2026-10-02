@@ -29,8 +29,6 @@ import { ProcessingSummary } from './ProcessingSummary';
 import { RecentActivity } from './RecentActivity';
 import { CollectionsSummary } from './CollectionsSummary';
 
-const ATTENTION_LIMIT = 4;
-
 export function KnowledgeOverview({
   projectId,
   canEdit,

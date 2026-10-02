@@ -43,8 +43,8 @@ describe('JinaKnowledgeFetcher', () => {
     expect(doc.title).toBe('A title');
     expect(doc.canonicalUrl).toBe('https://example.com/canonical');
     expect(doc.sourceUrl).toBe('https://example.com/a');
-    expect(calls[0].url).toBe('https://r.jina.ai/https://example.com/a');
-    expect((calls[0].init?.headers as Record<string, string>).authorization).toBe(`Bearer ${KEY}`);
+    expect(calls[0]!.url).toBe('https://r.jina.ai/https://example.com/a');
+    expect((calls[0]!.init?.headers as Record<string, string>).authorization).toBe(`Bearer ${KEY}`);
   });
 
   it('accepts a plain-text/markdown body and honors a custom base URL', async () => {
@@ -52,7 +52,7 @@ describe('JinaKnowledgeFetcher', () => {
     const fetcher = new JinaKnowledgeFetcher({ config: { JINA_API_KEY: KEY, JINA_BASE_URL: 'https://reader.example/' }, fetchFn });
     const doc = await fetcher.fetch('https://example.com/a');
     expect(doc.contentText).toBe('# Markdown body');
-    expect(calls[0].url).toBe('https://reader.example/https://example.com/a');
+    expect(calls[0]!.url).toBe('https://reader.example/https://example.com/a');
   });
 
   it('rejects an empty extraction', async () => {

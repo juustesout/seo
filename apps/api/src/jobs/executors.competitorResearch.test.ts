@@ -178,7 +178,7 @@ describe('competitor_research executor (KW3)', () => {
       report: vi.fn(),
     });
 
-    const targets = findCompetitorKeywordGaps.mock.calls[0][2] as string[];
+    const targets = findCompetitorKeywordGaps.mock.calls[0]![2] as string[];
     expect(targets).toEqual(['a.com', 'b.com', 'c.com']);
     expect(targets.length).toBe(COMPETITOR_RESEARCH_MAX_COMPETITORS);
   });
@@ -199,13 +199,13 @@ describe('competitor_research executor (KW3)', () => {
       });
 
     await run('example.com', ['a.com']);
-    expect(findCompetitorKeywordGaps.mock.calls[0][3]).toMatchObject({ limitPerCompetitor: COMPETITOR_RESEARCH_RUN_MAX_GAPS });
+    expect(findCompetitorKeywordGaps.mock.calls[0]![3]).toMatchObject({ limitPerCompetitor: COMPETITOR_RESEARCH_RUN_MAX_GAPS });
 
     await run('example.com', ['a.com', 'b.com']);
-    expect(findCompetitorKeywordGaps.mock.calls[1][3]).toMatchObject({ limitPerCompetitor: 100 });
+    expect(findCompetitorKeywordGaps.mock.calls[1]![3]).toMatchObject({ limitPerCompetitor: 100 });
 
     await run('example.com', ['a.com', 'b.com', 'c.com']);
-    expect(findCompetitorKeywordGaps.mock.calls[2][3]).toMatchObject({ limitPerCompetitor: 66 });
+    expect(findCompetitorKeywordGaps.mock.calls[2]![3]).toMatchObject({ limitPerCompetitor: 66 });
   });
 
   it('gap caps the carried result rows', async () => {

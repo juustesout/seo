@@ -92,7 +92,6 @@ export function Publications({ projectId }: { projectId: string }) {
     setOffset(0);
     setSelectedId(null);
     autoOpenedRef.current = false;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [search]);
 
   const publishers = useAsync<{ publisher: { id: string; name: string; status: string } }[]>(
@@ -129,7 +128,6 @@ export function Publications({ projectId }: { projectId: string }) {
     return () => {
       alive = false;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId, filters, offset, tick]);
 
   const change = (patch: Partial<Filters>) => {

@@ -54,6 +54,8 @@ export function fileExtension(filename: string): string {
 export function sanitizeFilename(raw: string): string {
   const base = raw.split(/[\\/]/).pop() ?? '';
   const cleaned = base
+    // Strip control characters intentionally (upload filename sanitizing).
+    // eslint-disable-next-line no-control-regex
     .replace(/[\u0000-\u001f\u007f]/g, '')
     .replace(/\s+/g, ' ')
     .trim()

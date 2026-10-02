@@ -73,13 +73,6 @@ async function dataSourceRow(sb: SupabaseClient, projectId: string, dataSourceId
   return data as Record<string, unknown>;
 }
 
-async function integrationRow(sb: SupabaseClient, projectId: string, integrationId?: string | null) {
-  if (!integrationId) throw new ApiError(400, 'bad_request', 'Job requires an integration');
-  const { data } = await sb.from('seo_integrations').select('*').eq('project_id', projectId).eq('id', integrationId).maybeSingle();
-  if (!data) throw new ApiError(404, 'not_found', 'Integration not found for this project');
-  return data as Record<string, unknown>;
-}
-
 async function gscPropertyForProject(sb: SupabaseClient, projectId: string) {
   const { data: link } = await sb
     .from('seo_project_properties')
@@ -355,7 +348,7 @@ async function runKeywordExpansion(args: {
       } else if (method === 'related') {
         for (let i = 0; i < seeds.length; i += 1) {
           if (i > 0) await delay(400);
-          results.push(...(await dfseo.relatedKeywords(ctx, seeds[i], { depth: relatedDepth, limit, minSearchVolume })));
+          results.push(...(await dfseo.relatedKeywords(ctx, seeds[i]!, { depth: relatedDepth, limit, minSearchVolume })));
         }
         outputs.push({ method, seeds, results });
       } else {

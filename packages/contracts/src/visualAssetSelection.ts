@@ -34,7 +34,6 @@
 import {
   isValidCanonicalDoc,
   type CanonicalBlock,
-  type CanonicalDocument,
   type CanonicalInline,
 } from './canonical.js';
 import {

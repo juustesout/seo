@@ -20,7 +20,6 @@ import type { MediaAttribution } from './mediaSource.js';
 import type { UsageEventSink } from './usageEvent.js';
 import type {
   AuditFinding,
-  ContentItem,
   Keyword,
   KeywordPerformance,
   KeywordResearchResult,
@@ -656,7 +655,7 @@ export interface PublisherSetupHint {
   note?: string;
 }
 
-export interface ProviderDescriptor<T = unknown> {
+export interface ProviderDescriptor {
   id: string;
   name: string;
   description: string;
@@ -684,9 +683,9 @@ export interface ProviderRegistry {
   getAI(id: string): AIProvider | undefined;
   getMedia(id: string): MediaProvider | undefined;
 
-  listDataSources(): ProviderDescriptor<'datasource'>[];
-  listKnowledge(): ProviderDescriptor<'knowledge'>[];
-  listPublishers(): ProviderDescriptor<'publisher'>[];
-  listAI(): ProviderDescriptor<'ai'>[];
-  listMedia(): ProviderDescriptor<'media'>[];
+  listDataSources(): ProviderDescriptor[];
+  listKnowledge(): ProviderDescriptor[];
+  listPublishers(): ProviderDescriptor[];
+  listAI(): ProviderDescriptor[];
+  listMedia(): ProviderDescriptor[];
 }

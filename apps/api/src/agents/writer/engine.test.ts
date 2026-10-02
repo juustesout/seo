@@ -24,7 +24,7 @@ import type {
   WriterSectionPlanInput,
 } from './deepWrite.js';
 import { DEFAULT_WRITER_REVIEW_DEPENDENCIES } from './review.js';
-import type { WriterContext, WriterContextDependencies, WriterContextInput } from './context.js';
+import type { WriterContextDependencies, WriterContextInput } from './context.js';
 import type { WriterPlanInput, WriterPlanOutcome, WriterPlannerDependencies } from './planner.js';
 import type { WriterSectionDependencies, WriterSectionInput, WriterSectionOutcome } from './sectionWriter.js';
 import type { WriterPlan } from './state.js';

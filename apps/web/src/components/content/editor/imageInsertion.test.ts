@@ -11,7 +11,7 @@ import { Editor, type JSONContent } from '@tiptap/core';
 import { NodeSelection } from '@tiptap/pm/state';
 import type { InsertImageOperation, TipDoc } from '@seo/contracts';
 import { createEditorExtensions } from './extensions';
-import { buildEditorContextSnapshot, type EditorContextSnapshot, type EditorSelectionSnapshot } from './editorContext';
+import { buildEditorContextSnapshot, type EditorContextSnapshot } from './editorContext';
 import { readSelectionSnapshot } from './selection';
 import {
   applyImageInsertionOperation,

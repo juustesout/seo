@@ -136,7 +136,7 @@ describe('startKeywordExpansion', () => {
       seeds: ['seo tools', 'keyword research'],
       methods: ['suggestions', 'ideas'],
     });
-    expect(enqueue.mock.calls[0][0].params).toEqual({
+    expect(enqueue.mock.calls[0]![0].params).toEqual({
       seeds: ['seo tools', 'keyword research'],
       methods: ['suggestions', 'ideas'],
       relatedDepth: 1,
@@ -151,7 +151,7 @@ describe('startKeywordExpansion', () => {
       methods: ['suggestions'],
       providerMinVolume: 250.9,
     });
-    expect(enqueue.mock.calls[0][0].params).toMatchObject({ providerMinVolume: 250 });
+    expect(enqueue.mock.calls[0]![0].params).toMatchObject({ providerMinVolume: 250 });
   });
 
   it('rejects an empty seed list, an unknown method and too many seeds', async () => {
@@ -200,7 +200,7 @@ describe('mergeExpansionCandidates', () => {
     const a = mergeExpansionCandidates([out('related', 'x', 900), out('suggestions', 'x', 1000)]);
     const b = mergeExpansionCandidates([out('suggestions', 'x', 1000), out('related', 'x', 900)]);
     expect(a).toEqual(b);
-    expect(a[0].searchVolume).toBe(1000);
+    expect(a[0]!.searchVolume).toBe(1000);
   });
 
   it('lets a later method fill a null it did not have, but never overwrite a real value', () => {
@@ -208,8 +208,8 @@ describe('mergeExpansionCandidates', () => {
       { method: 'suggestions', seeds: ['a'], results: [result('kw', { search_volume: null, difficulty: null })] },
       { method: 'ideas', seeds: ['a'], results: [result('kw', { search_volume: 5000, difficulty: 77 })] },
     ]);
-    expect(merged[0].searchVolume).toBe(5000);
-    expect(merged[0].difficulty).toBe(77);
+    expect(merged[0]!.searchVolume).toBe(5000);
+    expect(merged[0]!.difficulty).toBe(77);
   });
 
   it('sorts by volume descending with nulls last and drops nothing valid', () => {
@@ -264,7 +264,7 @@ describe('readKeywordExpansionRun', () => {
     expect(run.status).toBe('completed');
     expect(run.methods).toEqual(KEYWORD_EXPANSION_METHODS);
     expect(run.methodStatus.related).toEqual({ status: 'failed', count: 0 });
-    expect(run.candidates[0].keyword).toBe('seo software');
+    expect(run.candidates[0]!.keyword).toBe('seo software');
     expect(run.count).toBe(1);
   });
 
@@ -335,10 +335,10 @@ describe('saveKeywordExpansionSelection', () => {
       const out = await saveKeywordExpansionSelection(container, PROJECT, 'job-1', ['  SEO software ']);
       expect(out).toEqual({ saved: 1, skipped: 0 });
       expect(spy).toHaveBeenCalledTimes(1);
-      const [projectId, rows] = spy.mock.calls[0];
+      const [projectId, rows] = spy.mock.calls[0]!;
       expect(projectId).toBe(PROJECT);
       expect(rows[0]).toMatchObject({ keyword: 'seo software', volume: 1200, difficulty: 40, cpc: 2.5, competition: 'HIGH', intent: 'commercial' });
-      expect(rows[0].meta).toEqual({
+      expect(rows[0]!.meta).toEqual({
         discovered_via: 'keyword_expansion',
         run_job_id: 'job-1',
         methods: ['suggestions', 'related'],
@@ -389,7 +389,7 @@ describe('saveKeywordExpansionSelection', () => {
       const { container } = containerWith(baseStores(), { get: withCandidates() });
       const out = await saveKeywordExpansionSelection(container, PROJECT, 'job-1', ['seo software', 'SEO SOFTWARE']);
       expect(out).toEqual({ saved: 1, skipped: 1 });
-      expect(spy.mock.calls[0][1]).toHaveLength(1);
+      expect(spy.mock.calls[0]![1]).toHaveLength(1);
     } finally {
       spy.mockRestore();
     }

@@ -9,7 +9,7 @@
  */
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
 import type { Editor } from '@tiptap/react';
-import type { MediaItemDto, MediaListResponse, MediaMimeType } from '@seo/contracts';
+import type { MediaItemDto, MediaListResponse } from '@seo/contracts';
 import { api, apiRaw } from '../../lib/api';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -20,15 +20,6 @@ const MAX_BYTES = 8 * 1024 * 1024;
 function fmtSize(bytes: number): string {
   if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
   return `${Math.max(1, Math.round(bytes / 1024))} KB`;
-}
-
-function mimeFor(file: File): MediaMimeType {
-  if (/^image\/(png|jpeg|webp)$/.test(file.type)) return file.type as MediaMimeType;
-  const ext = (file.name.split('.').pop() ?? '').toLowerCase();
-  if (ext === 'png') return 'image/png';
-  if (ext === 'jpg' || ext === 'jpeg') return 'image/jpeg';
-  if (ext === 'webp') return 'image/webp';
-  return 'image/png';
 }
 
 /**

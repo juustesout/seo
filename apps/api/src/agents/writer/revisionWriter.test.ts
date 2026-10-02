@@ -96,6 +96,7 @@ function fakeProvider(options: { replies: Array<string | Error>; configured?: bo
       const reply = options.replies[index];
       index += 1;
       if (reply instanceof Error) throw reply;
+      if (typeof reply !== 'string') throw new Error('fake provider ran out of replies');
       return { content: reply, model: 'fake-ai' };
     },
     generate: async () => {
@@ -220,7 +221,7 @@ describe('buildRevisionWriterPrompt', () => {
   });
 
   it('adds no RESEARCH CONTEXT block when no research evidence was gathered', () => {
-    const { system, user } = buildRevisionWriterPrompt(revisionInput({ evidence: null }));
+    const { user } = buildRevisionWriterPrompt(revisionInput({ evidence: null }));
     expect(user.indexOf('RESEARCH CONTEXT')).toBe(-1);
   });
 
@@ -329,7 +330,7 @@ describe('createAiWriterRevisionWriter', () => {
     const outcome = await writer.reviseSection(revisionInput());
     expect(outcome.ok).toBe(true);
     expect(callCount()).toBe(2);
-    const secondUser = requests()[1].messages.find((m) => m.role === 'user')?.content ?? '';
+    const secondUser = requests()[1]!.messages.find((m) => m.role === 'user')?.content ?? '';
     expect(secondUser).toContain('previous reply was not valid section JSON');
   });
 
@@ -404,7 +405,7 @@ describe('createAiWriterRevisionWriter', () => {
 
     const outcome = await writer.reviseSection(revisionInput());
     expect(outcome.ok).toBe(true);
-    const request = requests()[0];
+    const request = requests()[0]!;
     expect(request.json).toBe(true);
     expect(request.temperature).toBe(0.5);
     expect(request.maxTokens).toBe(WRITER_REVISION_MAX_TOKENS);

@@ -84,7 +84,7 @@ function jpeg(buf: Buffer): SniffedImage | null {
       offset += 1;
       continue;
     }
-    const marker = buf[offset + 1];
+    const marker = buf[offset + 1]!;
     if (marker === 0xff) {
       offset += 1;
       continue;

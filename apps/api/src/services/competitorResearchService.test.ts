@@ -165,14 +165,14 @@ describe('startCompetitorDiscovery', () => {
   it('prefers an explicit domain override', async () => {
     const { container, enqueue } = containerWith(baseStores());
     await startCompetitorDiscovery(container, PROJECT, USER, 'https://rival.com/x');
-    expect(enqueue.mock.calls[0][0].params).toEqual({ mode: 'discover', domain: 'rival.com' });
+    expect(enqueue.mock.calls[0]![0].params).toEqual({ mode: 'discover', domain: 'rival.com' });
   });
 
   it('derives the domain from the linked Search Console property', async () => {
     const { container, enqueue } = containerWith(gscStores('https://www.example.com/'));
     const started = await startCompetitorDiscovery(container, PROJECT, USER);
     expect(started.domain).toBe('example.com');
-    expect(enqueue.mock.calls[0][0].params).toEqual({ mode: 'discover', domain: 'example.com' });
+    expect(enqueue.mock.calls[0]![0].params).toEqual({ mode: 'discover', domain: 'example.com' });
   });
 
   it('normalizes an sc-domain Search Console property', async () => {
@@ -219,7 +219,7 @@ describe('startCompetitorGap', () => {
       reused: false,
       snapshotId: null,
     });
-    expect(enqueue.mock.calls[0][0].params).toEqual({
+    expect(enqueue.mock.calls[0]![0].params).toEqual({
       mode: 'gap',
       domain: 'example.com',
       competitors: ['rival.com', 'other.com'],

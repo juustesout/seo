@@ -56,8 +56,8 @@ export function isDataImage(value: string): boolean {
 export async function storeImageDataUrl(sb: SupabaseClient, projectId: string, dataUrl: string): Promise<string> {
   const match = /^data:image\/(png|jpeg|jpg|webp|gif);base64,([A-Za-z0-9+/=\s]+)$/.exec(dataUrl);
   if (!match) throw new Error('Image provider returned an unsupported data URL');
-  const ext = match[1] === 'jpg' ? 'jpg' : match[1] === 'jpeg' ? 'jpg' : match[1];
-  const buffer = Buffer.from(match[2].replace(/\s+/g, ''), 'base64');
+  const ext = match[1]! === 'jpg' ? 'jpg' : match[1]! === 'jpeg' ? 'jpg' : match[1]!;
+  const buffer = Buffer.from(match[2]!.replace(/\s+/g, ''), 'base64');
   const path = `${projectId}/${Date.now()}-${randomBytes(6).toString('hex')}.${ext}`;
   await ensureBucket(sb);
   const { error } = await sb.storage.from(BUCKET).upload(path, buffer, {

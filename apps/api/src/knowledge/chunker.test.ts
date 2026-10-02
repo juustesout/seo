@@ -34,7 +34,7 @@ describe('chunkKnowledgeText', () => {
     const text = Array.from({ length: 300 }, (_, i) => `word${i}`).join(' ');
     const chunks = chunkKnowledgeText(text);
     expect(chunks.length).toBeGreaterThan(1);
-    const overlapProbe = chunks[0].slice(-CHUNK_OVERLAP).split(' ').filter(Boolean).pop()!;
+    const overlapProbe = chunks[0]!.slice(-CHUNK_OVERLAP).split(' ').filter(Boolean).pop()!;
     expect(chunks[1]).toContain(overlapProbe);
   });
 

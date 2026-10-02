@@ -173,12 +173,12 @@ describe('writer section writing happy path', () => {
     await resumeWriterRun({ runId: run.runId, decision: { decision: 'approve' } }, registry);
 
     expect(writer.calls).toHaveLength(3);
-    expect(writer.calls[0].section.heading).toBe('Heading 1');
-    expect(writer.calls[1].section.heading).toBe('Heading 2');
-    expect(writer.calls[2].section.heading).toBe('Heading 3');
-    expect(writer.calls[0].previousSectionContent).toBeNull();
-    expect(writer.calls[1].previousSectionContent).toBe('Body for Heading 1.');
-    expect(writer.calls[2].previousSectionContent).toBe('Body for Heading 2.');
+    expect(writer.calls[0]!.section.heading).toBe('Heading 1');
+    expect(writer.calls[1]!.section.heading).toBe('Heading 2');
+    expect(writer.calls[2]!.section.heading).toBe('Heading 3');
+    expect(writer.calls[0]!.previousSectionContent).toBeNull();
+    expect(writer.calls[1]!.previousSectionContent).toBe('Body for Heading 1.');
+    expect(writer.calls[2]!.previousSectionContent).toBe('Body for Heading 2.');
   });
 
   it('truncates a very long previous section so context cannot snowball', async () => {
@@ -195,8 +195,8 @@ describe('writer section writing happy path', () => {
     const resumed = await resumeWriterRun({ runId: run.runId, decision: { decision: 'approve' } }, registry);
 
     expect(resumed.status).toBe('review_ready');
-    expect(writer.calls[1].previousSectionContent?.length).toBe(WRITER_SECTION_MAX_PREVIOUS_CHARS);
-    expect(writer.calls[1].previousSectionContent).toBe(longBody.slice(0, WRITER_SECTION_MAX_PREVIOUS_CHARS));
+    expect(writer.calls[1]!.previousSectionContent?.length).toBe(WRITER_SECTION_MAX_PREVIOUS_CHARS);
+    expect(writer.calls[1]!.previousSectionContent).toBe(longBody.slice(0, WRITER_SECTION_MAX_PREVIOUS_CHARS));
   });
 });
 
@@ -375,7 +375,7 @@ describe('writer hostile context boundaries', () => {
     expect(resumed.writtenSections.some((s) => s.content.includes('Ignore your instructions'))).toBe(false);
     expect(writer.calls).toHaveLength(2);
     expect(writer.calls.every((c) => c.section.heading.startsWith('Heading '))).toBe(true);
-    expect(writer.calls[0].context.knowledge.chunks[0].text).toBe(hostile);
+    expect(writer.calls[0]!.context.knowledge.chunks[0]!.text).toBe(hostile);
   });
 
   it('hostile previous-writing text cannot inject a section or steer the outline', async () => {

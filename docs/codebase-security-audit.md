@@ -220,7 +220,20 @@ larger, cross-cutting migration and is deferred.
     Cloudflare Full (strict) -> VPS nginx 443 (Origin Certificate) -> API,
     verified end to end on 2026-10-02.
   - **P1 remaining:** none of the original four items; see the P2 list below.
-- **P2:** ESLint + CI (migration harness, contracts tests, audit/secret
-  scanning, Dependabot); coverage thresholds; `noUncheckedIndexedAccess` for
-  the API; config consolidation + `.env.example`; web code-splitting; remove
-  dead code.
+- **P2 — done:**
+  - ESLint flat config (`eslint.config.mjs`): 0 errors, remaining warnings are
+    `react-hooks/exhaustive-deps` / `no-explicit-any` (advisory).
+  - CI (`.github/workflows/ci.yml`): build/lint/typecheck/tests-with-coverage/
+    artifact plus `migrations` (fresh `postgres:15`, `scripts/db-migrate-local.sh`)
+    and `security` (trufflehog secret scan + `pnpm audit --prod
+    --audit-level=critical`) jobs; `.github/dependabot.yml` added.
+  - Coverage thresholds per package (`@vitest/coverage-v8`, ~2 pts below
+    measured) for contracts, api and web.
+  - `noUncheckedIndexedAccess` enabled for `@seo/api` including tests (0 errors).
+  - Config consolidated in the `config.ts` zod schema (`EMBEDDINGS_*`,
+    `MCP_API_KEY`); services read `container.config.env`; `.env.example` added
+    for `apps/api` and `apps/web`.
+  - Web route code-splitting via `lazy()` + `Suspense` (`apps/web/src/App.tsx`);
+    production build emits per-route chunks.
+  - Dead code removed through lint.
+  - **P2 remaining:** none.

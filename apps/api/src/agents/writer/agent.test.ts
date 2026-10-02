@@ -116,7 +116,7 @@ describe('initialWriterAgent / recordWriterAgentStep', () => {
     expect(next.actionCounts.research).toBe(1);
     expect(next.actionCounts.revision).toBe(0);
     expect(next.steps.map((s) => s.index)).toEqual([0, 1]);
-    expect(next.steps[0].summary).toBe('found sources');
+    expect(next.steps[0]!.summary).toBe('found sources');
   });
 
   it('hard-caps the stored step array at the global step maximum', () => {

@@ -165,7 +165,7 @@ describe('GoogleAnalyticsService', () => {
     const svc = new GoogleAnalyticsService(makeContainer(tables, tokens, credsSet), NOW);
     const property = await svc.selectProperty({ accountId: ACCOUNT, projectId: PROJECT, userId: 'user-1', propertyId: 'properties/111' });
     expect(property).toEqual({ property_id: '111', property_name: 'My Website', property_url: 'https://example.com' });
-    expect(tables.seo_project_analytics[0]).toMatchObject({ project_id: PROJECT, property_id: '111', property_name: 'My Website' });
+    expect(tables.seo_project_analytics![0]).toMatchObject({ project_id: PROJECT, property_id: '111', property_name: 'My Website' });
   });
 
   it('returns an empty report (no Google call) when the project has no property', async () => {

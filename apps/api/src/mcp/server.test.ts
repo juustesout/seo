@@ -9,7 +9,6 @@ import { ApiError } from '../apiErrors.js';
 import type { MemberRole } from '@seo/contracts';
 
 const readOnlyDeps = { canRead: false, canWrite: false } as unknown as MpcDeps;
-const readWriteDeps = { canRead: true, canWrite: true } as unknown as MpcDeps;
 
 // Realistic UUID-shaped ids so edge validation in handlers is exercised.
 const CID = '11111111-1111-4111-8111-111111111111';

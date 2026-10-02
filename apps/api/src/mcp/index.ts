@@ -25,12 +25,12 @@ import { logger } from '../logger.js';
  * exactly what a browser session can - nothing more, nothing less.
  */
 async function main(): Promise<void> {
-  const token = process.env.MCP_API_KEY?.trim();
+  const container = getContainer();
+  const token = container.config.env.MCP_API_KEY?.trim();
   if (!token) {
     logger.error('MCP_API_KEY is required (a project or account API key, seo_live_...)');
     process.exit(1);
   }
-  const container = getContainer();
   const store = new ApiKeyStore(container.sb);
   const key = await store.authenticate(token);
   if (!key) {

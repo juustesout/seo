@@ -406,7 +406,7 @@ async function runQuickDraft(
   const writtenSections: WriterWrittenSection[] = [];
   const total = plan.sections.length;
   for (let index = 0; index < total; index += 1) {
-    const section = plan.sections[index];
+    const section = plan.sections[index]!;
     const content = await tracePass(trace, 'section_generation', writerSectionIdFor(index), async () => {
       const outcome = await deps.sectionWriter.writeSection({
         projectId: input.projectId,

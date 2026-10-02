@@ -251,13 +251,11 @@ interface WriterPanelProps {
   contentId: string;
   /** Content title, used as the run's topic when no instruction is given. */
   defaultTopic: string;
-  /** Content target keyword, passed to the writer when present. */
-  defaultKeyword?: string;
   /** Poll cadence while an approved run is writing (tests override this). */
   pollMs?: number;
 }
 
-export function WriterPanel({ projectId, contentId, defaultTopic, defaultKeyword, pollMs = 1200 }: WriterPanelProps) {
+export function WriterPanel({ projectId, contentId, defaultTopic, pollMs = 1200 }: WriterPanelProps) {
   const [instruction, setInstruction] = useState('');
   const [run, setRun] = useState<WriterRunDto | null>(null);
   const [startBusy, setStartBusy] = useState(false);

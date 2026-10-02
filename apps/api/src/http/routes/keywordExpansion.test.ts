@@ -128,7 +128,7 @@ describe('keyword expansion routes', () => {
           requireRole: async (userId: string, _projectId: string, minRole: string) => {
             const role = ROLE_BY_USER[userId];
             if (!role) throw ApiError.forbidden('You do not have access to this project');
-            if ((ROLE_ORDER[role] ?? -1) < ROLE_ORDER[minRole]) {
+            if ((ROLE_ORDER[role] ?? -1) < (ROLE_ORDER[minRole] ?? -1)) {
               throw ApiError.forbidden(`This action requires the ${minRole} role`);
             }
           },
@@ -252,7 +252,7 @@ describe('keyword expansion routes', () => {
     expect(res.json.data).toEqual({ saved: 1, skipped: 0 });
     expect(upserted).toHaveLength(1);
     expect(upserted[0]).toMatchObject({ keyword: 'seo software', source: 'keyword_expansion', provider: 'dataforseo' });
-    expect(upserted[0].meta).toEqual({
+    expect(upserted[0]!.meta).toEqual({
       discovered_via: 'keyword_expansion',
       run_job_id: JOB,
       methods: ['suggestions'],

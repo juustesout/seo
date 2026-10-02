@@ -17,5 +17,17 @@ export default defineConfig({
     // file; every other stylesheet stays stubbed.
     css: { include: /canonicalRenderer\.css/ },
     include: ['src/**/*.test.{ts,tsx}'],
+    coverage: {
+      provider: 'v8',
+      reporter: ['text', 'html', 'lcov'],
+      include: ['src/**/*.{ts,tsx}'],
+      exclude: ['src/**/*.test.{ts,tsx}', 'src/**/*.d.ts', 'src/test/**'],
+      thresholds: {
+        statements: 70,
+        branches: 78,
+        functions: 66,
+        lines: 70,
+      },
+    },
   },
 });

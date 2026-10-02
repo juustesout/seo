@@ -153,7 +153,7 @@ describe('enqueuePublicationJob', () => {
     const { job, reused } = await enqueuePublicationJob(c, base);
     expect(reused).toBe(false);
     expect(records).toHaveLength(1);
-    expect(records[0].idempotency_key).toBe(`${identity}:0`);
+    expect(records[0]!.idempotency_key).toBe(`${identity}:0`);
     expect(job.id).toBe('job-1');
   });
 
@@ -171,11 +171,11 @@ describe('enqueuePublicationJob', () => {
     const records = jobRows();
     const c = container(records);
     await enqueuePublicationJob(c, base);
-    records[0].status = 'failed';
+    records[0]!.status = 'failed';
     const retry = await enqueuePublicationJob(c, base);
     expect(retry.reused).toBe(false);
     expect(records).toHaveLength(2);
-    expect(records[1].idempotency_key).toBe(`${identity}:1`);
+    expect(records[1]!.idempotency_key).toBe(`${identity}:1`);
   });
 
   it('resolves a concurrent duplicate that raced past the reuse check onto the winner', async () => {

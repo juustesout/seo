@@ -449,6 +449,7 @@ describe('createAiDeepWriteDependencies', () => {
         const reply = options.replies[index];
         index += 1;
         if (reply instanceof Error) throw reply;
+        if (typeof reply !== 'string') throw new Error('fake provider ran out of replies');
         return { content: reply, model: 'fake-ai' };
       },
       generate: async () => {

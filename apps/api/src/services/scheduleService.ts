@@ -32,8 +32,6 @@ export const SCHEDULE_STATUSES = [
   'cancelled',
 ] as const;
 
-/** States from which a future schedule can be moved to a new time. */
-const RESCHEDULABLE = ['scheduled'] as const;
 /** States from which a schedule can still be cancelled (not actively publishing). */
 const CANCELLABLE = ['scheduled', 'queued'] as const;
 
@@ -121,7 +119,7 @@ export class ScheduleService {
   async get(projectId: string, scheduleId: string): Promise<ScheduleDto> {
     const row = await this.requireSchedule(projectId, scheduleId);
     const [dto] = await this.enrich(projectId, [row]);
-    return dto;
+    return dto!;
   }
 
   // -------------------------------------------------------------------------
@@ -145,7 +143,6 @@ export class ScheduleService {
     this.requirePublishKindCapability(publisher, publishKind);
 
     const scheduleId = randomUUID();
-    const now = new Date().toISOString();
     const scheduleRow: Row = {
       id: scheduleId,
       project_id: projectId,
@@ -294,7 +291,7 @@ export class ScheduleService {
 
     const cancelled = (data ?? []) as Row[];
     if (cancelled.length > 0) {
-      const jobId = cancelled[0].job_id ? String(cancelled[0].job_id) : null;
+      const jobId = cancelled[0]!.job_id ? String(cancelled[0]!.job_id) : null;
       if (jobId) {
         await this.container.jobStore.cancel(jobId).catch((err) =>
           logger.warn({ err, jobId }, 'could not cancel backing job for schedule'),

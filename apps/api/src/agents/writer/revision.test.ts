@@ -252,11 +252,11 @@ describe('writer controlled revision', () => {
       writerSectionIdFor(0),
       writerSectionIdFor(1),
     ]);
-    expect(revised.writtenSections[0].content).toBe(`Revised body 0 (${hostile}).`);
-    expect(revised.writtenSections[1].content).toBe('Body for Heading 2.');
+    expect(revised.writtenSections[0]!.content).toBe(`Revised body 0 (${hostile}).`);
+    expect(revised.writtenSections[1]!.content).toBe('Body for Heading 2.');
     expect(revision.calls).toHaveLength(1);
-    expect(revision.calls[0].sectionIndex).toBe(0);
-    expect(revision.calls[0].instruction).toBe(hostile);
+    expect(revision.calls[0]!.sectionIndex).toBe(0);
+    expect(revision.calls[0]!.instruction).toBe(hostile);
   });
 
   it('an instruction naming other sections never expands the validated selection', async () => {
@@ -293,7 +293,7 @@ describe('writer controlled revision', () => {
       registry,
     );
     expect(revised.status).toBe('review_ready');
-    expect(revised.writtenSections[1].content).toBe('Revised body 1 (Sharpen the second section).');
+    expect(revised.writtenSections[1]!.content).toBe('Revised body 1 (Sharpen the second section).');
 
     const accepted = await resumeWriterSession({ runId: runId as `wr_${string}`, decision: { action: 'accept' } }, registry);
     expect(accepted.status).toBe('completed');
@@ -342,7 +342,7 @@ describe('writer controlled revision', () => {
     expect(failed.status).toBe('failed');
     expect(failed.revisionStatus).toBe('failed');
     expect(failed.revisionNote).toContain('No revision writer is wired');
-    expect(failed.writtenSections[0].content).toBe('Body for Heading 1.');
+    expect(failed.writtenSections[0]!.content).toBe('Body for Heading 1.');
   });
 });
 

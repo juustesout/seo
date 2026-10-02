@@ -753,7 +753,7 @@ async function writeSectionsNode(
   // ordered prefix of the approved outline. Anything else means the checkpoint
   // cannot be trusted and the run fails closed instead of re-writing.
   for (let i = 0; i < index; i += 1) {
-    if (written[i].sectionId !== writerSectionIdFor(i)) {
+    if (written[i]!.sectionId !== writerSectionIdFor(i)) {
       return {
         status: 'failed',
         writtenSections: written,
@@ -766,7 +766,7 @@ async function writeSectionsNode(
   }
 
   const sectionId = writerSectionIdFor(index);
-  const section = plan.sections[index];
+  const section = plan.sections[index]!;
   const input: WriterSectionInput = {
     projectId: state.projectId,
     topic: state.topic,
@@ -991,16 +991,6 @@ function awaitReviewSessionNode(
   };
 }
 
-/** Bounded tail of the written section at plan position index-1 (already in its
- *  final post-revision state because revisions run in plan order), used only
- *  for continuity while rewriting a requested section. */
-function previousSectionContextAt(written: WriterWrittenSection[], index: number): string | null {
-  if (index <= 0) return null;
-  const previous = written.find((entry) => entry.sectionId === writerSectionIdFor(index - 1));
-  if (!previous) return null;
-  return previous.content.slice(0, WRITER_SECTION_MAX_PREVIOUS_CHARS);
-}
-
 /**
  * The W8 controlled revision phase (runs only after a validated revise resume,
  * status `revising`). Mirrors writeSections: one superstep per requested
@@ -1068,7 +1058,7 @@ async function reviseSectionsNode(
     };
   }
 
-  const sectionId = requested[progress.length];
+  const sectionId = requested[progress.length]!;
   const index = writerSectionIndexFor(sectionId);
   if (!Number.isInteger(index) || index < 0 || index >= plan.sections.length) {
     return {
@@ -1085,7 +1075,7 @@ async function reviseSectionsNode(
       revisionNote: `Section ${sectionId} has no written content to revise; aborting the revision.`,
     };
   }
-  const section = plan.sections[index];
+  const section = plan.sections[index]!;
   const input: WriterRevisionInput = {
     projectId: state.projectId,
     topic: state.topic,

@@ -145,7 +145,7 @@ describe('designer revision writer agent', () => {
   });
 
   it('maps a resolution failure to ai_error', async () => {
-    const { provider } = fakeProvider(async () => ({ content: VALID }));
+    fakeProvider(async () => ({ content: VALID }));
     const outcome = await createAiDesignerRevisionWriter(async () => {
       throw new Error('no key');
     }).revise(INPUT);

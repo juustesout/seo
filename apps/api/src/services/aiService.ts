@@ -53,7 +53,7 @@ interface ProjectAiRow {
   settings: Record<string, unknown>;
 }
 
-type AiDescriptor = ProviderDescriptor<'ai'>;
+type AiDescriptor = ProviderDescriptor;
 
 export class AIService {
   constructor(private readonly container: ServiceContainer) {}

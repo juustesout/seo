@@ -31,7 +31,6 @@ import {
   evaluateSeo,
   asTipDoc,
   type ContentBlock,
-  type ContentOutlineItem,
   type TipDoc,
   type TipNode,
 } from '@seo/contracts';

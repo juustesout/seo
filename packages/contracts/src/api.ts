@@ -6,15 +6,12 @@
  * (PostgREST) under Row Level Security.
  */
 
-import type { JobStatus, JobType, MemberRole, PublicationStatus, PublishContentKind, ScheduleStatus } from './common.js';
+import type { JobStatus, JobType, PublicationStatus, PublishContentKind, ScheduleStatus } from './common.js';
 import type {
   DataSource,
   Integration,
-  Project,
-  ProjectMember,
   ProjectSummary,
   Publication,
-  Publisher,
   SeoOpportunity,
   SyncJob,
 } from './models.js';

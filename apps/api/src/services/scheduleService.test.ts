@@ -5,7 +5,12 @@ import { ScheduleService, scheduleIdempotencyKey, syncScheduleStatus } from './s
 import { ApiError } from '../apiErrors.js';
 
 type Row = Record<string, unknown>;
-type Store = Record<string, Row[]>;
+type Store = Record<string, Row[]> & {
+  seo_schedules: Row[];
+  seo_content: Row[];
+  seo_publishers: Row[];
+  seo_publications: Row[];
+};
 
 const now = Date.now();
 const inOneDay = new Date(now + 86400_000).toISOString();
@@ -274,12 +279,12 @@ describe('ScheduleService.create', () => {
     expect(dto.job_id).toBe('job-1');
 
     expect(stores.seo_schedules).toHaveLength(1);
-    expect(stores.seo_schedules[0].status).toBe('scheduled');
-    expect(stores.seo_schedules[0].job_id).toBe('job-1');
-    expect(stores.seo_schedules[0].created_by).toBe('u1');
+    expect(stores.seo_schedules[0]!.status).toBe('scheduled');
+    expect(stores.seo_schedules[0]!.job_id).toBe('job-1');
+    expect(stores.seo_schedules[0]!.created_by).toBe('u1');
 
     expect(jobStore.records).toHaveLength(1);
-    const job = jobStore.records[0];
+    const job = jobStore.records[0]!;
     expect(job.job_type).toBe('publish');
     expect(job.provider).toBe('wordpress');
     expect(job.run_after).toBe(inOneDay);
@@ -290,7 +295,7 @@ describe('ScheduleService.create', () => {
     });
 
     expect(stores.seo_publications).toHaveLength(1);
-    const pub = stores.seo_publications[0];
+    const pub = stores.seo_publications[0]!;
     expect(pub).toMatchObject({
       schedule_id: dto.id,
       content_id: 'c1',
@@ -359,9 +364,9 @@ describe('ScheduleService.reschedule', () => {
     expect(moved.status).toBe('scheduled');
     expect(moved.id).toBe(dto.id);
     expect(jobStore.records).toHaveLength(1);
-    expect(jobStore.records[0].run_after).toBe(inTwoDays);
+    expect(jobStore.records[0]!.run_after).toBe(inTwoDays);
     expect(stores.seo_schedules).toHaveLength(1);
-    expect(stores.seo_schedules[0].scheduled_at).toBe(inTwoDays);
+    expect(stores.seo_schedules[0]!.scheduled_at).toBe(inTwoDays);
     expect(stores.seo_publications).toHaveLength(1);
   });
 
@@ -371,10 +376,10 @@ describe('ScheduleService.reschedule', () => {
     const svc = new ScheduleService(container(stores, jobStore));
 
     const dto = await svc.create('p1', 'u1', { content_id: 'c1', publisher_id: 'pb1', scheduled_at: inOneDay });
-    stores.seo_schedules[0].status = 'publishing';
+    stores.seo_schedules[0]!.status = 'publishing';
 
     await expectErrorCode(svc.reschedule('p1', dto.id, inTwoDays), 'schedule_not_editable');
-    expect(jobStore.records[0].run_after).toBe(inOneDay);
+    expect(jobStore.records[0]!.run_after).toBe(inOneDay);
   });
 });
 
@@ -389,7 +394,7 @@ describe('ScheduleService.cancel', () => {
 
     expect(cancelled.status).toBe('cancelled');
     expect(cancelled.cancelled_at).toBeTruthy();
-    expect(stores.seo_schedules[0].status).toBe('cancelled');
+    expect(stores.seo_schedules[0]!.status).toBe('cancelled');
     expect((await jobStore.get('job-1'))?.status).toBe('canceled');
     expect(await jobStore.claimNext()).toBeNull();
     expect(stores.seo_publications).toHaveLength(1);
@@ -414,17 +419,17 @@ describe('ScheduleService.cancel', () => {
     const stores = baseStores();
     const svc = new ScheduleService(container(stores));
     const dto = await svc.create('p1', 'u1', { content_id: 'c1', publisher_id: 'pb1', scheduled_at: inOneDay });
-    stores.seo_schedules[0].status = 'publishing';
+    stores.seo_schedules[0]!.status = 'publishing';
 
     await expectErrorCode(svc.cancel('p1', dto.id), 'schedule_not_cancellable');
-    expect(stores.seo_schedules[0].status).toBe('publishing');
+    expect(stores.seo_schedules[0]!.status).toBe('publishing');
   });
 
   it('rejects cancelling a schedule that already published', async () => {
     const stores = baseStores();
     const svc = new ScheduleService(container(stores));
     const dto = await svc.create('p1', 'u1', { content_id: 'c1', publisher_id: 'pb1', scheduled_at: inOneDay });
-    stores.seo_schedules[0].status = 'published';
+    stores.seo_schedules[0]!.status = 'published';
 
     await expectErrorCode(svc.cancel('p1', dto.id), 'schedule_not_cancellable');
   });
@@ -491,7 +496,7 @@ describe('ScheduleService isolation + status sync', () => {
 
     await expectErrorCode(svc.reschedule('p2', 's-p1', inTwoDays), 'schedule_not_found');
     await expectErrorCode(svc.cancel('p2', 's-p1'), 'schedule_not_found');
-    expect(stores.seo_schedules[0].status).toBe('scheduled');
+    expect(stores.seo_schedules[0]!.status).toBe('scheduled');
   });
 
   it('syncs status only along non-terminal transitions (never un-cancels/un-publishes)', async () => {
@@ -502,20 +507,20 @@ describe('ScheduleService isolation + status sync', () => {
     const c = container(stores, jobStore);
 
     await syncScheduleStatus(c, { projectId: 'p1', scheduleId: dto.id, status: 'publishing' });
-    expect(stores.seo_schedules[0].status).toBe('publishing');
+    expect(stores.seo_schedules[0]!.status).toBe('publishing');
 
     await syncScheduleStatus(c, { projectId: 'p1', scheduleId: dto.id, status: 'published' });
-    expect(stores.seo_schedules[0].status).toBe('published');
+    expect(stores.seo_schedules[0]!.status).toBe('published');
 
     // A later stale sync must not flip a terminal state backwards.
     await syncScheduleStatus(c, { projectId: 'p1', scheduleId: dto.id, status: 'publishing' });
-    expect(stores.seo_schedules[0].status).toBe('published');
+    expect(stores.seo_schedules[0]!.status).toBe('published');
 
     // Cancelled is terminal too.
     const second = await svc.create('p1', 'u1', { content_id: 'c1', publisher_id: 'pb1', scheduled_at: inTwoDays });
     await svc.cancel('p1', second.id);
     await syncScheduleStatus(c, { projectId: 'p1', scheduleId: second.id, status: 'publishing' });
-    expect(stores.seo_schedules[1].status).toBe('cancelled');
+    expect(stores.seo_schedules[1]!.status).toBe('cancelled');
   });
 });
 
@@ -537,11 +542,11 @@ describe('ScheduleService capability gating (Content Studio Phase H6.1)', () => 
     expect(dto.status).toBe('scheduled');
     expect(dto.publish_kind).toBe('text');
     expect(jobStore.records).toHaveLength(1);
-    expect(jobStore.records[0].provider).toBe('mock_social');
-    expect(jobStore.records[0].job_type).toBe('publish');
+    expect(jobStore.records[0]!.provider).toBe('mock_social');
+    expect(jobStore.records[0]!.job_type).toBe('publish');
     expect(stores.seo_publications).toHaveLength(1);
-    expect(stores.seo_publications[0].publish_kind).toBe('text');
-    expect(stores.seo_schedules[0].publish_kind).toBe('text');
+    expect(stores.seo_publications[0]!.publish_kind).toBe('text');
+    expect(stores.seo_schedules[0]!.publish_kind).toBe('text');
   });
 
   it('rejects an article intent to a publish_text-only publisher (no implicit fallback)', async () => {
@@ -576,7 +581,7 @@ describe('ScheduleService capability gating (Content Studio Phase H6.1)', () => 
     const dto = await svc.create('p1', 'u1', { content_id: 'c1', publisher_id: 'pb-wp', scheduled_at: inOneDay });
     expect(dto.status).toBe('scheduled');
     expect(dto.publish_kind).toBe('article');
-    expect(stores.seo_publications[0].publish_kind).toBe('article');
+    expect(stores.seo_publications[0]!.publish_kind).toBe('article');
   });
 
   it('keeps legacy capability snapshots working (post -> publish_article)', async () => {
@@ -611,7 +616,7 @@ describe('ScheduleService capability gating (Content Studio Phase H6.1)', () => 
     const dto = await svc.create('p1', 'u1', { content_id: 'c1', publisher_id: 'pb-video', publish_kind: 'video', scheduled_at: inOneDay });
     expect(dto.status).toBe('scheduled');
     expect(stores.seo_schedules).toHaveLength(1);
-    expect(stores.seo_publications[0].publish_kind).toBe('video');
+    expect(stores.seo_publications[0]!.publish_kind).toBe('video');
     expect(jobStore.records).toHaveLength(1);
   });
 

@@ -49,7 +49,7 @@ describe('worker unknown job type', () => {
 
     expect(await runOnce(container)).toBe(true);
     expect(fail).toHaveBeenCalledTimes(1);
-    const [id, error, retryable] = fail.mock.calls[0];
+    const [id, error, retryable] = fail.mock.calls[0]!;
     expect(id).toBe('job-1');
     expect(error.code).toBe('unsupported_job_type');
     expect(retryable).toBe(true);
@@ -95,7 +95,7 @@ describe('worker stale running sweep', () => {
     await sweepStaleRunning(container);
 
     expect(fail).toHaveBeenCalledTimes(1);
-    const [id, error, retryable] = fail.mock.calls[0];
+    const [id, error, retryable] = fail.mock.calls[0]!;
     expect(id).toBe('j1');
     expect(error.code).toBe('stale_worker');
     expect(retryable).toBe(true);

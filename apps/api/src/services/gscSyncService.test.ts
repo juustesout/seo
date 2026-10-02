@@ -164,7 +164,7 @@ describe('enqueueGscSyncIfIdle', () => {
     const result = await enqueueGscSyncIfIdle(container(), { projectId: PROJECT, userId: 'editor-user' });
 
     expect(enqueueCalls).toHaveLength(1);
-    expect(enqueueCalls[0].idempotency_key).toBe(`gsc_sync:${PROJECT}:job-done`);
+    expect(enqueueCalls[0]!.idempotency_key).toBe(`gsc_sync:${PROJECT}:job-done`);
     expect(result.reused).toBe(false);
   });
 

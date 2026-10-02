@@ -51,15 +51,15 @@ function isBlockedIpv6(raw: string): boolean {
   if (host === '::1' || host === '0:0:0:0:0:0:0:1') return true;
   const mapped = /^::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/.exec(host);
   if (mapped) {
-    const v4 = parseIpv4(mapped[1]);
+    const v4 = parseIpv4(mapped[1]!);
     return v4 ? isBlockedIpv4(...v4) : false;
   }
   // The WHATWG URL parser rewrites IPv4-mapped literals to hex groups
   // (::ffff:127.0.0.1 -> ::ffff:7f00:1), so decode the trailing 32 bits too.
   const mappedHex = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(host);
   if (mappedHex) {
-    const hi = parseInt(mappedHex[1], 16);
-    const lo = parseInt(mappedHex[2], 16);
+    const hi = parseInt(mappedHex[1]!, 16);
+    const lo = parseInt(mappedHex[2]!, 16);
     return isBlockedIpv4((hi >> 8) & 255, hi & 255, (lo >> 8) & 255, lo & 255);
   }
   if (/^fe[89ab]/.test(host)) return true; // fe80::/10 link-local

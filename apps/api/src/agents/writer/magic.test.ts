@@ -309,13 +309,13 @@ describe('writer Section Magic round (graph)', () => {
     expect(magic.revisionCount).toBe(1);
     expect(magic.plan?.sections.map((s) => s.heading)).toEqual(['Heading 1', 'Heading 2']);
     expect(magic.writtenSections.map((s) => s.sectionId)).toEqual([writerSectionIdFor(0), writerSectionIdFor(1)]);
-    expect(magic.writtenSections[1].content).toBe('Body for Heading 2.');
+    expect(magic.writtenSections[1]!.content).toBe('Body for Heading 2.');
     expect(revision.calls).toHaveLength(1);
-    expect(revision.calls[0].sectionIndex).toBe(0);
+    expect(revision.calls[0]!.sectionIndex).toBe(0);
     // The canonical instruction is authoritative; the hostile prose only ever
     // reached the AI as the delimited magic.userIntent.
-    expect(revision.calls[0].magic?.userIntent).toBe(hostile);
-    expect(revision.calls[0].instruction).toBe(magicRequestInstruction({ action: 'improve' }));
+    expect(revision.calls[0]!.magic?.userIntent).toBe(hostile);
+    expect(revision.calls[0]!.instruction).toBe(magicRequestInstruction({ action: 'improve' }));
   });
 
   it('accept after a magic round completes the transformed run', async () => {
@@ -330,7 +330,7 @@ describe('writer Section Magic round (graph)', () => {
       registry,
     );
     expect(magic.status).toBe('review_ready');
-    expect(magic.writtenSections[1].content).toBe(`Revised body 1 (${magicRequestInstruction({ action: 'change_tone', tone: 'friendly' })}).`);
+    expect(magic.writtenSections[1]!.content).toBe(`Revised body 1 (${magicRequestInstruction({ action: 'change_tone', tone: 'friendly' })}).`);
 
     const accepted = await resumeWriterSession({ runId: runId as `wr_${string}`, decision: { action: 'accept' } }, registry);
     expect(accepted.status).toBe('completed');

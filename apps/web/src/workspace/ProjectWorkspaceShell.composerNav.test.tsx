@@ -9,7 +9,7 @@
  */
 import { useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { ProjectWorkspaceShell } from './ProjectWorkspaceShell';
 import type { WorkspaceMode } from './WorkspaceModeSwitcher';
 

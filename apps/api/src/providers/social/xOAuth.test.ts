@@ -54,7 +54,7 @@ describe('X OAuth 2.0 client', () => {
     const tokens = await client(fetchFn).exchangeCode({ code: 'the-code', redirectUri: 'https://x/cb', codeVerifier: 'verifier' });
     expect(tokens.access_token).toBe('at');
     expect(tokens.refresh_token).toBe('rt');
-    const call = calls[0];
+    const call = calls[0]!;
     expect(call.url).toContain('/2/oauth2/token');
     const body = String(call.init?.body);
     expect(body).toContain('grant_type=authorization_code');
@@ -67,8 +67,8 @@ describe('X OAuth 2.0 client', () => {
     const { fetchFn, calls } = recordingFetch(async () => jsonResponse({ access_token: 'at-new' }));
     const tokens = await client(fetchFn).refreshAccessToken('rt-old');
     expect(tokens.access_token).toBe('at-new');
-    expect(String(calls[0].init?.body)).toContain('grant_type=refresh_token');
-    expect(String(calls[0].init?.body)).toContain('refresh_token=rt-old');
+    expect(String(calls[0]!.init?.body)).toContain('grant_type=refresh_token');
+    expect(String(calls[0]!.init?.body)).toContain('refresh_token=rt-old');
   });
 
   it('normalizes token endpoint failures as XApiError without leaking the response body', async () => {
@@ -87,7 +87,7 @@ describe('X OAuth 2.0 client', () => {
     );
     const user = await client(fetchFn).fetchAuthenticatedUser('at');
     expect(user).toEqual({ id: 'user-1', name: 'Ada', username: 'ada' });
-    expect(calls[0].url).toContain('/2/users/me');
+    expect(calls[0]!.url).toContain('/2/users/me');
   });
 
   it('creates a post and returns the real tweet id from a 201', async () => {
@@ -96,7 +96,7 @@ describe('X OAuth 2.0 client', () => {
     );
     const tweet = await client(fetchFn).createPost('at', 'hi');
     expect(tweet.id).toBe('tweet-9');
-    const call = calls[0];
+    const call = calls[0]!;
     expect(call.url).toBe('https://api.x.com/2/tweets');
     expect((call.init?.body as string)).toContain('"text":"hi"');
     // init.headers is the plain object the client passed through

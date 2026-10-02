@@ -254,7 +254,7 @@ export function useWorkspaceSession({ projectId, role = 'viewer' }: { projectId:
       lifecycle.error,
       auto.dirty,
       auto.status,
-    ], // eslint-disable-line react-hooks/exhaustive-deps
+    ],
   );
 
   // Seed an existing row into the workspace once the active document has loaded.

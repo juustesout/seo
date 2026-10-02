@@ -293,11 +293,11 @@ describe('writer context gathering', () => {
       expect(input.targetKeyword).toBe('seo content ops');
     }
     expect(inputs).toHaveLength(1);
-    expect(inputs[0].projectId).toBe(projectId);
-    expect(inputs[0].topic).toBe(topic);
-    expect(inputs[0].targetKeyword).toBe('seo content ops');
-    expect(inputs[0].context.knowledge.status).toBe('available');
-    expect(inputs[0].context.knowledge.chunks[0].trust).toBe('untrusted');
+    expect(inputs[0]!.projectId).toBe(projectId);
+    expect(inputs[0]!.topic).toBe(topic);
+    expect(inputs[0]!.targetKeyword).toBe('seo content ops');
+    expect(inputs[0]!.context.knowledge.status).toBe('available');
+    expect(inputs[0]!.context.knowledge.chunks[0]!.trust).toBe('untrusted');
   });
 
   it('knowledge adapter failure degrades to unavailable and the run still plans', async () => {
@@ -356,7 +356,7 @@ describe('writer context gathering', () => {
       { context: contextDeps, planner: okPlanner() },
     );
 
-    const chunk = result.context.knowledge.chunks[0];
+    const chunk = result.context.knowledge.chunks[0]!;
     expect(chunk).toMatchObject({ source: 'knowledge', trust: 'untrusted', sourceId: 'evil' });
     expect(chunk.text).toBe(hostile);
     expect(result.status).toBe('awaiting_approval');
@@ -470,7 +470,7 @@ describe('writer planOutline', () => {
 
     expect(result.status).toBe('failed');
     expect(result.context.knowledge.status).toBe('available');
-    expect(result.context.knowledge.chunks[0].sourceId).toBe('k1');
+    expect(result.context.knowledge.chunks[0]!.sourceId).toBe('k1');
   });
 });
 

@@ -199,11 +199,11 @@ describe('PublicationService.list', () => {
 
     const rows = await svc.list('p1', { limit: 50, offset: 0 });
 
-    expect(Object.keys(rows[0]).sort()).toEqual([...pubColumns].sort());
+    expect(Object.keys(rows[0]!).sort()).toEqual([...pubColumns].sort());
     for (const secret of ['content', 'slug', 'excerpt', 'created_by', 'config', 'credentials']) {
       expect(rows[0]).not.toHaveProperty(secret);
     }
-    expect(rows[0].content_title).toBe('Snapshot title');
+    expect(rows[0]!.content_title).toBe('Snapshot title');
   });
 
   it('filters by content_id, publisher_id, status and schedule_id', async () => {
@@ -248,8 +248,8 @@ describe('PublicationService.list', () => {
 
     const rows = await svc.list('p1', { limit: 50, offset: 0 });
     const byId = Object.fromEntries(rows.map((r) => [r.id, r]));
-    expect(byId.direct.schedule_id).toBeNull();
-    expect(byId['from-schedule'].schedule_id).toBe('sched-1');
+    expect(byId.direct!.schedule_id).toBeNull();
+    expect(byId['from-schedule']!.schedule_id).toBe('sched-1');
   });
 
   it('falls back to the stored title snapshot when content no longer resolves', async () => {
@@ -259,8 +259,8 @@ describe('PublicationService.list', () => {
     const svc = svcOf(stores);
 
     const rows = await svc.list('p1', { limit: 50, offset: 0 });
-    expect(rows[0].content_id).toBeNull();
-    expect(rows[0].content_title).toBe('Manual direct post');
+    expect(rows[0]!.content_id).toBeNull();
+    expect(rows[0]!.content_title).toBe('Manual direct post');
   });
 
   it('coerces stored errors to a safe short string message', async () => {
@@ -274,10 +274,10 @@ describe('PublicationService.list', () => {
 
     const rows = await svc.list('p1', { limit: 50, offset: 0 });
     const byId = Object.fromEntries(rows.map((r) => [r.id, r]));
-    expect(byId.oops.error).toBe('publisher returned 401');
-    expect(byId.strerr.error).toBe('plain boom');
-    expect(byId.objerr.error).toBe('kaboom');
-    expect(byId.fine.error).toBeNull();
+    expect(byId.oops!.error).toBe('publisher returned 401');
+    expect(byId.strerr!.error).toBe('plain boom');
+    expect(byId.objerr!.error).toBe('kaboom');
+    expect(byId.fine!.error).toBeNull();
   });
 
   it('keeps nulls for names/titles it cannot resolve without inventing data', async () => {
@@ -289,8 +289,8 @@ describe('PublicationService.list', () => {
     const svc = svcOf(stores);
 
     const rows = await svc.list('p1', { limit: 50, offset: 0 });
-    expect(rows[0].content_title).toBe('Snapshot title'); // snapshot fallback is honest metadata
-    expect(rows[0].publisher_name).toBeNull();
+    expect(rows[0]!.content_title).toBe('Snapshot title'); // snapshot fallback is honest metadata
+    expect(rows[0]!.publisher_name).toBeNull();
   });
 });
 

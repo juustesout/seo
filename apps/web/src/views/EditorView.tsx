@@ -36,7 +36,6 @@ import {
   type ContentAiSuggestionDto,
   type ContentOutlineItem,
   type SeoResult,
-  type TipDoc,
 } from '@seo/contracts';
 import { api } from '../lib/api';
 import { fmtDate, Empty } from '../lib/ui';
@@ -208,7 +207,7 @@ export function EditorView({
   // inside the view's switch helper).
   useEffect(() => {
     resetAi();
-  }, [session.boundary]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [session.boundary]);
 
   // Report the combined inline AI busy signal to the shell chrome's assistant
   // slot. The operations themselves stay owned here.
@@ -634,7 +633,6 @@ export function EditorView({
                 projectId={projectId}
                 contentId={editingId}
                 defaultTopic={title}
-                defaultKeyword={targetKeyword.trim() || undefined}
               />
             )}
             {editingId && (

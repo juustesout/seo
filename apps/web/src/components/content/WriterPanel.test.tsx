@@ -12,7 +12,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, fireEvent, within } from '@testing-library/react';
-import { asTipDoc, evaluateSeo, tiptapEmptyDoc } from '@seo/contracts';
+import { asTipDoc, evaluateSeo } from '@seo/contracts';
 import type {
   WriterAgentDto,
   WriterEvidenceDto,
@@ -168,7 +168,7 @@ describe('WriterPanel', () => {
   it('starts with no run and posts the instruction on Start', async () => {
     const fake = fakeApi(run({ status: 'starting', plan: null }));
     render(
-      <WriterPanel projectId={PROJECT} contentId={CONTENT} defaultTopic="On-Page SEO" defaultKeyword="on page seo" />,
+      <WriterPanel projectId={PROJECT} contentId={CONTENT} defaultTopic="On-Page SEO" />,
     );
 
     expect(screen.getByRole('button', { name: /start writer run/i })).toBeTruthy();

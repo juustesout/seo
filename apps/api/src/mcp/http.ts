@@ -60,7 +60,7 @@ export interface McpHttpRouterOptions {
 function bearerToken(req: Request): string | null {
   const header = req.header('authorization');
   const match = /^Bearer\s+(.+)$/i.exec(header ?? '');
-  return match ? match[1].trim() : null;
+  return match ? match[1]!.trim() : null;
 }
 
 /**

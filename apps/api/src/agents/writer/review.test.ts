@@ -152,9 +152,9 @@ describe('assembleReviewDocument', () => {
       .map((n) => (n.content?.[0] as { text?: string } | undefined)?.text);
     expect(headingTexts).toEqual([
       p.title,
-      p.sections[0].heading,
-      p.sections[1].heading,
-      p.sections[2].heading,
+      p.sections[0]!.heading,
+      p.sections[1]!.heading,
+      p.sections[2]!.heading,
     ]);
     const levels = (doc.content ?? [])
       .filter((n) => n.type === 'heading')
@@ -166,9 +166,9 @@ describe('assembleReviewDocument', () => {
     expect(paragraphTexts).toEqual(['Why body.', 'Pipeline body.', 'Second pipeline paragraph.', 'Cadence body.']);
     expect(docHeadingsVia(doc).map((h) => h.text)).toEqual([
       p.title,
-      p.sections[0].heading,
-      p.sections[1].heading,
-      p.sections[2].heading,
+      p.sections[0]!.heading,
+      p.sections[1]!.heading,
+      p.sections[2]!.heading,
     ]);
   });
 

@@ -28,7 +28,7 @@ describe('InMemoryUsageEventStore', () => {
     const result = await store.append([event()]);
     expect(result).toEqual({ inserted: 1, duplicates: 0 });
 
-    const [stored] = await store.list({ projectId: PROJECT });
+    const stored = (await store.list({ projectId: PROJECT }))[0]!;
     expect(stored.id).toMatch(/^[0-9a-f-]{36}$/i);
     expect(typeof stored.occurredAt).toBe('string');
     expect(stored.metadata).toEqual({});
@@ -116,7 +116,7 @@ describe('InMemoryUsageEventStore', () => {
       occurredTo: '2026-03-01T00:00:00.000Z',
     });
     expect(windowed).toHaveLength(1);
-    expect(windowed[0].occurredAt).toBe('2026-02-01T00:00:00.000Z');
+    expect(windowed[0]!.occurredAt).toBe('2026-02-01T00:00:00.000Z');
 
     const limited = await store.list({ projectId: PROJECT, limit: 2 });
     expect(limited).toHaveLength(2);
@@ -161,9 +161,9 @@ describe('InMemoryUsageEventStore', () => {
   it('returns copies so callers cannot mutate the ledger', async () => {
     const store = new InMemoryUsageEventStore();
     await store.append([event({ sourceId: 's1' })]);
-    const [first] = await store.list({ projectId: PROJECT });
+    const first = (await store.list({ projectId: PROJECT }))[0]!;
     first.quantity = 9999;
-    const [again] = await store.list({ projectId: PROJECT });
+    const again = (await store.list({ projectId: PROJECT }))[0]!;
     expect(again.quantity).toBe(100);
   });
 });

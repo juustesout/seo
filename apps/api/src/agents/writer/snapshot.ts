@@ -37,7 +37,7 @@ import {
   WRITER_AGENT_STEP_STATUSES,
   type WriterAgentState,
 } from './agent.js';
-import type { WriterEvidence, WriterEvidenceSource, WriterEvidenceStatus } from './evidence.js';
+import type { WriterEvidence } from './evidence.js';
 import {
   WRITER_MAX_EVIDENCE_ITEM_TEXT_CHARS,
   WRITER_MAX_EVIDENCE_ITEMS,
@@ -318,7 +318,7 @@ export const writerAgentSchema = z
       });
     }
     for (let i = 0; i < value.steps.length; i += 1) {
-      if (value.steps[i].index !== i) {
+      if (value.steps[i]!.index !== i) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           path: ['steps'],
@@ -411,7 +411,7 @@ function assertSnapshotConsistency(snapshot: WriterRunSnapshot, runId: string, p
     writerSnapshotInvalid(runId, 'snapshot projectId does not match the row');
   }
   for (let i = 0; i < snapshot.writtenSections.length; i += 1) {
-    if (snapshot.writtenSections[i].sectionId !== `section_${i}`) {
+    if (snapshot.writtenSections[i]!.sectionId !== `section_${i}`) {
       writerSnapshotInvalid(runId, 'written sections are not an ordered prefix of the plan');
     }
   }

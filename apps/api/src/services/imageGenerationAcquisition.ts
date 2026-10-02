@@ -116,7 +116,7 @@ function decodeInlineImage(url: string): Buffer | null {
   const match = /^data:image\/[a-z0-9.+-]+;base64,([a-z0-9+/=\s]+)$/i.exec(url);
   if (!match) return null;
   try {
-    const buffer = Buffer.from(match[1].replace(/\s+/g, ''), 'base64');
+    const buffer = Buffer.from(match[1]!.replace(/\s+/g, ''), 'base64');
     return buffer.length > 0 ? buffer : null;
   } catch {
     return null;

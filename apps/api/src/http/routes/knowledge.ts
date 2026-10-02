@@ -48,9 +48,6 @@ export const knowledgeRouter: Router = Router({ mergeParams: true });
 
 knowledgeRouter.use(requireAuth);
 
-/** True when the server could embed (either the dedicated key or the shared OpenAI key is set). */
-const hasEmbeddingKey = () => Boolean(process.env.EMBEDDINGS_API_KEY || process.env.OPENAI_API_KEY);
-
 /**
  * Bounded, allowlisted retrieval request (KB6). The query is required and
  * bounded; filters are limited to the canonical source types and to bounded
@@ -111,7 +108,11 @@ knowledgeRouter.get(
       data: {
         project_id: projectId,
         provider: descriptor,
-        configured: Boolean(container.config.env.QDRANT_URL && container.config.env.QDRANT_API_KEY && hasEmbeddingKey()),
+        configured: Boolean(
+          container.config.env.QDRANT_URL &&
+            container.config.env.QDRANT_API_KEY &&
+            (container.config.env.EMBEDDINGS_API_KEY || container.config.env.OPENAI_API_KEY),
+        ),
         note: descriptor ? 'Run a knowledge_index job to (re)build the vector index.' : 'No knowledge provider registered.',
       },
     });

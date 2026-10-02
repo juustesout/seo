@@ -223,7 +223,7 @@ integrationsRouter.post(
       });
       try {
         await adapter.disconnect(ctx);
-      } catch (err) {
+      } catch {
         // token cleanup is best-effort; still mark disconnected
       }
     }

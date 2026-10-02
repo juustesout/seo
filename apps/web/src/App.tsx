@@ -12,7 +12,7 @@
  * exist, then `/me` (account + project memberships) must resolve before any
  * workspace renders - children assume `me.projects` is already loaded.
  */
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import {
   BarChart3,
   BookOpen,
@@ -30,33 +30,41 @@ import {
   Settings,
   ShieldCheck,
 } from 'lucide-react';
-import { supabase, configured as supabaseConfigured, currentUser, sessionToken } from './lib/supabase';
+import { supabase, configured as supabaseConfigured, currentUser } from './lib/supabase';
 import { api } from './lib/api';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/utils';
-import { Dashboard } from './views/Dashboard';
-import { Integrations } from './views/Integrations';
-import { Keywords } from './views/Keywords';
-import { Analytics } from './views/Analytics';
-import { Knowledge } from './views/Knowledge';
-import { Publishing } from './views/Publishing';
-import { ContentSchedule } from './views/ContentSchedule';
-import { Publications } from './views/Publications';
-import { ProjectWorkspaceShell, normalizeWorkspaceMode } from './workspace';
 import { openProjectView } from './lib/nav';
 import { createRouteNavigation } from './lib/historyNavigation';
 import { canonicalWorkspaceRoute, parseRoute, routePath, type Route, type TopArea } from './lib/projectRoute';
 import { DesignSystemProvider } from './lib/designSystem';
-import { Overview } from './views/Overview';
-import { AccountIntegrations } from './views/AccountIntegrations';
-import { AccountApiKeys } from './views/AccountApiKeys';
-import { ProjectsPage } from './views/ProjectsPage';
-import { ProjectSettings } from './views/ProjectSettings';
-import { Usage } from './views/Usage';
-import { AdminArea } from './views/admin/AdminArea';
+import { normalizeWorkspaceMode } from './workspace/WorkspaceModeSwitcher';
 import { LegalFooter, LegalPage } from './views/Legal';
+
+// Route views are code-split: each becomes its own chunk so the initial bundle
+// stays small and heavy dependencies (rich-text editor, charts) load on demand.
+const Dashboard = lazy(() => import('./views/Dashboard').then((m) => ({ default: m.Dashboard })));
+const Integrations = lazy(() => import('./views/Integrations').then((m) => ({ default: m.Integrations })));
+const Keywords = lazy(() => import('./views/Keywords').then((m) => ({ default: m.Keywords })));
+const Analytics = lazy(() => import('./views/Analytics').then((m) => ({ default: m.Analytics })));
+const Knowledge = lazy(() => import('./views/Knowledge').then((m) => ({ default: m.Knowledge })));
+const Publishing = lazy(() => import('./views/Publishing').then((m) => ({ default: m.Publishing })));
+const ContentSchedule = lazy(() => import('./views/ContentSchedule').then((m) => ({ default: m.ContentSchedule })));
+const Publications = lazy(() => import('./views/Publications').then((m) => ({ default: m.Publications })));
+const ProjectWorkspaceShell = lazy(() =>
+  import('./workspace/ProjectWorkspaceShell').then((m) => ({ default: m.ProjectWorkspaceShell })),
+);
+const Overview = lazy(() => import('./views/Overview').then((m) => ({ default: m.Overview })));
+const AccountIntegrations = lazy(() =>
+  import('./views/AccountIntegrations').then((m) => ({ default: m.AccountIntegrations })),
+);
+const AccountApiKeys = lazy(() => import('./views/AccountApiKeys').then((m) => ({ default: m.AccountApiKeys })));
+const ProjectsPage = lazy(() => import('./views/ProjectsPage').then((m) => ({ default: m.ProjectsPage })));
+const ProjectSettings = lazy(() => import('./views/ProjectSettings').then((m) => ({ default: m.ProjectSettings })));
+const Usage = lazy(() => import('./views/Usage').then((m) => ({ default: m.Usage })));
+const AdminArea = lazy(() => import('./views/admin/AdminArea').then((m) => ({ default: m.AdminArea })));
 
 interface ProjectRow {
   id: string;
@@ -109,6 +117,16 @@ const PROJECT_NAV: Array<{ id: string; label: string; icon: NavIcon }> = [
  * account-level area. Project membership comes from `/me`; the role of the
  * active project is passed down so views can gate capabilities per route.
  */
+/** Suspense fallback shown while a lazily-loaded route chunk is fetched. */
+function RouteFallback() {
+  return (
+    <div className="flex items-center gap-2 px-2 py-10 text-sm text-muted-foreground">
+      <Loader2 className="size-4 animate-spin" />
+      Loading…
+    </div>
+  );
+}
+
 export function App() {
   const [route, setRoute] = useState<Route>(() => parseRoute());
   const [me, setMe] = useState<Me | null>(null);
@@ -300,7 +318,9 @@ export function App() {
           adminActive
           onAdmin={() => goAdmin()}
         />
-        <AdminArea view={route.view} isAdmin={isAdmin} onNavigate={goAdmin} />
+        <Suspense fallback={<RouteFallback />}>
+          <AdminArea view={route.view} isAdmin={isAdmin} onNavigate={goAdmin} />
+        </Suspense>
       </div>
     );
   }
@@ -366,6 +386,7 @@ export function App() {
           <div className="flex flex-1">
             <ProjectSidebar projectId={pid} view={workspaceActive ? 'workspace' : view} onNavigate={goProject} />
             <main className="min-w-0 flex-1 px-6 py-6">
+              <Suspense fallback={<RouteFallback />}>
               {view === 'dashboard' && <Dashboard projectId={pid} onOpenSettings={() => goProject(pid, 'settings')} />}
               {view === 'keywords' && <Keywords projectId={pid} role={project.role} />}
               {view === 'analytics' && <Analytics projectId={pid} onOpenSettings={() => goProject(pid, 'settings')} />}
@@ -408,6 +429,7 @@ export function App() {
               {view === 'publishing' && <Publishing projectId={pid} />}
               {view === 'usage' && <Usage projectId={pid} />}
               {view === 'settings' && <ProjectSettings projectId={pid} role={project.role} />}
+              </Suspense>
             </main>
           </div>
         </div>
@@ -430,12 +452,14 @@ export function App() {
         onAdmin={() => goAdmin()}
       />
       <main className="mx-auto w-full max-w-5xl flex-1 px-6 py-6">
+        <Suspense fallback={<RouteFallback />}>
         {route.area === 'overview' && <Overview onOpenProject={goProject} onGoProjects={() => goArea('projects')} />}
         {route.area === 'projects' && <ProjectsPage onOpenProject={goProject} />}
         {route.area === 'compose' && <p className="text-sm text-muted-foreground">Opening the workspace Composer...</p>}
         {route.area === 'integrations' && <AccountIntegrations onOpenProject={goProject} />}
         {route.area === 'keys' && <AccountApiKeys />}
         {route.area === 'usage' && <Usage />}
+        </Suspense>
       </main>
       <LegalFooter />
     </div>

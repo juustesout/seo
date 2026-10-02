@@ -364,8 +364,8 @@ describe('WriterRunService research & evidence (W10.2)', () => {
     expect(gathered.evidence!.gatheredAt).toBeTruthy();
     const knowledge = gathered.evidence!.sources.find((s) => s.source === 'knowledge')!;
     expect(knowledge.status).toBe('available');
-    expect(knowledge.items[0].text).toBe('Evidence text for the article.');
-    expect(knowledge.items[0].trust).toBe('untrusted');
+    expect(knowledge.items[0]!.text).toBe('Evidence text for the article.');
+    expect(knowledge.items[0]!.trust).toBe('untrusted');
     const search = gathered.evidence!.sources.find((s) => s.source === 'search')!;
     expect(search.status).toBe('not_configured');
     expect(search.items).toEqual([]);
@@ -1008,7 +1008,7 @@ describe('WriterRunService advanced agent (W10.4)', () => {
     expect(rested.status).toBe('review_ready');
     expect(rested.agent?.status).toBe('completed');
     expect(rested.agent?.stepCount).toBe(1);
-    expect(rested.agent?.steps[0].action).toBe('finish');
+    expect(rested.agent?.steps[0]!.action).toBe('finish');
     expect(decided).toHaveLength(1);
   });
 
@@ -1042,7 +1042,7 @@ describe('WriterRunService advanced agent (W10.4)', () => {
     expect(rested.status).toBe('review_ready');
     expect(rested.agent?.status).toBe('limit_reached');
     expect(rested.agent?.stepCount).toBe(1);
-    expect(rested.agent?.steps[0].action).toBe('research');
+    expect(rested.agent?.steps[0]!.action).toBe('research');
     expect(researchCalls).toBe(1);
   });
 

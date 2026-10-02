@@ -18,8 +18,7 @@ import type { BlockRenderer, RenderContext } from './context';
 import { blockClassNames, classNames, columnsClassNames } from './presentation';
 import { safeHref, safeImageSrc } from './safety';
 
-const HEADING_LEVELS = [1, 2, 3, 4, 5, 6] as const;
-type HeadingLevel = (typeof HEADING_LEVELS)[number];
+type HeadingLevel = 1 | 2 | 3 | 4 | 5 | 6;
 
 function headingLevel(value: unknown): HeadingLevel {
   return typeof value === 'number' && Number.isInteger(value) && value >= 1 && value <= 6

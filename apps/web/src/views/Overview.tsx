@@ -124,7 +124,7 @@ export function Overview({
   onOpenProject: (id: string, view: string) => void;
   onGoProjects: () => void;
 }) {
-  const { data, error, loading, reload } = useAsync<AccountOverviewDto>(() => api('/account/overview'), []);
+  const { data, error, loading } = useAsync<AccountOverviewDto>(() => api('/account/overview'), []);
   const account = useAsync<AccountDto>(() => api('/account'), []);
   // The GSC OAuth callback redirects back here with ?gsc=connected; surface a
   // one-time confirmation banner. Reading it also implies this screen is the

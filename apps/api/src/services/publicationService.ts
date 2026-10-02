@@ -97,7 +97,7 @@ export class PublicationService {
   async get(projectId: string, publicationId: string): Promise<PublicationDto> {
     const row = await this.require(projectId, publicationId);
     const [dto] = await this.enrich(projectId, [row]);
-    return dto;
+    return dto!;
   }
 
   // ---------------------------------------------------------------------------

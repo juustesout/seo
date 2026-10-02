@@ -15,7 +15,7 @@
  * lives in `EditorMode`, so Composer/Designer never mount it. The shell keeps no
  * editor instance and no second session/autosave/lifecycle.
  */
-import { useCallback, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import {
   isCanonicalDocumentEmpty,
   type CanonicalDocument,

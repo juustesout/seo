@@ -147,14 +147,15 @@ const DISCOVERY_SESSION_COLUMNS =
 
 /** Fixed, allowlisted sort map. A client `sort` value can only select one of
  *  these pairs; no raw column name or SQL order ever reaches the database. */
-const SOURCE_SORTS: Record<string, { column: string; ascending: boolean }> = {
-  updated_desc: { column: 'updated_at', ascending: false },
+const DEFAULT_SOURCE_SORT = { column: 'updated_at', ascending: false };
+const SOURCE_SORTS = {
+  updated_desc: DEFAULT_SOURCE_SORT,
   updated_asc: { column: 'updated_at', ascending: true },
   indexed_desc: { column: 'last_indexed_at', ascending: false },
   indexed_asc: { column: 'last_indexed_at', ascending: true },
   name_asc: { column: 'name', ascending: true },
   name_desc: { column: 'name', ascending: false },
-};
+} satisfies Record<string, { column: string; ascending: boolean }>;
 
 /** Clamp a requested page size into [1, max]; non-finite falls back to default. */
 function clampListLimit(value: number | undefined): number {
@@ -184,6 +185,8 @@ export function sanitizeKnowledgeSearch(value: string | undefined): string {
   if (!value) return '';
   return value
     .replace(/[,()%*\\]/g, ' ')
+    // Control characters are intentionally stripped from search text.
+    // eslint-disable-next-line no-control-regex
     .replace(/[\u0000-\u001f\u007f]/g, '')
     .replace(/\s+/g, ' ')
     .trim()
@@ -471,7 +474,7 @@ export class KnowledgeService {
     if (!env.QDRANT_URL || !env.QDRANT_API_KEY) {
       return 'Set QDRANT_URL and QDRANT_API_KEY on the API server.';
     }
-    const hasEmbeddingKey = Boolean(process.env.EMBEDDINGS_API_KEY || env.OPENAI_API_KEY);
+    const hasEmbeddingKey = Boolean(env.EMBEDDINGS_API_KEY || env.OPENAI_API_KEY);
     if (!hasEmbeddingKey) {
       return 'Add an embedding key on the API server (EMBEDDINGS_API_KEY or OPENAI_API_KEY).';
     }
@@ -598,7 +601,7 @@ export class KnowledgeService {
   ): Promise<{ items: KnowledgeSourceDto[]; total: number; limit: number; offset: number; summary: KnowledgeSourceSummaryDto }> {
     const limit = clampListLimit(query.limit);
     const offset = Math.max(0, Math.floor(query.offset ?? 0));
-    const sort = SOURCE_SORTS[query.sort ?? 'updated_desc'] ?? SOURCE_SORTS.updated_desc;
+    const sort = SOURCE_SORTS[query.sort ?? 'updated_desc'] ?? DEFAULT_SOURCE_SORT;
 
     let q = this.sb
       .from('seo_knowledge_sources')

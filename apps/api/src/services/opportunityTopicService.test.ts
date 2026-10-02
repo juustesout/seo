@@ -153,7 +153,7 @@ describe('writeCoreTopics', () => {
     const container = { sb: fakeSb(tables) } as never;
     const result = await writeCoreTopics(container, PROJECT, [{ name: '  New topic ', description: '' }]);
     expect(result).toEqual([{ name: 'New topic', description: '' }]);
-    const stored = (tables.seo_projects[0]!.settings as Row) ?? {};
+    const stored = (tables.seo_projects![0]!.settings as Row) ?? {};
     expect(stored.ai).toEqual({ provider: 'x' });
     expect(stored.coreTopics).toEqual([{ name: 'New topic', description: '' }]);
   });

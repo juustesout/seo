@@ -9,7 +9,7 @@ import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import express from 'express';
-import { ApiError, errorHandler } from '../../apiErrors.js';
+import { errorHandler } from '../../apiErrors.js';
 import { accountRouter } from './account.js';
 
 type Row = Record<string, unknown>;

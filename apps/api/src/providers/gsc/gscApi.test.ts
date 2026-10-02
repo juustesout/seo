@@ -6,7 +6,7 @@
  * success/failure classification, error preservation, and that a broken
  * observer can never fail the request.
  */
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { GscApiClient, UnauthorizedError, type GscRequestObserver } from './gscApi.js';
 
 function response(body: unknown, status = 200): Response {

@@ -44,12 +44,12 @@ type Row = Record<string, unknown>;
 
 const GSC_PAGE_WINDOW_DAYS = 56;
 const GSC_QUERY_WINDOW_DAYS = 28;
-const SOURCE_LABELS: Record<string, string> = {
+const SOURCE_LABELS = {
   seo: 'On-page SEO',
   gsc: 'Search Console',
   dataforseo: 'DataForSEO',
   knowledge: 'Knowledge base',
-};
+} as const;
 const PRIORITY_RANK: Record<string, number> = { high: 0, medium: 1, low: 2 };
 
 function daysAgo(n: number): string {
@@ -186,7 +186,7 @@ export class ContentIntelligenceService {
     }
 
     const recommendations = [...seoRecs, ...gscRecs, ...dfRecs, ...knowledgeRecs, ...aiRecs].sort(
-      (a, b) => PRIORITY_RANK[a.priority] - PRIORITY_RANK[b.priority] || a.id.localeCompare(b.id),
+      (a, b) => (PRIORITY_RANK[a.priority] ?? 99) - (PRIORITY_RANK[b.priority] ?? 99) || a.id.localeCompare(b.id),
     );
 
     return {

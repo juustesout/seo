@@ -110,7 +110,7 @@ export function isValidDocStructure(value: unknown): boolean {
   if (!isTiptapDoc(value)) return false;
   const content = value.content ?? [];
   if (!Array.isArray(content) || content.length > 2000) return false;
-  const walk = (nodes: TipNode[], parentBlock: string | null): boolean => {
+  const walk = (nodes: TipNode[], _parentBlock: string | null): boolean => {
     for (const node of nodes) {
       if (!node || typeof node !== 'object' || typeof node.type !== 'string') return false;
       if (node.type === 'text') {

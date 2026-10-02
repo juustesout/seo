@@ -114,7 +114,7 @@ export function pageUrlCandidates(input: {
   };
 
   if (input.url && /^https?:\/\//i.test(input.url.trim())) {
-    const base = input.url.trim().split('#')[0].split('?')[0];
+    const base = input.url.trim().split('#')[0]?.split('?')[0] ?? '';
     add(base);
     add(base.replace(/\/+$/, ''));
     add(`${base.replace(/\/+$/, '')}/`);

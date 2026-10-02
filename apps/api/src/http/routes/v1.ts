@@ -30,6 +30,8 @@ import { ContentService, contentJsonSchema, CONTENT_STATUSES } from '../../servi
 import { ContentAnalysisService } from '../../services/contentAnalysisService.js';
 
 declare global {
+  // Express Request augmentation must use a namespace declaration.
+  // eslint-disable-next-line @typescript-eslint/no-namespace
   namespace Express {
     interface Request {
       apiKey?: ApiKeyRecord;
@@ -93,7 +95,7 @@ export async function authorizeKeyProject(
 
 /** Role-gated helper over authorizeKeyProject using the already-auth'd request key. */
 async function authorizeProject(req: Request, minRole: 'viewer' | 'editor'): Promise<string> {
-  return authorizeKeyProject(req.container.access, req.apiKey!, req.params.projectId, minRole);
+  return authorizeKeyProject(req.container.access, req.apiKey!, req.params.projectId!, minRole);
 }
 
 /** Reject the request unless the authenticated key carries the given scope. */
@@ -124,7 +126,7 @@ v1Router.get('/projects/:projectId/content/:id', requireApiKey, asyncHandler(asy
   requireScope(req, 'read');
   const projectId = await authorizeProject(req, 'viewer');
   const svc = new ContentService(asContainer(req).sb);
-  res.json({ data: await svc.get(projectId, req.params.id) });
+  res.json({ data: await svc.get(projectId, req.params.id!) });
 }));
 
 /** GET /content/:id/analysis - the saved SEO/AI analysis for one item (read scope, viewer). */
@@ -132,7 +134,7 @@ v1Router.get('/projects/:projectId/content/:id/analysis', requireApiKey, asyncHa
   requireScope(req, 'read');
   const projectId = await authorizeProject(req, 'viewer');
   const svc = new ContentAnalysisService(asContainer(req));
-  res.json({ data: await svc.analyze(projectId, req.params.id) });
+  res.json({ data: await svc.analyze(projectId, req.params.id!) });
 }));
 
 const contentPatchSchema = z
@@ -153,7 +155,7 @@ v1Router.patch('/projects/:projectId/content/:id', requireApiKey, asyncHandler(a
   const projectId = await authorizeProject(req, 'editor');
   const body = contentPatchSchema.parse(req.body);
   const svc = new ContentService(asContainer(req).sb);
-  const row = await svc.update(projectId, req.apiKey!.created_by, req.params.id, {
+  const row = await svc.update(projectId, req.apiKey!.created_by, req.params.id!, {
     title: body.title,
     targetKeyword: body.target_keyword,
     metaTitle: body.meta_title,
@@ -172,12 +174,12 @@ v1Router.post('/projects/:projectId/content/:id/analyze', requireApiKey, asyncHa
   const body = z.object({ with_ai: z.boolean().optional() }).parse(req.body ?? {});
   const container = asContainer(req);
   const svc = new ContentService(container.sb);
-  await svc.get(projectId, req.params.id);
+  await svc.get(projectId, req.params.id!);
   const job = await container.jobStore.enqueue({
     project_id: projectId,
     provider: 'content',
     job_type: 'content_analyze',
-    params: { content_id: req.params.id, with_ai: body.with_ai !== false },
+    params: { content_id: req.params.id!, with_ai: body.with_ai !== false },
     created_by: req.apiKey!.created_by ?? req.apiKey!.id,
   });
   res.status(202).json({ data: { job } });

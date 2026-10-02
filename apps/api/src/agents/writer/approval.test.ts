@@ -191,11 +191,11 @@ describe('writer resume happy paths', () => {
     expect(resumed.approvalReason).toBeNull();
     expect(resumed.plan?.title).toBe(planFixture().title);
     expect(resumed.writtenSections).toHaveLength(1);
-    expect(resumed.writtenSections[0].sectionId).toBe('section_0');
-    expect(resumed.writtenSections[0].content).toContain('Why LangGraph');
+    expect(resumed.writtenSections[0]!.sectionId).toBe('section_0');
+    expect(resumed.writtenSections[0]!.content).toContain('Why LangGraph');
     expect(writer.calls).toHaveLength(1);
     expect(resumed.context.knowledge.status).toBe('available');
-    expect(resumed.context.knowledge.chunks[0].sourceId).toBe('k1');
+    expect(resumed.context.knowledge.chunks[0]!.sourceId).toBe('k1');
     expect(resumed.projectId).toBe(projectId);
     expect(resumed.topic).toBe(topic);
 
@@ -247,7 +247,7 @@ describe('writer resume happy paths', () => {
     const interrupts = (paused as unknown as { __interrupt__?: Array<{ value: unknown }> }).__interrupt__;
     expect(interrupts).toBeDefined();
     expect(interrupts).toHaveLength(1);
-    expect(interrupts?.[0].value).toMatchObject({
+    expect(interrupts?.[0]!.value).toMatchObject({
       request: 'Approve or reject the proposed article plan before any writing starts.',
       runId,
       status: 'awaiting_approval',

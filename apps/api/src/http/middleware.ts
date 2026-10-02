@@ -66,7 +66,7 @@ export async function optionalAuth(req: Request, _res: Response, next: NextFunct
         jwtSecret: req.container.config.env.SUPABASE_JWT_SECRET,
       });
     }
-  } catch (err) {
+  } catch {
     // invalid token -> treat as anonymous; strict endpoints reject below
   }
   next();

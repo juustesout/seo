@@ -179,7 +179,7 @@ describe('importExternal (R4.5A)', () => {
       source: 'unsplash',
       created_by: 'u-1',
     });
-    expect(inserted[0].source_meta).toEqual({
+    expect(inserted[0]!.source_meta).toEqual({
       provider: 'unsplash',
       sourceAssetId: 'abc',
       author: 'Ada',

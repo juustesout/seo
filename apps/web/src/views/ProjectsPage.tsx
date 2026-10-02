@@ -35,7 +35,7 @@ interface AccountProject {
  * and opened immediately.
  */
 export function ProjectsPage({ onOpenProject }: { onOpenProject: (id: string, view: string) => void }) {
-  const { data, error, loading, reload } = useAsync<{ projects: AccountProject[] }>(() => api('/account'), []);
+  const { data, error, loading } = useAsync<{ projects: AccountProject[] }>(() => api('/account'), []);
   const [showForm, setShowForm] = useState(false);
   const [name, setName] = useState('');
   const [url, setUrl] = useState('');

@@ -35,6 +35,8 @@ type Row = Record<string, unknown>;
 export function sanitizeFilename(name: string | null | undefined): string {
   const base = String(name ?? 'image').split(/[\\/]/).pop() ?? '';
   const clean = base
+    // Strip control characters intentionally (stored object key sanitizing).
+    // eslint-disable-next-line no-control-regex
     .replace(/[\u0000-\u001f\u007f]/g, '')
     .replace(/[^A-Za-z0-9._ -]/g, '_')
     .replace(/\s+/g, ' ')

@@ -48,8 +48,8 @@ describe('OpenAIProvider', () => {
     const result = await p.chat({ messages: [{ role: 'user', content: 'hi' }] });
     expect(result.content).toBe('Hello from model');
     expect(result.usage).toEqual({ inputTokens: 3, outputTokens: 4 });
-    expect(calls[0].url).toContain('/chat/completions');
-    const sent = JSON.parse(calls[0].body);
+    expect(calls[0]!.url).toContain('/chat/completions');
+    const sent = JSON.parse(calls[0]!.body);
     expect(sent.messages).toEqual([{ role: 'user', content: 'hi' }]);
     expect(sent.model).toBe('gpt-4o-mini');
   });

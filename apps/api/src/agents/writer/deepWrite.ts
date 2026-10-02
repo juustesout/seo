@@ -240,11 +240,11 @@ export interface RefinementUnit {
 export function selectRefinementUnits(sections: string[][]): RefinementUnit[] {
   const units: RefinementUnit[] = [];
   for (let sectionIndex = 0; sectionIndex < sections.length; sectionIndex += 1) {
-    const paragraphs = sections[sectionIndex];
+    const paragraphs = sections[sectionIndex] ?? [];
     if (paragraphs.length === 0) continue;
     let longest = 0;
     for (let index = 1; index < paragraphs.length; index += 1) {
-      if (paragraphs[index].length > paragraphs[longest].length) longest = index;
+      if ((paragraphs[index]?.length ?? 0) > (paragraphs[longest]?.length ?? 0)) longest = index;
     }
     units.push({ sectionIndex, paragraphIndex: longest });
     if (units.length >= WRITER_DEEP_MAX_REFINEMENT_UNITS) break;
@@ -668,7 +668,7 @@ export async function runDeepWriteGeneration(
   let continuityTail: string | null = null;
 
   for (let sectionIndex = 0; sectionIndex < sectionCount; sectionIndex += 1) {
-    const section = plan.sections[sectionIndex];
+    const section = plan.sections[sectionIndex]!;
     const sectionId = writerSectionIdFor(sectionIndex);
 
     const intents = await tracePass(trace, 'section_planning', sectionId, async () => {
@@ -704,7 +704,7 @@ export async function runDeepWriteGeneration(
           ...base,
           sectionIndex,
           section,
-          intent: intents[paragraphIndex],
+          intent: intents[paragraphIndex]!,
           paragraphIndex,
           paragraphCount: intents.length,
           previousParagraph: continuityTail,
@@ -728,13 +728,13 @@ export async function runDeepWriteGeneration(
     const unitId = `${writerSectionIdFor(unit.sectionIndex)}:p${unit.paragraphIndex}`;
     const refined = await tracePass(trace, 'paragraph_refinement', unitId, async () => {
       budget.spend();
-      const paragraphs = sectionBodies[unit.sectionIndex];
+      const paragraphs = sectionBodies[unit.sectionIndex]!;
       const outcome = await deps.deep.paragraphRefiner.refineParagraph({
         ...base,
         sectionIndex: unit.sectionIndex,
-        section: plan.sections[unit.sectionIndex],
+        section: plan.sections[unit.sectionIndex]!,
         paragraphIndex: unit.paragraphIndex,
-        paragraph: paragraphs[unit.paragraphIndex],
+        paragraph: paragraphs[unit.paragraphIndex]!,
         previousParagraph: paragraphs[unit.paragraphIndex - 1] ?? null,
         nextParagraph: paragraphs[unit.paragraphIndex + 1] ?? null,
       });
@@ -743,7 +743,7 @@ export async function runDeepWriteGeneration(
       }
       return outcome.content;
     });
-    sectionBodies[unit.sectionIndex][unit.paragraphIndex] = refined;
+    sectionBodies[unit.sectionIndex]![unit.paragraphIndex] = refined;
   }
 
   await report('coherence', 84);
@@ -753,7 +753,7 @@ export async function runDeepWriteGeneration(
       ...base,
       sections: sectionBodies.map((paragraphs, sectionIndex) => ({
         sectionIndex,
-        heading: plan.sections[sectionIndex].heading,
+        heading: plan.sections[sectionIndex]!.heading,
         lead: paragraphs[0] ?? '',
       })),
     });
@@ -768,7 +768,7 @@ export async function runDeepWriteGeneration(
     return outcome.bridges;
   });
   for (const bridge of bridges) {
-    sectionBodies[bridge.sectionIndex].unshift(bridge.text);
+    sectionBodies[bridge.sectionIndex]!.unshift(bridge.text);
   }
 
   const writtenSections: WriterWrittenSection[] = sectionBodies.map((paragraphs, sectionIndex) => ({

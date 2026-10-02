@@ -101,7 +101,6 @@ export class OpenAIProvider implements AIProvider {
   models(): AIModelInfo[] {
     const list: AIModelInfo[] = [];
     const chat = this.chatModel;
-    const embedding = this.embeddingModel;
     for (const m of CHAT_MODELS) {
       if (m.id === chat) {
         list.unshift(m);

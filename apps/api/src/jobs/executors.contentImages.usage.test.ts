@@ -31,7 +31,7 @@ function result(url: string): MediaResult {
   return { id: url, url, width: 1, height: 1, source: 'unsplash' };
 }
 
-function recordingMedia(store: InMemoryUsageEventStore): MediaProvider {
+function recordingMedia(_store: InMemoryUsageEventStore): MediaProvider {
   return {
     id: 'unsplash',
     name: 'Unsplash',

@@ -28,8 +28,8 @@ describe('DataForSeoClient.competitorDomains', () => {
 
     const out = await client.competitorDomains('example.com', { limit: 20 });
 
-    expect(calls[0].url).toContain('/v3/dataforseo_labs/google/competitors_domain/live');
-    expect(calls[0].body?.[0]).toMatchObject({ target: 'example.com', limit: 20, exclude_top_domains: true });
+    expect(calls[0]!.url).toContain('/v3/dataforseo_labs/google/competitors_domain/live');
+    expect(calls[0]!.body?.[0]).toMatchObject({ target: 'example.com', limit: 20, exclude_top_domains: true });
     expect(out).toEqual(items);
   });
 
@@ -51,8 +51,8 @@ describe('DataForSeoClient.domainIntersection', () => {
       limit: 200,
     });
 
-    expect(calls[0].url).toContain('/v3/dataforseo_labs/google/domain_intersection/live');
-    const body = calls[0].body?.[0] ?? {};
+    expect(calls[0]!.url).toContain('/v3/dataforseo_labs/google/domain_intersection/live');
+    const body = calls[0]!.body?.[0] ?? {};
     expect(body).toMatchObject({
       target1: 'rival.com',
       target2: 'example.com',
@@ -73,7 +73,7 @@ describe('DataForSeoClient.domainIntersection', () => {
 
     await client.domainIntersection('rival.com', 'example.com', { excludePaid: false });
 
-    expect(calls[0].body?.[0].filters).toBeUndefined();
-    expect(calls[0].body?.[0].item_types).toEqual(['organic', 'paid']);
+    expect(calls[0]!.body?.[0]?.filters).toBeUndefined();
+    expect(calls[0]!.body?.[0]?.item_types).toEqual(['organic', 'paid']);
   });
 });

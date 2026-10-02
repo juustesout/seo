@@ -21,7 +21,6 @@ import type {
   ProviderDeps,
   SeoDataSource,
   SerpItem,
-  SerpSnapshot,
 } from '@seo/contracts';
 import { ApiError } from '../../apiErrors.js';
 import { COMPETITOR_RESEARCH_MAX_COMPETITORS } from '@seo/contracts';
@@ -434,7 +433,7 @@ export class DataForSeoDataSource implements SeoDataSource {
       : [];
     try {
       for (let i = 0; i < targets.length; i += 1) {
-        const competitor = targets[i];
+        const competitor = targets[i]!;
         if (i > 0) await delay(600);
         const items = await client.domainIntersection(competitor, domain, {
           locationCode: LOCATION_CODE,

@@ -35,20 +35,26 @@ jobs:
       - name: Build contracts
         run: pnpm --filter @seo/contracts build
 
+      - name: Lint
+        run: pnpm lint
+
       - name: Typecheck API
         run: pnpm --filter @seo/api typecheck
-
-      - name: Test API
-        run: pnpm --filter @seo/api test
-
-      - name: Build API
-        run: pnpm --filter @seo/api build
 
       - name: Typecheck web
         run: pnpm --filter @seo/web typecheck
 
-      - name: Test web
-        run: pnpm --filter @seo/web test
+      - name: Test contracts
+        run: pnpm --filter @seo/contracts test
+
+      - name: Test API (coverage thresholds enforced)
+        run: pnpm --filter @seo/api exec vitest run --coverage
+
+      - name: Test web (coverage thresholds enforced)
+        run: pnpm --filter @seo/web exec vitest run --coverage
+
+      - name: Build API
+        run: pnpm --filter @seo/api build
 
       - name: Build web
         run: pnpm --filter @seo/web build
@@ -65,3 +71,71 @@ jobs:
           path: artifact/api-artifact.tar.gz
           if-no-files-found: error
           retention-days: 14
+
+  migrations:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      PGPASSWORD: postgres
+      PSQL_CMD: psql -h 127.0.0.1 -U postgres
+      CREATEDB_CMD: createdb -h 127.0.0.1 -U postgres
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Postgres client
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+
+      - name: Validate migrations + RLS smoke tests
+        run: DB_NAME=seo_ci_${{ github.run_id }} bash scripts/db-migrate-local.sh
+
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.25.0
+          run_install: false
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Scan for committed secrets
+        uses: trufflesecurity/trufflehog@main
+        with:
+          extra_args: --only-verified
+
+      # Block only on critical runtime advisories. The remaining high/moderate
+      # findings are dev/build tooling (vitest UI server, vite on Windows) and
+      # are tracked via Dependabot; the full report below stays visible.
+      - name: Dependency audit (runtime, blocking on critical)
+        run: pnpm audit --prod --audit-level=critical
+
+      - name: Dependency audit (full, non-blocking)
+        continue-on-error: true
+        run: pnpm audit

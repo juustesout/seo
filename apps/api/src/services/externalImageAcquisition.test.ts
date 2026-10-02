@@ -162,7 +162,7 @@ describe('acquireExternalImage', () => {
       fetchFn: okFetch(bytes),
     });
     expect(persist).toHaveBeenCalledTimes(1);
-    const input = persist.mock.calls[0][0];
+    const input = persist.mock.calls[0]![0];
     expect(input.source).toBe('unsplash');
     expect(input.bytes).toHaveLength(bytes.length);
     expect(input.sourceMeta).toEqual({

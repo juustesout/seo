@@ -26,7 +26,11 @@ const ROLE_BY_USER: Record<string, string | undefined> = { 'viewer-user': 'viewe
 const ROLE_ORDER: Record<string, number> = { viewer: 0, editor: 1, admin: 2, owner: 3 };
 
 type Row = Record<string, unknown>;
-type Store = Record<string, Row[]>;
+type Store = Record<string, Row[]> & {
+  seo_publishers: Row[];
+  seo_publications: Row[];
+  seo_sync_jobs: Row[];
+};
 
 let stores: Store;
 let enqueued: EnqueueJobInput[];
@@ -187,7 +191,7 @@ describe('publications route idempotency', () => {
           requireRole: async (userId: string, _projectId: string, minRole: string) => {
             const role = ROLE_BY_USER[userId];
             if (!role) throw ApiError.forbidden('You do not have access to this project');
-            if ((ROLE_ORDER[role] ?? -1) < ROLE_ORDER[minRole]) {
+            if ((ROLE_ORDER[role] ?? -1) < (ROLE_ORDER[minRole] ?? -1)) {
               throw ApiError.forbidden(`This action requires the ${minRole} role`);
             }
           },
@@ -228,7 +232,7 @@ describe('publications route idempotency', () => {
     expect(res.json.data?.reused).toBe(false);
     expect(stores.seo_publications).toHaveLength(1);
     expect(stores.seo_sync_jobs).toHaveLength(1);
-    expect(String(stores.seo_sync_jobs[0].idempotency_key)).toMatch(/^publish:create:/);
+    expect(String(stores.seo_sync_jobs[0]!.idempotency_key)).toMatch(/^publish:create:/);
   });
 
   it('collapses a repeated identical submission onto the in-flight job', async () => {
@@ -272,9 +276,9 @@ describe('publications route idempotency', () => {
       body: { ...publicationBody, schedule_for: when },
     });
     expect(res.status).toBe(202);
-    expect(stores.seo_publications[0].status).toBe('scheduled');
+    expect(stores.seo_publications[0]!.status).toBe('scheduled');
     expect(stores.seo_sync_jobs).toHaveLength(1);
-    expect(new Date(String(stores.seo_sync_jobs[0].run_after)).getTime()).toBe(new Date(when).getTime());
+    expect(new Date(String(stores.seo_sync_jobs[0]!.run_after)).getTime()).toBe(new Date(when).getTime());
   });
 
   it('reuses an in-flight action job and refuses publishing an already-created row', async () => {
@@ -300,7 +304,7 @@ describe('publications route idempotency', () => {
     expect(second.json.data?.reused).toBe(true);
     expect(stores.seo_sync_jobs).toHaveLength(1);
 
-    stores.seo_publications[0].remote_id = 'remote-1';
+    stores.seo_publications[0]!.remote_id = 'remote-1';
     const conflict = await request(`/${PUBLICATION}/actions`, {
       token: 'editor-token',
       method: 'POST',

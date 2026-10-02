@@ -90,6 +90,19 @@ const envSchema = z.object({
   OPENAI_EMBEDDING_MODEL: z.string().optional(),
   OPENAI_IMAGE_MODEL: z.string().optional(),
 
+  // Dedicated embedding endpoint (BYOK). When unset the knowledge pipeline
+  // falls back to the OpenAI key/model above. Server-side only; never exposed
+  // to the browser.
+  EMBEDDINGS_API_KEY: z.string().optional(),
+  EMBEDDINGS_BASE_URL: z.string().url().optional(),
+  EMBEDDINGS_MODEL: z.string().optional(),
+  EMBEDDINGS_DIMENSIONS: z.string().optional(),
+
+  // MCP stdio bootstrap: a project or account API key (seo_live_...). Read once
+  // at process start; binds the stdio server to a project (or all member
+  // projects) the same way the HTTP MCP endpoint does.
+  MCP_API_KEY: z.string().optional(),
+
   // Unsplash (stock image search for content).
   UNSPLASH_ACCESS_KEY: z.string().optional(),
 

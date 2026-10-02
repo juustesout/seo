@@ -146,10 +146,10 @@ export function assembleReviewDocument(
       return {
         ok: false,
         code: 'missing_section',
-        note: `Planned section ${sectionId} ("${plan.sections[index].heading}") was never written; refusing to assemble.`,
+        note: `Planned section ${sectionId} ("${plan.sections[index]!.heading}") was never written; refusing to assemble.`,
       };
     }
-    const section = plan.sections[index];
+    const section = plan.sections[index]!;
     nodes.push(headingNode(2, section.heading));
     for (const paragraph of contentParagraphs(entry.content)) {
       nodes.push(paragraphNode(paragraph));

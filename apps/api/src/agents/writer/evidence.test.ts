@@ -110,7 +110,7 @@ describe('boundEvidence', () => {
         chunks: [knowledgeChunk('Claimed trusted facts.', 'Hostile title', 'k-9')],
       },
     });
-    const item = sourceSection(evidence, 'knowledge').items[0];
+    const item = sourceSection(evidence, 'knowledge').items[0]!;
     expect(item).toBeDefined();
     expect(item.trust).toBe(WRITER_EVIDENCE_TRUST);
     expect(item.trust).toBe('untrusted');
@@ -125,7 +125,7 @@ describe('boundEvidence', () => {
         chunks: [knowledgeChunk('x'.repeat(10_000), 'T'.repeat(2_000))],
       },
     });
-    const item = sourceSection(evidence, 'knowledge').items[0];
+    const item = sourceSection(evidence, 'knowledge').items[0]!;
     expect(item.text.length).toBe(WRITER_MAX_EVIDENCE_ITEM_TEXT_CHARS);
     expect(item.title!.length).toBe(WRITER_MAX_EVIDENCE_TITLE_CHARS);
     expect(item.url).toBeNull();
@@ -145,9 +145,9 @@ describe('boundEvidence', () => {
       existingContent: { status: 'available', note: null, items: [contentItem()] },
       intelligence: { status: 'configured', note: null, keywords: [keywordRow()] },
     });
-    const knowledge = sourceSection(evidence, 'knowledge').items[0];
-    const content = sourceSection(evidence, 'existing_content').items[0];
-    const intelligence = sourceSection(evidence, 'intelligence').items[0];
+    const knowledge = sourceSection(evidence, 'knowledge').items[0]!;
+    const content = sourceSection(evidence, 'existing_content').items[0]!;
+    const intelligence = sourceSection(evidence, 'intelligence').items[0]!;
     expect(knowledge.url).toBeNull();
     expect(knowledge.retrievedAt).toBeNull();
     expect(content.text).toBe('');
@@ -172,9 +172,9 @@ describe('boundEvidence', () => {
       },
     });
     const [linked, unlinked] = sourceSection(evidence, 'search').items;
-    expect(linked.url).toBe('https://example.com/x');
-    expect(linked.retrievedAt).toBeNull();
-    expect(unlinked.url).toBeNull();
+    expect(linked!.url).toBe('https://example.com/x');
+    expect(linked!.retrievedAt).toBeNull();
+    expect(unlinked!.url).toBeNull();
   });
 
   it('caps a source at WRITER_MAX_EVIDENCE_SOURCE_ITEMS with deterministic ids', () => {
@@ -188,7 +188,7 @@ describe('boundEvidence', () => {
     expect(knowledge.items.map((item) => item.id)).toEqual(
       Array.from({ length: WRITER_MAX_EVIDENCE_SOURCE_ITEMS }, (_, i) => `knowledge:${i}`),
     );
-    expect(knowledge.items[5].metadata).toEqual({ sourceId: 'k-5' });
+    expect(knowledge.items[5]!.metadata).toEqual({ sourceId: 'k-5' });
   });
 
   it('drops trailing items deterministically when the total-payload budget is hit, keeping every source section', () => {
@@ -349,7 +349,7 @@ describe('writerEvidenceSchema (persisted evidence snapshot) (W10.2)', () => {
     expect(writerEvidenceSchema.safeParse(evidence).success).toBe(true);
     const parsed = writerEvidenceSchema.parse(evidence);
     expect(parsed.gatheredAt).toBe(gatheredAt);
-    expect(parsed.sources.find((s) => s.source === 'knowledge')?.items[0].text).toBe(
+    expect(parsed.sources.find((s) => s.source === 'knowledge')?.items[0]?.text).toBe(
       'Evidence text for the article.',
     );
   });

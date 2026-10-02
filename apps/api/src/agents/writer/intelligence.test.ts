@@ -111,7 +111,7 @@ describe('boundIntelligence', () => {
     );
     const stored = sourceSection(intelligence, 'knowledge');
     expect(stored.findingCount).toBe(1);
-    const item = intelligence.findings[0];
+    const item = intelligence.findings[0]!;
     expect(item.trust).toBe(WRITER_INTELLIGENCE_TRUST);
     expect(item.trust).toBe('untrusted');
   });
@@ -158,7 +158,7 @@ describe('boundIntelligence', () => {
       }),
     );
     expect(intelligence.findings).toHaveLength(1);
-    expect(intelligence.findings[0].id).toBe('knowledge:0');
+    expect(intelligence.findings[0]!.id).toBe('knowledge:0');
     expect(sourceSection(intelligence, 'dataforseo').findingCount).toBe(0);
   });
 
@@ -179,7 +179,7 @@ describe('boundIntelligence', () => {
       gatheredAt,
       reading({ gsc: section({ status: 'available', findings: [finding({ summary: longSummary, evidenceIds: ids })] }) }),
     );
-    const item = intelligence.findings[0];
+    const item = intelligence.findings[0]!;
     expect(item.summary).toHaveLength(WRITER_MAX_INTELLIGENCE_SUMMARY_CHARS);
     expect(item.evidenceIds).toHaveLength(WRITER_MAX_INTELLIGENCE_EVIDENCE_IDS);
   });
@@ -298,7 +298,7 @@ describe('writerIntelligenceSchema (persisted intelligence snapshot) (W10.3)', (
     expect(parsed.success).toBe(true);
     if (!parsed.success) return;
     expect(parsed.data.findings).toHaveLength(1);
-    expect(parsed.data.findings[0].trust).toBe('untrusted');
+    expect(parsed.data.findings[0]!.trust).toBe('untrusted');
   });
 
   it('fails closed: rejects unknown fields that would smuggle raw or secret payloads', () => {
@@ -311,7 +311,7 @@ describe('writerIntelligenceSchema (persisted intelligence snapshot) (W10.3)', (
 
   it('rejects a payload whose declared source finding counts do not match the findings array', () => {
     const value = stored();
-    value.sources[0] = { ...value.sources[0], findingCount: value.findings.length + 1 };
+    value.sources[0] = { ...value.sources[0]!, findingCount: value.findings.length + 1 };
     expect(writerIntelligenceSchema.safeParse(value).success).toBe(false);
   });
 
@@ -327,7 +327,7 @@ describe('writerIntelligenceSchema (persisted intelligence snapshot) (W10.3)', (
     (value.findings[0] as unknown as Record<string, unknown>).trust = 'trusted';
     expect(writerIntelligenceSchema.safeParse(value).success).toBe(false);
 
-    const overflow = { ...stored(), findings: Array.from({ length: 21 }, (_, i) => value.findings[0]) };
+    const overflow = { ...stored(), findings: Array.from({ length: 21 }, () => value.findings[0]) };
     expect(writerIntelligenceSchema.safeParse(overflow).success).toBe(false);
   });
 });

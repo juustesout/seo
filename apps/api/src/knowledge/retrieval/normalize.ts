@@ -18,6 +18,8 @@ import { KNOWLEDGE_SEARCH_QUERY_MAX_CHARS } from '@seo/contracts';
 export function normalizeKnowledgeQuery(value: string | undefined): string {
   if (!value) return '';
   return value
+    // Control characters are intentionally collapsed so queries are single-line.
+    // eslint-disable-next-line no-control-regex
     .replace(/[\u0000-\u001f\u007f]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim()

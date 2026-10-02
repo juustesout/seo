@@ -29,7 +29,7 @@ import type { ServiceContainer } from '../context.js';
 import { enqueueJob } from '../jobs/enqueue.js';
 import type { JobRecord } from '../jobs/types.js';
 import { siteHostOf } from './contentIntelligence.js';
-import { assertDomain, normalizeDomain } from './domain.js';
+import { assertDomain } from './domain.js';
 import { competitorDiscoveryScope, competitorGapScope } from './sourceScope.js';
 import {
   projectCandidateRows,
