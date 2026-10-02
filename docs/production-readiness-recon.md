@@ -5,13 +5,13 @@ Date: 2026-09-29
 > UPDATE 2026-10-02 (P1 hardening): the S7 finding (H2 below) has been
 > remediated in the repository. Both `vercel.json` files now rewrite `/api/:path*`
 > to `https://api.peerdisco.com/api/:path*`. `peerdisco.com` is a Cloudflare zone
-> pointing at the SEO VPS, and the VPS nginx default server already proxies
-> `/api/*` to the API on `127.0.0.1:3001`, so Cloudflare can terminate edge TLS
-> with only a DNS record. `deploy/vps/nginx-api.conf` + `deploy/README.md`
-> ("API origin") document the optional Full (strict) / Let's Encrypt hardening.
-> The production path is not yet HTTPS until the Cloudflare DNS record exists:
-> **INFRA ACTION REQUIRED**. The topology diagram and findings below remain the
-> 2026-09-29 snapshot.
+> pointing at the SEO VPS; the `api` DNS record is live and Cloudflare SSL/TLS is
+> **Full (strict)** with a Cloudflare Origin Certificate on the VPS. The VPS still
+> must route `api.peerdisco.com` on 443 to the API on `127.0.0.1:3001` (its 443
+> default server currently hits an unrelated "Bridge" app); the ready server
+> block is in `deploy/vps/nginx-api.conf` and `deploy/README.md` ("API origin").
+> Until that block is applied, the path is **INFRA ACTION REQUIRED**. The
+> topology diagram and findings below remain the 2026-09-29 snapshot.
 
 Scope: Vercel production, production Supabase, Google OAuth, Google Search
 Console (GSC), CI / GitHub workflow and branch protection.
@@ -451,16 +451,16 @@ Only evidence-supported cells are populated; everything else is `unknown`.
 
   **Status 2026-10-02: INFRA ACTION REQUIRED.** Repository remediation is done:
   both rewrites target `https://api.peerdisco.com/api/:path*`. `peerdisco.com` is
-  a Cloudflare zone whose origin is the SEO VPS; `www.peerdisco.com` is a
-  separate nginx server block (unrelated app) while `api.peerdisco.com` lands on
-  the nginx default server that already proxies `/api/*` to `127.0.0.1:3001`.
-  Remaining external action:
-  1. Cloudflare DNS: `A api -> 144.172.102.63` (Proxied) for `peerdisco.com`.
-  2. Verify `https://api.peerdisco.com/api/health` over Cloudflare's edge cert.
-  3. (Hardening, optional) Cloudflare Origin Certificate + SSL mode
-     `Full (strict)`, or DNS-only + the certbot path in
-     `deploy/vps/nginx-api.conf`, to close the Cloudflare-to-origin HTTP hop.
-  S7 is not complete until step 2 passes; step 3 makes it end-to-end TLS.
+  a Cloudflare zone whose origin is the SEO VPS, the `api` DNS record is live,
+  and Cloudflare SSL/TLS is **Full (strict)** with a Cloudflare Origin
+  Certificate on the VPS. Remaining external action:
+  1. Install `deploy/vps/nginx-api.conf` as a `server_name api.peerdisco.com`
+     block on the VPS, reusing the existing Origin Certificate paths, so port
+     443 proxies to `127.0.0.1:3001` instead of the default "Bridge" app.
+  2. `nginx -t && systemctl reload nginx`.
+  3. Verify `https://api.peerdisco.com/api/health` returns the SEO API, then
+     `https://oldskoolseo.com/api/health` through Vercel.
+  S7 is not complete until step 3 passes.
 
 ### Medium
 

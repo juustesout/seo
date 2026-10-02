@@ -18,7 +18,7 @@ rate limiter) are already on `main` and are **not** redone here.
 | Item | Status | Where |
 |---|---|---|
 | S5 rate limiting (class tiers) | COMPLETE | `apps/api/src/http/rateLimitClasses.ts`, `config.ts` (`RATE_LIMIT_{STRICT,EXPENSIVE,MODERATE}_MAX`), `app.ts` mount before raw body parsers |
-| S7 HTTPS API origin | INFRA ACTION REQUIRED | `vercel.json` + `apps/web/vercel.json` → `https://api.peerdisco.com/api/:path*` (Cloudflare edge TLS); `deploy/vps/nginx-api.conf`, `deploy/README.md` (Full-strict/certbot hardening) |
+| S7 HTTPS API origin | INFRA ACTION REQUIRED | `vercel.json` + `apps/web/vercel.json` → `https://api.peerdisco.com/api/:path*`; Cloudflare Full (strict) live; `deploy/vps/nginx-api.conf` origin-cert 443 block + `deploy/README.md` |
 | Retry policy + budget | COMPLETE | `apps/api/src/reliability/retry.ts`; worker `runWithRetryBudget`; `jobErrorPayload` uses `isRetryableError`; DataForSEO `request()` via `withRetry` |
 | Circuit breaker | COMPLETE | `apps/api/src/reliability/circuitBreaker.ts`; DataForSEO client |
 | Stale-running sweep | COMPLETE | `worker.ts` `sweepStaleRunning` reuses `jobStore.fail` (crash = attempt, terminal `stale_worker`) |
@@ -145,21 +145,25 @@ Live probing changed the plan. Findings:
 - `api.oldskoolseo.com` has no DNS record, so the first attempt
   (`https://api.oldskoolseo.com/api/:path*`) broke production with Vercel
   `502 DNS_HOSTNAME_NOT_FOUND`.
-- The VPS (`144.172.102.63`) runs nginx and already proxies `/api/*` on port 80
+- The VPS (`144.172.102.63`) runs nginx and proxies `/api/*` on port 80
   to the API on `127.0.0.1:3001`; `GET http://<ip>/api/health` returns the SEO
-  API for the default host. Port 443 is closed (no origin TLS).
+  API for the default host. Port 443 later gained a Cloudflare Origin Certificate
+  but its default server routes to the unrelated Bridge app, not the API.
 - `peerdisco.com` is a Cloudflare zone whose origin is this same VPS.
   `www.peerdisco.com` is a different nginx server block (an unrelated "Bridge"
-  app); `api.peerdisco.com` does not match it and lands on the default server,
-  i.e. our API.
+  app); on port 80 `api.peerdisco.com` does not match it and lands on the
+  default server, i.e. our API.
 
-Chosen origin: **`https://api.peerdisco.com/api/:path*`**. Cloudflare terminates
-edge TLS, so only a DNS record is needed and no VPS access is required. Interim
-Cloudflare `Flexible` mode still leaves the Cloudflare-to-origin hop in HTTP;
-closing it needs an Origin Certificate + `Full (strict)` (or DNS-only +
-certbot) on the VPS. Both `vercel.json` files and `deploy/README.md` are updated;
-S7 stays **INFRA ACTION REQUIRED** until the record and (optionally) Full strict
-are in place.
+Chosen origin: **`https://api.peerdisco.com/api/:path*`**. The Cloudflare `api`
+DNS record is live, and Cloudflare SSL/TLS is set to **Full (strict)** with a
+Cloudflare Origin Certificate installed on the VPS, so the whole path is intended
+to be TLS end to end. One fix remains: on port 443 the VPS default server routes
+`api.peerdisco.com` to the Bridge app (it answers `400 Invalid Host header`), so
+`api.peerdisco.com` needs its own `listen 443 ssl` nginx server block that reuses
+the Origin Certificate and proxies to `127.0.0.1:3001`. Both `vercel.json` files,
+`deploy/vps/nginx-api.conf` (now the Cloudflare Origin Certificate variant) and
+`deploy/README.md` are updated. S7 stays **INFRA ACTION REQUIRED** until that
+block is applied and `https://api.peerdisco.com/api/health` returns the API.
 
 No second API hostname beyond the `api.` subdomain is introduced.
 

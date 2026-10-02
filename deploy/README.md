@@ -111,17 +111,22 @@ proxies that server-side. The rewrite target is
 `https://api.peerdisco.com/api/:path*` (`vercel.json`, `apps/web/vercel.json`).
 
 `peerdisco.com` is a Cloudflare zone whose origin is this SEO VPS
-(`144.172.102.63`, nginx/1.24). The VPS nginx default server already proxies
-`/api/*` to the API on `127.0.0.1:3001` (verified: `GET /api/health` returns the
-SEO API for any host that does not match another server block). `www.peerdisco.com`
-is a separate nginx server block hosting an unrelated "Bridge" app and is
-unaffected. No nginx change is required for the interim setup - only a Cloudflare
-DNS record.
+(`144.172.102.63`, nginx/1.24). Cloudflare SSL/TLS is set to **Full (strict)**,
+so the origin must serve a valid certificate on port 443 for
+`api.peerdisco.com`.
 
-Status: **INFRA ACTION REQUIRED** (add the DNS record) and **S7 PARTIALLY
-MITIGATED** - in Cloudflare's default `Flexible` SSL mode the browser-to-
-Cloudflare leg is TLS, but Cloudflare-to-origin is still HTTP. Run the Full
-(strict) hardening at the end to close that hop.
+Two things on the VPS matter:
+
+- Port **80**'s default server proxies `/api/*` to the API on `127.0.0.1:3001`,
+  but Cloudflare Full (strict) connects on **443**, not 80.
+- Port **443**'s default server routes to a different app (an unrelated "Bridge"
+  that rejects non-loopback `Host` headers), so `api.peerdisco.com` currently
+  gets a `400` there. The VPS already has a Cloudflare Origin Certificate
+  installed; `api.peerdisco.com` needs its **own `listen 443 ssl` server block**
+  that reuses that certificate and proxies to the API.
+
+Status: DNS record is live. **Remaining: install the 443 server block below**
+(otherwise Full (strict) hits the Bridge and the API returns 400).
 
 ### 1. DNS (Cloudflare)
 
@@ -139,44 +144,36 @@ the edge answers over TLS (Cloudflare terminates the certificate):
 curl -fsS https://api.peerdisco.com/api/health
 ```
 
-### 2. (Optional hardening) close the Cloudflare-to-origin hop
+### 2. Cloudflare settings (reference)
 
-Only needed to make the whole path end-to-end TLS. Either:
-
-- **Cloudflare Origin Certificate + Full (strict):** create an Origin CA
-  certificate for `*.peerdisco.com` in Cloudflare, install it on the VPS, add an
-  nginx `listen 443 ssl` server block for `api.peerdisco.com`, then set
-  Cloudflare SSL/TLS mode to **Full (strict)**; or
-- **DNS-only + Let's Encrypt:** set the `api` record to DNS-only (grey cloud) and
-  follow the certbot steps in `deploy/vps/nginx-api.conf` with
-  `server_name api.peerdisco.com` (the template below).
-
-
-### 3. Install the proxy and certificate (DNS-only + Let's Encrypt path)
-
-Run as root. Install nginx and certbot (package installs are the only system
-changes here; nginx and the proxy config are added, not replaced, if nginx is
-already present).
+- SSL/TLS -> Overview: **Full (strict)**.
+- The origin certificate (issuer `CloudFlare Origin SSL Certificate Authority`)
+  is already installed on the VPS. Find its paths before editing nginx:
 
 ```bash
-apt-get update
-apt-get install -y nginx certbot
-mkdir -p /var/www/certbot
-install -m 644 deploy/vps/nginx-api.conf /etc/nginx/sites-available/seo-api.conf
-ln -sf /etc/nginx/sites-available/seo-api.conf /etc/nginx/sites-enabled/seo-api.conf
+sudo nginx -T | grep -nE 'ssl_certificate|ssl_certificate_key|server_name|listen .*443'
 ```
 
-Request the certificate over the HTTP-01 webroot challenge (the port 80 server
-block already serves `/.well-known/acme-challenge/`):
+Reuse the same `.pem`/`.key` paths in the server block below. If the target file
+name already exists under `sites-enabled`, reuse that file instead of a new one.
+
+### 3. Install the origin proxy (nginx)
+
+`deploy/vps/nginx-api.conf` is a ready server block for `api.peerdisco.com` on
+443 (plus an 80 -> 443 redirect) that proxies to `127.0.0.1:3001` and reuses the
+Cloudflare Origin Certificate. Copy it to the VPS, set the two certificate paths
+to the values from step 2, then enable it:
 
 ```bash
-certbot certonly --webroot -w /var/www/certbot -d api.peerdisco.com
-nginx -t
-systemctl reload nginx
+sudo install -m 644 nginx-api.conf /etc/nginx/sites-available/seo-api.conf
+sudo ln -sf /etc/nginx/sites-available/seo-api.conf /etc/nginx/sites-enabled/seo-api.conf
+sudo nginx -t
+sudo systemctl reload nginx
 ```
 
-Certificate renewal is handled by the certbot timer; the reload hook reloads
-nginx after renewal.
+The new `server_name api.peerdisco.com` block takes precedence over 443's default
+(Bridge) server for that host; the Bridge and the port-80 default API proxy are
+untouched.
 
 ### 4. Firewall
 

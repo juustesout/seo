@@ -123,12 +123,13 @@ explicit range.
    shared fetch-URL module.
 2. **Perimeter and transport.** Rate limiting is now in place (global IP/user
    tiers plus OAuth/expensive/job endpoint classes, S5 FIXED). S7 remains
-   **infra action required**: both `vercel.json` files now target
-   `https://api.peerdisco.com/api/:path*` (Cloudflare edge TLS; the VPS nginx
-   default server already proxies `/api/*` to `127.0.0.1:3001`). Production is
-   HTTPS once the Cloudflare `api` DNS record exists; a TLS reverse-proxy
-   template (`deploy/vps/nginx-api.conf`) documents the optional Full (strict) /
-   certbot hardening. A CSP/header set for the web app is still open.
+   **infra action required**: both `vercel.json` files target
+   `https://api.peerdisco.com/api/:path*`; the Cloudflare `api` DNS record is
+   live and SSL/TLS is Full (strict) with a Cloudflare Origin Certificate on the
+   VPS. The VPS still needs a `server_name api.peerdisco.com` block on 443
+   proxying to `127.0.0.1:3001` (template: `deploy/vps/nginx-api.conf`);
+   `deploy/README.md` has the exact steps. A CSP/header set for the web app is
+   still open.
 3. **Observability and resilience.** Request/correlation ids, DB/Qdrant
    readiness, and outbound timeouts are in place. Retry amplification is bounded
    by a shared classifier + per-job retry budget (DataForSEO's internal loop now
