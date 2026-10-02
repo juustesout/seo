@@ -18,6 +18,7 @@ import { SeoWriter } from './persistence/seoWriter.js';
 import { getExecutor } from './jobs/executors.js';
 import { jobErrorPayload } from './jobs/types.js';
 import type { JobRecord } from './jobs/types.js';
+import { RetryBudget, runWithRetryBudget } from './reliability/retry.js';
 import { syncScheduleStatus } from './services/scheduleService.js';
 import { AgentRunService } from './services/agentRunService.js';
 import { appendUsage, jobUsageEvent } from './services/usageInstrumentation.js';
@@ -30,20 +31,52 @@ const AGENT_RUN_RECONCILE_INTERVAL_MS = 60 * 1000;
 let stopping = false;
 let lastAgentRunReconcileAt = 0;
 
-async function sweepStaleRunning(): Promise<void> {
-  const { sb } = getContainer();
+export async function sweepStaleRunning(
+  container: ReturnType<typeof getContainer>,
+): Promise<void> {
   const cutoff = new Date(Date.now() - STALE_RUNNING_MS).toISOString();
-  const { data, error } = await sb
+  const { data, error } = await container.sb
     .from('seo_sync_jobs')
-    .update({ status: 'queued', started_at: null })
+    .select('id, provider, job_type, retry_count, max_retries')
     .eq('status', 'running')
-    .lte('started_at', cutoff)
-    .select('id');
+    .lte('started_at', cutoff);
   if (error) {
     logger.error({ error }, 'stale job sweep failed');
     return;
   }
-  if (data && data.length > 0) logger.info({ ids: data.map((d) => d.id) }, 'requeued stale running jobs');
+  if (!data || data.length === 0) return;
+  const requeued: string[] = [];
+  const failed: string[] = [];
+  for (const row of data as Array<{
+    id: string;
+    provider: string | null;
+    job_type: string;
+    retry_count: number | null;
+    max_retries: number | null;
+  }>) {
+    // Reuse the job store's failure path so a worker crash counts as an attempt:
+    // it requeues with backoff while retries remain and terminally fails with a
+    // stale_worker error once max_retries is exceeded. Without this a job that
+    // repeatedly kills the worker would be requeued forever.
+    const stale = Object.assign(new Error('Job was still running when the worker stopped'), {
+      code: 'stale_worker',
+    });
+    const { error: payload, retryable } = jobErrorPayload(stale, {
+      provider: row.provider ?? undefined,
+      operation: row.job_type,
+      project_id: '',
+      job_type: row.job_type,
+    });
+    try {
+      await container.jobStore.fail(row.id, payload, retryable);
+      const willRetry = retryable && (row.retry_count ?? 0) + 1 <= (row.max_retries ?? 3);
+      (willRetry ? requeued : failed).push(row.id);
+    } catch (err) {
+      logger.error({ err, id: row.id }, 'stale job recovery failed');
+    }
+  }
+  if (requeued.length > 0) logger.info({ ids: requeued }, 'requeued stale running jobs');
+  if (failed.length > 0) logger.warn({ ids: failed }, 'failed stale running jobs past retry budget');
 }
 
 /**
@@ -102,14 +135,21 @@ export async function runOnce(container: ReturnType<typeof getContainer>): Promi
 
   log.info('job started');
   try {
-    const result = await executor({
-      container,
-      job,
-      writer,
-      report: async (progress, message) => {
-        await container.jobStore.updateProgress(job.id, Math.max(0, Math.min(100, progress)), message ?? null);
-      },
-    });
+    // One budget per logical job execution, shared by every nested provider
+    // retry, bounds total outbound retries regardless of how many calls the
+    // executor makes.
+    const result = await runWithRetryBudget(
+      new RetryBudget(container.config.retry.perJobBudget),
+      () =>
+        executor({
+          container,
+          job,
+          writer,
+          report: async (progress, message) => {
+            await container.jobStore.updateProgress(job.id, Math.max(0, Math.min(100, progress)), message ?? null);
+          },
+        }),
+    );
     await container.jobStore.complete(job.id, result ?? {});
     log.info({ result }, 'job completed');
     await recordJobUsage(container, job, true, 'completed', durationMs);
@@ -205,9 +245,9 @@ function waitForWork(container: ReturnType<typeof getContainer>): Promise<void> 
 export async function runWorker(): Promise<void> {
   const container = getContainer();
   logger.info('SEO job worker started');
-  await sweepStaleRunning();
+  await sweepStaleRunning(container);
   await reconcileAgentRuns(container, true);
-  const sweepTimer = setInterval(() => void sweepStaleRunning(), STALE_RUNNING_MS);
+  const sweepTimer = setInterval(() => void sweepStaleRunning(container), STALE_RUNNING_MS);
 
   process.on('SIGTERM', () => {
     stopping = true;

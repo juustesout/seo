@@ -70,6 +70,21 @@ describe('createRateLimiter', () => {
     expect(callLimiter(mw, { ip: '10.0.0.1' }).nextArg).toBeInstanceOf(ApiError);
     expect(callLimiter(mw, { ip: '10.0.0.2' }).nextArg).toBeUndefined();
   });
+
+  it('only counts methods in the allow-list and lets others pass through', () => {
+    const mw = createRateLimiter({
+      windowMs: 60_000,
+      max: 1,
+      keyGenerator: () => 'k',
+      methods: ['POST', 'DELETE'],
+    });
+    expect(callLimiter(mw, { method: 'GET' }).nextArg).toBeUndefined();
+    expect(callLimiter(mw, { method: 'GET' }).nextArg).toBeUndefined();
+    expect(callLimiter(mw, { method: 'HEAD' }).nextArg).toBeUndefined();
+    expect(callLimiter(mw, { method: 'POST' }).nextArg).toBeUndefined();
+    expect(callLimiter(mw, { method: 'POST' }).nextArg).toBeInstanceOf(ApiError);
+    expect(callLimiter(mw, { method: 'DELETE' }).nextArg).toBeInstanceOf(ApiError);
+  });
 });
 
 describe('rate limiter over HTTP', () => {

@@ -104,11 +104,23 @@ const envSchema = z.object({
   // environment so suites can fire many requests without tripping it; explicit
   // `RATE_LIMIT_DISABLED=true` turns it off anywhere. `RATE_LIMIT_MAX` governs
   // the pre-auth (per-IP) surface; `RATE_LIMIT_AUTH_MAX` the authenticated
-  // (per-user, IP fallback) surface.
+  // (per-user, IP fallback) surface. The three class tiers tighten specific
+  // request classes below the global budget: credential minting/OAuth
+  // (`STRICT`), mutating provider work (`EXPENSIVE`) and job enqueueing
+  // (`MODERATE`). They never replace the global tiers.
   RATE_LIMIT_DISABLED: z.enum(['true', 'false']).default('false'),
   RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(60_000),
   RATE_LIMIT_MAX: z.coerce.number().int().positive().default(300),
   RATE_LIMIT_AUTH_MAX: z.coerce.number().int().positive().default(600),
+  RATE_LIMIT_STRICT_MAX: z.coerce.number().int().positive().default(20),
+  RATE_LIMIT_EXPENSIVE_MAX: z.coerce.number().int().positive().default(30),
+  RATE_LIMIT_MODERATE_MAX: z.coerce.number().int().positive().default(60),
+
+  // Shared retry budget. One logical job execution may make many nested
+  // provider calls; this caps the total provider-level retries across all of
+  // them so worst-case outbound volume is (max_retries + 1) * this. 0 disables
+  // provider retries entirely (the job retry policy still applies).
+  RETRY_PER_JOB_BUDGET: z.coerce.number().int().nonnegative().default(4),
 
   LOG_LEVEL: z.enum(['trace', 'debug', 'info', 'warn', 'error']).default('info'),
 });
@@ -142,6 +154,13 @@ export interface AppConfig {
     windowMs: number;
     max: number;
     authMax: number;
+    strictMax: number;
+    expensiveMax: number;
+    moderateMax: number;
+  };
+  /** Total provider-level retries allowed per logical job execution. */
+  retry: {
+    perJobBudget: number;
   };
 }
 
@@ -171,6 +190,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       windowMs: parsed.RATE_LIMIT_WINDOW_MS,
       max: parsed.RATE_LIMIT_MAX,
       authMax: parsed.RATE_LIMIT_AUTH_MAX,
+      strictMax: parsed.RATE_LIMIT_STRICT_MAX,
+      expensiveMax: parsed.RATE_LIMIT_EXPENSIVE_MAX,
+      moderateMax: parsed.RATE_LIMIT_MODERATE_MAX,
+    },
+    retry: {
+      perJobBudget: parsed.RETRY_PER_JOB_BUDGET,
     },
   };
 }

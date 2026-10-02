@@ -121,20 +121,23 @@ explicit range.
    remaining external-URL fetches (image acquisition follows redirects past the
    allowlist; `competitorResearch` query isn't validated). Prefer a single
    shared fetch-URL module.
-2. **Perimeter and transport.** Still open: rate limiting (none today), the
-   cleartext HTTP API rewrite to a hardcoded IP in both `vercel.json` files
-   (S7, bearer traffic in plaintext), and a CSP/header set for the web app.
-3. **Observability and resilience.** No request/correlation ids; liveness-only
-   health with no DB/Qdrant readiness check (used as the deploy gate); missing
-   outbound timeouts on several providers; retry amplification (DataForSEO 4x
-   inside a 3x-retried job) with no circuit breaker; worker stale-job requeue
-   doesn't advance `retry_count`.
-4. **Data-layer integrity.** Project deletion likely fails (audit-log FK
-   cascade vs AFTER DELETE trigger); `seo_content_media` allows cross-project
-   linking; `seo_sync_jobs.idempotency_key` is globally unique instead of
-   per project; public media bucket without `storage.objects` policies;
-   `seo_usage_totals` revoke only `from public`; RLS isolation smoke-tested for
-   only a subset of tables.
+2. **Perimeter and transport.** Rate limiting is now in place (global IP/user
+   tiers plus OAuth/expensive/job endpoint classes, S5 FIXED). S7 remains
+   **infra action required**: both `vercel.json` files now target
+   `https://api.oldskoolseo.com/api/:path*` and a TLS reverse-proxy template is
+   shipped (`deploy/vps/nginx-api.conf`), but production is only actually HTTPS
+   once the DNS record, certificate and port 443 are provisioned. A CSP/header
+   set for the web app is still open.
+3. **Observability and resilience.** Request/correlation ids, DB/Qdrant
+   readiness, and outbound timeouts are in place. Retry amplification is bounded
+   by a shared classifier + per-job retry budget (DataForSEO's internal loop now
+   goes through `withRetry`), a per-provider circuit breaker refuses calls while
+   open, and the worker stale-job sweep now counts a crash as an attempt
+   (`stale_worker` terminal past `max_retries`).
+4. **Data-layer integrity.** S12–S16 are fixed (see migration
+   `20260101000035_harden_data_integrity.sql`). RLS isolation is now
+   schema-generated across every project-scoped `seo_*` table plus focused
+   write-denial and platform-admin boundary checks in the migration harness.
 5. **Engineering process & supply chain.** No ESLint/Prettier or `lint` script;
    CI never runs the migration harness or contracts tests; no coverage,
    dependency/secret scanning, or Dependabot; API tsconfig disables
@@ -145,6 +148,10 @@ explicit range.
 ---
 
 ## 3. Remaining findings (severity)
+
+Status as of 2026-10-02: **S5 FIXED**, **S9 FIXED**, **S10 FIXED**, **S12–S16
+FIXED**, **S7 INFRA ACTION REQUIRED** (repository config ready, external
+DNS/TLS pending). Rows are retained unchanged as the original audit snapshot.
 
 | # | Sev | Finding | Evidence |
 |---|-----|---------|----------|
@@ -200,9 +207,16 @@ larger, cross-cutting migration and is deferred.
   - Request/correlation ids, liveness-only `/api/health`, new DB-aware
     `/api/ready` (now the deploy gate), and expanded logger redaction (L2/L3).
   - Outbound timeouts on every provider HTTP client.
-  - **Remaining:** S5 rate limiting; S7 HTTPS API origin (deferred, infra);
-    shared retry budget + circuit breaker; expand RLS isolation tests to all
-    tables.
+  - Rate limiting (S5): global IP/user tiers plus OAuth/credential, expensive
+    provider and job-creation endpoint classes.
+  - Shared retry policy + per-job retry budget and a per-provider circuit
+    breaker; worker stale running sweep now advances `retry_count`.
+  - RLS isolation matrix expanded to every project-scoped `seo_*` table
+    (schema-generated) plus focused write-denial and platform-admin boundary
+    checks.
+  - **Remaining:** S7 HTTPS API origin (repository config ready; external
+    DNS/TLS/firewall action pending) — tracked as INFRA ACTION REQUIRED in
+    `docs/production-readiness-recon.md`.
 - **P2:** ESLint + CI (migration harness, contracts tests, audit/secret
   scanning, Dependabot); coverage thresholds; `noUncheckedIndexedAccess` for
   the API; config consolidation + `.env.example`; web code-splitting; remove

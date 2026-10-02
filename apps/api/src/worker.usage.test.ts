@@ -58,6 +58,7 @@ function container(store: InMemoryUsageEventStore, record: JobRecord, executor: 
       },
       sb: {},
       usageEvents: store,
+      config: { retry: { perJobBudget: 4 } },
     } as unknown as Parameters<typeof runOnce>[0],
     complete,
     fail,

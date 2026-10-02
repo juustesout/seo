@@ -22,6 +22,8 @@
 
 import { delay } from '../../util.js';
 import { fetchWithTimeout } from '../../http/fetchTimeout.js';
+import { withRetry } from '../../reliability/retry.js';
+import { getCircuitBreaker } from '../../reliability/circuitBreaker.js';
 
 const BASE = 'https://api.dataforseo.com';
 
@@ -254,67 +256,68 @@ export class DataForSeoClient {
 
   /**
    * The one HTTP path every call goes through. Retries network failures and
-   * retryable vendor errors up to maxAttempts with exponential backoff (+
-   * jitter so a fleet of retrying jobs does not pile onto the vendor at the
-   * same instant); permanent errors and quota failures throw immediately.
-   * DataForSEO signals success via a status_code in the 20000-29999 window,
-   * so an HTTP-200 body still goes through that check before being returned.
+   * retryable vendor errors with the shared policy (bounded attempts,
+   * exponential backoff + jitter, and the worker's per-job retry budget) and
+   * consults the shared DataForSEO circuit breaker so a vendor outage stops
+   * being hammered. Permanent errors and quota failures throw immediately.
+   * DataForSEO signals success via a status_code in the 20000-29999 window, so
+   * an HTTP-200 body still goes through that check before being returned.
    */
   async request<T>(method: string, path: string, body?: unknown): Promise<T> {
     const fetchFn = this.opts.fetchFn ?? fetch;
-    const maxAttempts = 4;
-    let attempt = 0;
-    for (;;) {
-      attempt += 1;
-      await this.pace();
-      let res: Response;
-      try {
-        res = await fetchWithTimeout(fetchFn, `${BASE}${path}`, {
-          method,
-          headers: {
-            authorization: this.authHeader,
-            'content-type': 'application/json',
-            accept: 'application/json',
-          },
-          body: body === undefined ? undefined : JSON.stringify(body),
-        });
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : 'network error';
-        if (attempt < maxAttempts) {
-          await delay(1000 * 2 ** (attempt - 1));
-          continue;
-        }
-        throw new DataForSeoError(`DataForSEO network failure: ${msg}`, true);
-      }
+    return withRetry<T>(() => this.attempt<T>(fetchFn, method, path, body), {
+      provider: 'dataforseo',
+      operation: `${method} ${path}`,
+      breaker: getCircuitBreaker('dataforseo'),
+    });
+  }
 
-      let json: Record<string, unknown>;
-      try {
-        json = (await res.json()) as Record<string, unknown>;
-      } catch {
-        const text = await res.text().catch(() => '');
-        if (!res.ok) throw this.classify(`HTTP ${res.status}: ${text.slice(0, 200)}`, res.status, undefined);
-        throw new DataForSeoError(`Unexpected DataForSEO response: ${text.slice(0, 200)}`, false, res.status);
-      }
-
-      const status = res.status;
-      const statusCode = typeof json.status_code === 'number' ? json.status_code : undefined;
-      const statusMessage =
-        typeof json.status_message === 'string' ? json.status_message : `HTTP ${status}`;
-
-      if (res.ok && statusCode !== undefined && statusCode >= 20000 && statusCode < 30000) {
-        return json as T;
-      }
-      if (res.ok && statusCode !== undefined && statusCode < 0) {
-        return json as T;
-      }
-
-      const error = this.classify(statusMessage, status, statusCode);
-      if (error.retryable && attempt < maxAttempts) {
-        await delay(1000 * 2 ** (attempt - 1) + Math.random() * 500);
-        continue;
-      }
-      throw error;
+  /** One outbound attempt; throws a classified DataForSeoError on failure. */
+  private async attempt<T>(
+    fetchFn: typeof fetch,
+    method: string,
+    path: string,
+    body?: unknown,
+  ): Promise<T> {
+    await this.pace();
+    let res: Response;
+    try {
+      res = await fetchWithTimeout(fetchFn, `${BASE}${path}`, {
+        method,
+        headers: {
+          authorization: this.authHeader,
+          'content-type': 'application/json',
+          accept: 'application/json',
+        },
+        body: body === undefined ? undefined : JSON.stringify(body),
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'network error';
+      throw new DataForSeoError(`DataForSEO network failure: ${msg}`, true);
     }
+
+    let json: Record<string, unknown>;
+    try {
+      json = (await res.json()) as Record<string, unknown>;
+    } catch {
+      const text = await res.text().catch(() => '');
+      if (!res.ok) throw this.classify(`HTTP ${res.status}: ${text.slice(0, 200)}`, res.status, undefined);
+      throw new DataForSeoError(`Unexpected DataForSEO response: ${text.slice(0, 200)}`, false, res.status);
+    }
+
+    const status = res.status;
+    const statusCode = typeof json.status_code === 'number' ? json.status_code : undefined;
+    const statusMessage =
+      typeof json.status_message === 'string' ? json.status_message : `HTTP ${status}`;
+
+    if (res.ok && statusCode !== undefined && statusCode >= 20000 && statusCode < 30000) {
+      return json as T;
+    }
+    if (res.ok && statusCode !== undefined && statusCode < 0) {
+      return json as T;
+    }
+
+    throw this.classify(statusMessage, status, statusCode);
   }
 
   // -- SERP (task based) ----------------------------------------------------

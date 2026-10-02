@@ -2082,4 +2082,262 @@ end $$;
 SQL
 echo "   smoke: usage totals is service-role only (S16 OK)"
 
+# ---------------------------------------------------------------------------
+# P1 hardening: RLS isolation matrix.
+#
+# The checks above exercise leakage for a handful of tables. This section is
+# systematic: it enumerates every public seo_* table that carries a project_id
+# from the catalog (never a hard-coded list), grants the browser roles the same
+# table privileges Supabase grants by default, and asserts an unrelated
+# authenticated user and anon read zero rows of the demo project from each. A
+# permission error is NOT treated as isolation - the grants are in place, so a
+# failure to run is a failure of the harness, not evidence of safety. Focused
+# write-denial and platform-admin checks follow.
+# ---------------------------------------------------------------------------
+
+echo "==> smoke test: RLS coverage for every seo_* table"
+PSQL -d "${DB_NAME}" -t -A <<'SQL' >/dev/null
+do $$
+declare
+  v_missing text;
+begin
+  select string_agg(c.relname, ', ' order by c.relname)
+    into v_missing
+  from pg_class c
+  join pg_namespace n on n.oid = c.relnamespace
+  where n.nspname = 'public'
+    and c.relkind = 'r'
+    and c.relname like 'seo\_%'
+    and not c.relrowsecurity;
+  if v_missing is not null then
+    raise exception 'smoke: seo_* tables without RLS enabled: %', v_missing;
+  end if;
+end $$;
+SQL
+echo "   smoke: every seo_* table has RLS enabled"
+
+DEMO_PROJECT_ID="$(PSQL -d "${DB_NAME}" -t -A -c "select id from public.seo_projects where slug = 'demo' limit 1")"
+if [ -z "${DEMO_PROJECT_ID}" ]; then
+  echo "!! RLS matrix: demo project id not found" >&2
+  exit 1
+fi
+
+# Browser roles get the table privileges, so a leak can only come from a policy.
+PSQL -d "${DB_NAME}" -t -A <<'SQL' >/dev/null
+grant usage on schema public to authenticated, anon;
+do $$
+declare
+  t text;
+begin
+  for t in
+    select c.relname
+    from pg_class c
+    join pg_namespace n on n.oid = c.relnamespace
+    where n.nspname = 'public'
+      and c.relkind = 'r'
+      and c.relname like 'seo\_%'
+      and exists (
+        select 1 from information_schema.columns col
+        where col.table_schema = 'public'
+          and col.table_name = c.relname
+          and col.column_name = 'project_id'
+      )
+  loop
+    execute format('grant select on public.%I to authenticated, anon', t);
+  end loop;
+end $$;
+SQL
+
+PSQL -d "${DB_NAME}" -v ON_ERROR_STOP=1 -t -A <<'SQL' >/dev/null
+do $$
+declare
+  v_demo uuid;
+  v_table record;
+  v_n bigint;
+  v_count int := 0;
+begin
+  select id into v_demo from public.seo_projects where slug = 'demo' limit 1;
+  if v_demo is null then
+    raise exception 'smoke: demo project id not found';
+  end if;
+
+  for v_table in
+    select c.relname
+    from pg_class c
+    join pg_namespace n on n.oid = c.relnamespace
+    where n.nspname = 'public'
+      and c.relkind = 'r'
+      and c.relname like 'seo\_%'
+      and exists (
+        select 1 from information_schema.columns col
+        where col.table_schema = 'public'
+          and col.table_name = c.relname
+          and col.column_name = 'project_id'
+      )
+    order by c.relname
+  loop
+    -- An unrelated authenticated principal must have the policy evaluate and
+    -- deny: exactly zero rows, never a permission error (the helper grants are
+    -- in place for `authenticated`, so an error here is a real regression).
+    execute 'set local role authenticated';
+    execute 'set local request.jwt.claims = ''{"sub":"00000000-0000-0000-0000-000000000002"}''';
+    execute format('select count(*) from public.%I where project_id = %L', v_table.relname, v_demo) into v_n;
+    execute 'reset role';
+    if v_n <> 0 then
+      raise exception 'smoke: RLS leak in % for authenticated non-member (%)', v_table.relname, v_n;
+    end if;
+
+    -- anon is denied either by returning zero rows or by a hard permission
+    -- denial (the membership helpers are authenticated-only, so policy
+    -- evaluation itself raises insufficient_privilege). Both are denials; any
+    -- other error is a harness/migration failure and propagates.
+    begin
+      execute 'set local role anon';
+      execute 'set local request.jwt.claims = ''{"sub":null}''';
+      execute format('select count(*) from public.%I where project_id = %L', v_table.relname, v_demo) into v_n;
+      execute 'reset role';
+      if v_n <> 0 then
+        raise exception 'smoke: RLS leak in % for anon (%)', v_table.relname, v_n;
+      end if;
+    exception
+      when insufficient_privilege then
+        execute 'reset role';
+    end;
+
+    v_count := v_count + 1;
+  end loop;
+
+  raise notice 'smoke: % project-scoped seo_* tables deny foreign reads (authenticated + anon)', v_count;
+end $$;
+SQL
+echo "   smoke: every project-scoped seo_* table denies foreign reads (authenticated + anon)"
+
+echo "==> smoke test: focused RLS write denial + deny-all tables"
+PSQL -d "${DB_NAME}" -t -A -v pid="${DEMO_PROJECT_ID}" <<'SQL' >/dev/null
+grant select, insert, update, delete on public.seo_content to authenticated;
+grant select, insert, update, delete on public.seo_media to authenticated;
+grant select, insert, update, delete on public.seo_sync_jobs to authenticated;
+grant select, insert, update, delete on public.seo_publications to authenticated;
+grant select, insert, update, delete on public.seo_integrations to authenticated;
+grant select, insert, update, delete on public.seo_api_keys to authenticated;
+grant select, insert, update, delete on public.seo_audit_logs to authenticated;
+grant select on public.seo_credentials to authenticated;
+select set_config('smoke.demo_project', :'pid', false);
+set role authenticated;
+set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-000000000002"}';
+do $$
+declare
+  v_demo uuid := current_setting('smoke.demo_project')::uuid;
+  v_n int;
+begin
+  -- content: no read, no update, no delete, no insert into a foreign project.
+  select count(*) into v_n from public.seo_content where project_id = v_demo;
+  if v_n <> 0 then raise exception 'smoke: foreign content is readable (%)', v_n; end if;
+  update public.seo_content set id = id where project_id = v_demo;
+  get diagnostics v_n = row_count;
+  if v_n <> 0 then raise exception 'smoke: foreign content is updatable'; end if;
+  delete from public.seo_content where project_id = v_demo;
+  get diagnostics v_n = row_count;
+  if v_n <> 0 then raise exception 'smoke: foreign content is deletable'; end if;
+  begin
+    insert into public.seo_content (project_id, title, slug) values (v_demo, 'tampered', 'tampered');
+    raise exception 'smoke: foreign content insert was allowed';
+  exception when insufficient_privilege then null;
+  end;
+
+  -- server-written tables: member-read only, so a non-member gets nothing and
+  -- cannot mutate the rows through the browser role.
+  select count(*) into v_n from public.seo_sync_jobs where project_id = v_demo;
+  if v_n <> 0 then raise exception 'smoke: foreign sync jobs are readable (%)', v_n; end if;
+  update public.seo_sync_jobs set id = id where project_id = v_demo;
+  get diagnostics v_n = row_count;
+  if v_n <> 0 then raise exception 'smoke: foreign sync jobs are updatable'; end if;
+
+  select count(*) into v_n from public.seo_publications where project_id = v_demo;
+  if v_n <> 0 then raise exception 'smoke: foreign publications are readable (%)', v_n; end if;
+  update public.seo_publications set id = id where project_id = v_demo;
+  get diagnostics v_n = row_count;
+  if v_n <> 0 then raise exception 'smoke: foreign publications are updatable'; end if;
+
+  select count(*) into v_n from public.seo_integrations where project_id = v_demo;
+  if v_n <> 0 then raise exception 'smoke: foreign integrations are readable (%)', v_n; end if;
+  update public.seo_integrations set id = id where project_id = v_demo;
+  get diagnostics v_n = row_count;
+  if v_n <> 0 then raise exception 'smoke: foreign integrations are updatable'; end if;
+
+  -- api keys: owner/admin only, so a foreign owner cannot read or revoke.
+  select count(*) into v_n from public.seo_api_keys where project_id = v_demo;
+  if v_n <> 0 then raise exception 'smoke: foreign api keys are readable (%)', v_n; end if;
+  delete from public.seo_api_keys where project_id = v_demo;
+  get diagnostics v_n = row_count;
+  if v_n <> 0 then raise exception 'smoke: foreign api keys are deletable'; end if;
+
+  -- audit logs: a non-member reads nothing.
+  select count(*) into v_n from public.seo_audit_logs where project_id = v_demo;
+  if v_n <> 0 then raise exception 'smoke: foreign audit logs are readable (%)', v_n; end if;
+
+  -- credentials are deny-all: even a broad select grant returns no rows.
+  select count(*) into v_n from public.seo_credentials where true;
+  if v_n <> 0 then raise exception 'smoke: credentials are directly readable (%)', v_n; end if;
+
+  raise notice 'smoke: focused RLS write + deny-all checks OK';
+end $$;
+SQL
+echo "   smoke: focused RLS write denial + deny-all tables OK"
+
+echo "==> smoke test: platform-admin trust boundary in policy definitions"
+PSQL -d "${DB_NAME}" -t -A <<'SQL' >/dev/null
+do $$
+declare
+  v_bad text;
+begin
+  -- The platform-admin helper is a service-role RPC boundary, never a table
+  -- policy; no policy anywhere may reference it.
+  select string_agg(format('%s.%s', p.schemaname, p.policyname), ', ' order by p.policyname)
+    into v_bad
+  from pg_policies p
+  where p.schemaname = 'public'
+    and (
+      coalesce(p.qual, '') like '%seo_is_platform_admin%'
+      or coalesce(p.with_check, '') like '%seo_is_platform_admin%'
+    );
+  if v_bad is not null then
+    raise exception 'smoke: platform-admin helper referenced by table policy: %', v_bad;
+  end if;
+
+  -- No project-scoped customer table may have a blanket permissive policy:
+  -- `USING (true)` would bypass membership even though RLS is enabled.
+  select string_agg(format('%s.%s', p.schemaname, p.policyname), ', ' order by p.policyname)
+    into v_bad
+  from pg_policies p
+  where p.schemaname = 'public'
+    and p.tablename like 'seo\_%'
+    and (
+      btrim(coalesce(p.qual, '')) in ('true', '(true)')
+      or btrim(coalesce(p.with_check, '')) in ('true', '(true)')
+    )
+    and exists (
+      select 1 from information_schema.columns c
+      where c.table_schema = 'public'
+        and c.table_name = p.tablename
+        and c.column_name = 'project_id'
+    );
+  if v_bad is not null then
+    raise exception 'smoke: permissive policy on a project-scoped table: %', v_bad;
+  end if;
+
+  -- The helper itself stays service-role only.
+  if has_function_privilege('authenticated', 'public.seo_is_platform_admin(uuid)', 'execute') then
+    raise exception 'smoke: authenticated can execute seo_is_platform_admin';
+  end if;
+  if has_function_privilege('anon', 'public.seo_is_platform_admin(uuid)', 'execute') then
+    raise exception 'smoke: anon can execute seo_is_platform_admin';
+  end if;
+  if not has_function_privilege('service_role', 'public.seo_is_platform_admin(uuid)', 'execute') then
+    raise exception 'smoke: service_role cannot execute seo_is_platform_admin';
+  end if;
+end $$;
+SQL
+echo "   smoke: platform-admin boundary holds (no policies, no permissive USING true, RPCs service-role only)"
+
 echo "==> migration validation OK (${DB_NAME})"

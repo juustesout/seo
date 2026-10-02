@@ -6,6 +6,7 @@
  */
 
 import type { JobError } from '@seo/contracts';
+import { isRetryableError } from '../reliability/retry.js';
 
 export interface JobRecord {
   id: string;
@@ -79,18 +80,7 @@ export function jobErrorPayload(
   const message = err instanceof Error ? err.message : String(err);
   const status = (err as { status?: number })?.status;
   const code = (err as { code?: string })?.code;
-  const explicit = (err as { retryable?: boolean })?.retryable;
-  let retryable: boolean;
-  if (explicit !== undefined) {
-    retryable = explicit;
-  } else if (code && PERMANENT_CODES.has(code)) {
-    retryable = false;
-  } else if (status !== undefined) {
-    retryable = status >= 500 || status === 429;
-  } else {
-    // No HTTP status + no application code -> transport-level failure.
-    retryable = true;
-  }
+  const retryable = isRetryableError(err);
   return {
     error: {
       provider: meta.provider,
@@ -104,15 +94,3 @@ export function jobErrorPayload(
     retryable,
   };
 }
-
-const PERMANENT_CODES = new Set([
-  'not_configured',
-  'unsupported_job_type',
-  'validation_error',
-  'bad_request',
-  'unauthorized',
-  'forbidden',
-  'not_found',
-  'conflict',
-  'invalid_credentials',
-]);

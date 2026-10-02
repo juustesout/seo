@@ -28,6 +28,7 @@ import { resolveContainer, optionalAuth } from './http/middleware.js';
 import { requestContext } from './http/requestContext.js';
 import { checkReadiness } from './http/readiness.js';
 import { createRateLimiter } from './http/rateLimit.js';
+import { mountClassRateLimits } from './http/rateLimitClasses.js';
 import { errorHandler, notFoundHandler } from './apiErrors.js';
 
 import { meRouter } from './http/routes/me.js';
@@ -159,6 +160,11 @@ export function createApp(): Express {
       createRateLimiter({ windowMs: config.rateLimit.windowMs, max: config.rateLimit.authMax }),
     );
   }
+
+  // Tighter per-class budgets on top of the global tiers, mounted before the
+  // routes (and before the raw body parsers below) so a throttled provider
+  // call or upload is rejected without spending money or buffering bytes.
+  mountClassRateLimits(app, config.rateLimit);
 
   // Google OAuth callback is intentionally unauthenticated (browser redirect).
   app.use('/api/oauth', oauthRouter);

@@ -2,6 +2,14 @@
 
 Date: 2026-09-29
 
+> UPDATE 2026-10-02 (P1 hardening): the S7 finding (H2 below) has been
+> remediated in the repository. Both `vercel.json` files now rewrite `/api/:path*`
+> to `https://api.oldskoolseo.com/api/:path*`, and a reverse-proxy + TLS template
+> (`deploy/vps/nginx-api.conf`) with exact DNS/cert/firewall/verification steps
+> (`deploy/README.md`, "TLS reverse proxy") is committed. The production path is
+> not yet HTTPS until those external ops steps run: **INFRA ACTION REQUIRED**.
+> The topology diagram and findings below remain the 2026-09-29 snapshot.
+
 Scope: Vercel production, production Supabase, Google OAuth, Google Search
 Console (GSC), CI / GitHub workflow and branch protection.
 
@@ -25,7 +33,7 @@ Browser (https://oldskoolseo.com)
   |
   |  Vercel serves the React/Vite SPA (apps/web)
   |  vercel.json rewrites:
-  |    /api/:path*  ->  http://144.172.102.63/api/:path*
+  |    /api/:path*  ->  http://144.172.102.63/api/:path*   (as of 2026-09-29)
   |    /(.*)        ->  /index.html          (SPA fallback)
   v
 VPS 144.172.102.63  (API + worker, port 3001)
@@ -426,17 +434,28 @@ Only evidence-supported cells are populated; everything else is `unknown`.
   Cloud.
 - Remediation type: external configuration (and one env value).
 
-**H2. The Vercel `/api` rewrite is a hardcoded plain-HTTP bare IP.**
+**H2. The Vercel `/api` rewrite is a hardcoded plain-HTTP bare IP.** (2026-09-29)
 - Location: `vercel.json:4-6`, `apps/web/vercel.json:4-6`.
 - Current behavior: all API traffic is proxied server-side to
   `http://144.172.102.63/api/...` with no TLS, no hostname and no environment
   indirection.
 - Consequence: single point of failure; any VPS IP change requires editing and
-  redeploying the SPA; behavior for POST bodies and OAuth redirect hops through
-  the proxy is unverified.
-- Smallest remediation boundary: replace the hardcoded IP with a stable
-  hostname (and ideally HTTPS) in the rewrite target.
-- Remediation type: configuration/code (small).
+  redeploying the SPA; the bearer token and request bodies cross an unencrypted,
+  unauthenticated hop.
+- Remediation boundary: replace the hardcoded IP with a stable HTTPS hostname in
+  the rewrite target, and terminate TLS for that hostname on the VPS.
+- Remediation type: configuration/code (done) plus external ops (pending).
+
+  **Status 2026-10-02: INFRA ACTION REQUIRED.** Repository remediation is done:
+  both rewrites target `https://api.oldskoolseo.com/api/:path*`, and
+  `deploy/vps/nginx-api.conf` + the "TLS reverse proxy" section of
+  `deploy/README.md` give the exact steps. Remaining external action:
+  1. DNS: `A api.oldskoolseo.com -> <VPS public IP>` (the `VPS_HOST` host).
+  2. Install `deploy/vps/nginx-api.conf` and issue a Let's Encrypt certificate
+     for `api.oldskoolseo.com` (`certbot certonly --webroot`).
+  3. Allow inbound `80`/`443`; keep `3001` on loopback only.
+  4. Verify `https://api.oldskoolseo.com/api/health` over a valid certificate.
+  S7 is not complete until step 4 passes.
 
 ### Medium
 

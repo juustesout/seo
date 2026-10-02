@@ -104,6 +104,88 @@ new ones.
 No sudoers rule is needed when the deploy user is root; the scripts call
 `systemctl` directly.
 
+## TLS reverse proxy (api.oldskoolseo.com)
+
+The browser calls the API same-origin as `https://oldskoolseo.com/api/*`; Vercel
+proxies that server-side. The rewrite target is
+`https://api.oldskoolseo.com/api/:path*` (`vercel.json`,
+`apps/web/vercel.json`), so the VPS must serve a valid certificate for
+`api.oldskoolseo.com` and forward to the API on `127.0.0.1:3001`. Without this
+the proxy hop is cleartext HTTP and the bearer token crosses it unencrypted.
+
+Status: **INFRA ACTION REQUIRED**. The repository config is ready; the DNS, TLS
+and proxy steps below are an external ops action and cannot be verified from the
+repository. Do not mark S7 complete until `https://api.oldskoolseo.com/api/health`
+answers over a valid certificate.
+
+### 1. DNS
+
+Create an `A` (and matching `AAAA` if the VPS has IPv6) record:
+
+```
+api.oldskoolseo.com  ->  <VPS public IP>
+```
+
+Use the same host that `VPS_HOST` points at. Confirm propagation before issuing a
+certificate:
+
+```bash
+dig +short api.oldskoolseo.com
+```
+
+### 2. Install the proxy and certificate
+
+Run as root. Install nginx and certbot (package installs are the only system
+changes here; nginx and the proxy config are added, not replaced, if nginx is
+already present).
+
+```bash
+apt-get update
+apt-get install -y nginx certbot
+mkdir -p /var/www/certbot
+install -m 644 deploy/vps/nginx-api.conf /etc/nginx/sites-available/seo-api.conf
+ln -sf /etc/nginx/sites-available/seo-api.conf /etc/nginx/sites-enabled/seo-api.conf
+```
+
+Request the certificate over the HTTP-01 webroot challenge (the port 80 server
+block already serves `/.well-known/acme-challenge/`):
+
+```bash
+certbot certonly --webroot -w /var/www/certbot -d api.oldskoolseo.com
+nginx -t
+systemctl reload nginx
+```
+
+Certificate renewal is handled by the certbot timer; the reload hook reloads
+nginx after renewal.
+
+### 3. Firewall
+
+Allow inbound TCP `80` (ACME + redirect) and `443` (API traffic). Keep `3001`
+bound to loopback only; it must not be reachable from the public internet.
+
+### 4. Verify
+
+From any host:
+
+```bash
+curl -fsS https://api.oldskoolseo.com/api/health
+curl -fsSI https://api.oldskoolseo.com/api/ready
+curl -sI http://api.oldskoolseo.com/api/health
+```
+
+The first two must succeed over TLS; the third must return `301` to `https`.
+Then load `https://oldskoolseo.com` and confirm authenticated requests succeed
+in the browser network tab against `/api/*`.
+
+### Notes
+
+- `PUBLIC_APP_URL` stays `https://oldskoolseo.com` (the browser-facing origin
+  used to build OAuth redirect URIs). It is independent of the internal API
+  proxy hostname and must not be changed to the `api.` host.
+- `VPS_HEALTH_URL` still targets loopback (`http://127.0.0.1:3001/api/ready`) and
+  is unaffected by this proxy.
+
 ## Cutover from the existing config
 
 The old deployment lives in `/opt/seo-api/repo` with units pointing at

@@ -15,6 +15,7 @@
  */
 import type { NextFunction, Request, Response } from 'express';
 import { ApiError } from '../apiErrors.js';
+import { logger } from '../logger.js';
 
 export interface RateLimitOptions {
   /** Window length in milliseconds. */
@@ -23,6 +24,19 @@ export interface RateLimitOptions {
   max: number;
   /** Stable per-caller key; defaults to the authenticated user or the client IP. */
   keyGenerator?: (req: Request) => string;
+  /**
+   * Optional label for the class this limiter enforces (e.g. `expensive`). Only
+   * used in the structured rejection log so an operator can tell which budget
+   * a caller exhausted.
+   */
+  name?: string;
+  /**
+   * Optional HTTP-method allow-list. When set, only requests whose (uppercased)
+   * method is listed are counted; everything else passes through untouched.
+   * This keeps read-only GETs on a hot prefix on the generous global budget
+   * while still bounding the mutating calls that actually spend money/quota.
+   */
+  methods?: readonly string[];
   /** Injectable clock so the window/reset behavior is unit-testable. */
   now?: () => number;
 }
@@ -43,7 +57,8 @@ function defaultKey(req: Request): string {
  * so the map stays bounded under normal churn without a background timer.
  */
 export function createRateLimiter(options: RateLimitOptions) {
-  const { windowMs, max, keyGenerator = defaultKey, now = Date.now } = options;
+  const { windowMs, max, keyGenerator = defaultKey, name, methods, now = Date.now } = options;
+  const methodFilter = methods ? new Set(methods.map((m) => m.toUpperCase())) : null;
   const buckets = new Map<string, Bucket>();
   const sweepIntervalMs = Math.max(1000, Math.min(windowMs, 60_000));
   let lastSweep = now();
@@ -56,6 +71,11 @@ export function createRateLimiter(options: RateLimitOptions) {
   }
 
   return function rateLimit(req: Request, res: Response, next: NextFunction): void {
+    if (methodFilter && !methodFilter.has((req.method ?? '').toUpperCase())) {
+      next();
+      return;
+    }
+
     const at = now();
     if (at - lastSweep >= sweepIntervalMs) sweep(at);
 
@@ -74,6 +94,18 @@ export function createRateLimiter(options: RateLimitOptions) {
 
     if (bucket.count > max) {
       res.setHeader('retry-after', String(resetSeconds));
+      // Path only (never the query string) so an OAuth `code`/`state` in a
+      // callback URL can never reach the log sink.
+      logger.warn(
+        {
+          rateLimit: name ?? 'default',
+          key,
+          method: req.method,
+          path: (req.originalUrl ?? req.path ?? '').split('?')[0],
+          retryAfterSeconds: resetSeconds,
+        },
+        'rate limit exceeded',
+      );
       next(ApiError.rateLimited('Too many requests', { retryAfterSeconds: resetSeconds }));
       return;
     }
