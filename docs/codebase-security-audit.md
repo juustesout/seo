@@ -124,10 +124,11 @@ explicit range.
 2. **Perimeter and transport.** Rate limiting is now in place (global IP/user
    tiers plus OAuth/expensive/job endpoint classes, S5 FIXED). S7 remains
    **infra action required**: both `vercel.json` files now target
-   `https://api.oldskoolseo.com/api/:path*` and a TLS reverse-proxy template is
-   shipped (`deploy/vps/nginx-api.conf`), but production is only actually HTTPS
-   once the DNS record, certificate and port 443 are provisioned. A CSP/header
-   set for the web app is still open.
+   `https://api.peerdisco.com/api/:path*` (Cloudflare edge TLS; the VPS nginx
+   default server already proxies `/api/*` to `127.0.0.1:3001`). Production is
+   HTTPS once the Cloudflare `api` DNS record exists; a TLS reverse-proxy
+   template (`deploy/vps/nginx-api.conf`) documents the optional Full (strict) /
+   certbot hardening. A CSP/header set for the web app is still open.
 3. **Observability and resilience.** Request/correlation ids, DB/Qdrant
    readiness, and outbound timeouts are in place. Retry amplification is bounded
    by a shared classifier + per-job retry budget (DataForSEO's internal loop now

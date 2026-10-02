@@ -2,7 +2,7 @@
   "rewrites": [
     {
       "source": "/api/:path*",
-      "destination": "https://api.oldskoolseo.com/api/:path*"
+      "destination": "https://api.peerdisco.com/api/:path*"
     },
     {
       "source": "/(.*)",

@@ -104,36 +104,55 @@ new ones.
 No sudoers rule is needed when the deploy user is root; the scripts call
 `systemctl` directly.
 
-## TLS reverse proxy (api.oldskoolseo.com)
+## API origin: api.peerdisco.com via Cloudflare
 
 The browser calls the API same-origin as `https://oldskoolseo.com/api/*`; Vercel
 proxies that server-side. The rewrite target is
-`https://api.oldskoolseo.com/api/:path*` (`vercel.json`,
-`apps/web/vercel.json`), so the VPS must serve a valid certificate for
-`api.oldskoolseo.com` and forward to the API on `127.0.0.1:3001`. Without this
-the proxy hop is cleartext HTTP and the bearer token crosses it unencrypted.
+`https://api.peerdisco.com/api/:path*` (`vercel.json`, `apps/web/vercel.json`).
 
-Status: **INFRA ACTION REQUIRED**. The repository config is ready; the DNS, TLS
-and proxy steps below are an external ops action and cannot be verified from the
-repository. Do not mark S7 complete until `https://api.oldskoolseo.com/api/health`
-answers over a valid certificate.
+`peerdisco.com` is a Cloudflare zone whose origin is this SEO VPS
+(`144.172.102.63`, nginx/1.24). The VPS nginx default server already proxies
+`/api/*` to the API on `127.0.0.1:3001` (verified: `GET /api/health` returns the
+SEO API for any host that does not match another server block). `www.peerdisco.com`
+is a separate nginx server block hosting an unrelated "Bridge" app and is
+unaffected. No nginx change is required for the interim setup - only a Cloudflare
+DNS record.
 
-### 1. DNS
+Status: **INFRA ACTION REQUIRED** (add the DNS record) and **S7 PARTIALLY
+MITIGATED** - in Cloudflare's default `Flexible` SSL mode the browser-to-
+Cloudflare leg is TLS, but Cloudflare-to-origin is still HTTP. Run the Full
+(strict) hardening at the end to close that hop.
 
-Create an `A` (and matching `AAAA` if the VPS has IPv6) record:
+### 1. DNS (Cloudflare)
+
+Cloudflare dashboard -> `peerdisco.com` -> DNS -> Add record:
 
 ```
-api.oldskoolseo.com  ->  <VPS public IP>
+Type   Name   Content            Proxy status
+A      api    144.172.102.63     Proxied (orange cloud)
 ```
 
-Use the same host that `VPS_HOST` points at. Confirm propagation before issuing a
-certificate:
+Do not add an `AAAA` record unless the VPS has a working IPv6 listener. Confirm
+the edge answers over TLS (Cloudflare terminates the certificate):
 
 ```bash
-dig +short api.oldskoolseo.com
+curl -fsS https://api.peerdisco.com/api/health
 ```
 
-### 2. Install the proxy and certificate
+### 2. (Optional hardening) close the Cloudflare-to-origin hop
+
+Only needed to make the whole path end-to-end TLS. Either:
+
+- **Cloudflare Origin Certificate + Full (strict):** create an Origin CA
+  certificate for `*.peerdisco.com` in Cloudflare, install it on the VPS, add an
+  nginx `listen 443 ssl` server block for `api.peerdisco.com`, then set
+  Cloudflare SSL/TLS mode to **Full (strict)**; or
+- **DNS-only + Let's Encrypt:** set the `api` record to DNS-only (grey cloud) and
+  follow the certbot steps in `deploy/vps/nginx-api.conf` with
+  `server_name api.peerdisco.com` (the template below).
+
+
+### 3. Install the proxy and certificate (DNS-only + Let's Encrypt path)
 
 Run as root. Install nginx and certbot (package installs are the only system
 changes here; nginx and the proxy config are added, not replaced, if nginx is
@@ -151,7 +170,7 @@ Request the certificate over the HTTP-01 webroot challenge (the port 80 server
 block already serves `/.well-known/acme-challenge/`):
 
 ```bash
-certbot certonly --webroot -w /var/www/certbot -d api.oldskoolseo.com
+certbot certonly --webroot -w /var/www/certbot -d api.peerdisco.com
 nginx -t
 systemctl reload nginx
 ```
@@ -159,19 +178,19 @@ systemctl reload nginx
 Certificate renewal is handled by the certbot timer; the reload hook reloads
 nginx after renewal.
 
-### 3. Firewall
+### 4. Firewall
 
 Allow inbound TCP `80` (ACME + redirect) and `443` (API traffic). Keep `3001`
 bound to loopback only; it must not be reachable from the public internet.
 
-### 4. Verify
+### 5. Verify
 
 From any host:
 
 ```bash
-curl -fsS https://api.oldskoolseo.com/api/health
-curl -fsSI https://api.oldskoolseo.com/api/ready
-curl -sI http://api.oldskoolseo.com/api/health
+curl -fsS https://api.peerdisco.com/api/health
+curl -fsSI https://api.peerdisco.com/api/ready
+curl -sI http://api.peerdisco.com/api/health
 ```
 
 The first two must succeed over TLS; the third must return `301` to `https`.

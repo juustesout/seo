@@ -18,7 +18,7 @@ rate limiter) are already on `main` and are **not** redone here.
 | Item | Status | Where |
 |---|---|---|
 | S5 rate limiting (class tiers) | COMPLETE | `apps/api/src/http/rateLimitClasses.ts`, `config.ts` (`RATE_LIMIT_{STRICT,EXPENSIVE,MODERATE}_MAX`), `app.ts` mount before raw body parsers |
-| S7 HTTPS API origin | INFRA ACTION REQUIRED | `vercel.json` + `apps/web/vercel.json` → `https://api.oldskoolseo.com/api/:path*`; `deploy/vps/nginx-api.conf`, `deploy/README.md` TLS steps |
+| S7 HTTPS API origin | INFRA ACTION REQUIRED | `vercel.json` + `apps/web/vercel.json` → `https://api.peerdisco.com/api/:path*` (Cloudflare edge TLS); `deploy/vps/nginx-api.conf`, `deploy/README.md` (Full-strict/certbot hardening) |
 | Retry policy + budget | COMPLETE | `apps/api/src/reliability/retry.ts`; worker `runWithRetryBudget`; `jobErrorPayload` uses `isRetryableError`; DataForSEO `request()` via `withRetry` |
 | Circuit breaker | COMPLETE | `apps/api/src/reliability/circuitBreaker.ts`; DataForSEO client |
 | Stale-running sweep | COMPLETE | `worker.ts` `sweepStaleRunning` reuses `jobStore.fail` (crash = attempt, terminal `stale_worker`) |
@@ -133,17 +133,35 @@ an external TLS terminator.
 ### Decision
 
 - Replace the hardcoded cleartext IP in **both** `vercel.json` files with a
-  stable HTTPS origin on the existing production domain:
-  `https://api.oldskoolseo.com/api/:path*`.
-- Ship a ready-to-use reverse-proxy + certificate template plus exact DNS, TLS,
-  firewall and verification steps under `deploy/vps/` and `deploy/README.md`, so
-  the remaining work is a finite external ops action.
-- **S7 is not marked COMPLETE** until the production path is actually HTTPS; it
-  is marked **INFRA ACTION REQUIRED** with the exact steps recorded in
+  stable HTTPS origin.
+- **S7 is not marked COMPLETE** until the production path is actually end-to-end
+  HTTPS; it is marked **INFRA ACTION REQUIRED** with the exact steps recorded in
   `docs/production-readiness-recon.md`.
 
-No second API hostname is introduced beyond the `api.` subdomain of the existing
-domain.
+### Resolution (2026-10-02)
+
+Live probing changed the plan. Findings:
+
+- `api.oldskoolseo.com` has no DNS record, so the first attempt
+  (`https://api.oldskoolseo.com/api/:path*`) broke production with Vercel
+  `502 DNS_HOSTNAME_NOT_FOUND`.
+- The VPS (`144.172.102.63`) runs nginx and already proxies `/api/*` on port 80
+  to the API on `127.0.0.1:3001`; `GET http://<ip>/api/health` returns the SEO
+  API for the default host. Port 443 is closed (no origin TLS).
+- `peerdisco.com` is a Cloudflare zone whose origin is this same VPS.
+  `www.peerdisco.com` is a different nginx server block (an unrelated "Bridge"
+  app); `api.peerdisco.com` does not match it and lands on the default server,
+  i.e. our API.
+
+Chosen origin: **`https://api.peerdisco.com/api/:path*`**. Cloudflare terminates
+edge TLS, so only a DNS record is needed and no VPS access is required. Interim
+Cloudflare `Flexible` mode still leaves the Cloudflare-to-origin hop in HTTP;
+closing it needs an Origin Certificate + `Full (strict)` (or DNS-only +
+certbot) on the VPS. Both `vercel.json` files and `deploy/README.md` are updated;
+S7 stays **INFRA ACTION REQUIRED** until the record and (optionally) Full strict
+are in place.
+
+No second API hostname beyond the `api.` subdomain is introduced.
 
 ---
 
