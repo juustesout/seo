@@ -65,7 +65,7 @@ jobs:
 
       - name: Upload API artifact
         if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: seo-api-artifact
           path: artifact/api-artifact.tar.gz
