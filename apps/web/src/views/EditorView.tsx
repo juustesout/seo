@@ -29,6 +29,7 @@ import {
   asTipDoc,
   docHeadings,
   evaluateSeo,
+  isCanonicalDocumentEmpty,
   tiptapEmptyDoc,
   type ContentAiAction,
   type ContentAiEditOperation,
@@ -36,6 +37,8 @@ import {
   type ContentAiSuggestionDto,
   type ContentOutlineItem,
   type SeoResult,
+  type WriterRunReviewDto,
+  type CanonicalDocument,
 } from '@seo/contracts';
 import { api } from '../lib/api';
 import { fmtDate, Empty } from '../lib/ui';
@@ -54,6 +57,9 @@ import {
 import { WriterPanel } from '../components/content/WriterPanel';
 import { KnowledgePanel } from '../components/content/KnowledgePanel';
 import { IntelligencePanel } from '../components/content/IntelligencePanel';
+import { canonicalFromEditorDocument } from '../components/content/editorDraft';
+import { documentRevisionOf } from '../components/content/documentRevision';
+import { useEditorContext } from '../components/content/editor/EditorContext';
 import { AI_EDIT_OPERATION_LABELS, textToBlocksHtml } from '../components/content/contentAi';
 import { useOperationBoundary } from '../components/content/session';
 import { useWorkspaceSessionContext } from '../workspace/workspaceSession';
@@ -130,8 +136,12 @@ export function EditorView({
     setNewTitle,
     notice,
     err,
+    setNotice,
+    setErr,
     remove,
   } = ws;
+
+  const editorContext = useEditorContext();
 
   const editingId = session.identity.documentId;
   const creating = session.identity.creating;
@@ -294,6 +304,46 @@ export function EditorView({
   const rejectAi = () => {
     setAiSuggestion(null);
     setAiSelRange(null);
+  };
+
+  /**
+   * Adopt a review-ready Writer article into this same draft. It goes through
+   * the one external-document mutation path (`applyExternalDocument`), which is
+   * revision-guarded, undoable and emits a normal editor update so the existing
+   * autosave persists it. There is no second document store. Replacing a
+   * non-empty draft asks first so the user never silently loses work.
+   */
+  const useWriterArticle = (review: WriterRunReviewDto) => {
+    const liveDoc = live.current.doc;
+    let currentEmpty = false;
+    try {
+      currentEmpty = isCanonicalDocumentEmpty(canonicalFromEditorDocument(liveDoc));
+    } catch {
+      currentEmpty = false;
+    }
+    if (!currentEmpty && !window.confirm('Replace the current draft content with the generated article?')) return;
+
+    let canonical: CanonicalDocument;
+    try {
+      canonical = canonicalFromEditorDocument(review.contentJson);
+    } catch {
+      setErr('The generated article could not be represented in the editor.');
+      return;
+    }
+    const result = editorContext?.applyExternalDocument({
+      canonical,
+      expectedRevision: documentRevisionOf(liveDoc),
+      source: 'writer',
+    });
+    if (result?.ok) {
+      setErr(null);
+      setNotice('Writer article loaded into this draft. Review it and the existing autosave will persist it.');
+      setWriterOpen(false);
+    } else if (result?.reason === 'stale-revision') {
+      setErr('The document changed before the article could be applied. Generate the article again.');
+    } else {
+      setErr('The generated article could not be applied to this document.');
+    }
   };
 
   // --- Cosmos AI editor (structured replace_selection, preview-before-apply) ---
@@ -623,8 +673,8 @@ export function EditorView({
               {!editingId && <span className="text-xs text-muted-foreground">Save this draft first to run the writer on it.</span>}
               {writerOpen && editingId && (
                 <span className="text-xs text-muted-foreground">
-                  Runs the approved writer flow against this article's saved context; results are previewed, never saved
-                  automatically.
+                  Runs the approved writer flow against this article's saved context; results are previewed until you
+                  choose "Use article" to load them into this draft.
                 </span>
               )}
             </div>
@@ -633,6 +683,7 @@ export function EditorView({
                 projectId={projectId}
                 contentId={editingId}
                 defaultTopic={title}
+                onUseArticle={useWriterArticle}
               />
             )}
             {editingId && (

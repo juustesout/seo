@@ -4,10 +4,11 @@
  *
  * Two flows share one view. Creation mode (5.1) submits an intent anchored to
  * the empty-document revision and shows the result as a proposal that is never
- * applied. Edit mode (5.2) targets the one document the workspace has open: the
- * intent is submitted against that document's server-derived revision, the
- * returned proposal is reviewed against the live document, and the user may
- * explicitly apply it or reject it.
+ * applied on its own; the user may adopt it by creating one new draft from it
+ * and opening it in the editor. Edit mode (5.2) targets the one document the
+ * workspace has open: the intent is submitted against that document's
+ * server-derived revision, the returned proposal is reviewed against the live
+ * document, and the user may explicitly apply it or reject it.
  *
  * R5.5.1: this view no longer owns a document selector, a `/content` list read
  * or a document detail read. Document identity, title, the live canonical
@@ -36,7 +37,9 @@ import {
 } from '@seo/contracts';
 import type { DocumentLifecycleStatus } from '../components/content/session';
 import { CanonicalRenderer } from '../components/canonicalRenderer';
+import { editorDraftFromCanonical } from '../components/content/editorDraft';
 import { useDesignerRun, type DesignerRunPhase } from '../components/designer/useDesignerRun';
+import { api } from '../lib/api';
 import {
   isDesignerMutationRepresentable,
   planDesignerMutation,
@@ -93,6 +96,12 @@ export interface DesignerProps {
    */
   onApplyProposal?: (proposal: DesignerProposal, targetDocumentId: string) => void;
   /**
+   * Hands a newly created draft (persisted from a creation-mode proposal) to the
+   * shell, which switches the shared session to it and opens the editor. Absent
+   * when the workspace cannot open documents, in which case adoption is hidden.
+   */
+  onOpenEditor?: (contentId: string) => void;
+  /**
    * Reports whether the Designer has a proposal review open (R5.5.3). The shell
    * uses it as a navigation hold so a mode switch cannot silently discard the
    * review; no proposal data crosses this boundary.
@@ -110,6 +119,7 @@ export function Designer({
   documentStatus = 'idle',
   currentDocument = null,
   onApplyProposal,
+  onOpenEditor,
   onReviewOpenChange,
 }: DesignerProps) {
   const canEdit = (ROLE_RANK[role] ?? 0) >= 1;
@@ -119,6 +129,9 @@ export function Designer({
   const [instruction, setInstruction] = useState('');
   const [applyState, setApplyState] = useState<ApplyState>('idle');
   const applyingRef = useRef(false);
+  const [creating, setCreating] = useState(false);
+  const [createError, setCreateError] = useState<string | null>(null);
+  const createdIdRef = useRef<string | null>(null);
 
   const busy = phase === 'submitting' || phase === 'queued' || phase === 'running';
   const proposal = run?.result ?? null;
@@ -170,6 +183,41 @@ export function Designer({
     void submit(instruction, mode === 'edit' && documentId ? { contentId: documentId } : undefined);
   };
 
+  // A creation run has no target document: its proposal is adoptable by creating
+  // one new draft, unlike an edit run whose review targets the open document.
+  const showCreateResult = phase === 'succeeded' && proposal !== null && runContentId === null;
+
+  /**
+   * Adopt a creation-mode proposal: persist its canonical document as one new
+   * draft through the existing `/content` create (no AI, no re-planning), then
+   * ask the shell to open it in the editor. There is no second document model -
+   * the proposal document is canonical and the editor's normal autosave owns
+   * persistence from here on. Guarded so a retry re-opens the created draft
+   * instead of posting a duplicate.
+   */
+  const openCreationInEditor = async () => {
+    if (!proposal || !canEdit || creating || !onOpenEditor) return;
+    if (createdIdRef.current) {
+      onOpenEditor(createdIdRef.current);
+      return;
+    }
+    setCreating(true);
+    setCreateError(null);
+    try {
+      const draft = editorDraftFromCanonical(proposal.document, instruction.trim() || 'Designer draft');
+      const row = await api<{ id: string }>(`/projects/${projectId}/content`, {
+        method: 'POST',
+        body: { title: draft.title, status: 'draft', content_json: draft.doc },
+      });
+      createdIdRef.current = row.id;
+      onOpenEditor(row.id);
+    } catch (e) {
+      setCreateError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setCreating(false);
+    }
+  };
+
   const changeMode = (next: DesignerFlow) => {
     if (busy || mode === next) return;
     setMode(next);
@@ -201,6 +249,8 @@ export function Designer({
     reset();
     setInstruction('');
     setApplyState('idle');
+    setCreateError(null);
+    createdIdRef.current = null;
   };
 
   const showEditReview = phase === 'succeeded' && targetsOpenDocument && proposal !== null;
@@ -378,7 +428,19 @@ export function Designer({
           </div>
         )}
 
-        {phase === 'succeeded' && !showEditReview && proposal && <ProposalResult proposal={proposal} />}
+        {showCreateResult && proposal && (
+          <CreationResult
+            proposal={proposal}
+            canAdopt={canEdit && Boolean(onOpenEditor)}
+            creating={creating}
+            error={createError}
+            onAdopt={() => void openCreationInEditor()}
+          />
+        )}
+
+        {phase === 'succeeded' && !showEditReview && !showCreateResult && proposal && (
+          <ProposalResult proposal={proposal} />
+        )}
 
         {(phase === 'succeeded' || phase === 'failed') && !showEditReview && (
           <div>
@@ -597,8 +659,48 @@ function VisualProvenance({ visual }: { visual: VisualDesignProposal }) {
 }
 
 /**
- * Creation-mode proposal. It has no document to apply to (the apply route
- * requires an existing content record), so it stays explicitly proposal-only.
+ * Creation-mode result. A creation proposal has no target document, so adoption
+ * means creating one new draft from its canonical document and opening it in the
+ * editor - the same handoff the Composer uses. Until the user chooses it, the
+ * proposal stays proposal-only; no second document model is introduced.
+ */
+function CreationResult({
+  proposal,
+  canAdopt,
+  creating,
+  error,
+  onAdopt,
+}: {
+  proposal: DesignerProposal;
+  canAdopt: boolean;
+  creating: boolean;
+  error: string | null;
+  onAdopt: () => void;
+}) {
+  return (
+    <div className="flex flex-col gap-3">
+      <ProposalResult proposal={proposal} />
+      {canAdopt && (
+        <div className="flex flex-col gap-2">
+          <div>
+            <Button type="button" onClick={onAdopt} disabled={creating}>
+              {creating ? 'Creating draft…' : 'Open in editor'}
+            </Button>
+          </div>
+          {error && (
+            <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+              {error}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Read-only proposal renderer. It shows what was generated and that nothing has
+ * been applied, saved or published; callers own any adoption action.
  */
 function ProposalResult({ proposal }: { proposal: DesignerProposal }) {
   return (

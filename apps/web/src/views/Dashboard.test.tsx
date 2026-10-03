@@ -51,13 +51,15 @@ describe('Dashboard project switch', () => {
       throw new Error(`unexpected api path: ${path}`);
     });
 
-    const { rerender } = render(<Dashboard projectId="p-a" onOpenSettings={() => {}} />);
+    const { rerender } = render(
+      <Dashboard projectId="p-a" role="viewer" onOpenSettings={() => {}} onOpenView={() => {}} />,
+    );
     await act(async () => {
       a.resolve(dash('alpha-unique'));
     });
     expect(await screen.findByText('alpha-unique')).toBeTruthy();
 
-    rerender(<Dashboard projectId="p-b" onOpenSettings={() => {}} />);
+    rerender(<Dashboard projectId="p-b" role="viewer" onOpenSettings={() => {}} onOpenView={() => {}} />);
     expect(screen.queryByText('alpha-unique')).toBeNull();
     expect(screen.getByText('Loading…')).toBeTruthy();
 

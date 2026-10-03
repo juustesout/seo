@@ -14,14 +14,15 @@
  */
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  BarChart3,
   BookOpen,
   CalendarDays,
   FolderKanban,
+  Globe,
   KeyRound,
   LayoutDashboard,
   LineChart,
   Loader2,
+  Menu,
   Newspaper,
   PenSquare,
   Plug,
@@ -29,7 +30,7 @@ import {
   Send,
   Settings,
   ShieldCheck,
-  Target,
+  X,
 } from 'lucide-react';
 import { supabase, configured as supabaseConfigured, currentUser } from './lib/supabase';
 import { api } from './lib/api';
@@ -51,6 +52,7 @@ const Integrations = lazy(() => import('./views/Integrations').then((m) => ({ de
 const Keywords = lazy(() => import('./views/Keywords').then((m) => ({ default: m.Keywords })));
 const Analytics = lazy(() => import('./views/Analytics').then((m) => ({ default: m.Analytics })));
 const AdsIntelligence = lazy(() => import('./views/AdsIntelligence').then((m) => ({ default: m.AdsIntelligence })));
+const Google = lazy(() => import('./views/Google').then((m) => ({ default: m.Google })));
 const Knowledge = lazy(() => import('./views/Knowledge').then((m) => ({ default: m.Knowledge })));
 const Publishing = lazy(() => import('./views/Publishing').then((m) => ({ default: m.Publishing })));
 const ContentSchedule = lazy(() => import('./views/ContentSchedule').then((m) => ({ default: m.ContentSchedule })));
@@ -99,8 +101,7 @@ const TOP_NAV: Array<{ id: TopArea; label: string; icon: NavIcon }> = [
 const PROJECT_NAV: Array<{ id: string; label: string; icon: NavIcon }> = [
   { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { id: 'keywords', label: 'Keywords', icon: Search },
-  { id: 'analytics', label: 'Analytics', icon: BarChart3 },
-  { id: 'ads', label: 'Paid search', icon: Target },
+  { id: 'google', label: 'Google', icon: Globe },
   { id: 'integrations', label: 'Integrations', icon: Plug },
   { id: 'knowledge', label: 'Knowledge Base', icon: BookOpen },
   { id: 'workspace', label: 'Workspace', icon: PenSquare },
@@ -136,6 +137,10 @@ export function App() {
   const [authed, setAuthed] = useState<boolean | null>(null);
   const [session, setSession] = useState<{ email: string | null } | null>(null);
   const [bootError, setBootError] = useState<string | null>(null);
+  // Mobile-only project navigation drawer. Desktop keeps the always-visible
+  // sidebar (`md:block`); below `md` the same entries are reachable through this
+  // overlay because the sidebar is hidden there.
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
 
   // The route the UI currently renders, read by the navigation controller. It is
   // a ref because the controller is created once and must never close over a
@@ -371,6 +376,10 @@ export function App() {
     const workspaceActive = view === 'workspace';
     const workspaceMode = normalizeWorkspaceMode(route.sub);
     const workspaceContentId = route.sub2;
+    // Analytics and Ads are now reached through the unified Google hub, so the
+    // nav entry stays highlighted while their detail routes are open.
+    const sidebarView =
+      view === 'analytics' || view === 'ads' ? 'google' : workspaceActive ? 'workspace' : view;
     return (
       <DesignSystemProvider projectId={pid}>
         <div className="flex min-h-screen flex-col">
@@ -381,17 +390,41 @@ export function App() {
             onArea={goArea}
             projects={me.projects}
             currentProjectId={pid}
+            currentView={workspaceActive ? 'workspace' : view}
             onOpenProject={goProject}
+            onOpenProjectMenu={() => setMobileNavOpen(true)}
             isAdmin={isAdmin}
             adminActive={false}
             onAdmin={() => goAdmin()}
           />
           <div className="flex flex-1">
-            <ProjectSidebar projectId={pid} view={workspaceActive ? 'workspace' : view} onNavigate={goProject} />
+            <ProjectSidebar projectId={pid} view={sidebarView} onNavigate={goProject} />
+            <MobileProjectNav
+              projectId={pid}
+              view={sidebarView}
+              open={mobileNavOpen}
+              onNavigate={goProject}
+              onClose={() => setMobileNavOpen(false)}
+            />
             <main className="min-w-0 flex-1 px-6 py-6">
               <Suspense fallback={<RouteFallback />}>
-              {view === 'dashboard' && <Dashboard projectId={pid} onOpenSettings={() => goProject(pid, 'settings')} />}
+              {view === 'dashboard' && (
+                <Dashboard
+                  projectId={pid}
+                  role={project.role}
+                  onOpenSettings={() => goProject(pid, 'settings')}
+                  onOpenView={(next, sub) => goProject(pid, next, sub)}
+                />
+              )}
               {view === 'keywords' && <Keywords projectId={pid} role={project.role} />}
+              {view === 'google' && (
+                <Google
+                  projectId={pid}
+                  role={project.role}
+                  onOpenSettings={() => goProject(pid, 'settings')}
+                  onOpenView={(next) => goProject(pid, next)}
+                />
+              )}
               {view === 'analytics' && <Analytics projectId={pid} onOpenSettings={() => goProject(pid, 'settings')} />}
               {view === 'ads' && <AdsIntelligence projectId={pid} onOpenSettings={() => goProject(pid, 'settings')} />}
               {view === 'integrations' && <Integrations projectId={pid} />}
@@ -493,7 +526,9 @@ export function AppHeader({
   onArea,
   projects,
   currentProjectId,
+  currentView,
   onOpenProject,
+  onOpenProjectMenu,
   isAdmin,
   adminActive,
   onAdmin,
@@ -504,13 +539,27 @@ export function AppHeader({
   onArea: (area: TopArea) => void;
   projects: ProjectRow[];
   currentProjectId: string | null;
+  currentView?: string;
   onOpenProject: (id: string, view: string) => void;
+  onOpenProjectMenu?: () => void;
   isAdmin: boolean;
   adminActive: boolean;
   onAdmin: () => void;
 }) {
   return (
     <header className="sticky top-0 z-30 flex h-14 items-center gap-2 border-b bg-background/85 px-4 backdrop-blur">
+      {onOpenProjectMenu && (
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          onClick={onOpenProjectMenu}
+          aria-label="Open project navigation"
+          className="md:hidden"
+        >
+          <Menu className="size-4" />
+        </Button>
+      )}
       <button
         type="button"
         onClick={() => onArea('overview')}
@@ -559,7 +608,7 @@ export function AppHeader({
           value={currentProjectId ?? ''}
           onChange={(e) => {
             const id = e.target.value;
-            if (id) onOpenProject(id, 'dashboard');
+            if (id) onOpenProject(id, currentView ?? 'dashboard');
           }}
         >
           <option value="" disabled>
@@ -581,6 +630,42 @@ export function AppHeader({
   );
 }
 
+/** The one list of project views, shared by the desktop sidebar and mobile drawer. */
+function ProjectNavList({
+  projectId,
+  view,
+  onNavigate,
+}: {
+  projectId: string;
+  view: string;
+  onNavigate: (id: string, view: string) => void;
+}) {
+  return (
+    <nav className="flex flex-col gap-0.5 p-3">
+      {PROJECT_NAV.map((n) => {
+        const Icon = n.icon;
+        const isActive = view === n.id;
+        return (
+          <button
+            key={n.id}
+            type="button"
+            onClick={() => onNavigate(projectId, n.id)}
+            className={cn(
+              'flex items-center gap-2.5 rounded-md px-3 py-2 text-left text-sm transition-colors',
+              isActive
+                ? 'bg-sidebar-accent font-medium text-sidebar-accent-foreground'
+                : 'text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground',
+            )}
+          >
+            <Icon className="size-4 shrink-0" />
+            {n.label}
+          </button>
+        );
+      })}
+    </nav>
+  );
+}
+
 /** Project workspace sidebar: one entry per project view, icon + label. */
 function ProjectSidebar({
   projectId,
@@ -593,29 +678,61 @@ function ProjectSidebar({
 }) {
   return (
     <aside className="hidden w-60 shrink-0 border-r bg-sidebar md:block">
-      <nav className="flex flex-col gap-0.5 p-3">
-        {PROJECT_NAV.map((n) => {
-          const Icon = n.icon;
-          const isActive = view === n.id;
-          return (
-            <button
-              key={n.id}
-              type="button"
-              onClick={() => onNavigate(projectId, n.id)}
-              className={cn(
-                'flex items-center gap-2.5 rounded-md px-3 py-2 text-left text-sm transition-colors',
-                isActive
-                  ? 'bg-sidebar-accent font-medium text-sidebar-accent-foreground'
-                  : 'text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground',
-              )}
-            >
-              <Icon className="size-4 shrink-0" />
-              {n.label}
-            </button>
-          );
-        })}
-      </nav>
+      <ProjectNavList projectId={projectId} view={view} onNavigate={onNavigate} />
     </aside>
+  );
+}
+
+/**
+ * Mobile project navigation drawer. The desktop sidebar is `hidden` below `md`,
+ * so on small viewports the same project views are reached through this overlay.
+ * It closes on backdrop click, the close button, Escape, and after a selection.
+ */
+export function MobileProjectNav({
+  projectId,
+  view,
+  open,
+  onNavigate,
+  onClose,
+}: {
+  projectId: string;
+  view: string;
+  open: boolean;
+  onNavigate: (id: string, view: string) => void;
+  onClose: () => void;
+}) {
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [open, onClose]);
+
+  if (!open) return null;
+  return (
+    <div className="fixed inset-0 z-40 md:hidden" role="dialog" aria-modal="true" aria-label="Project navigation">
+      <div className="absolute inset-0 bg-black/40" onClick={onClose} aria-hidden="true" />
+      <div className="absolute inset-y-0 left-0 flex w-64 flex-col border-r bg-sidebar shadow-xl">
+        <div className="flex h-14 items-center justify-between border-b px-3">
+          <span className="text-sm font-semibold">Project menu</span>
+          <Button type="button" variant="ghost" size="sm" onClick={onClose} aria-label="Close project navigation">
+            <X className="size-4" />
+          </Button>
+        </div>
+        <div className="flex-1 overflow-y-auto">
+          <ProjectNavList
+            projectId={projectId}
+            view={view}
+            onNavigate={(id, next) => {
+              onClose();
+              onNavigate(id, next);
+            }}
+          />
+        </div>
+      </div>
+    </div>
   );
 }
 

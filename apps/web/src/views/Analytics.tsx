@@ -13,13 +13,8 @@ import { pageTraffic, type AnalyticsPageTrafficReport } from '../lib/analytics';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { PageHeader } from '@/components/ui/page-header';
+import { DEFAULT_PERIOD_DAYS, PeriodSelector, periodLabel } from '@/components/ui/period-selector';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-
-const PERIODS: Array<{ days: number; label: string }> = [
-  { days: 7, label: 'Last 7 days' },
-  { days: 28, label: 'Last 28 days' },
-  { days: 90, label: 'Last 90 days' },
-];
 
 /** Large, readable integer (12000 -> "12,000"). */
 function fmtCount(v: unknown): string {
@@ -27,7 +22,7 @@ function fmtCount(v: unknown): string {
 }
 
 export function Analytics({ projectId, onOpenSettings }: { projectId: string; onOpenSettings?: () => void }) {
-  const [days, setDays] = useState(28);
+  const [days, setDays] = useState(DEFAULT_PERIOD_DAYS);
   const report = useAsync<AnalyticsPageTrafficReport>(() => pageTraffic(projectId, days), [projectId, days]);
 
   const data = report.data;
@@ -36,18 +31,7 @@ export function Analytics({ projectId, onOpenSettings }: { projectId: string; on
     <div className="grid gap-5">
       <PageHeader title="Page traffic" description="Which pages actually receive traffic, from Google Analytics 4." />
 
-      <div className="flex flex-wrap gap-2">
-        {PERIODS.map((p) => (
-          <Button
-            key={p.days}
-            size="sm"
-            variant={days === p.days ? 'default' : 'outline'}
-            onClick={() => setDays(p.days)}
-          >
-            {p.label}
-          </Button>
-        ))}
-      </div>
+      <PeriodSelector value={days} onChange={setDays} />
 
       <Card>
         <CardHeader>
@@ -55,7 +39,7 @@ export function Analytics({ projectId, onOpenSettings }: { projectId: string; on
             {data?.property ? data.property.property_name : 'Page traffic'}
             {data?.property?.property_url && <span className="ml-2 text-sm font-normal text-muted-foreground">{data.property.property_url}</span>}
           </CardTitle>
-          {data && <p className="text-sm text-muted-foreground">{PERIODS.find((p) => p.days === data.period.days)?.label ?? `Last ${data.period.days} days`}</p>}
+          {data && <p className="text-sm text-muted-foreground">{periodLabel(data.period.days)}</p>}
         </CardHeader>
         <CardContent>
           {report.loading ? (

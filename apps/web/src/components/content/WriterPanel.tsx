@@ -253,9 +253,15 @@ interface WriterPanelProps {
   defaultTopic: string;
   /** Poll cadence while an approved run is writing (tests override this). */
   pollMs?: number;
+  /**
+   * Adopt a review-ready article into the editor for this same draft. Optional
+   * because the panel is also used where no editor is mounted; when absent the
+   * result stays preview-only.
+   */
+  onUseArticle?: (review: NonNullable<WriterRunDto['review']>) => void;
 }
 
-export function WriterPanel({ projectId, contentId, defaultTopic, pollMs = 1200 }: WriterPanelProps) {
+export function WriterPanel({ projectId, contentId, defaultTopic, pollMs = 1200, onUseArticle }: WriterPanelProps) {
   const [instruction, setInstruction] = useState('');
   const [run, setRun] = useState<WriterRunDto | null>(null);
   const [startBusy, setStartBusy] = useState(false);
@@ -649,7 +655,7 @@ export function WriterPanel({ projectId, contentId, defaultTopic, pollMs = 1200 
 
       {status === 'review_ready' && review && plan && (
         <>
-          <ReviewResult review={review} planTitle={plan.title} revisionCount={run.revisionCount} />
+          <ReviewResult review={review} planTitle={plan.title} revisionCount={run.revisionCount} onUseArticle={onUseArticle} />
           <ResearchControls evidence={evidence} busy={actionBusy || researchBusy || agentRunning} onGather={() => void gatherResearch()} />
           <IntelligenceControls
             intelligence={intelligence}
@@ -701,7 +707,7 @@ export function WriterPanel({ projectId, contentId, defaultTopic, pollMs = 1200 
       )}
 
       {status === 'completed' && review && plan && (
-        <ReviewResult review={review} planTitle={plan.title} revisionCount={run.revisionCount} />
+        <ReviewResult review={review} planTitle={plan.title} revisionCount={run.revisionCount} onUseArticle={onUseArticle} />
       )}
 
       {status === 'rejected' && (
@@ -791,15 +797,18 @@ function PlanReview({
 }
 
 /** Review-ready result of a run: canonical document + deterministic SEO
- *  evaluation. Preview only - never auto-saved or auto-published. */
+ *  evaluation. Preview only until the user explicitly adopts it through
+ *  `onUseArticle`; it is never auto-saved or auto-published. */
 function ReviewResult({
   review,
   planTitle,
   revisionCount,
+  onUseArticle,
 }: {
   review: NonNullable<WriterRunDto['review']>;
   planTitle: string;
   revisionCount?: number;
+  onUseArticle?: (review: NonNullable<WriterRunDto['review']>) => void;
 }) {
   const passed = review.seo.checks.filter((c) => c.status === 'pass').length;
   return (
@@ -821,9 +830,20 @@ function ReviewResult({
       <div className="rounded-lg border bg-card p-4">
         <div className="article-body" dangerouslySetInnerHTML={{ __html: sanitizeArticleHtml(review.contentHtml) }} />
       </div>
-      <p className="text-xs text-muted-foreground">
-        To use this draft in the editor you would explicitly apply it as content - this panel does not do that for you.
-      </p>
+      {onUseArticle ? (
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <Button size="sm" onClick={() => onUseArticle(review)}>
+            Use article
+          </Button>
+          <span className="text-xs text-muted-foreground">
+            Loads this article into the open draft so you can edit it; the existing autosave persists it.
+          </span>
+        </div>
+      ) : (
+        <p className="text-xs text-muted-foreground">
+          To use this draft in the editor you would explicitly apply it as content - this panel does not do that for you.
+        </p>
+      )}
     </div>
   );
 }

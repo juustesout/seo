@@ -21,6 +21,7 @@ import type {
   TopicRecommendationsDto,
 } from '@seo/contracts';
 import { Keywords } from './Keywords';
+import { DEFAULT_PERIOD_DAYS, periodRange } from '@/components/ui/period-selector';
 
 const { apiMock, ApiRequestErrorMock, jobsState } = vi.hoisted(() => {
   class ApiRequestErrorMock extends Error {
@@ -75,7 +76,10 @@ describe('Keywords view - GSC read states', () => {
     expect(screen.getByText('40,000')).toBeTruthy();
     expect(screen.getByText('3.00%')).toBeTruthy();
     expect(screen.getByText('4.3')).toBeTruthy();
-    expect(apiMock.api).toHaveBeenCalledWith(`/projects/${PROJECT}/gsc/keywords`);
+    const { startDate, endDate } = periodRange(DEFAULT_PERIOD_DAYS);
+    expect(apiMock.api).toHaveBeenCalledWith(
+      `/projects/${PROJECT}/gsc/keywords?startDate=${startDate}&endDate=${endDate}`,
+    );
   });
 
   it('prompts to connect Search Console when no property is linked', async () => {
@@ -107,7 +111,7 @@ describe('Keywords view - Research (KW2)', () => {
     get?: () => Promise<KeywordResearchRunDto>;
   }) {
     apiMock.api.mockImplementation(async (path: string, opts?: { method?: string }) => {
-      if (path.endsWith('/gsc/keywords')) return handlers.gsc ?? EMPTY_GSC;
+      if (path.includes('/gsc/keywords')) return handlers.gsc ?? EMPTY_GSC;
       if (path.endsWith('/keyword/research') && opts?.method === 'POST') {
         return handlers.post ? handlers.post() : Promise.reject(new Error('no post handler'));
       }
@@ -163,7 +167,7 @@ describe('Keywords view - Research (KW2)', () => {
   it('submits a trimmed seed, then shows the running state', async () => {
     let posted: Record<string, unknown> | null = null;
     apiMock.api.mockImplementation(async (path: string, opts?: { method?: string; body?: unknown }) => {
-      if (path.endsWith('/gsc/keywords')) return EMPTY_GSC;
+      if (path.includes('/gsc/keywords')) return EMPTY_GSC;
       if (path.endsWith('/keyword/research') && opts?.method === 'POST') {
         posted = opts.body as Record<string, unknown>;
         return STARTED;
@@ -281,7 +285,7 @@ describe('Keywords view - Competitors (KW3)', () => {
 
   it('blocks viewers from running competitor research', async () => {
     apiMock.api.mockImplementation(async (path: string) => {
-      if (path.endsWith('/gsc/keywords')) return EMPTY_GSC;
+      if (path.includes('/gsc/keywords')) return EMPTY_GSC;
       if (path.endsWith('/keyword/competitors/snapshot')) return null;
       throw new Error(`unexpected ${path}`);
     });
@@ -292,7 +296,7 @@ describe('Keywords view - Competitors (KW3)', () => {
 
   it('discovers candidates, then shows the selected gap keywords', async () => {
     apiMock.api.mockImplementation(async (path: string, opts?: { method?: string; body?: unknown }) => {
-      if (path.endsWith('/gsc/keywords')) return EMPTY_GSC;
+      if (path.includes('/gsc/keywords')) return EMPTY_GSC;
       if (path.endsWith('/keyword/competitors') && opts?.method === 'POST') {
         return { jobId: DISCOVER_JOB, status: 'queued', mode: 'discover', domain: 'example.com' };
       }
@@ -334,7 +338,7 @@ describe('Keywords view - Competitors (KW3)', () => {
 
   it('collapses the candidate list to the active set and re-opens it on demand', async () => {
     apiMock.api.mockImplementation(async (path: string) => {
-      if (path.endsWith('/gsc/keywords')) return EMPTY_GSC;
+      if (path.includes('/gsc/keywords')) return EMPTY_GSC;
       if (path.endsWith('/keyword/competitors/snapshot')) {
         return {
           id: 'dsnap-1',
@@ -366,7 +370,7 @@ describe('Keywords view - Competitors (KW3)', () => {
 
   it('shows the honest server message when the project has no domain', async () => {
     apiMock.api.mockImplementation(async (path: string, opts?: { method?: string }) => {
-      if (path.endsWith('/gsc/keywords')) return EMPTY_GSC;
+      if (path.includes('/gsc/keywords')) return EMPTY_GSC;
       if (path.endsWith('/keyword/competitors') && opts?.method === 'POST') {
         throw new ApiRequestErrorMock('bad_request', 'Add a domain to this project before finding competitors', 400);
       }
@@ -383,7 +387,7 @@ describe('Keywords view - Competitors (KW3)', () => {
 
   it('maps a not-configured server error to an honest message', async () => {
     apiMock.api.mockImplementation(async (path: string, opts?: { method?: string }) => {
-      if (path.endsWith('/gsc/keywords')) return EMPTY_GSC;
+      if (path.includes('/gsc/keywords')) return EMPTY_GSC;
       if (path.endsWith('/keyword/competitors') && opts?.method === 'POST') {
         throw new ApiRequestErrorMock('not_configured', 'No dataforseo provider is registered', 503);
       }
@@ -442,7 +446,7 @@ describe('Keywords view - Expand (KW4)', () => {
   it('runs an expansion, shows partial method status, and saves a selected keyword', async () => {
     let savedBody: Record<string, unknown> | null = null;
     apiMock.api.mockImplementation(async (path: string, opts?: { method?: string; body?: unknown }) => {
-      if (path.endsWith('/gsc/keywords')) return EMPTY_GSC;
+      if (path.includes('/gsc/keywords')) return EMPTY_GSC;
       if (path.endsWith('/keyword/expansion') && opts?.method === 'POST') {
         return { jobId: JOB, status: 'queued', seeds: ['seo tools'], methods: ['suggestions', 'related'] };
       }
@@ -476,7 +480,7 @@ describe('Keywords view - Expand (KW4)', () => {
 
   it('maps a not-configured server error to an honest message', async () => {
     apiMock.api.mockImplementation(async (path: string, opts?: { method?: string }) => {
-      if (path.endsWith('/gsc/keywords')) return EMPTY_GSC;
+      if (path.includes('/gsc/keywords')) return EMPTY_GSC;
       if (path.endsWith('/keyword/expansion') && opts?.method === 'POST') {
         throw new ApiRequestErrorMock('not_configured', 'No dataforseo provider is registered', 503);
       }
@@ -548,7 +552,7 @@ describe('Keywords view - Opportunities (KW5/KW5.1)', () => {
     article?: (opts?: { method?: string; body?: unknown }) => unknown,
   ) {
     apiMock.api.mockImplementation(async (path: string, opts?: { method?: string; body?: unknown }) => {
-      if (path.endsWith('/gsc/keywords')) return EMPTY_GSC;
+      if (path.includes('/gsc/keywords')) return EMPTY_GSC;
       if (path.endsWith('/keyword/competitors/snapshot')) return discoverySnapshot();
       if (path.includes('/opportunities/topics/article') && opts?.method === 'POST') {
         return article ? article(opts) : { job: { id: 'job-1' } };
@@ -569,7 +573,7 @@ describe('Keywords view - Opportunities (KW5/KW5.1)', () => {
 
   it('prompts to select competitors before reading any snapshot', async () => {
     apiMock.api.mockImplementation(async (path: string) => {
-      if (path.endsWith('/gsc/keywords')) return EMPTY_GSC;
+      if (path.includes('/gsc/keywords')) return EMPTY_GSC;
       if (path.includes('/keyword/opportunities')) return { snapshot: null, opportunities: [], total: 0, count: 0 };
       throw new Error(`unexpected ${path}`);
     });
@@ -790,7 +794,7 @@ describe('Keywords view - Compare (KW5.1)', () => {
 
   async function selectAndCompare() {
     apiMock.api.mockImplementation(async (path: string) => {
-      if (path.endsWith('/gsc/keywords')) return EMPTY_GSC;
+      if (path.includes('/gsc/keywords')) return EMPTY_GSC;
       if (path.endsWith('/keyword/competitors/snapshot')) return discoverySnapshot();
       if (path.includes('/keyword/opportunities')) return compareData();
       throw new Error(`unexpected ${path}`);
@@ -804,7 +808,7 @@ describe('Keywords view - Compare (KW5.1)', () => {
 
   it('asks for a selection before comparing', async () => {
     apiMock.api.mockImplementation(async (path: string) => {
-      if (path.endsWith('/gsc/keywords')) return EMPTY_GSC;
+      if (path.includes('/gsc/keywords')) return EMPTY_GSC;
       if (path.endsWith('/keyword/competitors/snapshot')) return null;
       throw new Error(`unexpected ${path}`);
     });
@@ -882,7 +886,7 @@ describe('Keywords view - Topics (KW6)', () => {
     coreTopics?: unknown;
   }) {
     apiMock.api.mockImplementation(async (path: string, opts?: { method?: string; body?: unknown }) => {
-      if (path.endsWith('/gsc/keywords')) return EMPTY_GSC;
+      if (path.includes('/gsc/keywords')) return EMPTY_GSC;
       if (path.endsWith('/keyword/competitors/snapshot')) return discoverySnapshot();
       if (path.includes('/opportunities/topics/article') && opts?.method === 'POST') {
         return handlers.article ? handlers.article(opts) : { job: { id: 'job-1' } };
@@ -902,7 +906,7 @@ describe('Keywords view - Topics (KW6)', () => {
 
   it('prompts to select competitors before reading any snapshot', async () => {
     apiMock.api.mockImplementation(async (path: string) => {
-      if (path.endsWith('/gsc/keywords')) return EMPTY_GSC;
+      if (path.includes('/gsc/keywords')) return EMPTY_GSC;
       throw new Error(`unexpected ${path}`);
     });
 
@@ -1077,7 +1081,7 @@ describe('Keywords view - GSC sync', () => {
     try {
       let keywordCalls = 0;
       apiMock.api.mockImplementation(async (path: string) => {
-        if (String(path).endsWith('/gsc/keywords')) keywordCalls += 1;
+        if (String(path).includes('/gsc/keywords')) keywordCalls += 1;
         return LINKED_EMPTY;
       });
       jobsState.payload = [

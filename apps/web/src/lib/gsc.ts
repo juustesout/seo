@@ -21,3 +21,30 @@ export async function googleConnectUrl(): Promise<string> {
   const r = await api<{ url: string }>('/account/gsc/connect-url');
   return r.url;
 }
+
+/** The account's GSC authorization state (shape mirrors the API DTO). */
+export interface GscConnection {
+  connected: boolean;
+  integration_id: string | null;
+  status: string | null;
+  last_sync_at: string | null;
+  error: string | null;
+}
+
+export interface GscLinkedProperty {
+  property_id: string;
+  site_url: string;
+  is_primary: boolean;
+}
+
+/** Per-project GSC state: account connection + this project's linked property. */
+export interface ProjectGscState {
+  google: GscConnection;
+  current: GscLinkedProperty | null;
+  candidates: unknown[];
+}
+
+/** Per-project Search Console state (cheap; no live Google call). */
+export function projectGscState(projectId: string): Promise<ProjectGscState> {
+  return api<ProjectGscState>(`/projects/${projectId}/gsc/state`);
+}

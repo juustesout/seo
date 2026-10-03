@@ -16,13 +16,8 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { PageHeader } from '@/components/ui/page-header';
+import { DEFAULT_PERIOD_DAYS, PeriodSelector } from '@/components/ui/period-selector';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-
-const PERIODS: Array<{ days: number; label: string }> = [
-  { days: 7, label: 'Last 7 days' },
-  { days: 28, label: 'Last 28 days' },
-  { days: 90, label: 'Last 90 days' },
-];
 
 /** Currency amount with the customer's ISO code when Google reports one. */
 function fmtCost(v: unknown, currency: string | null): string {
@@ -37,7 +32,7 @@ function fmtPct(v: unknown): string {
 }
 
 export function AdsIntelligence({ projectId, onOpenSettings }: { projectId: string; onOpenSettings?: () => void }) {
-  const [days, setDays] = useState(28);
+  const [days, setDays] = useState(DEFAULT_PERIOD_DAYS);
   const [filterInput, setFilterInput] = useState('');
   const [filter, setFilter] = useState('');
   const report = useAsync<AdsReport>(() => adsReport(projectId, days, filter || undefined), [projectId, days, filter]);
@@ -50,16 +45,7 @@ export function AdsIntelligence({ projectId, onOpenSettings }: { projectId: stri
       <PageHeader title="Paid search" description="Search terms and keywords receiving paid traffic, from Google Ads." />
 
       <div className="flex flex-wrap items-center gap-2">
-        {PERIODS.map((p) => (
-          <Button
-            key={p.days}
-            size="sm"
-            variant={days === p.days ? 'default' : 'outline'}
-            onClick={() => setDays(p.days)}
-          >
-            {p.label}
-          </Button>
-        ))}
+        <PeriodSelector value={days} onChange={setDays} />
         <form
           className="flex items-center gap-2"
           onSubmit={(e) => {

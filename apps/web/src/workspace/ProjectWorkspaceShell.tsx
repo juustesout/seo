@@ -465,7 +465,11 @@ function WorkspaceBody({
         />
       )}
       {activeMode === 'designer' && (
-        <DesignerMode onApplyProposal={applyDesignerProposal} onReviewOpenChange={setDesignerReviewOpen} />
+        <DesignerMode
+          onApplyProposal={applyDesignerProposal}
+          onOpenEditor={openInEditor}
+          onReviewOpenChange={setDesignerReviewOpen}
+        />
       )}
     </div>
   );

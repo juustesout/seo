@@ -49,6 +49,12 @@ export interface DesignerModeProps {
    */
   onApplyProposal?: (proposal: DesignerProposal, targetDocumentId: string) => void;
   /**
+   * Hands a newly created draft (persisted from a reviewed creation-mode
+   * proposal) to the shell, which switches the shared session to it and opens
+   * the editor. Mirrors `ComposerMode`; the Designer owns no document identity.
+   */
+  onOpenEditor?: (contentId: string) => void;
+  /**
    * Reports whether the Designer has a proposal review open (R5.5.3). The shell
    * uses it as a navigation hold so a mode switch cannot silently discard the
    * review; no proposal data crosses this boundary.
@@ -56,7 +62,7 @@ export interface DesignerModeProps {
   onReviewOpenChange?: (open: boolean) => void;
 }
 
-export function DesignerMode({ pollMs, onApplyProposal, onReviewOpenChange }: DesignerModeProps) {
+export function DesignerMode({ pollMs, onApplyProposal, onOpenEditor, onReviewOpenChange }: DesignerModeProps) {
   const { projectId, role, doc, title, session, lifecycle, err } = useWorkspaceSessionContext();
 
   // The live document in canonical form, or null when the editor document is a
@@ -87,6 +93,7 @@ export function DesignerMode({ pollMs, onApplyProposal, onReviewOpenChange }: De
         documentStatus={lifecycle.status}
         currentDocument={currentDocument}
         onApplyProposal={onApplyProposal}
+        onOpenEditor={onOpenEditor}
         onReviewOpenChange={onReviewOpenChange}
       />
     </div>

@@ -409,6 +409,42 @@ describe('WriterPanel - W8 review session', () => {
   });
 });
 
+describe('WriterPanel - article adoption', () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+    apiMock.api.mockReset();
+  });
+
+  it('hands the review to onUseArticle when the reader chooses to use the article', async () => {
+    window.localStorage.setItem(BOOKMARK_KEY, 'run-1');
+    fakeApi(run({ status: 'review_ready', review: REVIEW }));
+    const onUseArticle = vi.fn();
+    render(
+      <WriterPanel
+        projectId={PROJECT}
+        contentId={CONTENT}
+        defaultTopic="On-Page SEO"
+        onUseArticle={onUseArticle}
+      />,
+    );
+
+    await screen.findByText(/review-ready draft/i);
+    fireEvent.click(screen.getByRole('button', { name: /use article/i }));
+
+    expect(onUseArticle).toHaveBeenCalledTimes(1);
+    expect(onUseArticle.mock.calls[0]?.[0]).toEqual(REVIEW);
+  });
+
+  it('does not offer adoption when no host is listening', async () => {
+    window.localStorage.setItem(BOOKMARK_KEY, 'run-1');
+    fakeApi(run({ status: 'review_ready', review: REVIEW }));
+    render(<WriterPanel projectId={PROJECT} contentId={CONTENT} defaultTopic="On-Page SEO" />);
+
+    await screen.findByText(/review-ready draft/i);
+    expect(screen.queryByRole('button', { name: /use article/i })).toBeNull();
+  });
+});
+
 describe('WriterPanel - W10.1 Section Magic', () => {
   beforeEach(() => {
     window.localStorage.clear();

@@ -17,6 +17,7 @@ import { requireAuth } from '../middleware.js';
 import { asyncHandler } from '../asyncHandler.js';
 import { ApiError } from '../../apiErrors.js';
 import { parseProjectId } from './utils.js';
+import { readProjectSettings, writeProjectSettings } from '../../services/projectSettings.js';
 
 export const seoRouter: Router = Router({ mergeParams: true });
 
@@ -104,9 +105,16 @@ seoRouter.get(
 
     const topQueries = (queries as unknown as Array<Record<string, unknown>> | null) ?? [];
 
+    // First-value onboarding is persisted in the project's existing settings
+    // bag (no new table): the dashboard reports whether it was dismissed so the
+    // client does not rely on browser-local state alone.
+    const settings = await readProjectSettings(container, projectId);
+    const onboarding = (settings.onboarding ?? {}) as { dismissed?: boolean };
+
     res.json({
       data: {
         project_id: projectId,
+        onboarding: { dismissed: onboarding.dismissed === true },
         performance: { last_7d: perf7.total, last_28d: perf28.total, impressions_28d: impressions28.total, days: perf28.days },
         counts: { keywords: keywordCount, pages: pageCount, ranking_rows_28d: rankCount.count ?? 0 },
         top_queries: topQueries.slice(0, 5).map((q) => ({
@@ -126,6 +134,20 @@ seoRouter.get(
         },
       },
     });
+  }),
+);
+
+/** Dismiss this project's first-value onboarding (editor+). */
+seoRouter.post(
+  '/onboarding/dismiss',
+  asyncHandler(async (req, res) => {
+    const projectId = parseProjectId(req);
+    const { container, user } = req;
+    await container.access.requireRole(user!.sub, projectId, 'editor');
+    await writeProjectSettings(container, projectId, {
+      onboarding: { dismissed: true, dismissed_at: new Date().toISOString() },
+    });
+    res.json({ data: { ok: true } });
   }),
 );
 

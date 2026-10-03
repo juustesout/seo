@@ -58,6 +58,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { PageHeader } from '@/components/ui/page-header';
+import { DEFAULT_PERIOD_DAYS, PeriodSelector, periodLabel, periodRange } from '@/components/ui/period-selector';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Textarea } from '@/components/ui/textarea';
 
@@ -2027,9 +2028,13 @@ const KEYWORDS_TABS: Array<{ id: KeywordsTab; label: string }> = [
 export function Keywords({ projectId, role }: { projectId: string; role: string }) {
   const [tab, setTab] = useState<KeywordsTab>('mine');
   const [selectedCompetitors, setSelectedCompetitors] = useState<string[]>([]);
+  const [gscDays, setGscDays] = useState(DEFAULT_PERIOD_DAYS);
   const { data, error, loading, reload: reloadKeywords } = useAsync<ProjectKeywordsDto>(
-    () => api(`/projects/${projectId}/gsc/keywords`),
-    [projectId],
+    () => {
+      const { startDate, endDate } = periodRange(gscDays);
+      return api(`/projects/${projectId}/gsc/keywords?startDate=${startDate}&endDate=${endDate}`);
+    },
+    [projectId, gscDays],
   );
   const canSync = canStartResearch(role);
   const { jobs, reload: reloadJobs } = useJobs(projectId, true);
@@ -2124,11 +2129,13 @@ export function Keywords({ projectId, role }: { projectId: string; role: string 
       )}
 
       {tab === 'mine' && (
-        <Card>
+        <div className="grid gap-4">
+          <PeriodSelector value={gscDays} onChange={setGscDays} />
+          <Card>
           <CardHeader>
             <CardTitle>My keywords</CardTitle>
             <CardDescription>
-              Queries your site is seen for in Google Search Console, and how they perform over the last 28 days.
+              Queries your site is seen for in Google Search Console, and how they perform over the {periodLabel(gscDays).toLowerCase()}.
             </CardDescription>
             {canSync && data?.propertyId && data.keywords.length > 0 && !activeSync && (
               <CardAction>
@@ -2188,6 +2195,7 @@ export function Keywords({ projectId, role }: { projectId: string; role: string 
             )}
           </CardContent>
         </Card>
+        </div>
       )}
     </div>
   );

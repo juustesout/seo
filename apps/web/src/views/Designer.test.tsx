@@ -360,6 +360,65 @@ describe('Designer', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Creation-mode adoption: a creation proposal becomes an editable draft
+// ---------------------------------------------------------------------------
+
+const ADOPTED_ID = '44444444-4444-4444-8444-444444444444';
+
+describe('Designer creation adoption', () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+    apiMock.api.mockReset();
+  });
+
+  function creationSucceeded(): Call[] {
+    const calls: Call[] = [];
+    apiMock.api.mockImplementation(async (path: string, opts: { method?: string; body?: unknown } = {}) => {
+      const method = opts.method ?? 'GET';
+      calls.push({ path, method, body: opts.body });
+      if (method === 'POST' && path === RUNS_PATH) {
+        return { run: run({ status: 'succeeded', result: proposal('Adoptable body') }), reused: false };
+      }
+      if (method === 'POST' && path === `/projects/${PROJECT}/content`) return { id: ADOPTED_ID };
+      return run({ status: 'succeeded', result: proposal('Adoptable body') });
+    });
+    return calls;
+  }
+
+  function startCreate() {
+    fireEvent.change(screen.getByLabelText('What should the Designer create?'), {
+      target: { value: 'Create a pricing page' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Start design run' }));
+  }
+
+  it('opens a creation proposal as one new draft and hands its id to the shell', async () => {
+    const calls = creationSucceeded();
+    const onOpenEditor = vi.fn();
+    render(<Designer projectId={PROJECT} role="editor" pollMs={5} onOpenEditor={onOpenEditor} />);
+    startCreate();
+    await screen.findByText('Adoptable body');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open in editor' }));
+
+    await waitFor(() => expect(onOpenEditor).toHaveBeenCalledWith(ADOPTED_ID));
+    const create = calls.find((c) => c.method === 'POST' && c.path === `/projects/${PROJECT}/content`);
+    expect(create).toBeTruthy();
+    expect(create!.body).toMatchObject({ status: 'draft' });
+    expect((create!.body as { content_json?: unknown }).content_json).toBeTruthy();
+  });
+
+  it('does not offer adoption when no host can open the draft', async () => {
+    creationSucceeded();
+    render(<Designer projectId={PROJECT} role="editor" pollMs={5} />);
+    startCreate();
+    await screen.findByText('Adoptable body');
+
+    expect(screen.queryByRole('button', { name: 'Open in editor' })).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // R5.5.1: edit the shared workspace document (no own document read)
 // ---------------------------------------------------------------------------
 

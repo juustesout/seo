@@ -8,8 +8,10 @@
  * appears when no GSC property is attached yet. Background jobs are listed and
  * polled while busy via lib/ui useJobs.
  */
+import { useState } from 'react';
 import { api } from '../lib/api';
 import { useAsync, fmtNum, fmtDate, useJobs, JobTable, Empty } from '../lib/ui';
+import { OnboardingChecklist } from '@/components/onboarding/OnboardingChecklist';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -17,6 +19,7 @@ import { PageHeader } from '@/components/ui/page-header';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 
 interface Dash {
+  onboarding?: { dismissed: boolean };
   performance: { last_7d: number; last_28d: number; impressions_28d: number; days: number };
   counts: { keywords: number; pages: number; ranking_rows_28d: number };
   top_queries: Array<{ query: string; clicks: number; impressions: number; position: number }>;
@@ -52,12 +55,23 @@ function GscAttachCta({ projectId, onOpenSettings }: { projectId: string; onOpen
  * `onOpenSettings` deep-links the "attach GSC property / set up Search
  * Console" CTA into the project's Settings view.
  */
-export function Dashboard({ projectId, onOpenSettings }: { projectId: string; onOpenSettings: () => void }) {
+export function Dashboard({
+  projectId,
+  role,
+  onOpenSettings,
+  onOpenView,
+}: {
+  projectId: string;
+  role: string;
+  onOpenSettings: () => void;
+  onOpenView: (view: string, sub?: string) => void;
+}) {
   const { data, error, loading, reload } = useAsync<Dash>(
     () => api(`/projects/${projectId}/dashboard`),
     [projectId],
   );
   const { jobs, busy } = useJobs(projectId, Boolean(data));
+  const [dismissedLocal, setDismissedLocal] = useState(false);
 
   if (loading && !data) return <p className="text-sm text-muted-foreground">Loading…</p>;
   if (error) {
@@ -97,6 +111,15 @@ export function Dashboard({ projectId, onOpenSettings }: { projectId: string; on
         />
         <GscAttachCta projectId={projectId} onOpenSettings={onOpenSettings} />
       </div>
+
+      <OnboardingChecklist
+        projectId={projectId}
+        role={role}
+        hasSearchData={data.counts.keywords > 0 || data.top_queries.length > 0}
+        dismissed={data.onboarding?.dismissed === true || dismissedLocal}
+        onDismissed={() => setDismissedLocal(true)}
+        onOpenView={onOpenView}
+      />
 
       <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
         {stats.map((s) => (
