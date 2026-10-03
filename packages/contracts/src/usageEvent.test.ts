@@ -54,6 +54,7 @@ describe('usage vocabulary', () => {
     expect(USAGE_UNITS).toContain('serp_request');
     expect(USAGE_UNITS).toContain('gsc_request');
     expect(USAGE_UNITS).toContain('ga4_request');
+    expect(USAGE_UNITS).toContain('ads_request');
     expect(USAGE_UNITS).toContain('publish_attempt');
     expect(USAGE_UNITS).toContain('job');
     expect(isValidUsageUnit('image_generation')).toBe(true);

@@ -12,6 +12,8 @@
  *  - GET /ga4/callback   - account-scoped Google Analytics (GA4) connect. Same
  *    signed-state handshake, stored under the account's separate 'ga4'
  *    integration so the GSC connection is never altered.
+ *  - GET /ads/callback   - account-scoped Google Ads connect. Same machinery,
+ *    stored under the account's separate 'ads' integration.
  *  - GET /publisher/callback - generic publisher connect-by-consent (e.g. X);
  *    all flow logic lives in publisherOAuthService so no vendor logic is here.
  *
@@ -142,6 +144,12 @@ oauthRouter.get(
 oauthRouter.get(
   '/ga4/callback',
   asyncHandler((req, res) => handleGoogleCallback(req, res, googleOAuthProvider('ga4'))),
+);
+
+/** Google Ads consent callback (account-scoped connects only). */
+oauthRouter.get(
+  '/ads/callback',
+  asyncHandler((req, res) => handleGoogleCallback(req, res, googleOAuthProvider('ads'))),
 );
 
 /**

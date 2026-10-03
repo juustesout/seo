@@ -1568,6 +1568,13 @@ begin
   values
     (v_project, null, 'google', 'ga4', 'page_traffic', 1, 'ga4_request', true, 'smoke-usage-6');
 
+  -- A Google Ads request under the P5 vocabulary extension: the `google`
+  -- category and `ads_request` unit must be accepted.
+  insert into public.seo_usage_events
+    (project_id, user_id, category, provider, operation, quantity, unit, success, source_id)
+  values
+    (v_project, null, 'google', 'ads', 'search_terms', 1, 'ads_request', true, 'smoke-usage-7');
+
   -- An account-scoped event with no project.
   insert into public.seo_usage_events
     (account_id, user_id, category, provider, operation, quantity, unit, success, source_id, idempotency_key)
@@ -1686,12 +1693,12 @@ begin
   -- Aggregation RPC: fixed shape, membership enforced, raw ledger never returned.
   select coalesce(sum(quantity), 0), count(*) into v_total, v_groups
   from public.seo_usage_totals('00000000-0000-0000-0000-000000000001', v_project, null);
-  if v_total <> 102 then raise exception 'smoke: usage project total was % not 102', v_total; end if;
+  if v_total <> 103 then raise exception 'smoke: usage project total was % not 103', v_total; end if;
   if v_groups < 2 then raise exception 'smoke: usage aggregate returned too few groups'; end if;
 
   select coalesce(sum(quantity), 0) into v_total
   from public.seo_usage_totals('00000000-0000-0000-0000-000000000001', null, v_account);
-  if v_total <> 107 then raise exception 'smoke: usage account total was % not 107', v_total; end if;
+  if v_total <> 108 then raise exception 'smoke: usage account total was % not 108', v_total; end if;
 
   begin
     perform 1 from public.seo_usage_totals('00000000-0000-0000-0000-000000000002', v_project, null);
@@ -1915,6 +1922,107 @@ begin
 end $$;
 SQL
 echo "   smoke: analytics bindings are server-write only (read-only RLS OK)"
+
+echo "==> smoke test: Google Ads project binding (phase 5) + RLS isolation"
+PSQL -d "${DB_NAME}" <<'SQL'
+do $$
+declare
+  v_project uuid;
+  v_owner   uuid := '00000000-0000-0000-0000-000000000001';
+  v_denied  boolean;
+begin
+  select id into v_project from public.seo_projects where slug = 'demo' limit 1;
+  if v_project is null then raise exception 'smoke: demo project missing for ads binding'; end if;
+
+  -- Bind a real Google Ads customer to the project.
+  insert into public.seo_project_ads (project_id, customer_id, customer_name, currency_code, login_customer_id, created_by)
+  values (v_project, '1234567890', 'Acme Ads', 'USD', null, v_owner);
+
+  if not exists (select 1 from public.seo_project_ads where project_id = v_project and customer_id = '1234567890') then
+    raise exception 'smoke: ads binding was not stored';
+  end if;
+
+  -- Replacing the customer upserts on the project primary key.
+  insert into public.seo_project_ads (project_id, customer_id, customer_name, created_by)
+  values (v_project, '9998887776', 'Renamed', v_owner)
+  on conflict (project_id) do update
+    set customer_id = excluded.customer_id, customer_name = excluded.customer_name;
+  if (select customer_id from public.seo_project_ads where project_id = v_project) <> '9998887776' then
+    raise exception 'smoke: ads customer replacement failed';
+  end if;
+
+  -- One customer per project: a second plain insert must conflict.
+  v_denied := false;
+  begin
+    insert into public.seo_project_ads (project_id, customer_id, customer_name)
+    values (v_project, '5550001112', 'Another');
+  exception when unique_violation then v_denied := true; end;
+  if not v_denied then raise exception 'smoke: a project was allowed two ads customers'; end if;
+
+  -- A malformed customer id is rejected by the format check.
+  v_denied := false;
+  begin
+    insert into public.seo_project_ads (project_id, customer_id, customer_name)
+    values (gen_random_uuid(), 'customers/1', 'bad');
+  exception when check_violation then v_denied := true; end;
+  if not v_denied then raise exception 'smoke: invalid ads customer id was accepted'; end if;
+
+  raise notice 'smoke: ads binding + replacement + format check OK';
+end $$;
+SQL
+
+# RLS + write-privilege boundary: members may read, nobody may write via PostgREST.
+ADS_MEMBER_COUNT="$(PSQL -d "${DB_NAME}" -t -A <<'SQL'
+grant usage on schema public to authenticated;
+grant select on public.seo_project_ads to authenticated;
+set role authenticated;
+set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-000000000001"}';
+select count(*) from public.seo_project_ads;
+SQL
+)"
+if [ -z "${ADS_MEMBER_COUNT}" ] || [ "${ADS_MEMBER_COUNT}" = "0" ]; then
+  echo "!! RLS: project owner could not read the project ads binding (${ADS_MEMBER_COUNT})" >&2
+  exit 1
+fi
+echo "   smoke: project member can read the ads binding (RLS OK)"
+
+ADS_LEAK_COUNT="$(PSQL -d "${DB_NAME}" -t -A <<'SQL'
+grant usage on schema public to authenticated;
+grant select on public.seo_project_ads to authenticated;
+set role authenticated;
+set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-000000000002"}';
+select count(*) from public.seo_project_ads;
+SQL
+)"
+if [ -z "${ADS_LEAK_COUNT}" ] || [ "${ADS_LEAK_COUNT}" != "0" ]; then
+  echo "!! RLS leak: non-member read ${ADS_LEAK_COUNT} ads bindings" >&2
+  exit 1
+fi
+echo "   smoke: non-member cannot read a foreign ads binding (RLS isolation OK)"
+
+PSQL -d "${DB_NAME}" -t -A <<'SQL' >/dev/null
+do $$
+declare
+  v_write_policies int;
+begin
+  -- The API/worker write with the service role; there is deliberately no
+  -- insert/update/delete policy, so browser/PostgREST traffic can never write
+  -- an ads binding (only the SELECT policy exists).
+  select count(*) into v_write_policies
+  from pg_policies
+  where tablename = 'seo_project_ads' and cmd in ('INSERT', 'UPDATE', 'DELETE');
+  if v_write_policies <> 0 then
+    raise exception 'smoke: ads binding has a write policy (%)', v_write_policies;
+  end if;
+  if has_table_privilege('authenticated', 'public.seo_project_ads', 'insert') then
+    raise exception 'smoke: authenticated can insert an ads binding';
+  end if;
+  if has_table_privilege('authenticated', 'public.seo_project_ads', 'update') then
+    raise exception 'smoke: authenticated can update an ads binding';
+  end if;
+end $$;
+SQL
+echo "   smoke: ads bindings are server-write only (read-only RLS OK)"
 
 echo "==> smoke test: RLS hardening (creator backdoor + definer grants)"
 PSQL -d "${DB_NAME}" <<'SQL'

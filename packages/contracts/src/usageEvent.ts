@@ -38,11 +38,11 @@ import type { IsoDateTime } from './common.js';
  *
  * `dataforseo` is the DataForSEO vendor category. `google` is the category for
  * Google platform API consumption regardless of product: Google Search Console
- * (`provider = gsc`, `unit = gsc_request`) and Google Analytics
- * (`provider = ga4`, `unit = ga4_request`) both land here, and a future Google
- * Ads integration would join under the same category with its own provider id
- * and units. Keeping one category per external platform reason is deliberate:
- * the provider column already distinguishes the concrete product.
+ * (`provider = gsc`, `unit = gsc_request`), Google Analytics
+ * (`provider = ga4`, `unit = ga4_request`) and Google Ads
+ * (`provider = ads`, `unit = ads_request`) all land here. Keeping one category
+ * per external platform reason is deliberate: the provider column already
+ * distinguishes the concrete product.
  */
 export const USAGE_CATEGORIES = ['ai', 'dataforseo', 'google', 'job', 'publishing', 'media'] as const;
 export type UsageCategory = (typeof USAGE_CATEGORIES)[number];
@@ -65,6 +65,7 @@ export const USAGE_UNITS = [
   'serp_request',
   'gsc_request',
   'ga4_request',
+  'ads_request',
   'input_token',
   'output_token',
   'image_generation',

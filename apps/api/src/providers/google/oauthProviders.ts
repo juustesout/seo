@@ -15,10 +15,12 @@
 
 import { GSC_SCOPES, type OAuthState } from '../gsc/oauth.js';
 import { GA4_SCOPES } from '../ga4/scopes.js';
+import { GOOGLE_ADS_SCOPES } from '../googleAds/scopes.js';
 import { GoogleAnalyticsClient } from '../ga4/googleAnalyticsClient.js';
+import { GoogleAdsClient } from '../googleAds/googleAdsClient.js';
 
 /** Google products the platform currently authorizes against. */
-export type GoogleProviderType = 'gsc' | 'ga4';
+export type GoogleProviderType = 'gsc' | 'ga4' | 'ads';
 
 /** Encrypted-credential keys under which a Google token triple is stored. */
 export interface GoogleTokenKeys {
@@ -76,9 +78,21 @@ const GA4_PROVIDER: GoogleOAuthProvider = {
   errorRedirect: (base, error) => `${base}/integrations?analytics_error=${encodeURIComponent(error)}`,
 };
 
+const ADS_PROVIDER: GoogleOAuthProvider = {
+  providerType: 'ads',
+  callbackPath: '/api/oauth/ads/callback',
+  scopes: GOOGLE_ADS_SCOPES,
+  tokenKeys: TOKEN_KEYS,
+  accountScopedOnly: true,
+  resolveIdentity: (accessToken) => new GoogleAdsClient(accessToken).getUserEmail(),
+  successRedirect: (base) => `${base}/integrations?ads=connected`,
+  errorRedirect: (base, error) => `${base}/integrations?ads_error=${encodeURIComponent(error)}`,
+};
+
 const PROVIDERS: Record<GoogleProviderType, GoogleOAuthProvider> = {
   gsc: GSC_PROVIDER,
   ga4: GA4_PROVIDER,
+  ads: ADS_PROVIDER,
 };
 
 /** Resolve the descriptor for one Google product. */

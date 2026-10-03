@@ -48,6 +48,17 @@ const envSchema = z.object({
   // Google (Search Console integration - separate from Supabase login OAuth).
   GOOGLE_CLIENT_ID: z.string().optional(),
   GOOGLE_CLIENT_SECRET: z.string().optional(),
+  // Google Ads (P5). The integration reuses GOOGLE_CLIENT_ID/SECRET above; a
+  // developer token is an optional, deprecated string that is still accepted by
+  // the API and forwarded when present (developer tokens were sunset
+  // 2026-09-09; API access levels now attach to the Google Cloud project that
+  // owns the OAuth client). This is never logged or sent to the browser.
+  GOOGLE_ADS_DEVELOPER_TOKEN: z.string().optional(),
+  /** Google Ads API version used for REST calls (e.g. `v25`). */
+  GOOGLE_ADS_API_VERSION: z
+    .string()
+    .regex(/^v[0-9]{1,3}$/)
+    .default('v25'),
 
   // X (publisher OAuth, public PKCE client - client id only, no secret).
   X_OAUTH_CLIENT_ID: z.string().optional(),

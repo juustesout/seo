@@ -29,6 +29,7 @@ import {
   Send,
   Settings,
   ShieldCheck,
+  Target,
 } from 'lucide-react';
 import { supabase, configured as supabaseConfigured, currentUser } from './lib/supabase';
 import { api } from './lib/api';
@@ -49,6 +50,7 @@ const Dashboard = lazy(() => import('./views/Dashboard').then((m) => ({ default:
 const Integrations = lazy(() => import('./views/Integrations').then((m) => ({ default: m.Integrations })));
 const Keywords = lazy(() => import('./views/Keywords').then((m) => ({ default: m.Keywords })));
 const Analytics = lazy(() => import('./views/Analytics').then((m) => ({ default: m.Analytics })));
+const AdsIntelligence = lazy(() => import('./views/AdsIntelligence').then((m) => ({ default: m.AdsIntelligence })));
 const Knowledge = lazy(() => import('./views/Knowledge').then((m) => ({ default: m.Knowledge })));
 const Publishing = lazy(() => import('./views/Publishing').then((m) => ({ default: m.Publishing })));
 const ContentSchedule = lazy(() => import('./views/ContentSchedule').then((m) => ({ default: m.ContentSchedule })));
@@ -98,6 +100,7 @@ const PROJECT_NAV: Array<{ id: string; label: string; icon: NavIcon }> = [
   { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { id: 'keywords', label: 'Keywords', icon: Search },
   { id: 'analytics', label: 'Analytics', icon: BarChart3 },
+  { id: 'ads', label: 'Paid search', icon: Target },
   { id: 'integrations', label: 'Integrations', icon: Plug },
   { id: 'knowledge', label: 'Knowledge Base', icon: BookOpen },
   { id: 'workspace', label: 'Workspace', icon: PenSquare },
@@ -390,6 +393,7 @@ export function App() {
               {view === 'dashboard' && <Dashboard projectId={pid} onOpenSettings={() => goProject(pid, 'settings')} />}
               {view === 'keywords' && <Keywords projectId={pid} role={project.role} />}
               {view === 'analytics' && <Analytics projectId={pid} onOpenSettings={() => goProject(pid, 'settings')} />}
+              {view === 'ads' && <AdsIntelligence projectId={pid} onOpenSettings={() => goProject(pid, 'settings')} />}
               {view === 'integrations' && <Integrations projectId={pid} />}
               {view === 'knowledge' && (
                 <Knowledge

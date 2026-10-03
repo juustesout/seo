@@ -21,7 +21,9 @@ import { buildProviderContext } from '../../context.js';
 import { redirectBase } from './utils.js';
 import { buildAuthorizationUrl, signState } from '../../providers/gsc/oauth.js';
 import { GA4_SCOPES } from '../../providers/ga4/scopes.js';
+import { GOOGLE_ADS_SCOPES } from '../../providers/googleAds/scopes.js';
 import { GoogleAnalyticsService } from '../../services/googleAnalyticsService.js';
+import { GoogleAdsService } from '../../services/googleAdsService.js';
 import { GscDataSource } from '../../providers/gsc/gscDataSource.js';
 import { logger } from '../../logger.js';
 import {
@@ -385,6 +387,116 @@ accountRouter.post(
         await creds.delete(keyName);
       } catch (err) {
         logger.warn({ err: (err as Error).message }, 'ga4 disconnect token cleanup failed');
+      }
+    }
+    await container.sb.from('seo_integrations').update({ status: 'disconnected', last_error: null }).eq('id', integration.id as string);
+    res.json({ data: { ok: true, was_connected: true } });
+  }),
+);
+
+// ---------------------------------------------------------------------------
+// Google Ads connect (account level, read-only)
+// ---------------------------------------------------------------------------
+
+/**
+ * Google Ads connection state: whether the account has authorized Google Ads
+ * and which Google identity it belongs to. Separate from the GSC and GA4
+ * integrations so authorizing Ads never touches the others.
+ */
+accountRouter.get(
+  '/ads/state',
+  asyncHandler(async (req, res) => {
+    const { container, user } = req;
+    const { account_id: accountId } = await requireAccount(container, user!.sub);
+    const state = await new GoogleAdsService(container).connectionState(accountId);
+    res.json({ data: state });
+  }),
+);
+
+/**
+ * Build the Google consent URL for an account-level Google Ads connect. Reuses
+ * any existing account-scoped 'ads' integration as the token owner, signs the
+ * state (account + integration ids) so the callback cannot be replayed against
+ * another account, and requests the Google Ads scope (Google's only variant;
+ * the integration remains read-only by construction).
+ */
+accountRouter.get(
+  '/ads/connect-url',
+  asyncHandler(async (req, res) => {
+    const { container, user } = req;
+    const { account_id: accountId } = await requireAccount(container, user!.sub);
+
+    requireConfigured(container.config.googleConfigured, 'Google OAuth');
+    requireConfigured(container.config.encryptionConfigured, 'Credential storage');
+
+    const existing = await container.sb
+      .from('seo_integrations')
+      .select('id')
+      .eq('account_id', accountId)
+      .is('project_id', null)
+      .eq('provider_type', 'ads')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    let integrationId = (existing.data as { id: string } | null)?.id ?? null;
+
+    if (!integrationId) {
+      const insert = await container.sb
+        .from('seo_integrations')
+        .insert({
+          account_id: accountId,
+          project_id: null,
+          provider_type: 'ads',
+          name: 'Google Ads',
+          status: 'disconnected',
+          capabilities: ['search_intelligence'],
+          config: {},
+          created_by: user!.sub,
+        } as never)
+        .select()
+        .single();
+      if (insert.error) throw new ApiError(500, 'storage_error', 'Could not create the Google Ads connection');
+      integrationId = (insert.data as { id: string }).id;
+    }
+
+    await container.sb.from('seo_integrations').update({ status: 'connecting', last_error: null }).eq('id', integrationId);
+
+    const state = signState({ accountId, integrationId, userId: user!.sub, nonce: crypto.randomUUID() }, requireKey(container));
+    const redirectUri = `${redirectBase(req)}/api/oauth/ads/callback`;
+    const url = buildAuthorizationUrl({
+      clientId: container.config.env.GOOGLE_CLIENT_ID!,
+      redirectUri,
+      state,
+      scope: GOOGLE_ADS_SCOPES,
+    });
+    res.json({ data: { url, redirect_uri: redirectUri } });
+  }),
+);
+
+/** Disconnect Google Ads: drop the stored Ads tokens and mark it disconnected. */
+accountRouter.post(
+  '/ads/disconnect',
+  asyncHandler(async (req, res) => {
+    const { container, user } = req;
+    const { account_id: accountId } = await requireAccount(container, user!.sub);
+    const { data } = await container.sb
+      .from('seo_integrations')
+      .select('*')
+      .eq('account_id', accountId)
+      .is('project_id', null)
+      .eq('provider_type', 'ads')
+      .maybeSingle();
+    if (!data) {
+      res.json({ data: { ok: true, was_connected: false } });
+      return;
+    }
+    const integration = data as Record<string, unknown>;
+    const creds = container.credentials.reader({ integrationId: String(integration.id) }, 'ads');
+    for (const keyName of ['google_access_token', 'google_refresh_token', 'google_token_scope']) {
+      try {
+        await creds.delete(keyName);
+      } catch (err) {
+        logger.warn({ err: (err as Error).message }, 'ads disconnect token cleanup failed');
       }
     }
     await container.sb.from('seo_integrations').update({ status: 'disconnected', last_error: null }).eq('id', integration.id as string);
