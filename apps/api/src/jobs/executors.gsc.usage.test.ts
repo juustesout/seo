@@ -95,7 +95,7 @@ describe('gsc_sync executor usage', () => {
     expect(events).toHaveLength(9);
     for (const event of events) {
       expect(event).toMatchObject({
-        category: 'dataforseo',
+        category: 'google',
         provider: 'gsc',
         unit: 'gsc_request',
         quantity: 1,

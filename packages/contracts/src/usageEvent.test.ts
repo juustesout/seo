@@ -37,9 +37,10 @@ function baseEvent(overrides: Partial<UsageEvent> = {}): UsageEvent {
 
 describe('usage vocabulary', () => {
   it('closes the category vocabulary', () => {
-    expect(USAGE_CATEGORIES).toEqual(['ai', 'dataforseo', 'job', 'publishing', 'media']);
+    expect(USAGE_CATEGORIES).toEqual(['ai', 'dataforseo', 'google', 'job', 'publishing', 'media']);
     expect(isValidUsageCategory('ai')).toBe(true);
     expect(isValidUsageCategory('dataforseo')).toBe(true);
+    expect(isValidUsageCategory('google')).toBe(true);
     expect(isValidUsageCategory('job')).toBe(true);
     expect(isValidUsageCategory('publishing')).toBe(true);
     expect(isValidUsageCategory('media')).toBe(true);
@@ -52,6 +53,7 @@ describe('usage vocabulary', () => {
     expect(USAGE_UNITS).not.toContain('token');
     expect(USAGE_UNITS).toContain('serp_request');
     expect(USAGE_UNITS).toContain('gsc_request');
+    expect(USAGE_UNITS).toContain('ga4_request');
     expect(USAGE_UNITS).toContain('publish_attempt');
     expect(USAGE_UNITS).toContain('job');
     expect(isValidUsageUnit('image_generation')).toBe(true);

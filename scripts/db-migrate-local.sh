@@ -1561,6 +1561,13 @@ begin
   values
     (v_project, null, 'job', 'worker', 'run', 1, 'job', true, 'smoke-usage-4');
 
+  -- A Google Analytics request under the P4.5 vocabulary extension: the
+  -- `google` category and `ga4_request` unit must be accepted.
+  insert into public.seo_usage_events
+    (project_id, user_id, category, provider, operation, quantity, unit, success, source_id)
+  values
+    (v_project, null, 'google', 'ga4', 'page_traffic', 1, 'ga4_request', true, 'smoke-usage-6');
+
   -- An account-scoped event with no project.
   insert into public.seo_usage_events
     (account_id, user_id, category, provider, operation, quantity, unit, success, source_id, idempotency_key)
@@ -1679,12 +1686,12 @@ begin
   -- Aggregation RPC: fixed shape, membership enforced, raw ledger never returned.
   select coalesce(sum(quantity), 0), count(*) into v_total, v_groups
   from public.seo_usage_totals('00000000-0000-0000-0000-000000000001', v_project, null);
-  if v_total <> 101 then raise exception 'smoke: usage project total was % not 101', v_total; end if;
+  if v_total <> 102 then raise exception 'smoke: usage project total was % not 102', v_total; end if;
   if v_groups < 2 then raise exception 'smoke: usage aggregate returned too few groups'; end if;
 
   select coalesce(sum(quantity), 0) into v_total
   from public.seo_usage_totals('00000000-0000-0000-0000-000000000001', null, v_account);
-  if v_total <> 106 then raise exception 'smoke: usage account total was % not 106', v_total; end if;
+  if v_total <> 107 then raise exception 'smoke: usage account total was % not 107', v_total; end if;
 
   begin
     perform 1 from public.seo_usage_totals('00000000-0000-0000-0000-000000000002', v_project, null);

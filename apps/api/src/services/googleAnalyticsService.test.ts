@@ -6,12 +6,14 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { GoogleAnalyticsService, resolveAnalyticsPeriodDays } from './googleAnalyticsService.js';
+import { InMemoryUsageEventStore } from './usageEventRepository.js';
 import type { ServiceContainer } from '../context.js';
 
 type Row = Record<string, unknown>;
 
 const ACCOUNT = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const PROJECT = '11111111-1111-4111-8111-111111111111';
+const USER = '22222222-2222-4222-8222-222222222222';
 
 function response(body: unknown, status = 200): Response {
   return { status, ok: status >= 200 && status < 300, json: async () => body } as unknown as Response;
@@ -235,5 +237,53 @@ describe('GoogleAnalyticsService', () => {
       status: 502,
       code: 'analytics_unavailable',
     });
+  });
+
+  it('records one google/ga4_request fact per Analytics report request (P4.5)', async () => {
+    const tables = baseTables({ seo_project_analytics: [{ project_id: PROJECT, property_id: '111', property_name: 'My Website', property_url: null }] });
+    vi.stubGlobal('fetch', (async () =>
+      response({ rows: [{ dimensionValues: [{ value: '/' }], metricValues: [{ value: '5' }, { value: '4' }, { value: '3' }] }], rowCount: 1 })) as unknown as typeof fetch);
+    const container = makeContainer(tables, tokens, credsSet);
+    const store = new InMemoryUsageEventStore();
+    (container as unknown as { usageEvents: InMemoryUsageEventStore }).usageEvents = store;
+    const svc = new GoogleAnalyticsService(container, NOW);
+
+    await svc.pageTraffic({ accountId: ACCOUNT, projectId: PROJECT, days: 7, userId: USER });
+
+    const events = await store.list({ projectId: PROJECT });
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      accountId: null,
+      projectId: PROJECT,
+      userId: USER,
+      category: 'google',
+      provider: 'ga4',
+      operation: 'page_traffic',
+      quantity: 1,
+      unit: 'ga4_request',
+      success: true,
+    });
+  });
+
+  it('counts both the failed and the retried request after a 401 refresh (P4.5)', async () => {
+    const tables = baseTables({ seo_project_analytics: [{ project_id: PROJECT, property_id: '111', property_name: 'My Website', property_url: null }] });
+    let dataCalls = 0;
+    vi.stubGlobal('fetch', (async (url: string) => {
+      if (String(url).includes('oauth2.googleapis.com')) return response({ access_token: 'access-2', expires_in: 3600 });
+      dataCalls += 1;
+      if (dataCalls === 1) return response({ error: { message: 'expired' } }, 401);
+      return response({ rows: [{ dimensionValues: [{ value: '/' }], metricValues: [{ value: '5' }, { value: '4' }, { value: '3' }] }], rowCount: 1 });
+    }) as unknown as typeof fetch);
+    const container = makeContainer(tables, tokens, credsSet);
+    const store = new InMemoryUsageEventStore();
+    (container as unknown as { usageEvents: InMemoryUsageEventStore }).usageEvents = store;
+    const svc = new GoogleAnalyticsService(container, NOW);
+
+    await svc.pageTraffic({ accountId: ACCOUNT, projectId: PROJECT, days: 7, userId: USER });
+
+    const events = await store.list({ projectId: PROJECT });
+    expect(events).toHaveLength(2);
+    expect(events.map((e) => e.success).sort()).toEqual([false, true]);
+    expect(events.every((e) => e.category === 'google' && e.provider === 'ga4' && e.unit === 'ga4_request')).toBe(true);
   });
 });

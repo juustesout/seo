@@ -272,10 +272,12 @@ Blocked by which factor:
 6. Application code - **implemented**; no defect found in the traced flow.
 7. Production environment configuration - **required and unverifiable**:
    `PUBLIC_APP_URL`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` and
-   `CREDENTIALS_ENCRYPTION_KEY` must all be present on the VPS. The
-   `/api/health` endpoint exposes only the derived `google` and
-   `credentials_encryption` booleans (`app.ts:98-111`), so presence is
-   observable without reading values.
+   `CREDENTIALS_ENCRYPTION_KEY` must all be present on the VPS. `/api/health`
+   is a liveness probe only (`200 {"ok":true,"service":"seo-api"}`,
+   `app.ts:137-139`) and `/api/ready` only checks database reachability
+   (`app.ts:146-153`); neither exposes which Google/credential environment
+   variables are present, so presence must be verified on the VPS `.env`
+   (presence only), never inferred from an HTTP boolean.
 
 The exact current gap: GSC is code-complete but its production operation depends
 on external Google Cloud + VPS env configuration that cannot be verified from
@@ -469,7 +471,9 @@ Only evidence-supported cells are populated; everything else is `unknown`.
   `GOOGLE_CLIENT_SECRET`, `CREDENTIALS_ENCRYPTION_KEY`, the authorized redirect
   URI and the enabled Search Console API is not observable in the repository.
 - Consequence: GSC may be non-operational in production while all code and tests
-  pass; only `/api/health` booleans can confirm env presence.
+  pass; neither `/api/health` (liveness) nor `/api/ready` (database
+  reachability) exposes environment-variable presence, so this can only be
+  confirmed on the VPS `.env`.
 - Smallest remediation boundary: verify the §F checklist in Google Cloud,
   Supabase and the VPS `.env`.
 - Remediation type: external configuration.

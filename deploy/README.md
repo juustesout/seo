@@ -264,9 +264,10 @@ pure code; a restart never changes the schema.
   ```bash
   pnpm db:migrate:local
   ```
-- Apply to hosted Supabase manually, either by pasting the consolidated
-  `dist/supabase-schema.sql` into the SQL editor and running only the new
-  statements, or by applying the matching files under `supabase/migrations/`.
+- Apply to hosted Supabase manually by pasting the matching, ordered
+  `supabase/migrations/*.sql` files (`YYYYMMDDNNNNNN_*.sql`) into the SQL editor
+  and running only the new statements. There is no generated consolidated schema
+  file; `dist/` is gitignored.
 - Keep the RLS and smoke-test additions in `scripts/db-migrate-local.sh`.
 - Never run destructive SQL against the shared hosted project.
 

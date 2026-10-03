@@ -18,8 +18,9 @@ Modular, project-scoped **SEO operating platform** (pnpm monorepo):
 - `supabase/migrations` — schema + RLS + RPCs. Tables use the `seo_` prefix.
 - `scripts/db-migrate-local.sh` — validates migrations + smoke tests against a
   **fresh** local Postgres database (run as root, name must not be reused).
-- `dist/supabase-schema.sql` — consolidated migrations for manual paste into
-  the hosted Supabase SQL editor.
+- Manual hosted deploy: apply the ordered `supabase/migrations/*.sql` files
+  (`YYYYMMDDNNNNNN_*.sql`) in the Supabase SQL editor. There is no generated
+  consolidated schema file (`dist/` is gitignored).
 
 ## Commands
 

@@ -21,177 +21,127 @@
  */
 
 import { Router } from 'express';
+import type { Request, Response } from 'express';
 import { z } from 'zod';
 import { asyncHandler } from '../asyncHandler.js';
 import { ApiError } from '../../apiErrors.js';
-import { exchangeCode, verifyState, GSC_SCOPES } from '../../providers/gsc/oauth.js';
-import { GA4_SCOPES } from '../../providers/ga4/scopes.js';
-import { GoogleAnalyticsClient } from '../../providers/ga4/googleAnalyticsClient.js';
+import { exchangeCode, verifyState } from '../../providers/gsc/oauth.js';
+import { googleOAuthProvider, type GoogleOAuthProvider } from '../../providers/google/oauthProviders.js';
 import { publisherOAuthComplete } from '../../services/publisherOAuthService.js';
 import { redirectBase } from './utils.js';
 import { logger } from '../../logger.js';
 
 export const oauthRouter: Router = Router();
 
-/** Encrypted-credential keys under which the GSC token pair is stored. */
-const TOKEN_KEYS = {
-  access: 'google_access_token',
-  refresh: 'google_refresh_token',
-  scope: 'google_token_scope',
-} as const;
+/**
+ * One provider-aware handler for every Google consent callback. The descriptor
+ * declares the only real differences (scopes, callback path, token owner,
+ * redirect); the handshake, scoping, encryption and persistence are identical.
+ * Signed state is verified with CREDENTIALS_ENCRYPTION_KEY before the code is
+ * exchanged, so a forged callback cannot attach tokens to an integration the
+ * user never authorized.
+ */
+async function handleGoogleCallback(req: Request, res: Response, provider: GoogleOAuthProvider): Promise<void> {
+  const container = req.container;
+  const parsed = z.object({ code: z.string().optional(), state: z.string().optional(), error: z.string().optional() }).parse(req.query);
+  const base = redirectBase(req);
+
+  if (parsed.error) {
+    logger.warn({ error: parsed.error, provider: provider.providerType }, `${provider.providerType} oauth error`);
+    res.redirect(provider.errorRedirect(base, parsed.error));
+    return;
+  }
+  if (!parsed.code || !parsed.state) {
+    throw ApiError.badRequest('Missing OAuth code or state');
+  }
+
+  const key = container.config.env.CREDENTIALS_ENCRYPTION_KEY;
+  const clientId = container.config.env.GOOGLE_CLIENT_ID;
+  const clientSecret = container.config.env.GOOGLE_CLIENT_SECRET;
+  if (!key || !clientId || !clientSecret) {
+    throw ApiError.notConfigured('Google OAuth or credential storage is not configured');
+  }
+
+  let state;
+  try {
+    state = verifyState(parsed.state, key);
+  } catch (err) {
+    logger.warn({ err: (err as Error).message, provider: provider.providerType }, 'oauth state verification failed');
+    throw ApiError.forbidden('Invalid OAuth state');
+  }
+
+  // Confirm the integration still belongs to this project or account, and to
+  // this Google product (the state is signed server-side, so its scope cannot
+  // be tampered with).
+  let query = container.sb
+    .from('seo_integrations')
+    .select('id, config')
+    .eq('id', state.integrationId)
+    .eq('provider_type', provider.providerType);
+  if (state.accountId) {
+    query = query.eq('account_id', state.accountId).is('project_id', null);
+  } else if (state.projectId) {
+    query = query.eq('project_id', state.projectId);
+  } else {
+    throw ApiError.badRequest('OAuth state has no scope');
+  }
+  const { data: integration } = await query.maybeSingle();
+  if (!integration) throw ApiError.notFound('Integration no longer exists');
+  if (provider.accountScopedOnly && !state.accountId) {
+    throw ApiError.badRequest('OAuth state has no account scope');
+  }
+
+  const redirectUri = `${base}${provider.callbackPath}`;
+  const tokens = await exchangeCode({ clientId, clientSecret, code: parsed.code, redirectUri });
+
+  const creds = container.credentials.reader({ integrationId: state.integrationId }, provider.providerType);
+  await creds.set(provider.tokenKeys.access, tokens.access_token, { scope: tokens.scope ?? provider.scopes });
+  if (tokens.refresh_token) {
+    await creds.set(provider.tokenKeys.refresh, tokens.refresh_token, { scope: tokens.scope ?? provider.scopes });
+  }
+  if (tokens.scope) {
+    await creds.set(provider.tokenKeys.scope, tokens.scope);
+  }
+
+  // Best-effort identity so the UI can show "Connected as ...". A failure to
+  // read it must not fail the connect itself.
+  let email: string | null = null;
+  try {
+    email = await provider.resolveIdentity(tokens.access_token);
+  } catch (err) {
+    logger.warn({ err: (err as Error).message, provider: provider.providerType }, `${provider.providerType} identity lookup failed`);
+  }
+  const patch: Record<string, unknown> = { status: 'connected', last_error: null };
+  if (email) {
+    const existing = (integration.config as Record<string, unknown> | null) ?? {};
+    patch.config = { ...existing, google_email: email };
+  }
+
+  await container.sb.from('seo_integrations').update(patch).eq('id', state.integrationId);
+
+  logger.info(
+    {
+      provider: provider.providerType,
+      scope: state.accountId ? 'account' : 'project',
+      integrationId: state.integrationId,
+      accountId: state.accountId ?? null,
+      projectId: state.projectId ?? null,
+    },
+    `${provider.providerType} oauth completed`,
+  );
+  res.redirect(provider.successRedirect(base, state));
+}
 
 /** Google Search Console consent callback (project- and account-scoped connects). */
 oauthRouter.get(
   '/gsc/callback',
-  asyncHandler(async (req, res) => {
-    const container = req.container;
-    const parsed = z.object({ code: z.string().optional(), state: z.string().optional(), error: z.string().optional() }).parse(req.query);
-    const base = redirectBase(req);
-
-    if (parsed.error) {
-      logger.warn({ error: parsed.error }, 'gsc oauth error');
-      res.redirect(`${base}/p?oauth_error=${encodeURIComponent(parsed.error)}`);
-      return;
-    }
-    if (!parsed.code || !parsed.state) {
-      throw ApiError.badRequest('Missing OAuth code or state');
-    }
-
-    const key = container.config.env.CREDENTIALS_ENCRYPTION_KEY;
-    const clientId = container.config.env.GOOGLE_CLIENT_ID;
-    const clientSecret = container.config.env.GOOGLE_CLIENT_SECRET;
-    if (!key || !clientId || !clientSecret) {
-      throw ApiError.notConfigured('Google OAuth or credential storage is not configured');
-    }
-
-    let state;
-    try {
-      state = verifyState(parsed.state, key);
-    } catch (err) {
-      logger.warn({ err: (err as Error).message }, 'oauth state verification failed');
-      throw ApiError.forbidden('Invalid OAuth state');
-    }
-
-    // Confirm the integration still belongs to this project or account (the
-    // state is signed server-side, so its scope cannot be tampered with).
-    let query = container.sb
-      .from('seo_integrations')
-      .select('id, project_id')
-      .eq('id', state.integrationId);
-    if (state.accountId) {
-      query = query.eq('account_id', state.accountId).is('project_id', null);
-    } else if (state.projectId) {
-      query = query.eq('project_id', state.projectId);
-    } else {
-      throw ApiError.badRequest('OAuth state has no scope');
-    }
-    const { data: integration } = await query.maybeSingle();
-    if (!integration) throw ApiError.notFound('Integration no longer exists');
-
-    const redirectUri = `${base}/api/oauth/gsc/callback`;
-    const tokens = await exchangeCode({ clientId, clientSecret, code: parsed.code, redirectUri });
-
-    const creds = container.credentials.reader({ integrationId: state.integrationId }, 'gsc');
-    await creds.set(TOKEN_KEYS.access, tokens.access_token, { scope: tokens.scope ?? GSC_SCOPES });
-    if (tokens.refresh_token) {
-      await creds.set(TOKEN_KEYS.refresh, tokens.refresh_token, { scope: tokens.scope ?? GSC_SCOPES });
-    }
-    await container.sb
-      .from('seo_integrations')
-      .update({ status: 'connected', last_error: null })
-      .eq('id', state.integrationId);
-
-    logger.info(
-      { scope: state.accountId ? 'account' : 'project', integrationId: state.integrationId, accountId: state.accountId ?? null, projectId: state.projectId ?? null },
-      'gsc oauth completed',
-    );
-    if (state.accountId) {
-      res.redirect(`${base}/overview?gsc=connected`);
-    } else if (state.projectId) {
-      res.redirect(`${base}/p/${state.projectId}/integrations?gsc=connected`);
-    } else {
-      res.redirect(`${base}/overview`);
-    }
-  }),
+  asyncHandler((req, res) => handleGoogleCallback(req, res, googleOAuthProvider('gsc'))),
 );
 
-/**
- * Google Analytics (GA4) consent callback. Account-scoped like the GSC
- * callback: the signed state carries the account + integration ids. Tokens are
- * stored encrypted under the account's 'ga4' integration (a separate provider
- * integration, so the GSC token/scope is never touched), the granted Google
- * identity is sealed into the integration config, and the browser is sent back
- * to the account Integrations view.
- */
+/** Google Analytics (GA4) consent callback (account-scoped connects only). */
 oauthRouter.get(
   '/ga4/callback',
-  asyncHandler(async (req, res) => {
-    const container = req.container;
-    const parsed = z.object({ code: z.string().optional(), state: z.string().optional(), error: z.string().optional() }).parse(req.query);
-    const base = redirectBase(req);
-
-    if (parsed.error) {
-      logger.warn({ error: parsed.error }, 'ga4 oauth error');
-      res.redirect(`${base}/integrations?analytics_error=${encodeURIComponent(parsed.error)}`);
-      return;
-    }
-    if (!parsed.code || !parsed.state) {
-      throw ApiError.badRequest('Missing OAuth code or state');
-    }
-
-    const key = container.config.env.CREDENTIALS_ENCRYPTION_KEY;
-    const clientId = container.config.env.GOOGLE_CLIENT_ID;
-    const clientSecret = container.config.env.GOOGLE_CLIENT_SECRET;
-    if (!key || !clientId || !clientSecret) {
-      throw ApiError.notConfigured('Google OAuth or credential storage is not configured');
-    }
-
-    let state;
-    try {
-      state = verifyState(parsed.state, key);
-    } catch (err) {
-      logger.warn({ err: (err as Error).message }, 'ga4 oauth state verification failed');
-      throw ApiError.forbidden('Invalid OAuth state');
-    }
-    if (!state.accountId) throw ApiError.badRequest('OAuth state has no account scope');
-
-    // The signed state is scoped to this exact account-scoped GA4 integration.
-    const { data: integration } = await container.sb
-      .from('seo_integrations')
-      .select('id, config')
-      .eq('id', state.integrationId)
-      .eq('account_id', state.accountId)
-      .is('project_id', null)
-      .eq('provider_type', 'ga4')
-      .maybeSingle();
-    if (!integration) throw ApiError.notFound('Integration no longer exists');
-
-    const redirectUri = `${base}/api/oauth/ga4/callback`;
-    const tokens = await exchangeCode({ clientId, clientSecret, code: parsed.code, redirectUri });
-
-    const creds = container.credentials.reader({ integrationId: state.integrationId }, 'ga4');
-    await creds.set('google_access_token', tokens.access_token, { scope: tokens.scope ?? GA4_SCOPES });
-    if (tokens.refresh_token) {
-      await creds.set('google_refresh_token', tokens.refresh_token, { scope: tokens.scope ?? GA4_SCOPES });
-    }
-
-    // Best-effort identity so the UI can show "Connected as ...". A failure to
-    // read it must not fail the connect itself.
-    let email: string | null = null;
-    try {
-      email = await new GoogleAnalyticsClient(tokens.access_token).getUserEmail();
-    } catch (err) {
-      logger.warn({ err: (err as Error).message }, 'ga4 identity lookup failed');
-    }
-    const config = { ...((integration.config as Record<string, unknown> | null) ?? {}), ...(email ? { google_email: email } : {}) };
-    await container.sb
-      .from('seo_integrations')
-      .update({ status: 'connected', last_error: null, config })
-      .eq('id', state.integrationId);
-
-    logger.info({ integrationId: state.integrationId, accountId: state.accountId }, 'ga4 oauth completed');
-    res.redirect(`${base}/integrations?analytics=connected`);
-  }),
+  asyncHandler((req, res) => handleGoogleCallback(req, res, googleOAuthProvider('ga4'))),
 );
 
 /**

@@ -32,7 +32,10 @@ import {
   UnauthorizedError,
   normalizePropertyId,
   type AnalyticsPropertyMetadata,
+  type Ga4RequestObserver,
 } from '../providers/ga4/googleAnalyticsClient.js';
+import { emitGa4RequestUsage } from '../providers/ga4/providerUsage.js';
+import { usageScopeContext } from './usageInstrumentation.js';
 
 /** Encrypted-credential keys under which the GA4 token pair is stored. */
 const TOKEN_KEYS = {
@@ -114,12 +117,33 @@ export class GoogleAnalyticsService {
   }
 
   /**
+   * Persist one real GA4 API request as a project-scoped usage fact (P4.5). The
+   * observer is only built when the caller supplies real project scope, so
+   * account-scoped discovery (no project) emits nothing rather than a
+   * fabricated project fact.
+   */
+  private usageObserver(args: { projectId: string; userId: string | null } | undefined): Ga4RequestObserver | undefined {
+    if (!args) return undefined;
+    const usage = usageScopeContext({ sink: this.container.usageEvents, sourceId: null, userId: args.userId });
+    if (!usage) return undefined;
+    return (operation, success) =>
+      emitGa4RequestUsage({ usage, projectId: args.projectId, userId: args.userId, operation, success });
+  }
+
+  /**
    * Run `fn` against a GA4 client using the stored access token, refreshing it
    * once and retrying on a 401. Two consecutive 401s mean the refresh token is
    * itself invalid, so the caller must reconnect - surfaced as a distinct code
    * the UI can turn into "reconnect Google Analytics".
+   *
+   * When `usageArgs` carries real project scope, every actual Analytics API
+   * request made by either client attempt is recorded via the request observer.
    */
-  private async withClient<T>(integration: Row, fn: (client: GoogleAnalyticsClient) => Promise<T>): Promise<T> {
+  private async withClient<T>(
+    integration: Row,
+    fn: (client: GoogleAnalyticsClient) => Promise<T>,
+    usageArgs?: { projectId: string; userId: string | null },
+  ): Promise<T> {
     const integrationId = String(integration.id);
     const creds = this.container.credentials.reader({ integrationId }, 'ga4');
     const access = await creds.get(TOKEN_KEYS.access);
@@ -127,8 +151,9 @@ export class GoogleAnalyticsService {
     if (!access || !refresh) {
       throw new ApiError(403, 'analytics_reauthorization_required', 'Google Analytics authorization expired. Reconnect Google Analytics.');
     }
+    const observe = this.usageObserver(usageArgs);
     try {
-      return await fn(new GoogleAnalyticsClient(access));
+      return await fn(new GoogleAnalyticsClient(access, fetch, observe));
     } catch (err) {
       if (!(err instanceof UnauthorizedError)) throw err;
       const clientId = this.container.config.env.GOOGLE_CLIENT_ID;
@@ -144,7 +169,7 @@ export class GoogleAnalyticsService {
       }
       await creds.set(TOKEN_KEYS.access, tokens.access_token, { scope: tokens.scope });
       try {
-        return await fn(new GoogleAnalyticsClient(tokens.access_token));
+        return await fn(new GoogleAnalyticsClient(tokens.access_token, fetch, observe));
       } catch (retryErr) {
         if (retryErr instanceof UnauthorizedError) {
           throw new ApiError(403, 'analytics_reauthorization_required', 'Google Analytics authorization expired. Reconnect Google Analytics.');
@@ -251,7 +276,7 @@ export class GoogleAnalyticsService {
    * `property: null` (the UI then prompts for a property) - that is not an
    * error, and never a fabricated zero row.
    */
-  async pageTraffic(args: { accountId: string; projectId: string; days: AnalyticsPeriodDays }): Promise<AnalyticsPageTrafficReportDto> {
+  async pageTraffic(args: { accountId: string; projectId: string; days: AnalyticsPeriodDays; userId?: string | null }): Promise<AnalyticsPageTrafficReportDto> {
     const end = shiftDate(this.now(), 0);
     const start = shiftDate(this.now(), -(args.days - 1));
     const period = { days: args.days, start_date: start, end_date: end };
@@ -264,8 +289,10 @@ export class GoogleAnalyticsService {
       throw ApiError.badRequest("Google Analytics isn't connected. Connect Google Analytics to see page traffic.");
     }
     try {
-      const report = await this.withClient(integration, (client) =>
-        client.runPageTrafficReport(property.property_id, { startDate: start, endDate: end, limit: PAGE_TRAFFIC_LIMIT }),
+      const report = await this.withClient(
+        integration,
+        (client) => client.runPageTrafficReport(property.property_id, { startDate: start, endDate: end, limit: PAGE_TRAFFIC_LIMIT }),
+        { projectId: args.projectId, userId: args.userId ?? null },
       );
       return { property, period, rows: report.rows, limit: PAGE_TRAFFIC_LIMIT, truncated: report.truncated };
     } catch (err) {

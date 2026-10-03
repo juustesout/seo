@@ -47,7 +47,7 @@ export function buildGscRequestUsageEvent(
     accountId: null,
     projectId,
     userId,
-    category: 'dataforseo',
+    category: 'google',
     provider: 'gsc',
     operation,
     quantity: 1,
@@ -55,7 +55,7 @@ export function buildGscRequestUsageEvent(
     success,
     sourceId: usage.sourceId,
     idempotencyKey: usageEventIdempotencyKey({
-      category: 'dataforseo',
+      category: 'google',
       provider: 'gsc',
       operation,
       unit: 'gsc_request',

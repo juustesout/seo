@@ -162,7 +162,7 @@ projectAnalyticsRouter.get(
     const accountId = await projectAccountId(container, projectId);
     if (!accountId) throw ApiError.conflict('This project has no account');
 
-    const report = await new GoogleAnalyticsService(container).pageTraffic({ accountId, projectId, days });
+    const report = await new GoogleAnalyticsService(container).pageTraffic({ accountId, projectId, days, userId: user!.sub });
     res.json({ data: report });
   }),
 );

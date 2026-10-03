@@ -795,6 +795,46 @@ IGNORE
 - Missing root README (deploy/README.md is the operative doc).
 ```
 
+### P4.5 status (pre-P5 prerequisites, 2026-10-03)
+
+Implemented in P4.5 (commit range starts from the `2aba19c` recon baseline):
+
+- Google usage vocabulary widened: contract categories now include `google` and
+  GA4 adds the `ga4_request` unit (migration
+  `20260101000036_google_usage_vocabulary.sql`). GSC request facts now emit
+  `category: google` (provider `gsc`, unit `gsc_request`); historical
+  `dataforseo` GSC rows are left untouched.
+- GA4 metering: one real Analytics Admin/Data API request is recorded as one
+  `ga4_request` fact under `google` at the client `request()` seam, project
+  scope only (account-scoped property discovery emits nothing). The userinfo
+  identity lookup is not an Analytics API request and is not counted.
+- One provider-aware Google OAuth callback handler replaces the duplicated
+  GSC/GA4 handlers while keeping both registered redirect URIs
+  (`/api/oauth/gsc/callback`, `/api/oauth/ga4/callback`). Scopes, callback path,
+  token owner and post-consent redirect are declared once in
+  `providers/google/oauthProviders.ts`; signed state and AES credential storage
+  are unchanged.
+- Documentation drift corrected: D2 (`/api/health` is liveness-only, `/api/ready`
+  is the database gate; neither exposes environment-variable presence) and D3
+  (no `dist/supabase-schema.sql`; apply the ordered `supabase/migrations/*.sql`).
+
+Decisions taken in P4.5:
+
+- GA4 registry scope = **shared OAuth only**. GA4 is deliberately NOT registered
+  as a `dataSource` and keeps no full provider adapter, because the catalog
+  renders project-connectable datasources (`Integrations.tsx`) while GA4 is
+  account-scoped. A GA4 provider adapter remains deferred to the Ads design.
+- `google` is the forward category for all Google products (GSC now, GA4 now,
+  Ads later); `dataforseo` is retained unchanged for history.
+
+Still open before P5 (unchanged by P4.5):
+
+- Unify job-type ownership / the enqueue gate (out of P4.5 scope).
+- Register Google Ads as a provider on the shared OAuth client (P5).
+- Share the Ads-touched frontend DTOs.
+- Correct the RLS comment at `context.ts:39`.
+- Retire the legacy project-scoped GSC attach path.
+
 ---
 
 ## 24. Recommended next sequence

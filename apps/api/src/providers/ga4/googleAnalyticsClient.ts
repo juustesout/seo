@@ -45,6 +45,14 @@ export class GoogleAnalyticsError extends Error {
   }
 }
 
+/**
+ * Per-request usage reporter (P4.5). Invoked once for every real Analytics
+ * Admin/Data API request, after the outcome is known. It reports only the
+ * operation kind and success; the service binds project/user/usage scope. The
+ * userinfo identity lookup is not an Analytics API request and is not observed.
+ */
+export type Ga4RequestObserver = (operation: string, success: boolean) => Promise<void>;
+
 /** Metadata for one GA4 property. */
 export interface AnalyticsPropertyMetadata {
   propertyId: string;
@@ -89,22 +97,45 @@ export class GoogleAnalyticsClient {
   constructor(
     private readonly accessToken: string,
     private readonly fetchFn: typeof fetch = fetch,
+    private readonly observe?: Ga4RequestObserver,
   ) {}
 
-  private async request(url: string, init?: RequestInit): Promise<Record<string, unknown>> {
-    const res = await fetchWithTimeout(this.fetchFn, url, {
-      ...init,
-      headers: {
-        authorization: `Bearer ${this.accessToken}`,
-        accept: 'application/json',
-        ...(init?.body ? { 'content-type': 'application/json' } : {}),
-        ...(init?.headers ?? {}),
-      },
-    });
+  /**
+   * Report one actual request outcome, best-effort. A misbehaving observer must
+   * never fail the Analytics call, so any observer error is swallowed here as
+   * well as inside the shared append seam.
+   */
+  private async record(operation: string, success: boolean): Promise<void> {
+    if (!this.observe) return;
+    try {
+      await this.observe(operation, success);
+    } catch {
+      // Usage is observability, never the request's transaction boundary.
+    }
+  }
+
+  private async request(operation: string, url: string, init?: RequestInit): Promise<Record<string, unknown>> {
+    let res: Response;
+    try {
+      res = await fetchWithTimeout(this.fetchFn, url, {
+        ...init,
+        headers: {
+          authorization: `Bearer ${this.accessToken}`,
+          accept: 'application/json',
+          ...(init?.body ? { 'content-type': 'application/json' } : {}),
+          ...(init?.headers ?? {}),
+        },
+      });
+    } catch (err) {
+      await this.record(operation, false);
+      throw err;
+    }
     if (res.status === 401) {
+      await this.record(operation, false);
       throw new UnauthorizedError();
     }
     if (!res.ok) {
+      await this.record(operation, false);
       let detail = '';
       try {
         const body = (await res.json()) as { error?: { message?: string } };
@@ -114,6 +145,7 @@ export class GoogleAnalyticsClient {
       }
       throw new GoogleAnalyticsError(`Google Analytics request failed (${res.status})${detail ? `: ${detail}` : ''}`, res.status);
     }
+    await this.record(operation, true);
     return (await res.json()) as Record<string, unknown>;
   }
 
@@ -134,7 +166,7 @@ export class GoogleAnalyticsClient {
    */
   async getPropertyUrl(propertyId: string): Promise<string | null> {
     try {
-      const json = await this.request(`${GA4_ADMIN_BASE}/properties/${propertyId}/dataStreams?pageSize=100`);
+      const json = await this.request('list_data_streams', `${GA4_ADMIN_BASE}/properties/${propertyId}/dataStreams?pageSize=100`);
       const streams = (json.dataStreams as Array<Record<string, unknown>> | undefined) ?? [];
       for (const stream of streams) {
         if (stream.type === 'WEB' && typeof stream.webStreamData === 'object' && stream.webStreamData) {
@@ -155,7 +187,7 @@ export class GoogleAnalyticsClient {
    * large account does not fan out into hundreds of calls.
    */
   async listProperties(): Promise<AnalyticsPropertyMetadata[]> {
-    const json = await this.request(`${GA4_ADMIN_BASE}/accountSummaries?pageSize=200`);
+    const json = await this.request('list_properties', `${GA4_ADMIN_BASE}/accountSummaries?pageSize=200`);
     const accounts = (json.accountSummaries as Array<Record<string, unknown>> | undefined) ?? [];
     const properties: AnalyticsPropertyMetadata[] = [];
     for (const account of accounts) {
@@ -181,7 +213,7 @@ export class GoogleAnalyticsClient {
     propertyId: string,
     options: { startDate: string; endDate: string; limit: number },
   ): Promise<{ rows: PageTrafficRow[]; truncated: boolean }> {
-    const json = await this.request(`${GA4_DATA_BASE}/properties/${propertyId}:runReport`, {
+    const json = await this.request('page_traffic', `${GA4_DATA_BASE}/properties/${propertyId}:runReport`, {
       method: 'POST',
       body: JSON.stringify({
         dateRanges: [{ startDate: options.startDate, endDate: options.endDate }],
