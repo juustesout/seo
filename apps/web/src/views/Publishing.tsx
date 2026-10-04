@@ -66,6 +66,11 @@ interface Publication {
   published_at: string | null;
   created_at: string;
 }
+interface ContentOption {
+  id: string;
+  title: string;
+  status: string;
+}
 
 const CATEGORY_ORDER = ['website', 'social'];
 
@@ -91,6 +96,10 @@ export function Publishing({ projectId }: { projectId: string }) {
   const pubs = useAsync<PubWrap[]>(() => api(`/projects/${projectId}/publishers`), [projectId, refresh]);
   const catalog = useAsync<{ publishers: { id: string; name: string }[] }>(() => api('/providers'), []);
   const list = useAsync<Publication[]>(() => api(`/projects/${projectId}/publications?limit=200`), [projectId, refresh]);
+  const contentList = useAsync<{ content: ContentOption[]; total: number }>(
+    () => api(`/projects/${projectId}/content?limit=200`),
+    [projectId, refresh],
+  );
   const { jobs } = useJobs(projectId, true);
 
   // A full-tab OAuth connect bounces through the vendor consent screen and back
@@ -196,7 +205,13 @@ export function Publishing({ projectId }: { projectId: string }) {
       {(pubs.data ?? []).length === 0 && <Empty>No publishers yet. Add one above to start publishing.</Empty>}
 
       {connectedCapable.length > 0 && (
-        <NewPublication projectId={projectId} publishers={connectedCapable} onDone={reload} onError={setErr} />
+        <NewPublication
+          projectId={projectId}
+          publishers={connectedCapable}
+          contentOptions={contentList.data?.content ?? []}
+          onDone={reload}
+          onError={setErr}
+        />
       )}
 
       <Card>
@@ -466,17 +481,20 @@ function PublisherCard({
 function NewPublication({
   projectId,
   publishers,
+  contentOptions,
   onDone,
   onError,
 }: {
   projectId: string;
   publishers: PubWrap[];
+  contentOptions: ContentOption[];
   onDone: () => void;
   onError: (m: string) => void;
 }) {
   const [title, setTitle] = useState('');
   const [content, setContent] = useState('');
   const [excerpt, setExcerpt] = useState('');
+  const [contentId, setContentId] = useState('');
   const [publisherId, setPublisherId] = useState(publishers[0]?.publisher.id ?? '');
   const [publishKind, setPublishKind] = useState<PublishContentKind>(() => {
     const first = publishers[0];
@@ -502,6 +520,15 @@ function NewPublication({
     if (chosen) setPublishKind(chosen);
   };
 
+  // Linking a publication to a Content Studio item is what lets the publish be
+  // measured (the performance join keys on content_id) and lets the content
+  // status follow the real remote publish instead of a manual edit.
+  const selectContent = (idValue: string) => {
+    setContentId(idValue);
+    const item = contentOptions.find((c) => c.id === idValue);
+    if (item) setTitle((t) => (t.trim().length > 0 ? t : item.title));
+  };
+
   const submit = async () => {
     setBusy(true);
     try {
@@ -510,6 +537,7 @@ function NewPublication({
         method: 'POST',
         body: {
           publisher_id: publisherId,
+          content_id: contentId || undefined,
           publish_kind: finalKind,
           title,
           content,
@@ -520,6 +548,7 @@ function NewPublication({
       setTitle('');
       setContent('');
       setExcerpt('');
+      setContentId('');
       onDone();
     } catch (e) {
       onError(e instanceof Error ? e.message : String(e));
@@ -567,6 +596,28 @@ function NewPublication({
               ))}
             </div>
           </>
+        )}
+        <label className="text-sm font-medium" htmlFor="pub-content-link">
+          Link to content (optional)
+        </label>
+        <select
+          id="pub-content-link"
+          className="h-9 rounded-md border border-input bg-background px-3 text-sm shadow-xs outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+          value={contentId}
+          onChange={(e) => selectContent(e.target.value)}
+        >
+          <option value="">Standalone publication (not linked to content)</option>
+          {contentOptions.map((c) => (
+            <option key={c.id} value={c.id}>
+              {c.title} ({c.status})
+            </option>
+          ))}
+        </select>
+        {contentId && (
+          <p className="text-xs text-muted-foreground">
+            The publication will be tied to this content item, and the content status becomes published once the
+            publisher confirms the remote post.
+          </p>
         )}
         <label className="text-sm font-medium" htmlFor="pub-title">
           Title

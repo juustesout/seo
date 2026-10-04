@@ -785,6 +785,39 @@ const knowledgeDiscovery: JobExecutor = async ({ container, job, report }) => {
  *      propagates to the worker, which records seo_sync_jobs.error + a safe
  *      message on the publication and syncs the schedule read-model.
  */
+/**
+ * Mark the seo_content row linked to a publication as published after the
+ * publisher confirms a remote post. This keeps the content workspace status in
+ * step with reality instead of requiring a separate manual status edit - the
+ * publication row already stores the authoritative content_id. It only flips
+ * status and fills a missing published_at; a user-set date is preserved and a
+ * publication without a content link is simply skipped.
+ */
+async function markLinkedContentPublished(
+  container: ServiceContainer,
+  projectId: string,
+  contentId: unknown,
+  when: string,
+): Promise<void> {
+  if (typeof contentId !== 'string' || contentId.length === 0) return;
+  const { data } = await container.sb
+    .from('seo_content')
+    .select('id, status, published_at')
+    .eq('project_id', projectId)
+    .eq('id', contentId)
+    .maybeSingle();
+  if (!data) return;
+  const patch: Record<string, unknown> = {};
+  if (data.status !== 'published') patch.status = 'published';
+  if (!data.published_at) patch.published_at = when;
+  if (Object.keys(patch).length === 0) return;
+  await container.sb
+    .from('seo_content')
+    .update(patch)
+    .eq('project_id', projectId)
+    .eq('id', contentId);
+}
+
 const publish: JobExecutor = async ({ container, job, report }) => {
   const publicationId = job.params.publication_id as string | undefined;
   if (!publicationId) throw new ApiError(400, 'bad_request', 'publish job requires a publication_id');
@@ -855,6 +888,7 @@ const publish: JobExecutor = async ({ container, job, report }) => {
       .update({ status: 'updated', target_url: result.url, remote_id: result.remoteId, published_at: new Date().toISOString(), error: null })
       .eq('project_id', job.project_id)
       .eq('id', publicationId);
+    await markLinkedContentPublished(container, job.project_id, pub.content_id, new Date().toISOString());
     await report(100, 'Publication updated');
     return { remoteId: result.remoteId, url: result.url };
   }
@@ -876,6 +910,7 @@ const publish: JobExecutor = async ({ container, job, report }) => {
         .eq('project_id', job.project_id)
         .eq('id', publicationId);
     }
+    await markLinkedContentPublished(container, job.project_id, pub.content_id, new Date().toISOString());
     await report(100, 'Publication already created');
     return { remoteId: existingRemoteId, url: (pub.target_url as string | null) ?? null };
   }
@@ -887,6 +922,7 @@ const publish: JobExecutor = async ({ container, job, report }) => {
     .update({ status: 'published', target_url: result.url, remote_id: result.remoteId, published_at: new Date().toISOString(), error: null })
     .eq('project_id', job.project_id)
     .eq('id', publicationId);
+  await markLinkedContentPublished(container, job.project_id, pub.content_id, new Date().toISOString());
   await report(100, 'Publication published');
   return { remoteId: result.remoteId, url: result.url };
 };

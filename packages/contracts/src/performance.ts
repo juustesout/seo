@@ -33,12 +33,17 @@ export interface ContentPerformanceTraffic {
 }
 
 /**
- * One content item in the measurement loop. `state` is honest: `measured` means
- * at least one provider row matched the item's URL/path, `no_traffic` means the
- * item is published but no row matched for the period (never a fabricated zero
- * presented as evidence).
+ * One content item in the measurement loop. `state` is honest:
+ *   - `measured`        at least one provider row matched the item's URL/path;
+ *   - `no_traffic`      a provider is configured and the item has a URL/path,
+ *                       but no row matched for the period (never a fabricated
+ *                       zero presented as evidence);
+ *   - `not_configured`  neither Search Console nor Analytics is configured for
+ *                       the project, so nothing can be measured yet;
+ *   - `no_url`          providers are configured but the item has no
+ *                       publication URL, URL or slug to match against.
  */
-export type ContentPerformanceState = 'measured' | 'no_traffic';
+export type ContentPerformanceState = 'measured' | 'no_traffic' | 'not_configured' | 'no_url';
 
 export interface ContentPerformanceItem {
   content_id: string;

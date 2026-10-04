@@ -191,7 +191,7 @@ export function AccountIntegrations({ onOpenProject }: { onOpenProject: (id: str
   return (
     <div className="grid gap-5">
       <PageHeader
-        title="Integrations"
+        title="Connections"
         description="Provider connections live on your account. Credentials stay server-side, encrypted."
       />
 

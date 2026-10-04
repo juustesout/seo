@@ -109,7 +109,46 @@ describe('Content performance view', () => {
     );
     render(<Performance projectId="p1" role="editor" />);
     expect(await screen.findByText(/connect search console/i)).toBeTruthy();
-    expect(screen.getByText('No data')).toBeTruthy();
+    expect(screen.getByText('No traffic')).toBeTruthy();
+  });
+
+  it('labels not-configured and no-url rows distinctly', async () => {
+    contentPerformanceMock.mockResolvedValue(
+      report({
+        sources: { gsc: false, ga4: false },
+        rows: [
+          {
+            content_id: 'c1',
+            title: 'Unconfigured',
+            content_status: 'published',
+            target_keyword: null,
+            publication_url: null,
+            published_at: null,
+            days_live: null,
+            matched_path: null,
+            search: null,
+            traffic: null,
+            state: 'not_configured',
+          },
+          {
+            content_id: 'c2',
+            title: 'Untitled page',
+            content_status: 'published',
+            target_keyword: null,
+            publication_url: null,
+            published_at: null,
+            days_live: null,
+            matched_path: null,
+            search: null,
+            traffic: null,
+            state: 'no_url',
+          },
+        ],
+      }),
+    );
+    render(<Performance projectId="p1" role="editor" />);
+    expect(await screen.findByText('Not configured')).toBeTruthy();
+    expect(screen.getByText('No URL')).toBeTruthy();
   });
 
   it('starts a sync and reports the outcome', async () => {

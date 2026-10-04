@@ -149,6 +149,25 @@ export function useJobs(projectId: string, enabled: boolean, ms = 4000) {
   return { jobs: (data ?? []) as any[], error: error as string | null, busy, reload };
 }
 
+/**
+ * Human-readable text for a job/publication error. Durable jobs store their
+ * error as a JobError object (jsonb), so a raw template interpolation would
+ * render "[object Object]". Strings pass through; a `{ message }` (or
+ * `{ error }`) object is reduced to its message; anything else is null so the
+ * caller can decide the fallback.
+ */
+export function jobErrorText(error: unknown): string | null {
+  if (error == null) return null;
+  if (typeof error === 'string') return error.trim() || null;
+  if (typeof error === 'object') {
+    const message = (error as { message?: unknown }).message;
+    if (typeof message === 'string' && message.trim()) return message.trim();
+    const nested = (error as { error?: unknown }).error;
+    if (typeof nested === 'string' && nested.trim()) return nested.trim();
+  }
+  return null;
+}
+
 /** Table of background jobs with status pill, progress and error message. */
 export function JobTable({ jobs }: { jobs: any[] }) {
   if (!jobs.length) return <Empty>No background jobs yet</Empty>;
@@ -171,7 +190,9 @@ export function JobTable({ jobs }: { jobs: any[] }) {
               <StatusPill status={j.status} />
             </TableCell>
             <TableCell className="tabular-nums">{j.progress != null ? `${num(j.progress)}%` : '—'}</TableCell>
-            <TableCell className="text-muted-foreground">{j.message || (j.error ? `error: ${j.error}` : '')}</TableCell>
+            <TableCell className="text-muted-foreground">
+              {j.message || (j.error ? `error: ${jobErrorText(j.error) ?? 'Unknown error'}` : '')}
+            </TableCell>
             <TableCell className="text-muted-foreground">{fmtDate(j.created_at)}</TableCell>
           </TableRow>
         ))}

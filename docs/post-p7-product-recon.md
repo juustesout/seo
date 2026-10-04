@@ -648,3 +648,43 @@ Stop adding major features. Land the bounded polish/release-prep list from
 Sections 20 and 22, verify the signup path against production, and then put the
 product in front of real users. The loop is closed; the remaining work is
 credibility, not capability.
+
+---
+
+## 24. P8 polish resolution (post-recon)
+
+This section records how the Section 20 polish list was resolved in phase P8.
+It does not change the recon's verdict; it closes the listed defects.
+
+- **GSC page signal (Section 9/15).** Content intelligence now resolves a
+  project's Google properties through `seo_project_properties` (the same
+  account-scoped link used by keyword and competitor services) instead of the
+  dropped `project_id`. Regression test:
+  `apps/api/src/services/contentIntelligenceService.gscProperty.test.ts`.
+- **Composer publications unlinked (Section 8).** On adapter-confirmed publish,
+  the publish executor flips a linked `seo_content` row to `status='published'`
+  and fills a missing `published_at`. The composer exposes an optional
+  "Link to content" select and sends `content_id` only when chosen.
+- **`[object Object]` job errors (Section 14).** `jobErrorText()` renders the
+  jsonb `JobError`/string/`{error}` shapes as a message in the job table.
+- **Password reset (Section 16).** The auth screen gains a "Forgot password"
+  mode (`resetPasswordForEmail`) and a recovery screen (`updateUser`) triggered
+  by the Supabase `PASSWORD_RECOVERY` event or a `type=recovery` URL.
+- **Signup OTP type (Section 5).** `verifyOtp` now uses `type: 'signup'` for the
+  signup flow and `type: 'email'` for magic links, with a resend path per flow.
+  Live production Supabase verification remains a release-prep step.
+- **Measurement states (Section 9).** `ContentPerformanceState` is now
+  `measured | no_traffic | not_configured | no_url`, so an unconfigured
+  provider or a page without a URL is reported honestly instead of as a zero.
+- **Google hub copy and partial failure (Section 13).** Copy now states each
+  Google product is authorized separately; a per-product error/retry replaces
+  the all-or-nothing failure that hid every product.
+- **Destructive-action confirmations (Section 13).** API key revoke and
+  integration delete now confirm first (regression tests:
+  `AccountApiKeys.test.tsx`, `Integrations.test.tsx`).
+- **Navigation labels (Section 13).** The account "Integrations" entry is
+  renamed "Connections" to remove its collision with the project Integrations
+  view; stale "Follow it in Content" copy now reads "Open it in the Workspace".
+
+Project rename/delete was left out of scope: it is a feature, not a defect, and
+the recon lists it under deferred work, not the Section 20 polish list.

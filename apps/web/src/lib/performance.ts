@@ -20,7 +20,7 @@ export interface ContentPerformanceTraffic {
   sessions: number;
 }
 
-export type ContentPerformanceState = 'measured' | 'no_traffic';
+export type ContentPerformanceState = 'measured' | 'no_traffic' | 'not_configured' | 'no_url';
 
 export interface ContentPerformanceItem {
   content_id: string;

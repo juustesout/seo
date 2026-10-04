@@ -293,7 +293,10 @@ function IntegrationCard({
             size="sm"
             className="text-destructive"
             disabled={busy !== null}
-            onClick={() => void action('del', () => api(`/projects/${projectId}/integrations/${id}`, { method: 'DELETE' }))}
+            onClick={() => {
+              if (!window.confirm(`Delete the ${descriptor?.name ?? type} integration? Its stored credentials and project binding are removed.`)) return;
+              void action('del', () => api(`/projects/${projectId}/integrations/${id}`, { method: 'DELETE' }));
+            }}
           >
             Delete
           </Button>

@@ -13,6 +13,7 @@ import {
   contentPerformance,
   syncContentPerformance,
   type ContentPerformanceReport,
+  type ContentPerformanceState,
 } from '../lib/performance';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -30,6 +31,17 @@ function fmtPosition(v: number | null | undefined): string {
 function fmtCtr(v: number | null | undefined): string {
   return typeof v === 'number' && Number.isFinite(v) ? `${(v * 100).toFixed(1)}%` : '—';
 }
+
+/**
+ * Honest per-row measurement state. Each value maps to a distinct reason so the
+ * badge never implies a measurement that did not happen.
+ */
+const STATE_BADGE: Record<ContentPerformanceState, { label: string; variant: 'success' | 'outline' | 'warning' }> = {
+  measured: { label: 'Measured', variant: 'success' },
+  no_traffic: { label: 'No traffic', variant: 'outline' },
+  not_configured: { label: 'Not configured', variant: 'outline' },
+  no_url: { label: 'No URL', variant: 'warning' },
+};
 
 export function Performance({
   projectId,
@@ -195,9 +207,7 @@ export function Performance({
                       {row.traffic ? fmtNum(row.traffic.active_users) : '—'}
                     </TableCell>
                     <TableCell>
-                      <Badge variant={row.state === 'measured' ? 'success' : 'outline'}>
-                        {row.state === 'measured' ? 'Measured' : 'No data'}
-                      </Badge>
+                      <Badge variant={STATE_BADGE[row.state].variant}>{STATE_BADGE[row.state].label}</Badge>
                     </TableCell>
                   </TableRow>
                 ))}

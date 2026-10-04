@@ -9,9 +9,10 @@
  * project-scoped, read-only report.
  *
  * It is deliberately not automated SEO: nothing here changes content. Every row
- * is labelled honestly (`measured` vs `no_traffic`), a provider that is not
- * configured is reported as a note, and no metric is fabricated - a page with
- * no matched row shows "no data", never a zero that looks like evidence.
+ * is labelled honestly (`measured`, `no_traffic`, `not_configured` or `no_url`),
+ * a provider that is not configured is reported as a note, and no metric is
+ * fabricated - a page with no matched row shows "no data", never a zero that
+ * looks like evidence.
  *
  * Matching is host-agnostic and path-based: both GSC page rows (absolute URLs)
  * and GA4 rows (paths) are reduced to a normalized path and compared with the
@@ -26,6 +27,7 @@ import type {
   ContentPerformanceItem,
   ContentPerformanceReportDto,
   ContentPerformanceSearch,
+  ContentPerformanceState,
   ContentPerformanceSyncDto,
   ContentPerformanceTraffic,
   PerformancePeriodDays,
@@ -160,6 +162,10 @@ export class ContentPerformanceService {
       : { map: new Map<string, TrafficAgg>(), lastSynced: null as string | null };
 
     const items: ContentPerformanceItem[] = [];
+    // Whether any provider is even configured to measure against. When none is,
+    // an unmatched row is "not configured", not "no traffic" - the product must
+    // not imply measurement happened.
+    const anyProvider = gscLinked || Boolean(ga4Property);
     for (const c of content) {
       const publication = latestPublications.get(c.id) ?? null;
       const keys = matchKeys({ publication_url: publication?.url ?? null, url: c.url, slug: c.slug });
@@ -184,6 +190,11 @@ export class ContentPerformanceService {
             position: search.impressions > 0 ? search.positionWeight / search.impressions : null,
           }
         : null;
+      let state: ContentPerformanceState;
+      if (finalSearch || traffic) state = 'measured';
+      else if (!anyProvider) state = 'not_configured';
+      else if (keys.length === 0) state = 'no_url';
+      else state = 'no_traffic';
       items.push({
         content_id: c.id,
         title: c.title,
@@ -195,7 +206,7 @@ export class ContentPerformanceService {
         matched_path: matchedPath,
         search: finalSearch,
         traffic: traffic ? { views: traffic.views, active_users: traffic.active_users, sessions: traffic.sessions } : null,
-        state: finalSearch || traffic ? 'measured' : 'no_traffic',
+        state,
       });
     }
 

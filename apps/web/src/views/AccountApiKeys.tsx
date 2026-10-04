@@ -80,6 +80,7 @@ export function AccountApiKeys() {
   };
 
   const revoke = async (row: KeyRow) => {
+    if (!window.confirm(`Revoke API key "${row.name}"? Apps using it will stop working immediately.`)) return;
     setBusy(row.id);
     setErr(null);
     setOk(null);

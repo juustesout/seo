@@ -31,7 +31,7 @@ export function EditorAiBubbleMenu({ editor, actions }: { editor: Editor | null;
     ? actions.busy
       ? 'AI is working…'
       : undefined
-    : 'AI is not configured — add an OpenAI key under Account → Integrations.';
+    : 'AI is not configured — add an OpenAI key under Account → Connections.';
 
   const ask = () => {
     const instruction = window.prompt('What should the AI do with the selection?', 'Make this sound less corporate.');

@@ -169,6 +169,41 @@ describe('publish executor routing to a social publisher (Content Studio Phase H
     expect(sbStores.seo_publications[0]!.target_url).toBeNull();
   });
 
+  it('marks the linked seo_content row published once the adapter confirms', async () => {
+    const sbStores = stores();
+    sbStores.seo_content = [{ id: 'c1', project_id: 'p1', status: 'draft', published_at: null }];
+    const reg = buildRegistry({ config: { ENABLE_TEST_PUBLISHERS: 'true' }, logger: silentLogger() });
+    const c = container(reg, sbStores);
+
+    await executorFor('publish')({
+      container: c,
+      job: job(),
+      writer: {} as SeoWriter,
+      report: async () => undefined,
+    });
+
+    expect(sbStores.seo_content[0]!.status).toBe('published');
+    expect(typeof sbStores.seo_content[0]!.published_at).toBe('string');
+  });
+
+  it('leaves a standalone publication (no content_id) without touching seo_content', async () => {
+    const sbStores = stores();
+    sbStores.seo_publications[0]!.content_id = null;
+    sbStores.seo_content = [{ id: 'c1', project_id: 'p1', status: 'draft', published_at: null }];
+    const reg = buildRegistry({ config: { ENABLE_TEST_PUBLISHERS: 'true' }, logger: silentLogger() });
+    const c = container(reg, sbStores);
+
+    await executorFor('publish')({
+      container: c,
+      job: job(),
+      writer: {} as SeoWriter,
+      report: async () => undefined,
+    });
+
+    expect(sbStores.seo_content[0]!.status).toBe('draft');
+    expect(sbStores.seo_content[0]!.published_at).toBeNull();
+  });
+
   it('fails safely when the publisher provider is not registered (default production registry)', async () => {
     const sbStores = stores();
     const reg = buildRegistry({ config: {}, logger: silentLogger() });

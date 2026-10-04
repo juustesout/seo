@@ -6,8 +6,8 @@
  * `reload()` refreshes in place. The API is not involved; only the hook runs.
  */
 import { describe, expect, it, vi } from 'vitest';
-import { act, renderHook, waitFor } from '@testing-library/react';
-import { useAsync } from './ui';
+import { act, render, renderHook, screen, waitFor } from '@testing-library/react';
+import { JobTable, jobErrorText, useAsync } from './ui';
 
 interface Deferred<T> {
   promise: Promise<T>;
@@ -85,5 +85,46 @@ describe('useAsync', () => {
       first.resolve({ id: 'p-1' });
     });
     expect(result.current.data).toEqual({ id: 'p-2' });
+  });
+});
+
+describe('jobErrorText', () => {
+  it('reduces a JobError object to its message', () => {
+    expect(jobErrorText({ message: 'Provider rejected the request', code: 'invalid' })).toBe(
+      'Provider rejected the request',
+    );
+  });
+
+  it('passes a string error through and treats empties as null', () => {
+    expect(jobErrorText('plain failure')).toBe('plain failure');
+    expect(jobErrorText('   ')).toBeNull();
+    expect(jobErrorText(null)).toBeNull();
+  });
+
+  it('falls back to a nested error message then null', () => {
+    expect(jobErrorText({ error: 'nested failure' })).toBe('nested failure');
+    expect(jobErrorText({ code: 'no-message' })).toBeNull();
+  });
+});
+
+describe('JobTable', () => {
+  it('renders a JobError message instead of [object Object]', () => {
+    render(
+      <JobTable
+        jobs={[
+          {
+            id: 'j1',
+            job_type: 'publish',
+            status: 'failed',
+            progress: 40,
+            message: null,
+            error: { message: 'Remote post could not be created', retryable: true, occurred_at: '2026-09-01T00:00:00Z' },
+            created_at: '2026-09-01T00:00:00Z',
+          },
+        ]}
+      />,
+    );
+    expect(screen.getByText('error: Remote post could not be created')).toBeTruthy();
+    expect(screen.queryByText(/\[object Object\]/)).toBeNull();
   });
 });

@@ -248,20 +248,40 @@ export class ContentIntelligenceService {
       sources.push({ id: 'gsc', label: SOURCE_LABELS.gsc, state: 'no_data', note });
     };
 
-    const hosts = await this.container.sb
-      .from('seo_gsc_properties')
-      .select('site_url')
+    // The property registry is account-scoped: a project references its GSC
+    // property through seo_project_properties (migration 20260101000012), not a
+    // project_id column on seo_gsc_properties. Resolve the linked properties
+    // here so page signals match the same hosts the rest of the platform uses.
+    const links = await this.container.sb
+      .from('seo_project_properties')
+      .select('property_id')
       .eq('project_id', projectId)
-      .eq('is_active', true)
       .limit(50);
-    if (hosts.error) {
+    if (links.error) {
       degraded('Search Console properties could not be read, so page signals are unavailable right now.');
       return { sources, recommendations };
     }
+    const propertyIds = [
+      ...new Set((links.data ?? []).map((l) => String((l as Row).property_id ?? '')).filter(Boolean)),
+    ];
 
-    const propertyHosts = ((hosts.data ?? []) as Array<{ site_url: string }>)
-      .map((p) => siteHostOf(p.site_url))
-      .filter((h): h is string => Boolean(h));
+    let propertyHosts: string[] = [];
+    if (propertyIds.length > 0) {
+      const properties = await this.container.sb
+        .from('seo_gsc_properties')
+        .select('site_url')
+        .in('id', propertyIds)
+        .eq('is_active', true)
+        .limit(50);
+      if (properties.error) {
+        degraded('Search Console properties could not be read, so page signals are unavailable right now.');
+        return { sources, recommendations };
+      }
+      propertyHosts = ((properties.data ?? []) as Array<{ site_url: string }>)
+        .map((p) => siteHostOf(p.site_url))
+        .filter((h): h is string => Boolean(h));
+    }
+
     const candidates = pageUrlCandidates({
       url: text(row.url),
       slug: text(row.slug),

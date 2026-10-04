@@ -162,7 +162,7 @@ describe('ContentPerformanceService.report', () => {
     expect(report.last_synced_at).toBe('2026-09-12T00:00:00Z');
   });
 
-  it('reports published content with no matched data honestly and notes missing providers', async () => {
+  it('reports content not_configured (not "no traffic") when no provider is set up', async () => {
     const svc = new ContentPerformanceService(
       makeContainer(
         baseTables({
@@ -180,12 +180,54 @@ describe('ContentPerformanceService.report', () => {
     expect(report.sources).toEqual({ gsc: false, ga4: false });
     expect(report.rows).toHaveLength(1);
     const row = report.rows[0]!;
-    expect(row.state).toBe('no_traffic');
+    expect(row.state).toBe('not_configured');
     expect(row.search).toBeNull();
     expect(row.traffic).toBeNull();
     expect(row.publication_url).toBeNull();
     expect(row.days_live).toBe(12);
     expect(report.totals).toEqual({ search: null, traffic: null });
     expect(report.notes).toHaveLength(2);
+  });
+
+  it('reports no_traffic when providers are configured but nothing matched', async () => {
+    const svc = new ContentPerformanceService(
+      makeContainer(baseTables({ seo_gsc_pages: [], seo_page_traffic: [] })),
+      NOW,
+    );
+    const report = await svc.report(PROJECT, 28);
+
+    expect(report.sources).toEqual({ gsc: true, ga4: true });
+    const row = report.rows[0]!;
+    expect(row.state).toBe('no_traffic');
+    expect(row.matched_path).toBeNull();
+  });
+
+  it('reports no_url when the item has no publication URL, url or slug to match', async () => {
+    const svc = new ContentPerformanceService(
+      makeContainer(
+        baseTables({
+          seo_publications: [],
+          seo_content: [
+            {
+              project_id: PROJECT,
+              id: 'c1',
+              title: 'Untitled draft',
+              url: null,
+              slug: null,
+              status: 'published',
+              target_keyword: null,
+              published_at: '2026-09-01T00:00:00Z',
+            },
+          ],
+          seo_gsc_pages: [],
+          seo_page_traffic: [],
+        }),
+      ),
+      NOW,
+    );
+    const report = await svc.report(PROJECT, 28);
+
+    expect(report.sources).toEqual({ gsc: true, ga4: true });
+    expect(report.rows[0]!.state).toBe('no_url');
   });
 });

@@ -1270,7 +1270,7 @@ function Opportunities({
           intent: o.intent,
         },
       });
-      setNotice(`Draft generation started for "${o.keyword}". Follow it in Content.`);
+      setNotice(`Draft generation started for "${o.keyword}". Open it in the Workspace.`);
     } catch (e) {
       setActionError(
         e instanceof ApiRequestError && e.code === 'forbidden'
@@ -1831,7 +1831,7 @@ function Topics({
           opportunity_score: rec.bestOpportunityScore,
         },
       });
-      setNotice(`Draft generation started for "${rec.topic.name}". Follow it in Content.`);
+      setNotice(`Draft generation started for "${rec.topic.name}". Open it in the Workspace.`);
     } catch (e) {
       setActionError(
         e instanceof ApiRequestError && e.code === 'forbidden'

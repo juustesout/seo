@@ -104,7 +104,7 @@ function AiMenu({ ai }: { ai: ContentAiToolbar }) {
     ? ai.busy
       ? 'AI is working…'
       : ''
-    : 'AI is not configured — add an OpenAI key under Account → Integrations.';
+    : 'AI is not configured — add an OpenAI key under Account → Connections.';
   return (
     <details className="relative ml-auto inline-block">
       <summary
@@ -119,7 +119,7 @@ function AiMenu({ ai }: { ai: ContentAiToolbar }) {
       <div className="absolute right-0 top-[calc(100%+6px)] z-20 flex min-w-[240px] flex-col gap-1.5 rounded-lg border bg-card p-2.5 shadow-lg">
         {!ai.configured && (
           <p className="m-0 max-w-[260px] text-xs text-muted-foreground">
-            AI is not configured for this account. Add an OpenAI key under Account → Integrations.
+            AI is not configured for this account. Add an OpenAI key under Account → Connections.
           </p>
         )}
         {ai.configured && (

@@ -95,7 +95,7 @@ type NavIcon = React.ComponentType<{ className?: string }>;
 const TOP_NAV: Array<{ id: TopArea; label: string; icon: NavIcon }> = [
   { id: 'overview', label: 'Overview', icon: LayoutDashboard },
   { id: 'projects', label: 'Projects', icon: FolderKanban },
-  { id: 'integrations', label: 'Integrations', icon: Plug },
+  { id: 'integrations', label: 'Connections', icon: Plug },
   { id: 'keys', label: 'API keys', icon: KeyRound },
   { id: 'usage', label: 'Usage', icon: LineChart },
 ];
@@ -140,6 +140,12 @@ export function App() {
   const [authed, setAuthed] = useState<boolean | null>(null);
   const [session, setSession] = useState<{ email: string | null } | null>(null);
   const [bootError, setBootError] = useState<string | null>(null);
+  // A Supabase password-recovery link lands back here with a recovery session;
+  // until the user sets a new password we show the reset screen instead of the
+  // app, regardless of the (now authenticated) session.
+  const [recovery, setRecovery] = useState<boolean>(
+    () => typeof window !== 'undefined' && /(?:^|[#&?])type=recovery(?:&|$)/.test(window.location.hash + window.location.search),
+  );
   // Mobile-only project navigation drawer. Desktop keeps the always-visible
   // sidebar (`md:block`); below `md` the same entries are reachable through this
   // overlay because the sidebar is hidden there.
@@ -192,7 +198,8 @@ export function App() {
   // changes (e.g. sign-out elsewhere), rather than only at boot.
   useEffect(() => {
     if (!supabase) return;
-    const { data: sub } = supabase.auth.onAuthStateChange((_e, s) => {
+    const { data: sub } = supabase.auth.onAuthStateChange((event, s) => {
+      if (event === 'PASSWORD_RECOVERY') setRecovery(true);
       setSession(s?.user ? { email: s.user.email ?? null } : null);
       setAuthed(Boolean(s?.user));
     });
@@ -248,6 +255,19 @@ export function App() {
   // before every boot/auth gate.
   if (route.area === 'legal') {
     return <LegalPage view={route.view} />;
+  }
+
+  // Password recovery takes priority over the authenticated app: the recovery
+  // link signs the user in, but they are here to choose a new password.
+  if (recovery) {
+    return (
+      <ResetPasswordScreen
+        onDone={() => {
+          setRecovery(false);
+          window.history.replaceState({}, '', window.location.pathname);
+        }}
+      />
+    );
   }
 
   if (bootError && authed === false) {
@@ -836,16 +856,106 @@ function CreateProject({ email, onCreated }: { email: string | null; onCreated: 
 }
 
 /**
- * Supabase email/password auth screen, with magic-link / one-time-code and
- * sign-up flows. Only rendered while `authed === false`; once a session exists
- * App re-bootstraps and loads /me. No provider or service credentials are ever
- * involved here - this is purely identity for the anon-key client.
+ * Shown when the user follows a Supabase password-recovery link. The recovery
+ * link already established a session, so this only collects and applies the new
+ * password via `updateUser`; on success it hands control back to the app.
+ */
+function ResetPasswordScreen({ onDone }: { onDone: () => void }) {
+  const [password, setPassword] = useState('');
+  const [confirm, setConfirm] = useState('');
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const submit = async () => {
+    setErr(null);
+    if (password.length < 8) {
+      setErr('Password must be at least 8 characters.');
+      return;
+    }
+    if (password !== confirm) {
+      setErr('Passwords do not match.');
+      return;
+    }
+    setBusy(true);
+    try {
+      if (!supabase) throw new Error('Supabase not configured');
+      const { error } = await supabase.auth.updateUser({ password });
+      if (error) throw new Error(error.message);
+      onDone();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="flex min-h-screen flex-col">
+      <div className="flex flex-1 items-start justify-center">
+        <CenteredCard>
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Choose a new password</CardTitle>
+              <CardDescription>Set a new password for your OldSkoolSEO account.</CardDescription>
+            </CardHeader>
+            <CardContent className="grid gap-4">
+              <div className="grid gap-1.5">
+                <label className="text-sm font-medium" htmlFor="reset-password">
+                  New password
+                </label>
+                <Input
+                  id="reset-password"
+                  type="password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                />
+              </div>
+              <div className="grid gap-1.5">
+                <label className="text-sm font-medium" htmlFor="reset-confirm">
+                  Confirm new password
+                </label>
+                <Input
+                  id="reset-confirm"
+                  type="password"
+                  value={confirm}
+                  onChange={(e) => setConfirm(e.target.value)}
+                />
+              </div>
+              {err && (
+                <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+                  {err}
+                </div>
+              )}
+              <div>
+                <Button type="button" onClick={() => void submit()} disabled={busy || !password || !confirm}>
+                  {busy ? 'Saving…' : 'Set new password'}
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </CenteredCard>
+      </div>
+      <LegalFooter />
+    </div>
+  );
+}
+
+/**
+ * Supabase email/password auth screen, with magic-link / one-time-code,
+ * sign-up and password-reset flows. Only rendered while `authed === false`;
+ * once a session exists App re-bootstraps and loads /me. No provider or service
+ * credentials are ever involved here - this is purely identity for the anon-key
+ * client.
  */
 function AuthScreen() {
-  const [mode, setMode] = useState<'login' | 'signup' | 'code'>('login');
+  const [mode, setMode] = useState<'login' | 'signup' | 'code' | 'forgot'>('login');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [code, setCode] = useState('');
+  // A 6-digit code means different things depending on where it came from: a
+  // signup confirmation must be verified as `signup`, a magic-link OTP as
+  // `email`. Using the wrong type makes verifyOtp reject a valid code.
+  const [codeType, setCodeType] = useState<'email' | 'signup'>('email');
   const [err, setErr] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -857,7 +967,7 @@ function AuthScreen() {
     try {
       if (!supabase) throw new Error('Supabase not configured');
       if (mode === 'code') {
-        const { error } = await supabase.auth.verifyOtp({ email, token: code.trim(), type: 'email' });
+        const { error } = await supabase.auth.verifyOtp({ email, token: code.trim(), type: codeType });
         if (error) throw new Error(error.message);
         return;
       }
@@ -866,9 +976,17 @@ function AuthScreen() {
         if (error) throw new Error(error.message);
         return;
       }
+      if (mode === 'forgot') {
+        const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo: window.location.origin });
+        if (error) throw new Error(error.message);
+        setMode('login');
+        setInfo('If an account exists for that email, a password reset link is on its way.');
+        return;
+      }
       const { error, data } = await supabase.auth.signUp({ email, password });
       if (error) throw new Error(error.message);
       if (data.session) return; // auto-confirmed project
+      setCodeType('signup');
       setMode('code');
       setInfo('Check your inbox for a one-time code, then paste it below.');
     } catch (e) {
@@ -886,8 +1004,33 @@ function AuthScreen() {
       if (!supabase) throw new Error('Supabase not configured');
       const { error } = await supabase.auth.signInWithOtp({ email });
       if (error) throw new Error(error.message);
+      setCodeType('email');
       setMode('code');
       setInfo('Magic link / code sent. Paste the code below after clicking the link.');
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // Re-send the same kind of code the user is currently verifying: a fresh
+  // signup confirmation for a signup code, otherwise a new magic-link OTP.
+  const resend = async () => {
+    setErr(null);
+    setInfo(null);
+    setBusy(true);
+    try {
+      if (!supabase) throw new Error('Supabase not configured');
+      if (codeType === 'signup') {
+        const { error } = await supabase.auth.resend({ type: 'signup', email });
+        if (error) throw new Error(error.message);
+        setInfo('Confirmation code re-sent. Check your inbox.');
+      } else {
+        const { error } = await supabase.auth.signInWithOtp({ email });
+        if (error) throw new Error(error.message);
+        setInfo('Magic link / code re-sent. Check your inbox.');
+      }
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
     } finally {
@@ -955,13 +1098,18 @@ function AuthScreen() {
             </label>
             <Input id="auth-email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} />
           </div>
-          {mode !== 'code' && (
+          {(mode === 'login' || mode === 'signup') && (
             <div className="grid gap-1.5">
               <label className="text-sm font-medium" htmlFor="auth-password">
                 Password
               </label>
               <Input id="auth-password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} />
             </div>
+          )}
+          {mode === 'forgot' && (
+            <p className="text-sm text-muted-foreground">
+              Enter your account email and we will send a password reset link.
+            </p>
           )}
           {mode === 'code' && (
             <div className="grid gap-1.5">
@@ -980,29 +1128,44 @@ function AuthScreen() {
             <div className="rounded-md border border-success/30 bg-success/5 px-3 py-2 text-sm text-success">{info}</div>
           )}
           <div className="flex flex-wrap gap-2">
-            {mode !== 'code' ? (
-              <Button type="button" onClick={() => void submit()} disabled={busy || !email || !password}>
-                {busy ? '…' : mode === 'login' ? 'Log in' : 'Create account'}
+            {mode === 'forgot' ? (
+              <Button type="button" onClick={() => void submit()} disabled={busy || !email}>
+                {busy ? '…' : 'Send reset link'}
               </Button>
-            ) : (
+            ) : mode === 'code' ? (
               <Button type="button" onClick={() => void submit()} disabled={busy || !code.trim()}>
                 {busy ? '…' : 'Verify code'}
               </Button>
+            ) : (
+              <Button type="button" onClick={() => void submit()} disabled={busy || !email || !password}>
+                {busy ? '…' : mode === 'login' ? 'Log in' : 'Create account'}
+              </Button>
             )}
-            <Button type="button" variant="outline" onClick={() => setMode(mode === 'login' ? 'signup' : 'login')}>
-              {mode === 'login' ? 'Create account instead' : 'Log in instead'}
-            </Button>
+            {mode === 'forgot' ? (
+              <Button type="button" variant="outline" onClick={() => { setMode('login'); setErr(null); setInfo(null); }}>
+                Back to log in
+              </Button>
+            ) : (
+              <Button type="button" variant="outline" onClick={() => { setMode(mode === 'login' ? 'signup' : 'login'); setErr(null); setInfo(null); }}>
+                {mode === 'login' ? 'Create account instead' : 'Log in instead'}
+              </Button>
+            )}
             {mode === 'code' && (
-              <Button type="button" variant="outline" onClick={() => void magic()} disabled={busy || !email}>
+              <Button type="button" variant="outline" onClick={() => void resend()} disabled={busy || !email}>
                 Re-send code
               </Button>
             )}
           </div>
-          {mode !== 'code' && (
-            <div>
+          {(mode === 'login' || mode === 'signup') && (
+            <div className="flex flex-wrap gap-2">
               <Button type="button" variant="ghost" onClick={() => void magic()} disabled={busy || !email}>
                 Email me a magic link instead
               </Button>
+              {mode === 'login' && (
+                <Button type="button" variant="ghost" onClick={() => { setMode('forgot'); setErr(null); setInfo(null); }}>
+                  Forgot password?
+                </Button>
+              )}
             </div>
           )}
         </CardContent>
