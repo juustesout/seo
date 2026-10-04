@@ -20,47 +20,52 @@
 :root {
   --radius: 0.625rem;
 
+  /* Quiet premium palette: light neutral canvas, white surfaces, faint lines. */
   --background: #f7f8fa;
-  --foreground: #1d2939;
+  --foreground: #17191d;
 
   --card: #ffffff;
-  --card-foreground: #1d2939;
+  --card-foreground: #17191d;
 
   --popover: #ffffff;
-  --popover-foreground: #1d2939;
+  --popover-foreground: #17191d;
 
   --primary: #2563eb;
   --primary-foreground: #ffffff;
 
-  --secondary: #f4f6f8;
-  --secondary-foreground: #1d2939;
+  --secondary: #f1f3f5;
+  --secondary-foreground: #17191d;
 
-  --muted: #f4f6f8;
-  --muted-foreground: #667085;
+  --muted: #f1f3f5;
+  --muted-foreground: #6b7280;
 
-  --accent: #eff6ff;
-  --accent-foreground: #1e40af;
+  /* Restrained neutral hover/active wash instead of a colored accent fill. */
+  --accent: #f1f3f5;
+  --accent-foreground: #17191d;
 
   --destructive: #dc2626;
   --destructive-foreground: #ffffff;
 
+  /* Status colors communicate state only; they are never a brand fill. */
   --success: #16a34a;
   --success-foreground: #ffffff;
 
   --warning: #d97706;
   --warning-foreground: #ffffff;
 
-  --border: #e5e7eb;
-  --input: #d8dde3;
+  --border: #e7e9ed;
+  --input: #dcdfe4;
   --ring: #2563eb;
 
-  --sidebar: #ffffff;
-  --sidebar-foreground: #1d2939;
+  --hover: #f1f3f5;
+
+  --sidebar: #fbfbfc;
+  --sidebar-foreground: #17191d;
   --sidebar-primary: #2563eb;
   --sidebar-primary-foreground: #ffffff;
-  --sidebar-accent: #f4f6f8;
-  --sidebar-accent-foreground: #1d2939;
-  --sidebar-border: #e5e7eb;
+  --sidebar-accent: #f1f3f5;
+  --sidebar-accent-foreground: #17191d;
+  --sidebar-border: #e7e9ed;
   --sidebar-ring: #2563eb;
 }
 

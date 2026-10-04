@@ -1,20 +1,30 @@
 /**
  * Project dashboard (default project view at `/p/:id/dashboard`).
  *
- * Aggregates real provider data - Search Console clicks/impressions, tracked
- * keywords, pages, ranking rows - and is honest about configuration: the
- * "active capabilities" list only shows capabilities that are actually on, the
- * feature pills come from the server payload (no invented metrics), and a CTA
- * appears when no GSC property is attached yet. Background jobs are listed and
- * polled while busy via lib/ui useJobs.
+ * The SEO command center: current project context, the search performance
+ * numbers Google actually recorded, what needs attention, workspace coverage
+ * and the top queries. Background jobs sit at the bottom as secondary
+ * operational information. Everything is rendered from real provider state - a
+ * search source that is off is reported as "not connected", never as a zero.
  */
 import { useState } from 'react';
 import { api } from '../lib/api';
-import { useAsync, fmtNum, fmtDate, useJobs, JobTable, Empty } from '../lib/ui';
+import {
+  useAsync,
+  fmtNum,
+  fmtDate,
+  useJobs,
+  JobTable,
+  Empty,
+  SectionHeading,
+  Panel,
+  Divider,
+  Metric,
+  StatusDot,
+} from '../lib/ui';
 import { OnboardingChecklist } from '@/components/onboarding/OnboardingChecklist';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { PageHeader } from '@/components/ui/page-header';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 
@@ -23,7 +33,11 @@ interface Dash {
   performance: { last_7d: number; last_28d: number; impressions_28d: number; days: number };
   counts: { keywords: number; pages: number; ranking_rows_28d: number };
   top_queries: Array<{ query: string; clicks: number; impressions: number; position: number }>;
-  sources: { integrations: any[]; data_sources: any[]; last_sync_at: string | null };
+  sources: {
+    integrations: Array<{ provider_type?: string; status?: string }>;
+    data_sources: Array<{ provider_type?: string; status?: string }>;
+    last_sync_at: string | null;
+  };
   features: Record<string, boolean>;
 }
 
@@ -37,34 +51,46 @@ function GscAttachCta({ projectId, onOpenSettings }: { projectId: string; onOpen
   const { data } = useAsync<GscState>(() => api(`/projects/${projectId}/gsc/state`), [projectId]);
   if (!data || data.current) return null;
   return (
-    <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-primary/20 bg-accent px-4 py-3 text-sm text-accent-foreground">
-      <span>
+    <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border bg-muted/40 px-4 py-3 text-sm">
+      <span className="text-foreground">
         {data.google.connected
           ? 'This project has no Google Search Console property connected.'
           : 'This project is not connected to Google Search Console yet.'}
       </span>
       <Button size="sm" onClick={onOpenSettings}>
-        {data.google.connected ? 'Attach GSC Property' : 'Set up Search Console'}
+        {data.google.connected ? 'Attach GSC property' : 'Set up Search Console'}
       </Button>
     </div>
   );
 }
 
+/** A single actionable row in the "what needs attention" list. */
+interface AttentionItem {
+  key: string;
+  text: string;
+  action?: { label: string; onClick: () => void };
+}
+
 /**
  * Renders the dashboard payload from `/projects/:projectId/dashboard`.
  * `onOpenSettings` deep-links the "attach GSC property / set up Search
- * Console" CTA into the project's Settings view.
+ * Console" CTA into the project's Settings view; `onOpenView` routes the
+ * attention-list actions into the relevant project surface.
  */
 export function Dashboard({
   projectId,
   role,
   onOpenSettings,
   onOpenView,
+  projectName,
+  websiteUrl,
 }: {
   projectId: string;
   role: string;
   onOpenSettings: () => void;
   onOpenView: (view: string, sub?: string) => void;
+  projectName?: string;
+  websiteUrl?: string | null;
 }) {
   const { data, error, loading, reload } = useAsync<Dash>(
     () => api(`/projects/${projectId}/dashboard`),
@@ -88,25 +114,63 @@ export function Dashboard({
     .filter(([, on]) => on)
     .map(([k]) => k);
 
-  const stats = [
-    { label: 'Clicks (7d)', value: fmtNum(perf.last_7d) },
-    { label: 'Clicks (28d)', value: fmtNum(perf.last_28d) },
-    { label: 'Impressions (28d)', value: fmtNum(perf.impressions_28d) },
-    { label: 'Tracked keywords', value: fmtNum(data.counts.keywords) },
-    { label: 'Pages', value: fmtNum(data.counts.pages) },
-    { label: 'Ranking rows (28d)', value: fmtNum(data.counts.ranking_rows_28d) },
-  ];
+  const gscActive = data.sources.data_sources.some(
+    (d) => d.provider_type === 'gsc' && d.status === 'active',
+  );
+  const failedJobs = jobs.filter((j) => j.status === 'failed' || j.status === 'error');
+  const unhealthy = data.sources.integrations.filter((i) => i.status && i.status !== 'connected');
+
+  const attention: AttentionItem[] = [];
+  if (unhealthy.length > 0) {
+    attention.push({
+      key: 'integrations',
+      text: `${unhealthy.length} connection${unhealthy.length === 1 ? '' : 's'} need attention.`,
+      action: { label: 'Open Integrations', onClick: () => onOpenView('integrations') },
+    });
+  }
+  if (failedJobs.length > 0) {
+    attention.push({
+      key: 'jobs',
+      text: `${failedJobs.length} background job${failedJobs.length === 1 ? '' : 's'} failed.`,
+      action: { label: 'Refresh jobs', onClick: reload },
+    });
+  }
+  if (data.counts.keywords === 0) {
+    attention.push({
+      key: 'keywords',
+      text: 'No keywords are being tracked yet.',
+      action: { label: 'Open Keywords', onClick: () => onOpenView('keywords') },
+    });
+  }
+
+  const host = websiteUrl ? websiteUrl.replace(/^https?:\/\//, '').replace(/\/$/, '') : null;
 
   return (
-    <div className="grid gap-5">
+    <div className="mx-auto grid max-w-6xl gap-8">
       <div className="grid gap-3">
         <PageHeader
-          title="Dashboard"
+          eyebrow="Dashboard"
+          title={projectName ?? 'Search overview'}
           description={
-            <>
-              Last sync {data.sources.last_sync_at ? fmtDate(data.sources.last_sync_at) : 'never'} ·{' '}
-              {data.sources.integrations.length} integrations · {data.sources.data_sources.length} data source(s)
-            </>
+            <span className="inline-flex flex-wrap items-center gap-x-2 gap-y-1">
+              {host ? (
+                <>
+                  <span>{host}</span>
+                  <span className="text-border">·</span>
+                </>
+              ) : null}
+              <span>Last synced {data.sources.last_sync_at ? fmtDate(data.sources.last_sync_at) : 'never'}</span>
+              <span className="text-border">·</span>
+              <span className="inline-flex items-center gap-1.5">
+                <StatusDot tone={gscActive ? 'success' : 'neutral'} />
+                Search Console {gscActive ? 'connected' : 'not connected'}
+              </span>
+            </span>
+          }
+          actions={
+            <Button variant="outline" size="sm" onClick={reload}>
+              Refresh
+            </Button>
           }
         />
         <GscAttachCta projectId={projectId} onOpenSettings={onOpenSettings} />
@@ -121,85 +185,138 @@ export function Dashboard({
         onOpenView={onOpenView}
       />
 
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
-        {stats.map((s) => (
-          <Card key={s.label} className="gap-0 py-4">
-            <CardContent className="px-4">
-              <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{s.label}</div>
-              <div className="mt-1 text-2xl font-semibold tabular-nums">{s.value}</div>
-            </CardContent>
-          </Card>
-        ))}
-      </div>
+      <section className="grid gap-5">
+        <SectionHeading
+          title="Search performance"
+          description="Clicks and impressions Google Search Console recorded for this project."
+        />
+        {gscActive ? (
+          <div className="grid grid-cols-2 gap-6 sm:grid-cols-3">
+            <Metric label="Clicks · last 7 days" value={fmtNum(perf.last_7d)} />
+            <Metric label="Clicks · last 28 days" value={fmtNum(perf.last_28d)} />
+            <Metric label="Impressions · last 28 days" value={fmtNum(perf.impressions_28d)} />
+          </div>
+        ) : (
+          <Panel className="px-4 py-2">
+            <Empty>
+              Search Console is not connected, so there is no search performance to show yet.
+            </Empty>
+          </Panel>
+        )}
+      </section>
 
-      <div className="grid gap-4 lg:grid-cols-2">
-        <Card>
-          <CardHeader>
-            <CardTitle>Active capabilities</CardTitle>
-          </CardHeader>
-          <CardContent>
-            {feats.length === 0 ? (
-              <Empty>
-                No data sources connected yet. Open <b>Integrations</b> to connect Search Console or DataForSEO.
-              </Empty>
-            ) : (
-              <div className="flex flex-wrap gap-2">
-                {feats.map((f) => (
-                  <Badge key={f} variant="success">
-                    {f}
-                  </Badge>
-                ))}
-              </div>
-            )}
-          </CardContent>
-        </Card>
+      <Divider />
 
-        <Card>
-          <CardHeader>
-            <CardTitle>Top queries (28d)</CardTitle>
-          </CardHeader>
-          <CardContent>
-            {data.top_queries.length === 0 ? (
-              <Empty>No search query data yet</Empty>
-            ) : (
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Query</TableHead>
-                    <TableHead className="text-right">Clicks</TableHead>
-                    <TableHead className="text-right">Impr.</TableHead>
-                    <TableHead className="text-right">Pos</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {data.top_queries.map((q) => (
-                    <TableRow key={q.query}>
-                      <TableCell>{q.query}</TableCell>
-                      <TableCell className="text-right tabular-nums">{fmtNum(q.clicks)}</TableCell>
-                      <TableCell className="text-right tabular-nums">{fmtNum(q.impressions)}</TableCell>
-                      <TableCell className="text-right tabular-nums">{q.position ?? '—'}</TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            )}
-          </CardContent>
-        </Card>
-      </div>
+      <section className="grid gap-6 lg:grid-cols-2">
+        <div className="grid content-start gap-3">
+          <SectionHeading title="What needs attention" />
+          {attention.length === 0 ? (
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <StatusDot tone="success" />
+              Nothing needs your attention right now.
+            </div>
+          ) : (
+            <ul className="grid gap-2.5">
+              {attention.map((item) => (
+                <li key={item.key} className="flex items-start justify-between gap-3 text-sm">
+                  <span className="flex items-start gap-2 text-foreground">
+                    <StatusDot tone="warning" className="mt-1.5" />
+                    {item.text}
+                  </span>
+                  {item.action ? (
+                    <button
+                      type="button"
+                      onClick={item.action.onClick}
+                      className="shrink-0 text-[13px] font-medium text-primary hover:underline"
+                    >
+                      {item.action.label}
+                    </button>
+                  ) : null}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
 
-      <Card>
-        <CardHeader className="flex flex-row items-center justify-between">
-          <CardTitle className="flex items-center gap-2">
-            Background jobs {busy ? <Badge variant="warning">running…</Badge> : null}
-          </CardTitle>
-          <Button variant="outline" size="sm" onClick={reload}>
-            Refresh
-          </Button>
-        </CardHeader>
-        <CardContent>
-          <JobTable jobs={jobs} />
-        </CardContent>
-      </Card>
+        <div className="grid content-start gap-3">
+          <SectionHeading title="Coverage" description="What this workspace is tracking." />
+          <div className="grid grid-cols-3 gap-4">
+            <Metric label="Keywords" value={fmtNum(data.counts.keywords)} />
+            <Metric label="Pages" value={fmtNum(data.counts.pages)} />
+            <Metric label="Ranking rows · 28d" value={fmtNum(data.counts.ranking_rows_28d)} />
+          </div>
+        </div>
+      </section>
+
+      <Divider />
+
+      <section className="grid gap-4">
+        <SectionHeading
+          title="Top queries"
+          description="Highest-click queries in the last 28 days."
+        />
+        {data.top_queries.length === 0 ? (
+          <Empty>No search query data yet</Empty>
+        ) : (
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Query</TableHead>
+                <TableHead className="text-right">Clicks</TableHead>
+                <TableHead className="text-right">Impr.</TableHead>
+                <TableHead className="text-right">Pos</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {data.top_queries.map((q) => (
+                <TableRow key={q.query}>
+                  <TableCell>{q.query}</TableCell>
+                  <TableCell className="text-right tabular-nums">{fmtNum(q.clicks)}</TableCell>
+                  <TableCell className="text-right tabular-nums">{fmtNum(q.impressions)}</TableCell>
+                  <TableCell className="text-right tabular-nums">{q.position ?? '—'}</TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        )}
+      </section>
+
+      <section className="grid gap-3">
+        <SectionHeading title="Active capabilities" />
+        {feats.length === 0 ? (
+          <Empty>
+            No data sources connected yet. Open <b>Integrations</b> to connect Search Console or DataForSEO.
+          </Empty>
+        ) : (
+          <div className="flex flex-wrap gap-2">
+            {feats.map((f) => (
+              <Badge key={f} variant="success">
+                {f}
+              </Badge>
+            ))}
+          </div>
+        )}
+      </section>
+
+      <Divider />
+
+      <section className="grid gap-3">
+        <SectionHeading
+          title={
+            <span className="inline-flex items-center gap-2">
+              Background jobs
+              {busy ? <Badge variant="warning">running</Badge> : null}
+            </span>
+          }
+          description="Operational activity for this project."
+          actions={
+            <Button variant="outline" size="sm" onClick={reload}>
+              Refresh
+            </Button>
+          }
+        />
+        <JobTable jobs={jobs} />
+      </section>
     </div>
   );
 }

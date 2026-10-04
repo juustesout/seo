@@ -14,14 +14,17 @@
  */
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  BarChart3,
   BookOpen,
   CalendarDays,
+  ChevronLeft,
+  ChevronRight,
   FolderKanban,
-  Globe,
   KeyRound,
   LayoutDashboard,
   LineChart,
   Loader2,
+  Megaphone,
   Menu,
   Newspaper,
   PenSquare,
@@ -30,6 +33,7 @@ import {
   Send,
   Settings,
   ShieldCheck,
+  Tags,
   TrendingUp,
   X,
 } from 'lucide-react';
@@ -40,6 +44,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/utils';
 import { openProjectView } from './lib/nav';
+import { StatusDot } from './lib/ui';
 import { createRouteNavigation } from './lib/historyNavigation';
 import { canonicalWorkspaceRoute, parseRoute, routePath, type Route, type TopArea } from './lib/projectRoute';
 import { DesignSystemProvider } from './lib/designSystem';
@@ -100,19 +105,68 @@ const TOP_NAV: Array<{ id: TopArea; label: string; icon: NavIcon }> = [
   { id: 'usage', label: 'Usage', icon: LineChart },
 ];
 
-const PROJECT_NAV: Array<{ id: string; label: string; icon: NavIcon }> = [
-  { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
-  { id: 'keywords', label: 'Keywords', icon: Search },
-  { id: 'google', label: 'Google', icon: Globe },
-  { id: 'performance', label: 'Performance', icon: TrendingUp },
-  { id: 'integrations', label: 'Integrations', icon: Plug },
-  { id: 'knowledge', label: 'Knowledge Base', icon: BookOpen },
-  { id: 'workspace', label: 'Workspace', icon: PenSquare },
-  { id: 'calendar', label: 'Calendar', icon: CalendarDays },
-  { id: 'publications', label: 'Publications', icon: Newspaper },
-  { id: 'publishing', label: 'Publishing', icon: Send },
-  { id: 'usage', label: 'Usage', icon: LineChart },
-  { id: 'settings', label: 'Settings', icon: Settings },
+/**
+ * Project navigation, grouped so the sidebar communicates product structure
+ * (Google, Writing, Publishing, User) rather than a flat list of routes. Every
+ * entry maps to an existing project view; no new surface is invented here.
+ */
+interface NavItem {
+  id: string;
+  label: string;
+  icon: NavIcon;
+}
+
+interface NavGroup {
+  id: string;
+  label: string;
+  items: NavItem[];
+}
+
+const PROJECT_NAV_GROUPS: NavGroup[] = [
+  {
+    id: 'overview',
+    label: 'Overview',
+    items: [
+      { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
+      { id: 'performance', label: 'Performance', icon: TrendingUp },
+    ],
+  },
+  {
+    id: 'google',
+    label: 'Google',
+    items: [
+      { id: 'google', label: 'Search Console', icon: Search },
+      { id: 'analytics', label: 'Analytics', icon: BarChart3 },
+      { id: 'ads', label: 'Ads', icon: Megaphone },
+      { id: 'integrations', label: 'Integrations', icon: Plug },
+    ],
+  },
+  {
+    id: 'writing',
+    label: 'Writing',
+    items: [
+      { id: 'keywords', label: 'Keywords', icon: Tags },
+      { id: 'knowledge', label: 'Knowledge Base', icon: BookOpen },
+      { id: 'workspace', label: 'Workspace', icon: PenSquare },
+      { id: 'calendar', label: 'Calendar', icon: CalendarDays },
+    ],
+  },
+  {
+    id: 'publishing',
+    label: 'Publishing',
+    items: [
+      { id: 'publications', label: 'Publications', icon: Newspaper },
+      { id: 'publishing', label: 'Publishing', icon: Send },
+    ],
+  },
+  {
+    id: 'user',
+    label: 'User',
+    items: [
+      { id: 'usage', label: 'Usage', icon: LineChart },
+      { id: 'settings', label: 'Settings', icon: Settings },
+    ],
+  },
 ];
 
 /**
@@ -399,10 +453,9 @@ export function App() {
     const workspaceActive = view === 'workspace';
     const workspaceMode = normalizeWorkspaceMode(route.sub);
     const workspaceContentId = route.sub2;
-    // Analytics and Ads are now reached through the unified Google hub, so the
-    // nav entry stays highlighted while their detail routes are open.
-    const sidebarView =
-      view === 'analytics' || view === 'ads' ? 'google' : workspaceActive ? 'workspace' : view;
+    // Analytics and Ads now have their own grouped sidebar entries, so the
+    // active item is simply the project view currently rendered.
+    const sidebarView = workspaceActive ? 'workspace' : view;
     return (
       <DesignSystemProvider projectId={pid}>
         <div className="flex min-h-screen flex-col">
@@ -421,7 +474,15 @@ export function App() {
             onAdmin={() => goAdmin()}
           />
           <div className="flex flex-1">
-            <ProjectSidebar projectId={pid} view={sidebarView} onNavigate={goProject} />
+            <ProjectSidebar
+              projectId={pid}
+              view={sidebarView}
+              onNavigate={goProject}
+              projectName={project.name}
+              websiteUrl={project.website_url}
+              connectedCount={project.connected_count}
+              integrationCount={project.integration_count}
+            />
             <MobileProjectNav
               projectId={pid}
               view={sidebarView}
@@ -429,12 +490,14 @@ export function App() {
               onNavigate={goProject}
               onClose={() => setMobileNavOpen(false)}
             />
-            <main className="min-w-0 flex-1 px-6 py-6">
+            <main className="min-w-0 flex-1 px-6 py-8 lg:px-8">
               <Suspense fallback={<RouteFallback />}>
               {view === 'dashboard' && (
                 <Dashboard
                   projectId={pid}
                   role={project.role}
+                  projectName={project.name}
+                  websiteUrl={project.website_url}
                   onOpenSettings={() => goProject(pid, 'settings')}
                   onOpenView={(next, sub) => goProject(pid, next, sub)}
                 />
@@ -630,7 +693,7 @@ export function AppHeader({
       )}
       {projects.length > 0 && (
         <select
-          className="ml-1 h-8 max-w-[180px] rounded-md border border-input bg-background px-2 text-sm shadow-xs outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+          className="ml-1 h-8 max-w-[180px] rounded-md border border-input bg-background px-2 text-sm outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
           value={currentProjectId ?? ''}
           onChange={(e) => {
             const id = e.target.value;
@@ -656,19 +719,30 @@ export function AppHeader({
   );
 }
 
-/** The one list of project views, shared by the desktop sidebar and mobile drawer. */
-function ProjectNavList({
+/** Render one navigation group with a quiet label and its icon+label items. */
+function NavGroupBlock({
+  group,
   projectId,
   view,
+  collapsed,
   onNavigate,
 }: {
+  group: NavGroup;
   projectId: string;
   view: string;
+  collapsed: boolean;
   onNavigate: (id: string, view: string) => void;
 }) {
   return (
-    <nav className="flex flex-col gap-0.5 p-3">
-      {PROJECT_NAV.map((n) => {
+    <div className="grid gap-0.5">
+      {collapsed ? (
+        <div className="mx-auto my-1.5 h-px w-5 bg-sidebar-border" aria-hidden="true" />
+      ) : (
+        <div className="px-2.5 pb-1 pt-3 text-[11px] font-medium uppercase tracking-wider text-muted-foreground/70">
+          {group.label}
+        </div>
+      )}
+      {group.items.map((n) => {
         const Icon = n.icon;
         const isActive = view === n.id;
         return (
@@ -676,43 +750,162 @@ function ProjectNavList({
             key={n.id}
             type="button"
             onClick={() => onNavigate(projectId, n.id)}
+            title={collapsed ? n.label : undefined}
+            aria-label={n.label}
+            aria-current={isActive ? 'page' : undefined}
             className={cn(
-              'flex items-center gap-2.5 rounded-md px-3 py-2 text-left text-sm transition-colors',
+              'relative flex items-center gap-2.5 rounded-md py-2 text-left text-sm transition-colors',
+              collapsed ? 'justify-center px-0' : 'px-2.5',
               isActive
-                ? 'bg-sidebar-accent font-medium text-sidebar-accent-foreground'
-                : 'text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground',
+                ? 'bg-sidebar-accent font-medium text-sidebar-foreground'
+                : 'text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground',
             )}
           >
+            {isActive && !collapsed && (
+              <span
+                className="absolute left-0 top-1/2 h-4 w-0.5 -translate-y-1/2 rounded-full bg-primary"
+                aria-hidden="true"
+              />
+            )}
             <Icon className="size-4 shrink-0" />
-            {n.label}
+            {!collapsed && <span className="truncate">{n.label}</span>}
           </button>
         );
       })}
-    </nav>
+    </div>
   );
 }
 
-/** Project workspace sidebar: one entry per project view, icon + label. */
-function ProjectSidebar({
+/** The one grouped list of project views, shared by the desktop sidebar and mobile drawer. */
+function ProjectNavList({
   projectId,
   view,
   onNavigate,
+  collapsed = false,
 }: {
   projectId: string;
   view: string;
   onNavigate: (id: string, view: string) => void;
+  collapsed?: boolean;
 }) {
   return (
-    <aside className="hidden w-60 shrink-0 border-r bg-sidebar md:block">
-      <ProjectNavList projectId={projectId} view={view} onNavigate={onNavigate} />
+    <nav className={cn('flex flex-col gap-1', collapsed ? 'px-2 py-3' : 'px-2 py-2')}>
+      {PROJECT_NAV_GROUPS.map((group) => (
+        <NavGroupBlock
+          key={group.id}
+          group={group}
+          projectId={projectId}
+          view={view}
+          collapsed={collapsed}
+          onNavigate={onNavigate}
+        />
+      ))}
+    </nav>
+  );
+}
+
+/** localStorage key for the persisted desktop sidebar collapse state. */
+const SIDEBAR_COLLAPSED_KEY = 'seo.sidebar.collapsed';
+
+/**
+ * Project workspace sidebar: grouped, collapsible navigation plus a compact
+ * project/connection context footer. Collapse state is persisted locally so the
+ * chosen density survives reloads.
+ */
+export function ProjectSidebar({
+  projectId,
+  view,
+  onNavigate,
+  projectName,
+  websiteUrl,
+  connectedCount,
+  integrationCount,
+}: {
+  projectId: string;
+  view: string;
+  onNavigate: (id: string, view: string) => void;
+  projectName: string;
+  websiteUrl: string | null;
+  connectedCount: number;
+  integrationCount: number;
+}) {
+  const [collapsed, setCollapsed] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    try {
+      return window.localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === '1';
+    } catch {
+      return false;
+    }
+  });
+
+  const toggle = () => {
+    setCollapsed((current) => {
+      const next = !current;
+      try {
+        window.localStorage.setItem(SIDEBAR_COLLAPSED_KEY, next ? '1' : '0');
+      } catch {
+        /* storage may be unavailable in private mode; collapse still works for the session */
+      }
+      return next;
+    });
+  };
+
+  const allConnected = integrationCount > 0 && connectedCount >= integrationCount;
+  const host = websiteUrl ? websiteUrl.replace(/^https?:\/\//, '').replace(/\/$/, '') : null;
+
+  return (
+    <aside
+      aria-label="Project navigation"
+      data-collapsed={collapsed ? 'true' : 'false'}
+      className={cn(
+        'hidden shrink-0 flex-col border-r bg-sidebar transition-[width] duration-200 ease-out md:flex',
+        collapsed ? 'w-16' : 'w-60',
+      )}
+    >
+      <div className="flex-1 overflow-y-auto">
+        <ProjectNavList projectId={projectId} view={view} onNavigate={onNavigate} collapsed={collapsed} />
+      </div>
+      <div className="border-t border-sidebar-border p-2">
+        {collapsed ? (
+          <div className="flex justify-center py-1" title={projectName}>
+            <span className="flex size-7 items-center justify-center rounded-md bg-secondary text-[11px] font-semibold text-foreground">
+              {projectName.slice(0, 1).toUpperCase()}
+            </span>
+          </div>
+        ) : (
+          <div className="grid gap-0.5 px-1.5 py-1">
+            <div className="truncate text-sm font-medium text-foreground" title={projectName}>
+              {projectName}
+            </div>
+            {host && <div className="truncate text-xs text-muted-foreground">{host}</div>}
+            <div className="mt-1 flex items-center gap-1.5 text-[11px] text-muted-foreground">
+              <StatusDot tone={allConnected ? 'success' : 'neutral'} />
+              {integrationCount > 0 ? `${connectedCount}/${integrationCount} connected` : 'No integrations'}
+            </div>
+          </div>
+        )}
+        <button
+          type="button"
+          onClick={toggle}
+          aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          className={cn(
+            'mt-1 flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground',
+            collapsed && 'justify-center px-0',
+          )}
+        >
+          {collapsed ? <ChevronRight className="size-4" /> : <ChevronLeft className="size-4" />}
+          {!collapsed && <span>Collapse</span>}
+        </button>
+      </div>
     </aside>
   );
 }
 
 /**
  * Mobile project navigation drawer. The desktop sidebar is `hidden` below `md`,
- * so on small viewports the same project views are reached through this overlay.
- * It closes on backdrop click, the close button, Escape, and after a selection.
+ * so on small viewports the same grouped project views are reached through this
+ * overlay. It closes on backdrop click, the close button, Escape, and after a
+ * selection.
  */
 export function MobileProjectNav({
   projectId,

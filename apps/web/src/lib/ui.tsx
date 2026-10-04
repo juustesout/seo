@@ -13,6 +13,7 @@ import { useEffect, useRef, useState } from 'react';
 import { api } from './api';
 import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { cn } from './utils';
 
 export interface AsyncState<T> {
   data: T | null;
@@ -126,6 +127,91 @@ export function StatusPill({ status }: { status: unknown }) {
 /** Empty-state placeholder with an optional custom message. */
 export function Empty({ children }: { children?: React.ReactNode }) {
   return <div className="py-6 text-center text-sm text-muted-foreground">{children ?? 'Nothing here yet'}</div>;
+}
+
+/**
+ * Section heading used to break page content into a clear hierarchy without
+ * wrapping every block in a card. Title is a restrained 15px, with an optional
+ * description and right-aligned actions.
+ */
+export function SectionHeading({
+  title,
+  description,
+  actions,
+  className,
+}: {
+  title: React.ReactNode;
+  description?: React.ReactNode;
+  actions?: React.ReactNode;
+  className?: string;
+}) {
+  return (
+    <div className={cn('flex flex-wrap items-end justify-between gap-3', className)}>
+      <div className="space-y-0.5">
+        <h2 className="text-[15px] font-semibold tracking-tight text-foreground">{title}</h2>
+        {description ? <p className="text-[13px] text-muted-foreground">{description}</p> : null}
+      </div>
+      {actions ? <div className="flex flex-wrap items-center gap-2">{actions}</div> : null}
+    </div>
+  );
+}
+
+/**
+ * Light grouping surface: a single subtle border and a 10px radius, no shadow.
+ * Use only where content genuinely reads as one discrete object; prefer
+ * whitespace and {@link SectionHeading} for everything else.
+ */
+export function Panel({ className, ...props }: React.ComponentProps<'div'>) {
+  return <div className={cn('rounded-lg border bg-card', className)} {...props} />;
+}
+
+/** A faint horizontal rule for separating blocks without a surface. */
+export function Divider({ className }: { className?: string }) {
+  return <div role="separator" className={cn('h-px w-full bg-border', className)} />;
+}
+
+/**
+ * A large metric with a label underneath and an optional, pre-formatted hint.
+ * A trend figure is only rendered when the caller passes one, so a missing
+ * comparison never becomes a fabricated delta (honesty rule).
+ */
+export function Metric({
+  label,
+  value,
+  hint,
+  className,
+}: {
+  label: React.ReactNode;
+  value: React.ReactNode;
+  hint?: React.ReactNode;
+  className?: string;
+}) {
+  return (
+    <div className={cn('min-w-0', className)}>
+      <div className="text-3xl font-semibold tracking-tight tabular-nums text-foreground">{value}</div>
+      <div className="mt-1 text-[13px] text-muted-foreground">{label}</div>
+      {hint ? <div className="mt-0.5 text-xs text-muted-foreground/80">{hint}</div> : null}
+    </div>
+  );
+}
+
+const STATUS_DOT_TONE: Record<'success' | 'warning' | 'danger' | 'primary' | 'neutral', string> = {
+  success: 'bg-success',
+  warning: 'bg-warning',
+  danger: 'bg-destructive',
+  primary: 'bg-primary',
+  neutral: 'bg-muted-foreground/40',
+};
+
+/** A small colored dot that communicates status without a colored badge fill. */
+export function StatusDot({
+  tone = 'neutral',
+  className,
+}: {
+  tone?: keyof typeof STATUS_DOT_TONE;
+  className?: string;
+}) {
+  return <span aria-hidden="true" className={cn('inline-block size-1.5 shrink-0 rounded-full', STATUS_DOT_TONE[tone], className)} />;
 }
 
 /**
