@@ -2460,4 +2460,74 @@ end $$;
 SQL
 echo "   smoke: platform-admin boundary holds (no policies, no permissive USING true, RPCs service-role only)"
 
+echo "==> smoke test: persisted GA4 page traffic (P7) + RLS isolation"
+PSQL -d "${DB_NAME}" <<'SQL'
+do $$
+declare
+  v_project uuid;
+  v_denied  boolean;
+begin
+  select id into v_project from public.seo_projects where slug = 'demo' limit 1;
+  if v_project is null then raise exception 'smoke: demo project missing for page traffic'; end if;
+
+  insert into public.seo_page_traffic (project_id, property_id, date, path, views, active_users, sessions)
+  values (v_project, '123456789', '2026-09-10', '/blog/seo-guide', 300, 250, 280);
+
+  -- Re-sync overwrites the same natural key (GA4 is authoritative for a date).
+  insert into public.seo_page_traffic (project_id, property_id, date, path, views, active_users, sessions)
+  values (v_project, '123456789', '2026-09-10', '/blog/seo-guide', 400, 260, 300)
+  on conflict (project_id, property_id, date, path) do update
+    set views = excluded.views, active_users = excluded.active_users, sessions = excluded.sessions;
+  if (select views from public.seo_page_traffic where project_id = v_project and path = '/blog/seo-guide') <> 400 then
+    raise exception 'smoke: page traffic re-sync did not overwrite';
+  end if;
+
+  -- Negative metrics are rejected.
+  v_denied := false;
+  begin
+    insert into public.seo_page_traffic (project_id, property_id, date, path, views)
+    values (v_project, '123456789', '2026-09-11', '/bad', -1);
+  exception when check_violation then v_denied := true; end;
+  if not v_denied then raise exception 'smoke: negative page-traffic views accepted'; end if;
+
+  -- A non-numeric GA4 property id is rejected by the format check.
+  v_denied := false;
+  begin
+    insert into public.seo_page_traffic (project_id, property_id, date, path)
+    values (v_project, 'properties/1', '2026-09-11', '/bad');
+  exception when check_violation then v_denied := true; end;
+  if not v_denied then raise exception 'smoke: invalid page-traffic property id accepted'; end if;
+
+  raise notice 'smoke: page traffic upsert + checks OK';
+end $$;
+SQL
+
+PAGE_TRAFFIC_MEMBER_COUNT="$(PSQL -d "${DB_NAME}" -t -A <<'SQL'
+grant usage on schema public to authenticated;
+grant select on public.seo_page_traffic to authenticated;
+set role authenticated;
+set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-000000000001"}';
+select count(*) from public.seo_page_traffic;
+SQL
+)"
+if [ -z "${PAGE_TRAFFIC_MEMBER_COUNT}" ] || [ "${PAGE_TRAFFIC_MEMBER_COUNT}" = "0" ]; then
+  echo "!! RLS: project owner could not read page traffic (${PAGE_TRAFFIC_MEMBER_COUNT})" >&2
+  exit 1
+fi
+echo "   smoke: project member can read page traffic (RLS OK)"
+
+PAGE_TRAFFIC_LEAK_COUNT="$(PSQL -d "${DB_NAME}" -t -A <<'SQL'
+grant usage on schema public to authenticated;
+grant select on public.seo_page_traffic to authenticated;
+set role authenticated;
+set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-000000000002"}';
+select count(*) from public.seo_page_traffic;
+SQL
+)"
+if [ -z "${PAGE_TRAFFIC_LEAK_COUNT}" ] || [ "${PAGE_TRAFFIC_LEAK_COUNT}" != "0" ]; then
+  echo "!! RLS leak: non-member read ${PAGE_TRAFFIC_LEAK_COUNT} page-traffic rows" >&2
+  exit 1
+fi
+echo "   smoke: non-member cannot read foreign page traffic (RLS isolation OK)"
+
 echo "==> migration validation OK (${DB_NAME})"

@@ -16,6 +16,7 @@ import type { JobRecord } from './types.js';
 /** Maps every platform job_type to its owning provider (drives gating + data source resolution). */
 export const JOB_PROVIDER: Record<string, string> = {
   gsc_sync: 'gsc',
+  analytics_sync: 'ga4',
   dataforseo_rank_sync: 'dataforseo',
   dataforseo_keyword_research: 'dataforseo',
   serp_retrieval: 'dataforseo',
@@ -82,15 +83,40 @@ async function resolveGscIntegrationForProject(container: ServiceContainer, proj
 }
 
 /**
+ * The connected account-scoped GA4 integration for a project's account, if any.
+ * GA4 mirrors GSC's account-level connection but has no project data source
+ * (the project binding is seo_project_analytics), so it cannot go through the
+ * generic project-scoped integration lookup.
+ */
+async function resolveGa4IntegrationForProject(container: ServiceContainer, projectId: string): Promise<string | null> {
+  const { data: project } = await container.sb.from('seo_projects').select('account_id').eq('id', projectId).maybeSingle();
+  const accountId = (project as Record<string, unknown> | null)?.account_id as string | null;
+  if (!accountId) return null;
+  const { data } = await container.sb
+    .from('seo_integrations')
+    .select('id')
+    .eq('account_id', accountId)
+    .is('project_id', null)
+    .eq('provider_type', 'ga4')
+    .eq('status', 'connected')
+    .maybeSingle();
+  return (data as { id?: string } | null)?.id ?? null;
+}
+
+/**
  * Verify a provider has a connected integration before a job is enqueued, and
  * return its id. GSC goes through the account/property link (resolveGsc...);
- * every other provider needs a connected project-scoped integration row.
- * Enqueuing without this check would produce jobs that fail at run time
- * instead of telling the user what to connect.
+ * GA4 through the account-scoped connection; every other provider needs a
+ * connected project-scoped integration row. Enqueuing without this check would
+ * produce jobs that fail at run time instead of telling the user what to connect.
  */
 export async function assertConnectedIntegration(container: ServiceContainer, projectId: string, provider: string) {
   if (provider === 'gsc') {
     const linked = await resolveGscIntegrationForProject(container, projectId);
+    if (linked) return linked;
+  }
+  if (provider === 'ga4') {
+    const linked = await resolveGa4IntegrationForProject(container, projectId);
     if (linked) return linked;
   }
   const { data } = await container.sb
@@ -127,8 +153,11 @@ export async function enqueueJob(container: ServiceContainer, opts: EnqueueJobOp
   const provider = JOB_PROVIDER[jobType]!;
 
   // crawler job types exist in the platform vocabulary but no crawler provider
-  // is registered yet -> honest "not configured", never silent fake.
-  if (provider === 'crawler' || (provider !== 'qdrant' && !container.registry.getDataSource(provider))) {
+  // is registered yet -> honest "not configured", never silent fake. GA4 is
+  // account-scoped like GSC and has no registry data-source adapter (the
+  // executor calls GoogleAnalyticsService directly), so it is exempt from the
+  // data-source registration check too.
+  if (provider === 'crawler' || (provider !== 'qdrant' && provider !== 'ga4' && !container.registry.getDataSource(provider))) {
     throw ApiError.notConfigured(`No ${provider} provider is registered on this server yet`);
   }
   if (provider === 'qdrant' && !container.registry.getKnowledge('qdrant')) {
@@ -142,12 +171,13 @@ export async function enqueueJob(container: ServiceContainer, opts: EnqueueJobOp
     integrationId = await assertConnectedIntegration(container, projectId, provider);
   }
 
+  // GA4 has no project data source: its binding is seo_project_analytics.
   let dataSourceId: string | null = opts.dataSourceId ?? null;
-  if (!dataSourceId && provider !== 'qdrant') {
+  if (!dataSourceId && provider !== 'qdrant' && provider !== 'ga4') {
     const ds = await resolveDataSource(container, projectId, provider);
     dataSourceId = ds ? (ds.id as string) : null;
   }
-  if (!dataSourceId && provider !== 'qdrant') {
+  if (!dataSourceId && provider !== 'qdrant' && provider !== 'ga4') {
     throw ApiError.badRequest(`Attach a ${provider} data source to this project before syncing`);
   }
 

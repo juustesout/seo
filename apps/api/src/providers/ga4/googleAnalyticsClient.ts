@@ -68,6 +68,23 @@ export interface PageTrafficRow {
   sessions: number;
 }
 
+/** One normalized daily page-traffic row (date + path) from the Data API. */
+export interface PageTrafficDailyRow {
+  /** GA4 `date` dimension, normalized to YYYY-MM-DD (GA4 emits YYYYMMDD). */
+  date: string;
+  path: string;
+  views: number;
+  active_users: number;
+  sessions: number;
+}
+
+/** GA4's `date` dimension is `YYYYMMDD`; normalize to ISO `YYYY-MM-DD`. */
+function normalizeGa4Date(raw: string): string | null {
+  const compact = raw.replace(/-/g, '');
+  if (!/^\d{8}$/.test(compact)) return null;
+  return `${compact.slice(0, 4)}-${compact.slice(4, 6)}-${compact.slice(6, 8)}`;
+}
+
 /** `properties/123456` -> `123456`; already-numeric ids pass through. */
 export function normalizePropertyId(raw: string): string {
   return raw.startsWith('properties/') ? raw.slice('properties/'.length) : raw;
@@ -231,6 +248,46 @@ export class GoogleAnalyticsClient {
       if (typeof dimension !== 'string' || dimension.length === 0) continue;
       normalized.push({
         path: dimension,
+        views: metricNumber(metrics[0]?.value),
+        active_users: metricNumber(metrics[1]?.value),
+        sessions: metricNumber(metrics[2]?.value),
+      });
+    }
+    const rowCount = typeof json.rowCount === 'number' ? json.rowCount : normalized.length;
+    return { rows: normalized, truncated: rowCount > normalized.length };
+  }
+
+  /**
+   * Daily page traffic per (date, pagePath) for [startDate, endDate] inclusive,
+   * for persistence. `limit` bounds rows; `truncated` is true when Google
+   * reported more. Rows with an unparsable date are dropped rather than dated
+   * with a guess.
+   */
+  async runPageTrafficDailyReport(
+    propertyId: string,
+    options: { startDate: string; endDate: string; limit: number },
+  ): Promise<{ rows: PageTrafficDailyRow[]; truncated: boolean }> {
+    const json = await this.request('page_traffic_daily', `${GA4_DATA_BASE}/properties/${propertyId}:runReport`, {
+      method: 'POST',
+      body: JSON.stringify({
+        dateRanges: [{ startDate: options.startDate, endDate: options.endDate }],
+        dimensions: [{ name: 'date' }, { name: 'pagePath' }],
+        metrics: [{ name: 'screenPageViews' }, { name: 'activeUsers' }, { name: 'sessions' }],
+        orderBys: [{ dimension: { dimensionName: 'date' }, desc: true }],
+        limit: options.limit,
+      }),
+    });
+    const rows = (json.rows as Array<Record<string, unknown>> | undefined) ?? [];
+    const normalized: PageTrafficDailyRow[] = [];
+    for (const row of rows) {
+      const dims = (row.dimensionValues as Array<Record<string, unknown>> | undefined) ?? [];
+      const date = typeof dims[0]?.value === 'string' ? normalizeGa4Date(dims[0]!.value as string) : null;
+      const path = dims[1]?.value;
+      if (!date || typeof path !== 'string' || path.length === 0) continue;
+      const metrics = (row.metricValues as Array<Record<string, unknown>> | undefined) ?? [];
+      normalized.push({
+        date,
+        path,
         views: metricNumber(metrics[0]?.value),
         active_users: metricNumber(metrics[1]?.value),
         sessions: metricNumber(metrics[2]?.value),

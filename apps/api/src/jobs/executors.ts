@@ -20,6 +20,7 @@ import { retryOccurrenceBase, usageScopeContext } from '../services/usageInstrum
 import { delay } from '../util.js';
 import type { ServiceContainer } from '../context.js';
 import { ContentService } from '../services/contentService.js';
+import { GoogleAnalyticsService } from '../services/googleAnalyticsService.js';
 import { KnowledgeService } from '../services/knowledgeService.js';
 import { ContentAgentService } from '../services/contentAgentService.js';
 import { ContentAnalysisService } from '../services/contentAnalysisService.js';
@@ -199,6 +200,49 @@ const gscSync: JobExecutor = async ({ container, job, writer, report }) => {
     queryRows: queryRows.length,
     pageRows: pageRows.length,
     range: { startDate, endDate },
+  };
+};
+
+// ---------------------------------------------------------------------------
+// GA4 page-traffic sync (P7 measurement loop)
+// ---------------------------------------------------------------------------
+
+/**
+ * Persist the project's bound GA4 property page traffic for the last `days`.
+ * Long Google Analytics read -> one durable upsert; the report then joins the
+ * result with publications and GSC. Skips (does not fail) when no property is
+ * bound, so a project that only uses Search Console keeps working.
+ */
+const analyticsSync: JobExecutor = async ({ container, job, writer, report }) => {
+  const { data: project } = await container.sb
+    .from('seo_projects')
+    .select('account_id')
+    .eq('id', job.project_id)
+    .maybeSingle();
+  const accountId = (project as { account_id: string | null } | null)?.account_id ?? null;
+  if (!accountId) throw new ApiError(400, 'bad_request', 'Project has no account; cannot sync Google Analytics');
+
+  const service = new GoogleAnalyticsService(container);
+  const days = Math.max(1, Math.min(90, Number(job.params.days ?? 28)));
+  await report(10, `Fetching GA4 page traffic (last ${days} days)`);
+
+  const result = await service.dailyPageTraffic({
+    accountId,
+    projectId: job.project_id,
+    days,
+    userId: job.created_by,
+    sourceId: job.id,
+  });
+  if (!result.property) return { skipped: 'no_property', message: 'No Google Analytics property is bound to this project' };
+
+  await report(70, `Persisting ${result.rows.length} page-traffic rows`);
+  const written = await writer.persistPageTraffic(job.project_id, result.rows, result.property.property_id);
+  await report(100, `Synced ${written} page-traffic rows (${result.startDate}..${result.endDate})`);
+  return {
+    rows: written,
+    truncated: result.truncated,
+    propertyId: result.property.property_id,
+    range: { startDate: result.startDate, endDate: result.endDate },
   };
 };
 
@@ -1063,6 +1107,7 @@ const agentDesign: JobExecutor = async ({ container, job, report }) => {
  */
 export const EXECUTORS: Record<string, JobExecutor> = {
   gsc_sync: gscSync,
+  analytics_sync: analyticsSync,
   dataforseo_rank_sync: dataForSeoRankSync,
   dataforseo_keyword_research: dataForSeoKeywordResearch,
   competitor_research: dataForSeoCompetitorResearch,

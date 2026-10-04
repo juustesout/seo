@@ -61,6 +61,7 @@ import { projectApiKeysRouter } from './http/routes/projectApiKeys.js';
 import { projectGscRouter } from './http/routes/projectGsc.js';
 import { projectAnalyticsRouter } from './http/routes/projectAnalytics.js';
 import { projectAdsRouter } from './http/routes/projectAds.js';
+import { projectPerformanceRouter } from './http/routes/projectPerformance.js';
 import { v1Router } from './http/routes/v1.js';
 import { createMcpHttpRouter } from './mcp/http.js';
 
@@ -223,6 +224,7 @@ export function createApp(): Express {
   app.use('/api/projects/:projectId/gsc', projectGscRouter);
   app.use('/api/projects/:projectId/analytics', projectAnalyticsRouter);
   app.use('/api/projects/:projectId/ads', projectAdsRouter);
+  app.use('/api/projects/:projectId/performance', projectPerformanceRouter);
   app.use('/api/projects/:projectId/usage', usageRouter);
   app.use('/api/v1', v1Router);
   app.use('/api/projects/:projectId', seoRouter);

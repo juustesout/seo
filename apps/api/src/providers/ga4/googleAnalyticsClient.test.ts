@@ -84,6 +84,39 @@ describe('GoogleAnalyticsClient', () => {
     expect(report.truncated).toBe(true);
   });
 
+  it('normalizes a daily (date x pagePath) runReport response', async () => {
+    let sawBody = '';
+    const client = new GoogleAnalyticsClient('tok', (async (_url: string, init?: RequestInit) => {
+      sawBody = String(init?.body ?? '');
+      return response({
+        rows: [
+          {
+            dimensionValues: [{ value: '20260928' }, { value: '/blog/seo-guide' }],
+            metricValues: [{ value: '120' }, { value: '90' }, { value: '100' }],
+          },
+          {
+            dimensionValues: [{ value: '2026-09-27' }, { value: '/' }],
+            metricValues: [{ value: '300' }, { value: '250' }, { value: '280' }],
+          },
+          {
+            dimensionValues: [{ value: 'not-a-date' }, { value: '/junk' }],
+            metricValues: [{ value: '9' }, { value: '9' }, { value: '9' }],
+          },
+        ],
+        rowCount: 2,
+      });
+    }) as unknown as typeof fetch);
+
+    const report = await client.runPageTrafficDailyReport('123', { startDate: '2026-09-01', endDate: '2026-09-28', limit: 5000 });
+    expect(report.truncated).toBe(false);
+    expect(report.rows).toEqual([
+      { date: '2026-09-28', path: '/blog/seo-guide', views: 120, active_users: 90, sessions: 100 },
+      { date: '2026-09-27', path: '/', views: 300, active_users: 250, sessions: 280 },
+    ]);
+    const body = JSON.parse(sawBody);
+    expect(body.dimensions).toEqual([{ name: 'date' }, { name: 'pagePath' }]);
+  });
+
   it('throws UnauthorizedError on 401 so the service can refresh', async () => {
     const client = new GoogleAnalyticsClient('tok', (async () => response({ error: { message: 'expired' } }, 401)) as unknown as typeof fetch);
     await expect(client.listProperties()).rejects.toBeInstanceOf(UnauthorizedError);

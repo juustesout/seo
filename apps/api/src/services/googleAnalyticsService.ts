@@ -33,6 +33,7 @@ import {
   normalizePropertyId,
   type AnalyticsPropertyMetadata,
   type Ga4RequestObserver,
+  type PageTrafficDailyRow,
 } from '../providers/ga4/googleAnalyticsClient.js';
 import { emitGa4RequestUsage } from '../providers/ga4/providerUsage.js';
 import { usageScopeContext } from './usageInstrumentation.js';
@@ -50,6 +51,8 @@ export const DEFAULT_ANALYTICS_PERIOD: AnalyticsPeriodDays = 28;
 
 /** Row cap per page-traffic report (bounded to avoid huge Analytics datasets). */
 export const PAGE_TRAFFIC_LIMIT = 100;
+/** Row cap per daily page-traffic sync (date x path rows over the window). */
+export const PAGE_TRAFFIC_DAILY_LIMIT = 5000;
 
 type Row = Record<string, unknown>;
 
@@ -122,9 +125,9 @@ export class GoogleAnalyticsService {
    * account-scoped discovery (no project) emits nothing rather than a
    * fabricated project fact.
    */
-  private usageObserver(args: { projectId: string; userId: string | null } | undefined): Ga4RequestObserver | undefined {
+  private usageObserver(args: { projectId: string; userId: string | null; sourceId?: string | null } | undefined): Ga4RequestObserver | undefined {
     if (!args) return undefined;
-    const usage = usageScopeContext({ sink: this.container.usageEvents, sourceId: null, userId: args.userId });
+    const usage = usageScopeContext({ sink: this.container.usageEvents, sourceId: args.sourceId ?? null, userId: args.userId });
     if (!usage) return undefined;
     return (operation, success) =>
       emitGa4RequestUsage({ usage, projectId: args.projectId, userId: args.userId, operation, success });
@@ -142,7 +145,7 @@ export class GoogleAnalyticsService {
   private async withClient<T>(
     integration: Row,
     fn: (client: GoogleAnalyticsClient) => Promise<T>,
-    usageArgs?: { projectId: string; userId: string | null },
+    usageArgs?: { projectId: string; userId: string | null; sourceId?: string | null },
   ): Promise<T> {
     const integrationId = String(integration.id);
     const creds = this.container.credentials.reader({ integrationId }, 'ga4');
@@ -295,6 +298,52 @@ export class GoogleAnalyticsService {
         { projectId: args.projectId, userId: args.userId ?? null },
       );
       return { property, period, rows: report.rows, limit: PAGE_TRAFFIC_LIMIT, truncated: report.truncated };
+    } catch (err) {
+      this.mapProviderError(err);
+    }
+  }
+
+  /**
+   * Daily page traffic (date x path) for the project's bound property over the
+   * last `days`, for the measurement sync to persist into seo_page_traffic. A
+   * project without a bound property returns `property: null` with no rows -
+   * that is not an error. The account must have a connected GA4 integration;
+   * the worker checks that first and skips the sync rather than enqueuing a job
+   * that could only fail.
+   */
+  async dailyPageTraffic(args: {
+    accountId: string;
+    projectId: string;
+    days: number;
+    userId?: string | null;
+    sourceId?: string | null;
+  }): Promise<{
+    property: AnalyticsPropertyDto | null;
+    startDate: string;
+    endDate: string;
+    rows: PageTrafficDailyRow[];
+    truncated: boolean;
+  }> {
+    const endDate = shiftDate(this.now(), 0);
+    const startDate = shiftDate(this.now(), -(args.days - 1));
+    const property = await this.currentProperty(args.projectId);
+    if (!property) return { property: null, startDate, endDate, rows: [], truncated: false };
+    const integration = await this.accountIntegration(args.accountId);
+    if (!integration || !['connected', 'connecting'].includes(String(integration.status))) {
+      throw ApiError.badRequest("Google Analytics isn't connected. Connect Google Analytics to sync page traffic.");
+    }
+    try {
+      const report = await this.withClient(
+        integration,
+        (client) =>
+          client.runPageTrafficDailyReport(property.property_id, {
+            startDate,
+            endDate,
+            limit: PAGE_TRAFFIC_DAILY_LIMIT,
+          }),
+        { projectId: args.projectId, userId: args.userId ?? null, sourceId: args.sourceId ?? null },
+      );
+      return { property, startDate, endDate, rows: report.rows, truncated: report.truncated };
     } catch (err) {
       this.mapProviderError(err);
     }

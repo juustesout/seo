@@ -228,6 +228,38 @@ export class SeoWriter {
     logger.info({ projectId, propertyId, daily: daily.length, queries: queries.length, pages: pages.length }, 'gsc data persisted');
   }
 
+  // -- GA4 page traffic -----------------------------------------------------
+
+  /**
+   * Persist one GA4 page-traffic sync (P7 measurement loop). One row per
+   * (project, property, date, path); GA4 is authoritative for a past date, so a
+   * re-sync overwrites via onConflict (fetched_at is refreshed). `path` is a GA4
+   * pagePath, never a full URL.
+   */
+  async persistPageTraffic(
+    projectId: string,
+    rows: Array<{ date: string; path: string; views: number; active_users: number; sessions: number }>,
+    propertyId: string,
+  ): Promise<number> {
+    if (rows.length === 0) return 0;
+    const fetchedAt = new Date().toISOString();
+    const payload = rows.map((r) => ({
+      project_id: projectId,
+      property_id: propertyId,
+      date: r.date,
+      path: r.path,
+      views: r.views,
+      active_users: r.active_users,
+      sessions: r.sessions,
+      fetched_at: fetchedAt,
+    }));
+    await chunkedUpsert(this.sb, 'seo_page_traffic', payload, {
+      onConflict: 'project_id,property_id,date,path',
+    });
+    logger.info({ projectId, propertyId, rows: rows.length }, 'ga4 page traffic persisted');
+    return rows.length;
+  }
+
   /**
    * Upsert GSC-seen keywords into the keyword registry. Duplicates within one
    * sync are deduped first; the natural key (project, provider, source,

@@ -47,3 +47,4 @@ export * from './usageEvent.js';
 export * from './admin.js';
 export * from './analytics.js';
 export * from './googleAds.js';
+export * from './performance.js';

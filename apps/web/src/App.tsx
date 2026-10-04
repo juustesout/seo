@@ -30,6 +30,7 @@ import {
   Send,
   Settings,
   ShieldCheck,
+  TrendingUp,
   X,
 } from 'lucide-react';
 import { supabase, configured as supabaseConfigured, currentUser } from './lib/supabase';
@@ -53,6 +54,7 @@ const Keywords = lazy(() => import('./views/Keywords').then((m) => ({ default: m
 const Analytics = lazy(() => import('./views/Analytics').then((m) => ({ default: m.Analytics })));
 const AdsIntelligence = lazy(() => import('./views/AdsIntelligence').then((m) => ({ default: m.AdsIntelligence })));
 const Google = lazy(() => import('./views/Google').then((m) => ({ default: m.Google })));
+const Performance = lazy(() => import('./views/Performance').then((m) => ({ default: m.Performance })));
 const Knowledge = lazy(() => import('./views/Knowledge').then((m) => ({ default: m.Knowledge })));
 const Publishing = lazy(() => import('./views/Publishing').then((m) => ({ default: m.Publishing })));
 const ContentSchedule = lazy(() => import('./views/ContentSchedule').then((m) => ({ default: m.ContentSchedule })));
@@ -102,6 +104,7 @@ const PROJECT_NAV: Array<{ id: string; label: string; icon: NavIcon }> = [
   { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { id: 'keywords', label: 'Keywords', icon: Search },
   { id: 'google', label: 'Google', icon: Globe },
+  { id: 'performance', label: 'Performance', icon: TrendingUp },
   { id: 'integrations', label: 'Integrations', icon: Plug },
   { id: 'knowledge', label: 'Knowledge Base', icon: BookOpen },
   { id: 'workspace', label: 'Workspace', icon: PenSquare },
@@ -424,6 +427,9 @@ export function App() {
                   onOpenSettings={() => goProject(pid, 'settings')}
                   onOpenView={(next) => goProject(pid, next)}
                 />
+              )}
+              {view === 'performance' && (
+                <Performance projectId={pid} role={project.role} onOpenGoogle={() => goProject(pid, 'google')} />
               )}
               {view === 'analytics' && <Analytics projectId={pid} onOpenSettings={() => goProject(pid, 'settings')} />}
               {view === 'ads' && <AdsIntelligence projectId={pid} onOpenSettings={() => goProject(pid, 'settings')} />}
