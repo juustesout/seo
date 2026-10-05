@@ -198,11 +198,31 @@ alter table public.seo_sync_jobs
 
 -- ----------------------------------------------------------------------------
 -- S16: usage totals function grant
+--
+-- Revoke every existing overload of seo_usage_totals rather than naming one
+-- fixed argument list. The function is (re)defined in migration 31 and again in
+-- migration 41 with an extra p_funding_source parameter, so pinning the 10-arg
+-- signature here breaks a database that is catching up out of order (the 10-arg
+-- overload already replaced) or one where 31 has not run yet. Iterating over
+-- pg_proc keeps the hardening meaningful without a brittle exact signature.
 -- ----------------------------------------------------------------------------
 
-revoke execute on function public.seo_usage_totals(
-  uuid, uuid, uuid, timestamptz, timestamptz, text, text, text, text, boolean
-) from anon, authenticated;
+do $$
+declare
+  r record;
+begin
+  for r in
+    select p.oid::regprocedure as signature
+    from pg_proc p
+    join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname = 'public' and p.proname = 'seo_usage_totals'
+  loop
+    execute format(
+      'revoke execute on function %s from anon, authenticated',
+      r.signature
+    );
+  end loop;
+end $$;
 
 -- ----------------------------------------------------------------------------
 -- S14: storage.objects policies for the seo-media bucket

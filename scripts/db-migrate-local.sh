@@ -2903,4 +2903,48 @@ end $$;
 SQL
 echo "   smoke: entitlement plan + consumption + admission + admin boundary OK"
 
+echo "==> smoke test: seo_usage_totals hardening is drift-proof (migration 35 re-apply)"
+PSQL -d "${DB_NAME}" <<'SQL'
+do $$
+declare
+  r record;
+  v_overloads int;
+  v_granted int;
+begin
+  -- Re-run the migration 35 revoke against whatever overload exists now (the
+  -- 11-arg function created by migration 41) to prove the hardened form is
+  -- idempotent and does not depend on the 10-arg signature that a
+  -- partially-migrated database may have already replaced.
+  for r in
+    select p.oid::regprocedure as signature
+    from pg_proc p
+    join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname = 'public' and p.proname = 'seo_usage_totals'
+  loop
+    execute format('revoke execute on function %s from anon, authenticated', r.signature);
+  end loop;
+
+  select count(*) into v_overloads
+  from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+  where n.nspname = 'public' and p.proname = 'seo_usage_totals';
+  if v_overloads <> 1 then
+    raise exception 'm35: expected exactly one seo_usage_totals overload, found %', v_overloads;
+  end if;
+
+  select count(*) into v_granted
+  from pg_proc p
+  join pg_namespace n on n.oid = p.pronamespace
+  cross join lateral aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) a
+  join pg_roles ro on ro.oid = a.grantee
+  where n.nspname = 'public' and p.proname = 'seo_usage_totals'
+    and ro.rolname in ('anon', 'authenticated');
+  if v_granted <> 0 then
+    raise exception 'm35: anon/authenticated still hold execute (%)', v_granted;
+  end if;
+
+  raise notice 'm35: seo_usage_totals hardening is idempotent and signature-independent';
+end $$;
+SQL
+echo "   smoke: migration 35 revoke is drift-proof across seo_usage_totals overloads"
+
 echo "==> migration validation OK (${DB_NAME})"
