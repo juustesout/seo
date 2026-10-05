@@ -45,6 +45,7 @@ import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/utils';
 import { openProjectView } from './lib/nav';
 import { StatusDot } from './lib/ui';
+import { useGoogleTag } from './lib/googleTag';
 import { createRouteNavigation } from './lib/historyNavigation';
 import { canonicalWorkspaceRoute, parseRoute, routePath, type Route, type TopArea } from './lib/projectRoute';
 import { DesignSystemProvider } from './lib/designSystem';
@@ -224,6 +225,11 @@ export function App() {
     window.addEventListener('popstate', onLoc);
     return () => window.removeEventListener('popstate', onLoc);
   }, [nav]);
+
+  // The Google tag is for the public site only: the signed-out screen and the
+  // legal documents. It is injected once (see lib/googleTag) and never loads in
+  // the authenticated workspace, regardless of later navigation.
+  useGoogleTag(route.area === 'legal' || authed === false);
 
   // Re-runs whenever `authed` flips so a freshly signed-in user is loaded into
   // /me without a page reload; guards against stale state after sign-out.
