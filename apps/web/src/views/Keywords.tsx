@@ -16,6 +16,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useAsync, useJobs, num, fmtNum, fmtDate } from '../lib/ui';
 import { api, ApiRequestError } from '../lib/api';
+import { resourceErrorMessage } from '../lib/resourceErrors';
 import {
   COMPETITOR_RESEARCH_MAX_COMPETITORS,
   KEYWORD_EXPANSION_MAX_SEEDS,
@@ -221,7 +222,7 @@ function KeywordResearch({ projectId, role }: { projectId: string; role: string 
       } else if (e instanceof ApiRequestError && e.code === 'forbidden') {
         setError('You do not have permission to start keyword research.');
       } else {
-        setError(e instanceof Error ? e.message : 'Could not start keyword research. Please try again.');
+        setError(resourceErrorMessage(e) ?? (e instanceof Error ? e.message : 'Could not start keyword research. Please try again.'));
       }
     } finally {
       setStarting(false);

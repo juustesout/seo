@@ -50,6 +50,15 @@ export class ApiError extends Error {
     return new ApiError(429, 'rate_limited', message, details);
   }
   /**
+   * 429 - a server-side resource-protection ceiling refused the operation
+   * (P9). `code` is one of the closed resource error codes (`queue_limit`,
+   * `resource_concurrency`, `resource_limit`) so the UI can explain what was
+   * bounded and how to proceed. `details` stays secret-free (resource + scope).
+   */
+  static resourceLimited(code: string, message: string, details?: unknown) {
+    return new ApiError(429, code, message, details);
+  }
+  /**
    * 503 - the feature/credential is not configured server-side. Distinct from
    * 500 so the UI can show "set this up first" instead of "something broke".
    */

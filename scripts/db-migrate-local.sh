@@ -2530,4 +2530,164 @@ if [ -z "${PAGE_TRAFFIC_LEAK_COUNT}" ] || [ "${PAGE_TRAFFIC_LEAK_COUNT}" != "0" 
 fi
 echo "   smoke: non-member cannot read foreign page traffic (RLS isolation OK)"
 
+# ---------------------------------------------------------------------------
+# Resource protection (P9): atomic queue admission, release/retry semantics,
+# account-level bounding, repeated-request ceiling, and deny-all operational
+# tables. Uses fresh accounts so earlier smoke-run jobs cannot influence counts.
+# ---------------------------------------------------------------------------
+
+echo "==> smoke test: resource protection (P9) + atomic queue admission"
+
+rp_create_project() {
+  local rp_user="$1" rp_name="$2" rp_slug="$3"
+  PSQL -d "${DB_NAME}" <<SQL >/dev/null
+set request.jwt.claims = '{"sub":"${rp_user}","email":"${rp_slug}@example.com"}';
+insert into auth.users (id, email) values ('${rp_user}', '${rp_slug}@example.com') on conflict (id) do nothing;
+select public.seo_create_project('${rp_name}', '${rp_slug}', 'https://${rp_slug}.example', 'p9 resource smoke');
+SQL
+}
+
+rp_create_project '00000000-0000-0000-0000-0000000000a1' 'RP alpha' 'rp-alpha'
+rp_create_project '00000000-0000-0000-0000-0000000000a1' 'RP beta' 'rp-beta'
+rp_create_project '00000000-0000-0000-0000-0000000000c1' 'RP rate' 'rp-rate'
+rp_create_project '00000000-0000-0000-0000-0000000000d1' 'RP concurrency' 'rp-conc'
+
+PSQL -d "${DB_NAME}" <<'SQL'
+do $$
+declare
+  v_a uuid; v_b uuid; v_acc uuid;
+  v_id uuid; v_count int;
+  v_denied boolean; v_code text;
+begin
+  select id, account_id into v_a, v_acc from public.seo_projects where slug = 'rp-alpha';
+  select id into v_b from public.seo_projects where slug = 'rp-beta';
+  if v_a is null or v_b is null then raise exception 'p9: projects missing'; end if;
+  if (select account_id from public.seo_projects where id = v_b) is distinct from v_acc then
+    raise exception 'p9: sibling projects not on the same account';
+  end if;
+  if (select count(*) from public.seo_resource_limits) < 6 then
+    raise exception 'p9: resource limits were not seeded';
+  end if;
+
+  -- (1) Project queued ceiling enforced with the SE001 SQLSTATE.
+  update public.seo_resource_limits set max_value = 2 where scope = 'project' and resource = 'jobs_queued';
+  insert into public.seo_sync_jobs (project_id, provider, job_type) values (v_a, 'wordpress', 'publish');
+  insert into public.seo_sync_jobs (project_id, provider, job_type) values (v_a, 'wordpress', 'publish');
+  v_denied := false; v_code := null;
+  begin
+    insert into public.seo_sync_jobs (project_id, provider, job_type) values (v_a, 'wordpress', 'publish');
+  exception when others then v_denied := true; v_code := sqlstate; end;
+  if not v_denied or v_code <> 'SE001' then
+    raise exception 'p9: project queue ceiling not enforced (denied=%, sqlstate=%)', v_denied, v_code;
+  end if;
+
+  -- (2) Cancelling a queued job releases capacity.
+  select id into v_id from public.seo_sync_jobs where project_id = v_a and status = 'queued' order by queued_at limit 1;
+  update public.seo_sync_jobs set status = 'canceled', completed_at = now() where id = v_id;
+  insert into public.seo_sync_jobs (project_id, provider, job_type) values (v_a, 'wordpress', 'publish');
+  select count(*) into v_count from public.seo_sync_jobs where project_id = v_a and status = 'queued';
+  if v_count <> 2 then raise exception 'p9: release did not free capacity (queued=%)', v_count; end if;
+
+  -- (2b) A retry requeues with an UPDATE, so it is still one reservation and
+  -- admission is not re-evaluated (no second INSERT).
+  update public.seo_sync_jobs set retry_count = retry_count + 1, run_after = now()
+    where id = (select id from public.seo_sync_jobs where project_id = v_a and status = 'queued' order by queued_at limit 1);
+  select count(*) into v_count from public.seo_sync_jobs where project_id = v_a and status = 'queued';
+  if v_count <> 2 then raise exception 'p9: retry multiplied reservations (queued=%)', v_count; end if;
+
+  -- (3) Running concurrency ceiling enforced with the SE002 SQLSTATE.
+  update public.seo_resource_limits set max_value = 1 where scope = 'project' and resource = 'jobs_running';
+  update public.seo_resource_limits set max_value = 1000 where scope = 'project' and resource = 'jobs_queued';
+  update public.seo_sync_jobs set status = 'running', started_at = now()
+    where id = (select id from public.seo_sync_jobs where project_id = v_a and status = 'queued' order by queued_at limit 1);
+  v_denied := false; v_code := null;
+  begin
+    insert into public.seo_sync_jobs (project_id, provider, job_type) values (v_a, 'wordpress', 'publish');
+  exception when others then v_denied := true; v_code := sqlstate; end;
+  if not v_denied or v_code <> 'SE002' then
+    raise exception 'p9: running concurrency not enforced (denied=%, sqlstate=%)', v_denied, v_code;
+  end if;
+  update public.seo_sync_jobs set status = 'completed', completed_at = now()
+    where id = (select id from public.seo_sync_jobs where project_id = v_a and status = 'running' order by started_at limit 1);
+
+  -- (4) Account-level queued ceiling bounds across sibling projects: an
+  -- account cannot dodge protection by spreading work over multiple projects.
+  select count(*) into v_count
+    from public.seo_sync_jobs j
+    join public.seo_projects p on p.id = j.project_id
+    where p.account_id = v_acc and j.status = 'queued';
+  update public.seo_resource_limits set max_value = v_count where scope = 'account' and resource = 'jobs_queued';
+  v_denied := false; v_code := null;
+  begin
+    insert into public.seo_sync_jobs (project_id, provider, job_type) values (v_b, 'wordpress', 'publish');
+  exception when others then v_denied := true; v_code := sqlstate; end;
+  if not v_denied or v_code <> 'SE001' then
+    raise exception 'p9: account queue ceiling not enforced (denied=%, sqlstate=%)', v_denied, v_code;
+  end if;
+
+  raise notice 'p9: ceiling + release + retry + running concurrency + account scope OK';
+end $$;
+
+-- (5) Repeated request creation is bounded per project (SE003).
+do $$
+declare
+  v_r uuid; v_denied boolean; v_code text;
+begin
+  select id into v_r from public.seo_projects where slug = 'rp-rate';
+  update public.seo_resource_limits set max_value = 1, window_seconds = 60
+    where scope = 'project' and resource = 'jobs_create_rate';
+  insert into public.seo_sync_jobs (project_id, provider, job_type) values (v_r, 'wordpress', 'publish');
+  v_denied := false; v_code := null;
+  begin
+    insert into public.seo_sync_jobs (project_id, provider, job_type) values (v_r, 'wordpress', 'publish');
+  exception when others then v_denied := true; v_code := sqlstate; end;
+  if not v_denied or v_code <> 'SE003' then
+    raise exception 'p9: create-rate ceiling not enforced (denied=%, sqlstate=%)', v_denied, v_code;
+  end if;
+  raise notice 'p9: repeated-request ceiling OK';
+end $$;
+SQL
+echo "   smoke: admission ceiling + release + retry + concurrency + rate OK"
+
+# (6) The operational tables are deny-all to authenticated/anon.
+for rp_table in seo_resource_limits seo_resource_denials; do
+  RP_COUNT="$(PSQL -d "${DB_NAME}" -t -A <<SQL
+grant usage on schema public to authenticated;
+grant select on public.${rp_table} to authenticated;
+set role authenticated;
+set request.jwt.claims = '{"sub":"00000000-0000-0000-0000-000000000001"}';
+select count(*) from public.${rp_table};
+SQL
+)"
+  if [ -z "${RP_COUNT}" ] || [ "${RP_COUNT}" != "0" ]; then
+    echo "!! RLS leak: authenticated read ${RP_COUNT} rows from ${rp_table}" >&2
+    exit 1
+  fi
+done
+echo "   smoke: resource limits + denials are deny-all to authenticated (RLS OK)"
+
+# (7) Concurrent inserts cannot oversubscribe the queue: two racing sessions
+# each pause before inserting into a project whose queued ceiling is 1.
+PSQL -d "${DB_NAME}" -c "update public.seo_resource_limits set max_value = 1 where scope = 'project' and resource = 'jobs_queued'" >/dev/null
+PSQL -d "${DB_NAME}" -c "update public.seo_resource_limits set max_value = 100 where scope = 'account' and resource = 'jobs_queued'" >/dev/null
+RP_CONC_PROJ="$(PSQL -d "${DB_NAME}" -t -A -c "select id from public.seo_projects where slug = 'rp-conc'")"
+RP_RACE_OUT1="$(mktemp -p /tmp/opencode p9race1.XXXXXX)"
+RP_RACE_OUT2="$(mktemp -p /tmp/opencode p9race2.XXXXXX)"
+RP_RACE_SQL="begin; select pg_sleep(0.5); insert into public.seo_sync_jobs (project_id, provider, job_type) values ('${RP_CONC_PROJ}','wordpress','publish'); commit;"
+( $PSQL_CMD -v ON_ERROR_STOP=1 -X -q -d "${DB_NAME}" -c "${RP_RACE_SQL}" >"${RP_RACE_OUT1}" 2>&1; echo $? > "${RP_RACE_OUT1}.rc" ) &
+( $PSQL_CMD -v ON_ERROR_STOP=1 -X -q -d "${DB_NAME}" -c "${RP_RACE_SQL}" >"${RP_RACE_OUT2}" 2>&1; echo $? > "${RP_RACE_OUT2}.rc" ) &
+wait || true
+RP_RC1="$(cat "${RP_RACE_OUT1}.rc" 2>/dev/null || echo 1)"
+RP_RC2="$(cat "${RP_RACE_OUT2}.rc" 2>/dev/null || echo 1)"
+RP_CONC_QUEUED="$(PSQL -d "${DB_NAME}" -t -A -c "select count(*) from public.seo_sync_jobs where project_id = '${RP_CONC_PROJ}' and status = 'queued'")"
+if [ "${RP_CONC_QUEUED}" != "1" ]; then
+  echo "!! p9: concurrent admission oversubscribed the queue (queued=${RP_CONC_QUEUED})" >&2
+  exit 1
+fi
+if { [ "${RP_RC1}" = "0" ] && [ "${RP_RC2}" = "0" ]; } || { [ "${RP_RC1}" != "0" ] && [ "${RP_RC2}" != "0" ]; }; then
+  echo "!! p9: racing inserts did not resolve to exactly one admit (rc1=${RP_RC1} rc2=${RP_RC2})" >&2
+  exit 1
+fi
+echo "   smoke: exactly one of two racing inserts was admitted (queued=1)"
+
 echo "==> migration validation OK (${DB_NAME})"

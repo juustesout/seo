@@ -17,6 +17,7 @@ import {
   type WriterRunSummary,
 } from '@seo/contracts';
 import { api } from '../../lib/api';
+import { resourceErrorMessage } from '../../lib/resourceErrors';
 import { useJobs, StatusPill } from '../../lib/ui';
 import { Button } from '@/components/ui/button';
 
@@ -120,7 +121,7 @@ export function AgentControls({
       setTrackedJobId(data.job?.id ?? null);
       reload();
     } catch (e) {
-      setStartError(e instanceof Error ? e.message : String(e));
+      setStartError(resourceErrorMessage(e) ?? (e instanceof Error ? e.message : String(e)));
     } finally {
       setStarting(false);
     }

@@ -22,7 +22,9 @@ import { createKnowledgeFileExtractors, type KnowledgeFileExtractorRegistry } fr
 import { SupabaseKnowledgeFileStore, type KnowledgeFileStore } from './infra/knowledgeFileStorage.js';
 import { SupabaseJobStore } from './jobs/supabaseJobStore.js';
 import { PostgresJobStore } from './jobs/postgresJobStore.js';
+import { GuardedJobStore } from './jobs/guardedJobStore.js';
 import type { JobStore } from './jobs/types.js';
+import { ResourceAdmissionService } from './services/resourceAdmission.js';
 import { SupabaseUsageEventStore, type UsageEventStore } from './services/usageEventRepository.js';
 import { SupabasePlatformAdminService, type PlatformAdminReadService } from './services/platformAdminService.js';
 import type { Pool } from 'pg';
@@ -59,6 +61,13 @@ export interface ServiceContainer {
   knowledgeFileExtractors: KnowledgeFileExtractorRegistry;
   /** Durable job queue used by long operations. */
   jobStore: JobStore;
+  /**
+   * Resource admission (P9): the application-side half of the server-side
+   * resource-protection layer. Enforcement is atomic in the database; this
+   * service classifies resources, maps admission denials to structured errors
+   * and records best-effort denial evidence.
+   */
+  resourceAdmission: ResourceAdmissionService;
   /**
    * Append-only usage ledger (R5.10.2). The seam is append/list/aggregate only:
    * usage evidence is written once and can never be updated or deleted through
@@ -99,6 +108,8 @@ export function getContainer(): ServiceContainer {
   const sb = createAdminClient(config.env.SUPABASE_URL!, config.env.SUPABASE_SERVICE_ROLE_KEY!);
   const key = normalizeKey(config.env.CREDENTIALS_ENCRYPTION_KEY);
 
+  const resourceAdmission = new ResourceAdmissionService(sb);
+
   let jobStore: JobStore;
   let pgPool: Pool | null = null;
   const dbUrl = config.env.SUPABASE_DB_URL;
@@ -110,6 +121,9 @@ export function getContainer(): ServiceContainer {
     jobStore = new SupabaseJobStore(sb);
     logger.info('using supabase polling job store (set SUPABASE_DB_URL for LISTEN/NOTIFY)');
   }
+  // Admission guard wraps whichever store is selected so no enqueue path can
+  // reach the queue without passing through resource protection (P9).
+  jobStore = new GuardedJobStore(jobStore, resourceAdmission);
 
   const knowledgeFetcher = createKnowledgeFetcher({
     config: {
@@ -166,6 +180,7 @@ export function getContainer(): ServiceContainer {
     knowledgeFileStore: new SupabaseKnowledgeFileStore(sb),
     knowledgeFileExtractors: createKnowledgeFileExtractors(),
     jobStore,
+    resourceAdmission,
     usageEvents: new SupabaseUsageEventStore(sb),
     platformAdmin: new SupabasePlatformAdminService(sb),
     pgPool,
