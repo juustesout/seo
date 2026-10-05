@@ -30,6 +30,7 @@ import { SupabasePlatformAdminService, type PlatformAdminReadService } from './s
 import type { Pool } from 'pg';
 import pg from 'pg';
 import type {
+  FundingSource,
   KnowledgeDiscoveryProvider,
   KnowledgeFetcher,
   ProviderContext,
@@ -203,6 +204,7 @@ export function buildPublisherProviderContext(
     userId: args.userId,
     owner: { publisherId: args.publisherId, providerType: args.providerType },
     config: args.config,
+    fundingSource: 'byok',
   });
 }
 
@@ -221,6 +223,12 @@ export function buildProviderContext(
     config?: Record<string, unknown>;
     /** Stable identity of the logical execution (e.g. a job id) for usage dedup. */
     usageSourceId?: string | null;
+    /**
+     * Which credential funds this execution's provider calls (P11). Publishers
+     * use the user's own connection (byok); callers that cannot attribute the
+     * funding leave it null rather than guess.
+     */
+    fundingSource?: FundingSource | null;
     /**
      * Seed for the per-execution occurrence counter (R5.10.6). Defaults to 0.
      * A caller whose re-execution is a genuinely new external attempt (a retried
@@ -262,6 +270,7 @@ export function buildProviderContext(
       sink: container.usageEvents,
       sourceId: args.usageSourceId ?? null,
       userId: args.userId,
+      fundingSource: args.fundingSource ?? null,
       nextOccurrence: (operation: string) => {
         const next = occurrences.get(operation) ?? occurrenceBase;
         occurrences.set(operation, next + 1);

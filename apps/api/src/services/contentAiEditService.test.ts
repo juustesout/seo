@@ -5,6 +5,7 @@
  */
 import { describe, expect, it, beforeEach, vi } from 'vitest';
 import type { ServiceContainer } from '../context.js';
+import { admittingResourceAdmission } from '../testSupport/resourceAdmission.js';
 import {
   ContentAiEditService,
   buildContentAiEditPrompt,
@@ -84,6 +85,7 @@ function makeContainer(settings: Record<string, unknown> = {}) {
     config: { env: {} },
     registry: { getKnowledge: () => undefined },
     credentials: {},
+    resourceAdmission: admittingResourceAdmission(),
   } as unknown as ServiceContainer;
   return { container, updates };
 }

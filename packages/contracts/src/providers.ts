@@ -17,7 +17,7 @@ import type {
   PublisherCapability,
 } from './common.js';
 import type { MediaAttribution } from './mediaSource.js';
-import type { UsageEventSink } from './usageEvent.js';
+import type { FundingSource, UsageEventSink } from './usageEvent.js';
 import type {
   AuditFinding,
   Keyword,
@@ -91,6 +91,13 @@ export interface ProviderUsageContext {
    * `ProviderContext`, e.g. knowledge search) can still attribute the user.
    */
   userId?: string | null;
+  /**
+   * Which credential funded the facts emitted from this context (P11): `byok`
+   * when the user's own key/OAuth connection is used, `operator_funded` when the
+   * server environment key is. Absent/null when the funding cannot be attributed
+   * to a single credential.
+   */
+  fundingSource?: FundingSource | null;
   nextOccurrence: (operation: string) => number;
 }
 

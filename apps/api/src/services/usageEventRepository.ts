@@ -70,6 +70,7 @@ interface UsageEventColumn {
   unit: string;
   success: boolean;
   source_id: string | null;
+  funding_source: string | null;
   metadata: unknown;
 }
 
@@ -88,7 +89,7 @@ interface PreparedEvent {
 }
 
 const SELECT_COLUMNS =
-  'id,occurred_at,account_id,project_id,user_id,category,provider,operation,quantity,unit,success,source_id,metadata';
+  'id,occurred_at,account_id,project_id,user_id,category,provider,operation,quantity,unit,success,source_id,funding_source,metadata';
 
 function toNumber(value: number | string): number {
   return typeof value === 'number' ? value : Number(value);
@@ -125,6 +126,7 @@ function prepare(input: NewUsageEvent): PreparedEvent {
     unit: input.unit,
     success: input.success,
     sourceId: input.sourceId,
+    fundingSource: input.fundingSource ?? null,
     metadata: input.metadata ?? {},
   };
   const summary = {
@@ -169,6 +171,7 @@ function rowFromColumn(row: UsageEventColumn): UsageEvent {
     unit: row.unit as UsageEvent['unit'],
     success: row.success,
     sourceId: row.source_id,
+    fundingSource: (row.funding_source as UsageEvent['fundingSource']) ?? null,
     metadata: (row.metadata ?? {}) as Record<string, unknown>,
   };
   if (!isValidUsageEvent(event)) invalid('row', row.id);
@@ -246,6 +249,7 @@ export class SupabaseUsageEventStore implements UsageEventStore {
         unit: event.unit,
         success: event.success,
         source_id: event.sourceId,
+        funding_source: event.fundingSource ?? null,
         metadata: event.metadata as never,
         idempotency_key: idempotencyKey,
       });

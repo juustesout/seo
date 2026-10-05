@@ -48,6 +48,27 @@ export const USAGE_CATEGORIES = ['ai', 'dataforseo', 'google', 'job', 'publishin
 export type UsageCategory = (typeof USAGE_CATEGORIES)[number];
 
 // ---------------------------------------------------------------------------
+// Funding attribution (P11)
+// ---------------------------------------------------------------------------
+
+/**
+ * Who paid for the consumed resource (P11). This is a technical attribution
+ * dimension, not billing: it records which credential funded the external call
+ * so usage remains honest about operator exposure.
+ *
+ * - `byok`            the user supplied the credential (their API key or their
+ *                     own OAuth connection), so the user bears the vendor cost;
+ * - `operator_funded` the server environment key funded the call, so Old Skool
+ *                     SEO bears the cost.
+ *
+ * A usage fact may legitimately have no funding source (`null`) when an
+ * operation cannot be attributed to a single credential (for example a mixed
+ * background job). Callers must not guess.
+ */
+export const FUNDING_SOURCES = ['byok', 'operator_funded'] as const;
+export type FundingSource = (typeof FUNDING_SOURCES)[number];
+
+// ---------------------------------------------------------------------------
 // Units (closed vocabulary - first version)
 // ---------------------------------------------------------------------------
 
@@ -125,6 +146,9 @@ export interface UsageEvent {
 
   sourceId: string | null;
 
+  /** Which credential funded the call (P11), or null when unattributable. */
+  fundingSource?: FundingSource | null;
+
   metadata: Record<string, unknown>;
 }
 
@@ -158,6 +182,7 @@ const USAGE_EVENT_KEYS: ReadonlySet<string> = new Set([
   'unit',
   'success',
   'sourceId',
+  'fundingSource',
   'metadata',
 ]);
 
@@ -195,6 +220,11 @@ export function isValidUsageUnit(value: unknown): value is UsageUnit {
   return typeof value === 'string' && (USAGE_UNITS as readonly string[]).includes(value);
 }
 
+/** True when `value` is one of the closed funding sources. */
+export function isValidFundingSource(value: unknown): value is FundingSource {
+  return typeof value === 'string' && (FUNDING_SOURCES as readonly string[]).includes(value);
+}
+
 /** True when `value` is a non-negative integer quantity. */
 export function isValidUsageQuantity(value: unknown): value is number {
   return typeof value === 'number' && Number.isInteger(value) && value >= 0;
@@ -225,6 +255,9 @@ export function isValidUsageEvent(value: unknown): value is UsageEvent {
   if (!isValidUsageUnit(value.unit)) return false;
   if (typeof value.success !== 'boolean') return false;
   if (!isNullableBoundedText(value.sourceId, USAGE_SOURCE_ID_MAX_CHARS)) return false;
+  if (value.fundingSource !== undefined && value.fundingSource !== null && !isValidFundingSource(value.fundingSource)) {
+    return false;
+  }
   if (!isValidUsageMetadata(value.metadata)) return false;
   return true;
 }

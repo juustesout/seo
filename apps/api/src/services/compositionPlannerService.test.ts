@@ -11,6 +11,7 @@ import type { ServiceContainer } from '../context.js';
 import { MARKETING_STORYBOARD_PLAN } from '@seo/contracts';
 import { ApiError } from '../apiErrors.js';
 import { CompositionPlannerService } from './compositionPlannerService.js';
+import { admittingResourceAdmission } from '../testSupport/resourceAdmission.js';
 
 const mock = vi.hoisted(() => ({
   calls: [] as Array<{ messages: Array<{ role: string; content: string }> }>,
@@ -54,7 +55,7 @@ vi.mock('./cosmosService.js', () => ({
   }),
 }));
 
-const container = {} as ServiceContainer;
+const container = { resourceAdmission: admittingResourceAdmission() } as unknown as ServiceContainer;
 const service = new CompositionPlannerService(container);
 const INPUT = { brief: 'Launch a landing page for our analytics tool.' };
 

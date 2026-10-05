@@ -78,6 +78,7 @@ export function buildDataForSeoUsageEvents(args: {
       unit: fact.unit,
       success,
       sourceId,
+      fundingSource: usage.fundingSource ?? null,
       metadata: args.metadata ?? {},
       idempotencyKey: usageEventIdempotencyKey({
         category: 'dataforseo',

@@ -42,9 +42,27 @@ export class CompositionPlannerService {
 
   /** Produces one validated composition plan for the project, or throws a
    *  typed `ApiError`. No AI call happens without a configured provider.
+   *  The planner call consumes a server-funded AI resource, so it is admitted
+   *  against the project's ceiling before the provider call (P11).
    *  Callers that already gathered bounded Cosmos context (e.g. the compose
    *  flow, which also feeds the Writer) may pass it to avoid a second fetch. */
   async plan(
+    projectId: string,
+    input: CompositionPlannerInput,
+    options: { cosmosText?: string; actorUserId?: string | null } = {},
+  ): Promise<CompositionPlan> {
+    return this.container.resourceAdmission.withAdmission(
+      { projectId, userId: options.actorUserId ?? null, resource: 'ai_generation' },
+      () => this.planAdmitted(projectId, input, options),
+    );
+  }
+
+  /**
+   * Internal, non-admitting planner. Only call this from an operation that
+   * already holds an AI admission (compose, Designer execute), so one logical
+   * operation consumes one resource reservation rather than several.
+   */
+  async planAdmitted(
     projectId: string,
     input: CompositionPlannerInput,
     options: { cosmosText?: string } = {},

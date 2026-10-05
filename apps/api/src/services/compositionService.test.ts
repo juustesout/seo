@@ -12,6 +12,7 @@ import type { ServiceContainer } from '../context.js';
 import { MARKETING_STORYBOARD_PLAN, compileComposition, isWritableCompositionSlot } from '@seo/contracts';
 import { ApiError } from '../apiErrors.js';
 import { CompositionService } from './compositionService.js';
+import { admittingResourceAdmission } from '../testSupport/resourceAdmission.js';
 
 const mock = vi.hoisted(() => ({
   chats: [] as Array<{ messages: Array<{ role: string; content: string }> }>,
@@ -67,7 +68,7 @@ function fillsJson(): string {
   return JSON.stringify({ slots });
 }
 
-const container = {} as ServiceContainer;
+const container = { resourceAdmission: admittingResourceAdmission() } as unknown as ServiceContainer;
 const service = new CompositionService(container);
 const INPUT = { brief: 'Launch a landing page for our analytics tool.' };
 

@@ -26,6 +26,7 @@ import type {
   VisualDesignOperation,
 } from '@seo/contracts';
 import { DesignerService } from './designerService.js';
+import { admittingResourceAdmission } from '../testSupport/resourceAdmission.js';
 
 const mock = vi.hoisted(() => ({
   chats: [] as Array<{ messages: Array<{ role: string; content: string }> }>,
@@ -130,7 +131,7 @@ const PLAN = {
   ],
 };
 
-const container = {} as ServiceContainer;
+const container = { resourceAdmission: admittingResourceAdmission() } as unknown as ServiceContainer;
 const service = new DesignerService(container);
 
 async function expectApiError(promise: Promise<unknown>) {

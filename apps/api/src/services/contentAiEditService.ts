@@ -290,6 +290,8 @@ export class ContentAiEditService {
   /**
    * Runs one selection-scoped edit and returns a validated proposal. The client
    * previews and applies it; this method never writes the document.
+   *
+   * Admitted against the project's AI ceiling before any provider call (P11).
    */
   async run(
     projectId: string,
@@ -306,7 +308,18 @@ export class ContentAiEditService {
     if (input.operation === 'ask' && !input.instruction?.trim()) {
       throw ApiError.badRequest('Add an instruction for Ask AI.');
     }
+    return this.container.resourceAdmission.withAdmission(
+      { projectId, userId: actorUserId, resource: 'ai_generation' },
+      () => this.runAdmitted(projectId, contentId, input, actorUserId),
+    );
+  }
 
+  private async runAdmitted(
+    projectId: string,
+    contentId: string,
+    input: ContentAiEditRequestDto,
+    actorUserId: string | null,
+  ): Promise<ContentAiEditResponseDto> {
     const row = await this.content.get(projectId, contentId);
     const resolved = await this.ai.resolve(projectId, actorUserId);
     if (!resolved.configured || !resolved.provider.isConfigured()) {

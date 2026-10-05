@@ -63,7 +63,7 @@ compositionRouter.post(
     const { container, user } = req;
     await container.access.requireRole(user!.sub, projectId, 'editor');
     const body = compositionPlanRequestSchema.parse(req.body ?? {});
-    res.json({ data: await new CompositionPlannerService(container).plan(projectId, body) });
+    res.json({ data: await new CompositionPlannerService(container).plan(projectId, body, { actorUserId: user!.sub }) });
   }),
 );
 
@@ -75,7 +75,7 @@ compositionRouter.post(
     const { container, user } = req;
     await container.access.requireRole(user!.sub, projectId, 'editor');
     const body = composeRequestSchema.parse(req.body ?? {});
-    res.json({ data: await new CompositionService(container).compose(projectId, body) });
+    res.json({ data: await new CompositionService(container).compose(projectId, body, user!.sub) });
   }),
 );
 

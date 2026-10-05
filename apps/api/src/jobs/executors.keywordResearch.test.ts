@@ -119,4 +119,23 @@ describe('dataforseo_keyword_research executor (KW2)', () => {
     ).rejects.toMatchObject({ status: 400 });
     expect(researchKeywords).not.toHaveBeenCalled();
   });
+
+  it('bounds an oversized seed list from the generic /jobs path', async () => {
+    const researchKeywords = vi.fn(async (_ctx: unknown, _seeds: string[]) => [result()]);
+    const { container, writer } = build({ researchKeywords });
+    const executor = getExecutor('dataforseo_keyword_research')!;
+
+    const seeds = Array.from({ length: 250 }, (_, i) => `seed-${i}`);
+    await executor({
+      container,
+      job: { project_id: PROJECT, data_source_id: 'ds-1', created_by: 'u1', params: { seeds } } as never,
+      writer,
+      report: vi.fn(),
+    });
+
+    expect(researchKeywords).toHaveBeenCalledTimes(1);
+    const passed = researchKeywords.mock.calls[0]![1] as string[];
+    expect(passed).toHaveLength(5);
+    expect(passed).toEqual(['seed-0', 'seed-1', 'seed-2', 'seed-3', 'seed-4']);
+  });
 });

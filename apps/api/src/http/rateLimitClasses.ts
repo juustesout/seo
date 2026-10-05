@@ -61,6 +61,9 @@ export function mountClassRateLimits(app: Express, rateLimit: AppConfig['rateLim
       max: rateLimit.expensiveMax,
       methods: MUTATING_METHODS,
       // `/content` covers the writer/designer sub-routes mounted beneath it.
+      // `/mcp` is a streamable-HTTP POST surface that can run synchronous AI
+      // (Designer) so it shares the expensive budget; `/integrations` and
+      // `/publishers` `/test` endpoints probe external providers.
       prefixes: [
         '/api/projects/:projectId/keyword',
         '/api/projects/:projectId/composition',
@@ -70,16 +73,23 @@ export function mountClassRateLimits(app: Express, rateLimit: AppConfig['rateLim
         '/api/projects/:projectId/gsc',
         '/api/projects/:projectId/analytics',
         '/api/projects/:projectId/media',
+        '/api/projects/:projectId/integrations',
+        '/api/projects/:projectId/publishers',
+        '/api/mcp',
       ],
     },
     {
       name: 'moderate',
       max: rateLimit.moderateMax,
       methods: MUTATING_METHODS,
+      // `/v1` is the project-API-key REST surface; enqueueing is already bounded
+      // by P9 admission, this bounds the mutating request rate behind the key.
       prefixes: [
         '/api/projects/:projectId/jobs',
         '/api/projects/:projectId/publications',
         '/api/projects/:projectId/schedules',
+        '/api/projects/:projectId/performance',
+        '/api/v1',
       ],
     },
   ];

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { ServiceContainer } from '../context.js';
 import { ContentIntelligenceService } from './contentIntelligenceService.js';
+import { admittingResourceAdmission } from '../testSupport/resourceAdmission.js';
 
 /**
  * Regression coverage for P8-A: GSC content intelligence resolves a project's
@@ -109,6 +110,7 @@ function container(stores: Store): ServiceContainer {
     registry: {},
     sb: filterSb(stores),
     jobStore: {},
+    resourceAdmission: admittingResourceAdmission(),
   } as unknown as ServiceContainer;
 }
 

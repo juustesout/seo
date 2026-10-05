@@ -55,6 +55,7 @@ export function buildMediaUsageEvent(args: {
     unit,
     success,
     sourceId: scope.usage.sourceId,
+    fundingSource: scope.usage.fundingSource ?? null,
     ...(args.model ? { metadata: { model: args.model } } : {}),
     idempotencyKey: usageEventIdempotencyKey({
       category: 'media',

@@ -69,8 +69,8 @@ const RESOURCE_ERROR_MESSAGES: Record<ResourceErrorCode, string> = {
   queue_limit:
     'This account or project already has too many jobs queued. Wait for some to finish, then try again.',
   resource_concurrency:
-    'This account or project already has too many jobs running. Wait for some to finish, then try again.',
-  resource_limit: 'Too many job requests in a short time. Wait a moment, then try again.',
+    'This account or project already has too many operations running. Wait for some to finish, then try again.',
+  resource_limit: 'Too many requests in a short time. Wait a moment, then try again.',
 };
 
 /** SQLSTATEs raised by seo_admit_job, mapped to the stable public codes. */
@@ -101,6 +101,16 @@ export interface RecordDenialArgs {
   scope: ResourceScope;
   jobType?: string | null;
   requested?: number;
+}
+
+/** A synchronous operation asking to be admitted against a protected resource. */
+export interface SyncAdmissionRequest {
+  projectId: string;
+  userId: string | null;
+  resource: ResourceKind;
+  amount?: number;
+  /** Safety TTL for a leaked reservation; defaults to 15 minutes. */
+  ttlSeconds?: number;
 }
 
 export class ResourceAdmissionService {
@@ -136,8 +146,75 @@ export class ResourceAdmissionService {
 
   /** Build the stable, secret-free API error for a denial. */
   toApiError(failure: AdmissionFailure, jobType: string): ApiError {
-    const details: ResourceErrorDetails = { resource: resourceForJobType(jobType), scope: failure.scope };
+    return this.toApiErrorForResource(failure, resourceForJobType(jobType));
+  }
+
+  /** Build the stable, secret-free API error for a denial of a named resource. */
+  toApiErrorForResource(failure: AdmissionFailure, resource: ResourceKind): ApiError {
+    const details: ResourceErrorDetails = { resource, scope: failure.scope };
     return ApiError.resourceLimited(failure.code, RESOURCE_ERROR_MESSAGES[failure.code], details);
+  }
+
+  // -------------------------------------------------------------------------
+  // Synchronous admission (P11)
+  // -------------------------------------------------------------------------
+
+  /**
+   * Admit (and reserve) one synchronous operation. The database evaluates the
+   * technical ceilings atomically (advisory locks) and inserts the reservation;
+   * a denial is mapped onto the same structured 429 as the async job path.
+   * Returns the reservation id, which the caller must release when done.
+   */
+  async admit(request: SyncAdmissionRequest): Promise<string> {
+    const { data, error } = await this.sb.rpc('seo_admit_resource', {
+      p_project_id: request.projectId,
+      p_resource: request.resource,
+      p_amount: request.amount ?? 1,
+      p_ttl_seconds: request.ttlSeconds ?? 900,
+    });
+    if (error) {
+      const failure = this.admissionErrorFrom(error);
+      if (failure) {
+        await this.recordDenial({
+          projectId: request.projectId,
+          userId: request.userId,
+          resource: request.resource,
+          code: failure.code,
+          scope: failure.scope,
+          jobType: null,
+          requested: request.amount ?? 1,
+        });
+        throw this.toApiErrorForResource(failure, request.resource);
+      }
+      logger.error({ error, resource: request.resource }, 'sync resource admission failed');
+      throw new ApiError(500, 'resource_admission_failed', 'Could not evaluate resource availability.');
+    }
+    return String(data);
+  }
+
+  /** Release a reservation once the operation has finished. Best-effort. */
+  async release(reservationId: string | null | undefined): Promise<void> {
+    if (!reservationId) return;
+    try {
+      const { error } = await this.sb.rpc('seo_release_resource', { p_reservation_id: reservationId });
+      if (error) logger.warn({ error }, 'resource reservation release failed');
+    } catch (err) {
+      logger.warn({ err }, 'resource reservation release failed');
+    }
+  }
+
+  /**
+   * Run `fn` under a synchronous resource reservation, releasing it afterwards
+   * whether `fn` succeeds or throws. A resource denial from `admit` propagates
+   * unchanged so callers stop before doing any provider work.
+   */
+  async withAdmission<T>(request: SyncAdmissionRequest, fn: () => Promise<T>): Promise<T> {
+    const reservationId = await this.admit(request);
+    try {
+      return await fn();
+    } finally {
+      await this.release(reservationId);
+    }
   }
 
   /**

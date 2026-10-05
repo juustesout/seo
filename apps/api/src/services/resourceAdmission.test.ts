@@ -17,7 +17,14 @@ interface InsertedRow {
   job_type?: string | null;
 }
 
-function fakeSb(opts: { accountId?: string | null; insertError?: unknown; inserted?: InsertedRow[] } = {}): SupabaseClient {
+function fakeSb(
+  opts: {
+    accountId?: string | null;
+    insertError?: unknown;
+    inserted?: InsertedRow[];
+    rpc?: (fn: string, args: Record<string, unknown>) => Promise<{ data: unknown; error: unknown }>;
+  } = {},
+): SupabaseClient {
   return {
     from(table: string) {
       if (table === 'seo_projects') {
@@ -38,6 +45,8 @@ function fakeSb(opts: { accountId?: string | null; insertError?: unknown; insert
       }
       throw new Error(`unexpected table ${table}`);
     },
+    rpc: (fn: string, args: Record<string, unknown>) =>
+      opts.rpc ? opts.rpc(fn, args) : Promise.resolve({ data: null, error: null }),
   } as unknown as SupabaseClient;
 }
 
@@ -136,5 +145,91 @@ describe('ResourceAdmissionService.recordDenial', () => {
         scope: 'account',
       }),
     ).resolves.toBeUndefined();
+  });
+});
+
+describe('ResourceAdmissionService sync admission', () => {
+  it('passes the resource, amount and ttl to seo_admit_resource and returns the id', async () => {
+    const calls: Array<{ fn: string; args: Record<string, unknown> }> = [];
+    const admission = new ResourceAdmissionService(
+      fakeSb({
+        rpc: async (fn, args) => {
+          calls.push({ fn, args });
+          return { data: 'res-1', error: null };
+        },
+      }),
+    );
+    const id = await admission.admit({
+      projectId: 'proj-1',
+      userId: 'user-1',
+      resource: 'ai_generation',
+      amount: 2,
+      ttlSeconds: 120,
+    });
+    expect(id).toBe('res-1');
+    expect(calls[0]?.fn).toBe('seo_admit_resource');
+    expect(calls[0]?.args).toEqual({
+      p_project_id: 'proj-1',
+      p_resource: 'ai_generation',
+      p_amount: 2,
+      p_ttl_seconds: 120,
+    });
+  });
+
+  it('maps a denial onto a structured 429 and records evidence before throwing', async () => {
+    const inserted: InsertedRow[] = [];
+    const admission = new ResourceAdmissionService(
+      fakeSb({
+        accountId: 'acct-1',
+        inserted,
+        rpc: async () => ({
+          data: null,
+          error: { code: 'SE002', message: 'seo_resource_concurrency', detail: JSON.stringify({ scope: 'project' }) },
+        }),
+      }),
+    );
+    await expect(
+      admission.admit({ projectId: 'proj-1', userId: 'user-1', resource: 'ai_image' }),
+    ).rejects.toMatchObject({ status: 429, code: 'resource_concurrency' });
+    expect(inserted).toHaveLength(1);
+    expect(inserted[0]).toMatchObject({ resource: 'ai_image', code: 'resource_concurrency', scope: 'project' });
+  });
+
+  it('treats an unrecognised database error as an internal error, not a denial', async () => {
+    const admission = new ResourceAdmissionService(
+      fakeSb({ rpc: async () => ({ data: null, error: { code: '42P01', message: 'relation missing' } }) }),
+    );
+    await expect(
+      admission.admit({ projectId: 'proj-1', userId: null, resource: 'ai_generation' }),
+    ).rejects.toMatchObject({ status: 500, code: 'resource_admission_failed' });
+  });
+
+  it('releases the reservation whether the wrapped operation succeeds or fails', async () => {
+    const released: Array<Record<string, unknown>> = [];
+    const admission = new ResourceAdmissionService(
+      fakeSb({
+        rpc: async (fn, args) => {
+          if (fn === 'seo_release_resource') released.push(args);
+          return fn === 'seo_admit_resource' ? { data: 'res-1', error: null } : { data: null, error: null };
+        },
+      }),
+    );
+    await expect(
+      admission.withAdmission({ projectId: 'proj-1', userId: null, resource: 'ai_generation' }, async () => 'ok'),
+    ).resolves.toBe('ok');
+    await expect(
+      admission.withAdmission({ projectId: 'proj-1', userId: null, resource: 'ai_generation' }, async () => {
+        throw new Error('provider boom');
+      }),
+    ).rejects.toThrow('provider boom');
+    expect(released).toEqual([{ p_reservation_id: 'res-1' }, { p_reservation_id: 'res-1' }]);
+  });
+
+  it('never throws from release when the release RPC fails', async () => {
+    const admission = new ResourceAdmissionService(
+      fakeSb({ rpc: async () => ({ data: null, error: { message: 'down' } }) }),
+    );
+    await expect(admission.release('res-1')).resolves.toBeUndefined();
+    await expect(admission.release(null)).resolves.toBeUndefined();
   });
 });

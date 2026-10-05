@@ -9,6 +9,7 @@ import {
   ContentAiService,
 } from './contentAiService.js';
 import type { ServiceContainer } from '../context.js';
+import { admittingResourceAdmission, denyingResourceAdmission } from '../testSupport/resourceAdmission.js';
 
 const KEYWORD = 'seo tooling';
 const CHECKS = ['Fail — Content length: short (Warning line)'];
@@ -146,18 +147,27 @@ describe('content AI error mapping', () => {
 
 describe('ContentAiService selection guard', () => {
   it('rejects selection actions without selected text before touching storage', async () => {
-    const service = new ContentAiService({} as unknown as ServiceContainer);
+    const service = new ContentAiService({ resourceAdmission: admittingResourceAdmission() } as unknown as ServiceContainer);
     await expect(
       service.run('p1', 'c1', { action: 'rewrite', selection: '' }),
     ).rejects.toThrowError(/Select text to edit first/);
   });
 
   it('does not enforce the selection guard for generate_section', async () => {
-    const service = new ContentAiService({} as unknown as ServiceContainer);
+    const service = new ContentAiService({ resourceAdmission: admittingResourceAdmission() } as unknown as ServiceContainer);
     const message = await service
       .run('p1', 'c1', { action: 'generate_section' })
       .then(() => 'ok')
       .catch((e: unknown) => (e instanceof Error ? e.message : String(e)));
     expect(message).not.toContain('Select text to edit first');
+  });
+
+  it('surfaces a synchronous resource denial as a structured 429', async () => {
+    const service = new ContentAiService({
+      resourceAdmission: denyingResourceAdmission('resource_concurrency', 'account'),
+    } as unknown as ServiceContainer);
+    await expect(
+      service.run('p1', 'c1', { action: 'rewrite', selection: 'Some existing copy.' }),
+    ).rejects.toMatchObject({ status: 429, code: 'resource_concurrency', details: { resource: 'ai_generation', scope: 'account' } });
   });
 });

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { ServiceContainer } from '../context.js';
 import { ContentIntelligenceService } from './contentIntelligenceService.js';
+import { admittingResourceAdmission } from '../testSupport/resourceAdmission.js';
 
 type Store = Record<string, unknown[]>;
 
@@ -60,6 +61,7 @@ function container(stores: Store): ServiceContainer {
     registry: {},
     sb,
     jobStore: {},
+    resourceAdmission: admittingResourceAdmission(),
   } as unknown as ServiceContainer;
 }
 
@@ -157,6 +159,7 @@ describe('ContentIntelligenceService report wiring', () => {
       registry: { getKnowledge: () => ({ id: 'qdrant' }) },
       sb,
       jobStore: {},
+      resourceAdmission: admittingResourceAdmission(),
     } as unknown as ServiceContainer;
     const svc = new ContentIntelligenceService(containerInstance);
     const report = await svc.report('p1', 'c1');

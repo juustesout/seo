@@ -73,8 +73,16 @@ export class CompositionService {
   constructor(private readonly container: ServiceContainer) {}
 
   /** Runs the whole composer -> writer chain for the project, or throws a
-   *  typed `ApiError` labelled with the phase that failed. */
-  async compose(projectId: string, input: ComposeInput): Promise<ComposeResult> {
+   *  typed `ApiError` labelled with the phase that failed. Admitted once against
+   *  the project's AI ceiling for the whole chain (P11). */
+  async compose(projectId: string, input: ComposeInput, actorUserId: string | null = null): Promise<ComposeResult> {
+    return this.container.resourceAdmission.withAdmission(
+      { projectId, userId: actorUserId, resource: 'ai_generation' },
+      () => this.composeAdmitted(projectId, input),
+    );
+  }
+
+  private async composeAdmitted(projectId: string, input: ComposeInput): Promise<ComposeResult> {
     const cosmos = await getCosmosContext(this.container, projectId);
     const cosmosText = cosmos.text;
     const ai = new AIService(this.container);
@@ -87,7 +95,7 @@ export class CompositionService {
       plan = input.plan;
     } else {
       try {
-        plan = await new CompositionPlannerService(this.container).plan(
+        plan = await new CompositionPlannerService(this.container).planAdmitted(
           projectId,
           { brief: input.brief, format: input.format },
           { cosmosText },

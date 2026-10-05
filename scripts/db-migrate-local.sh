@@ -2650,7 +2650,7 @@ SQL
 echo "   smoke: admission ceiling + release + retry + concurrency + rate OK"
 
 # (6) The operational tables are deny-all to authenticated/anon.
-for rp_table in seo_resource_limits seo_resource_denials; do
+for rp_table in seo_resource_limits seo_resource_denials seo_resource_reservations; do
   RP_COUNT="$(PSQL -d "${DB_NAME}" -t -A <<SQL
 grant usage on schema public to authenticated;
 grant select on public.${rp_table} to authenticated;
@@ -2664,7 +2664,7 @@ SQL
     exit 1
   fi
 done
-echo "   smoke: resource limits + denials are deny-all to authenticated (RLS OK)"
+echo "   smoke: resource limits + denials + reservations are deny-all to authenticated (RLS OK)"
 
 # (7) Concurrent inserts cannot oversubscribe the queue: two racing sessions
 # each pause before inserting into a project whose queued ceiling is 1.
@@ -2689,5 +2689,80 @@ if { [ "${RP_RC1}" = "0" ] && [ "${RP_RC2}" = "0" ]; } || { [ "${RP_RC1}" != "0"
   exit 1
 fi
 echo "   smoke: exactly one of two racing inserts was admitted (queued=1)"
+
+echo "==> smoke test: synchronous resource protection (P11) + atomic reservations"
+
+p11_create_project() {
+  local p11_user="$1" p11_name="$2" p11_slug="$3"
+  PSQL -d "${DB_NAME}" <<SQL >/dev/null
+set request.jwt.claims = '{"sub":"${p11_user}","email":"${p11_slug}@example.com"}';
+insert into auth.users (id, email) values ('${p11_user}', '${p11_slug}@example.com') on conflict (id) do nothing;
+select public.seo_create_project('${p11_name}', '${p11_slug}', 'https://${p11_slug}.example', 'p11 sync resource smoke');
+SQL
+}
+
+p11_create_project '00000000-0000-0000-0000-0000000000e1' 'P11 sync' 'p11-sync'
+p11_create_project '00000000-0000-0000-0000-0000000000e1' 'P11 sync sibling' 'p11-sync-b'
+
+PSQL -d "${DB_NAME}" <<'SQL'
+do $$
+declare
+  v_a uuid; v_b uuid; v_acc uuid;
+  v_res uuid; v_res2 uuid;
+  v_denied boolean; v_code text;
+begin
+  select id, account_id into v_a, v_acc from public.seo_projects where slug = 'p11-sync';
+  select id into v_b from public.seo_projects where slug = 'p11-sync-b';
+  if v_a is null or v_b is null then raise exception 'p11: projects missing'; end if;
+  if not exists (select 1 from public.seo_resource_limits where scope = 'project' and resource = 'sync_create_rate') then
+    raise exception 'p11: sync limits were not seeded';
+  end if;
+
+  -- (1) Repeated synchronous request ceiling, per project, with SE003.
+  update public.seo_resource_limits set max_value = 1, window_seconds = 60
+    where scope = 'project' and resource = 'sync_create_rate';
+  v_res := public.seo_admit_resource(v_a, 'ai_generation');
+  v_denied := false; v_code := null;
+  begin
+    v_res2 := public.seo_admit_resource(v_a, 'ai_generation');
+  exception when others then v_denied := true; v_code := sqlstate; end;
+  if not v_denied or v_code <> 'SE003' then
+    raise exception 'p11: sync rate ceiling not enforced (denied=%, sqlstate=%)', v_denied, v_code;
+  end if;
+  perform public.seo_release_resource(v_res);
+  raise notice 'p11: sync rate ceiling + release OK';
+
+  -- (2) In-flight concurrency per project, with SE002; release frees the slot.
+  update public.seo_resource_limits set max_value = 1000 where scope = 'project' and resource = 'sync_create_rate';
+  update public.seo_resource_limits set max_value = 1 where scope = 'project' and resource = 'ai_generation_inflight';
+  v_res := public.seo_admit_resource(v_a, 'ai_generation');
+  v_denied := false; v_code := null;
+  begin
+    v_res2 := public.seo_admit_resource(v_a, 'ai_generation');
+  exception when others then v_denied := true; v_code := sqlstate; end;
+  if not v_denied or v_code <> 'SE002' then
+    raise exception 'p11: sync inflight ceiling not enforced (denied=%, sqlstate=%)', v_denied, v_code;
+  end if;
+  update public.seo_resource_limits set max_value = 1000 where scope = 'project' and resource = 'ai_generation_inflight';
+  perform public.seo_release_resource(v_res);
+  v_res2 := public.seo_admit_resource(v_a, 'ai_generation');
+  perform public.seo_release_resource(v_res2);
+  raise notice 'p11: sync inflight ceiling + release OK';
+
+  -- (3) Account scope: a sibling project cannot dodge the account ceiling.
+  update public.seo_resource_limits set max_value = 1 where scope = 'account' and resource = 'ai_image_inflight';
+  v_res := public.seo_admit_resource(v_a, 'ai_image');
+  v_denied := false; v_code := null;
+  begin
+    v_res2 := public.seo_admit_resource(v_b, 'ai_image');
+  exception when others then v_denied := true; v_code := sqlstate; end;
+  if not v_denied or v_code <> 'SE002' then
+    raise exception 'p11: account sync ceiling not enforced (denied=%, sqlstate=%)', v_denied, v_code;
+  end if;
+  perform public.seo_release_resource(v_res);
+  raise notice 'p11: account sync ceiling OK';
+end $$;
+SQL
+echo "   smoke: sync admission ceiling + release + concurrency + account scope OK"
 
 echo "==> migration validation OK (${DB_NAME})"

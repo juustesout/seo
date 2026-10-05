@@ -36,6 +36,7 @@ import { initialWriterAgent } from '../agents/writer/index.js';
 import { agentCommittedSnapshot, reviseCommittedSnapshot } from '../agents/writer/snapshot.js';
 import { WriterRunService } from './writerRunService.js';
 import { InMemoryWriterRunRepository, type WriterRunRepository } from './writerRunRepository.js';
+import { admittingResourceAdmission } from '../testSupport/resourceAdmission.js';
 
 const PROJECT = '11111111-1111-4111-8111-111111111111';
 const OTHER_PROJECT = '22222222-2222-4222-8222-222222222222';
@@ -97,9 +98,9 @@ function makeService(
     inFlight?: Set<WriterRunId>;
   } = {},
 ): WriterRunService {
-  // With repository + checkpointer + deps injected the container is never
-  // read; an empty object stands in for the production ServiceContainer.
-  const container = {} as never;
+  // With repository + checkpointer + deps injected the container's provider
+  // wiring is never read; only the resource-admission seam is exercised (P11).
+  const container = { resourceAdmission: admittingResourceAdmission() } as never;
   return new WriterRunService(container, {
     repository: opts.repository ?? new InMemoryWriterRunRepository(),
     checkpointer: opts.checkpointer ?? new MemorySaver(),

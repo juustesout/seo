@@ -38,6 +38,7 @@ import {
   KEYWORD_EXPANSION_MAX_LIMIT_PER_METHOD,
   KEYWORD_EXPANSION_RELATED_DEFAULT_DEPTH,
   KEYWORD_RESEARCH_RUN_MAX_KEYWORDS,
+  KEYWORD_RESEARCH_SEED_MAX_CHARS,
   type CompetitorCandidateDto,
   type CompetitorGapDto,
   type ContentBlock,
@@ -62,6 +63,41 @@ export interface JobExecContext {
 }
 
 export type JobExecutor = (ctx: JobExecContext) => Promise<Record<string, unknown>>;
+
+/**
+ * Technical provider-cost ceilings re-applied at execution, not only at the
+ * feature route. The generic `POST /jobs` endpoint accepts arbitrary `params`,
+ * so without re-validation here a caller could request a Search Console range
+ * or a keyword seed list far beyond what any UI allows and multiply provider
+ * cost. These bound workload, not entitlement; they mirror the feature routes'
+ * caps. See docs/p11-resource-protection.md (bypass closure).
+ */
+const GSC_SYNC_MAX_DAYS = 90;
+const KEYWORD_RESEARCH_MAX_SEEDS = 5;
+
+function clampInt(value: unknown, min: number, max: number, fallback: number): number {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(Math.max(Math.floor(n), min), max);
+}
+
+function isIsoDate(value: unknown): value is string {
+  return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value);
+}
+
+/** Bound a research seed list the same way the feature services do. */
+function boundedResearchSeeds(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  const out: string[] = [];
+  for (const value of raw) {
+    if (typeof value !== 'string') continue;
+    const seed = value.trim();
+    if (!seed || seed.length > KEYWORD_RESEARCH_SEED_MAX_CHARS) continue;
+    out.push(seed);
+    if (out.length >= KEYWORD_RESEARCH_MAX_SEEDS) break;
+  }
+  return out;
+}
 
 // ---------------------------------------------------------------------------
 // Shared lookups
@@ -149,11 +185,14 @@ const gscSync: JobExecutor = async ({ container, job, writer, report }) => {
   const siteUrl = (property.site_url as string | undefined) ?? ((ds.config as Record<string, unknown>)?.siteUrl as string | undefined);
   if (!siteUrl) throw new ApiError(400, 'bad_request', 'GSC project property has no site_url');
 
-  const endDate = (job.params.endDate as string) ?? new Date().toISOString().slice(0, 10);
-  const days = Number(job.params.days ?? job.params.rangeDays ?? 28);
+  const endDate = isIsoDate(job.params.endDate) ? job.params.endDate : new Date().toISOString().slice(0, 10);
+  const days = clampInt(job.params.days ?? job.params.rangeDays, 1, GSC_SYNC_MAX_DAYS, 28);
   const start = new Date(`${endDate}T00:00:00Z`);
-  start.setUTCDate(start.getUTCDate() - Math.max(0, days - 1));
-  const startDate = (job.params.startDate as string) ?? start.toISOString().slice(0, 10);
+  start.setUTCDate(start.getUTCDate() - (days - 1));
+  const earliestStartDate = start.toISOString().slice(0, 10);
+  const startDate = isIsoDate(job.params.startDate) && job.params.startDate >= earliestStartDate
+    ? job.params.startDate
+    : earliestStartDate;
   const range = { startDate, endDate };
 
   const adapter = container.registry.getDataSource('gsc');
@@ -424,7 +463,7 @@ const dataForSeoKeywordResearch: JobExecutor = async ({ container, job, writer, 
   const adapter = container.registry.getDataSource('dataforseo');
   if (!adapter) throw new ApiError(503, 'not_configured', 'DataForSEO provider is not registered');
   const dfseo = adapter as DataForSeoDataSource;
-  const seeds = (job.params.seeds as string[] | undefined) ?? (job.params.keywords as string[] | undefined) ?? [];
+  const seeds = boundedResearchSeeds(job.params.seeds ?? job.params.keywords);
   if (seeds.length === 0) throw new ApiError(400, 'bad_request', 'keyword_research requires seeds');
 
   const ctx = buildProviderContext(container, {

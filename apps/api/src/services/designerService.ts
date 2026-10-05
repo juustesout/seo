@@ -203,7 +203,7 @@ export class DesignerService {
 
     return {
       structure: async ({ brief, format }) => {
-        const plan = await new CompositionPlannerService(this.container).plan(
+        const plan = await new CompositionPlannerService(this.container).planAdmitted(
           projectId,
           { brief: briefToText(brief), format },
           { cosmosText },
@@ -358,7 +358,13 @@ export class DesignerService {
     if (input.brief !== undefined && !isValidDesignBrief(input.brief)) {
       throw ApiError.badRequest('Invalid design brief');
     }
+    return this.container.resourceAdmission.withAdmission(
+      { projectId, userId: this.actorUserId, resource: 'ai_generation' },
+      () => this.executeAdmitted(projectId, input),
+    );
+  }
 
+  private async executeAdmitted(projectId: string, input: DesignerExecuteInput): Promise<DesignerProposal> {
     const content = input.contentId
       ? await new ContentService(this.container.sb).get(projectId, input.contentId)
       : null;
@@ -420,6 +426,17 @@ export class DesignerService {
     if (intent.projectId !== projectId) {
       throw new ApiError(400, 'invalid_designer_intent', 'The Designer intent does not belong to this project.');
     }
+    return this.container.resourceAdmission.withAdmission(
+      { projectId, userId: this.actorUserId, resource: 'ai_generation' },
+      () => this.executeIntentAdmitted(projectId, intent, options),
+    );
+  }
+
+  private async executeIntentAdmitted(
+    projectId: string,
+    intent: DesignerIntent,
+    options: DesignerIntentOptions,
+  ): Promise<DesignerProposal> {
     const insertionContext = imageInsertionContextOf(intent);
     if (insertionContext) {
       const sectionRequest = sectionCreationFromInstruction(intent.instruction);
@@ -440,7 +457,7 @@ export class DesignerService {
       );
     }
     const plan = await runDesignerPlanner(this.planner, intent);
-    return this.execute(projectId, {
+    return this.executeAdmitted(projectId, {
       plan,
       ...(intent.brief !== undefined ? { brief: intent.brief } : {}),
       ...(intent.contentId !== undefined ? { contentId: intent.contentId } : {}),

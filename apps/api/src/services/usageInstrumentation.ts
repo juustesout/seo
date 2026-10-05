@@ -25,6 +25,7 @@
 import type {
   AIChatResult,
   AIProvider,
+  FundingSource,
   NewUsageEvent,
   ProviderUsageContext,
 } from '@seo/contracts';
@@ -37,6 +38,8 @@ export interface UsageScope {
   accountId: string | null;
   projectId: string;
   userId: string | null;
+  /** Which credential funded the call (P11); null when unattributable. */
+  fundingSource?: FundingSource | null;
 }
 
 /** Minimal append surface instrumentation depends on (the R5.10.2 store). */
@@ -70,6 +73,8 @@ export function usageScopeContext(args: {
   occurrenceBase?: number;
   /** Acting user threaded from the authenticated edge; null for system/job work. */
   userId?: string | null;
+  /** Which credential funded the operation (P11); null when unattributable. */
+  fundingSource?: FundingSource | null;
 }): ProviderUsageContext | undefined {
   if (!args.sink) return undefined;
   const occurrences = new Map<string, number>();
@@ -81,6 +86,7 @@ export function usageScopeContext(args: {
     sink: args.sink,
     sourceId: args.sourceId ?? null,
     userId: args.userId ?? null,
+    fundingSource: args.fundingSource ?? null,
     nextOccurrence: (operation: string) => {
       const next = occurrences.get(operation) ?? base;
       occurrences.set(operation, next + 1);
@@ -128,6 +134,7 @@ function chatTokenEvents(args: {
       unit: 'input_token',
       success: true,
       sourceId: null,
+      fundingSource: scope.fundingSource ?? null,
       metadata,
     });
   }
@@ -141,6 +148,7 @@ function chatTokenEvents(args: {
       unit: 'output_token',
       success: true,
       sourceId: null,
+      fundingSource: scope.fundingSource ?? null,
       metadata,
     });
   }

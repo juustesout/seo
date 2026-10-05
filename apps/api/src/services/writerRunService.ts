@@ -371,6 +371,18 @@ export class WriterRunService {
     return this.deps ?? writerDependenciesFor(this.container, this.actor?.userId ?? null);
   }
 
+  /**
+   * Run writer AI work under one project AI admission (P11). Every provider
+   * call in a writer run is server-funded, so the reservation is held for the
+   * whole operation and released whether it succeeds or fails.
+   */
+  private admitAi<T>(projectId: string, fn: () => Promise<T>): Promise<T> {
+    return this.container.resourceAdmission.withAdmission(
+      { projectId, userId: this.actor?.userId ?? null, resource: 'ai_generation' },
+      fn,
+    );
+  }
+
   private async checkpointer(): Promise<BaseCheckpointSaver> {
     return this.checkpointerExplicit ?? this.checkpoints.saver();
   }
@@ -426,6 +438,10 @@ export class WriterRunService {
    *  and the thread resume re-issues the exact revise instead of losing it. */
   private async recoverInProgress(row: WriterRunRow): Promise<void> {
     if (this.inFlight.has(row.runId)) return;
+    return this.admitAi(row.projectId, () => this.recoverInProgressAdmitted(row));
+  }
+
+  private async recoverInProgressAdmitted(row: WriterRunRow): Promise<void> {
     this.inFlight.add(row.runId);
     try {
       const current = await this.repository.getBound(row.runId, row.projectId, row.contentId);
@@ -531,6 +547,17 @@ export class WriterRunService {
     contentId: string,
     decision: unknown,
   ): Promise<void> {
+    return this.admitAi(projectId, () =>
+      this.resumeApprovalInBackgroundAdmitted(runId, projectId, contentId, decision),
+    );
+  }
+
+  private async resumeApprovalInBackgroundAdmitted(
+    runId: WriterRunId,
+    projectId: string,
+    contentId: string,
+    decision: unknown,
+  ): Promise<void> {
     try {
       const saver = await this.checkpointer();
       const deps = this.depsFor();
@@ -578,6 +605,17 @@ export class WriterRunService {
     contentId: string,
     resume: WriterReviewSessionResume,
   ): Promise<void> {
+    return this.admitAi(projectId, () =>
+      this.resumeReviseInBackgroundAdmitted(runId, projectId, contentId, resume),
+    );
+  }
+
+  private async resumeReviseInBackgroundAdmitted(
+    runId: WriterRunId,
+    projectId: string,
+    contentId: string,
+    resume: WriterReviewSessionResume,
+  ): Promise<void> {
     try {
       const saver = await this.checkpointer();
       const deps = this.depsFor();
@@ -618,6 +656,10 @@ export class WriterRunService {
    *  recorded only after the initial thread rests, so a caller always receives
    *  a durable run it can poll and resume. */
   async start(projectId: string, contentId: string, input: WriterStartServiceInput): Promise<WriterRunDto> {
+    return this.admitAi(projectId, () => this.startAdmitted(projectId, contentId, input));
+  }
+
+  private async startAdmitted(projectId: string, contentId: string, input: WriterStartServiceInput): Promise<WriterRunDto> {
     const saver = await this.checkpointer();
     const result = await startDurableWriterRun(
       {
@@ -956,6 +998,15 @@ export class WriterRunService {
     projectId: string,
     contentId: string,
   ): Promise<WriterRunDto> {
+    return this.admitAi(projectId, () => this.researchAdmitted(runId, purpose, projectId, contentId));
+  }
+
+  private async researchAdmitted(
+    runId: WriterRunId,
+    purpose: WriterResearchPurpose,
+    projectId: string,
+    contentId: string,
+  ): Promise<WriterRunDto> {
     const row = await this.requireBoundRow(runId, projectId, contentId);
     if (row.status !== 'review_ready') {
       throw new ApiError(
@@ -1029,6 +1080,15 @@ export class WriterRunService {
    *  populated (honest per-source status - empty / not configured / unavailable
    *  are reported, never fabricated). Wrong-state / unknown runs fail closed. */
   async intelligence(
+    runId: WriterRunId,
+    request: { purpose: WriterIntelligencePurpose; focus: string | null; sections: string[] },
+    projectId: string,
+    contentId: string,
+  ): Promise<WriterRunDto> {
+    return this.admitAi(projectId, () => this.intelligenceAdmitted(runId, request, projectId, contentId));
+  }
+
+  private async intelligenceAdmitted(
     runId: WriterRunId,
     request: { purpose: WriterIntelligencePurpose; focus: string | null; sections: string[] },
     projectId: string,
@@ -1224,6 +1284,17 @@ export class WriterRunService {
    *  this.inFlight; a resume that throws falls back to
    *  continueDurableWriterRun so the run is caught up instead of being failed. */
   private async resumeAgentInBackground(
+    runId: WriterRunId,
+    projectId: string,
+    contentId: string,
+    resume: WriterReviewSessionResume,
+  ): Promise<void> {
+    return this.admitAi(projectId, () =>
+      this.resumeAgentInBackgroundAdmitted(runId, projectId, contentId, resume),
+    );
+  }
+
+  private async resumeAgentInBackgroundAdmitted(
     runId: WriterRunId,
     projectId: string,
     contentId: string,

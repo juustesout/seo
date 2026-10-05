@@ -26,6 +26,7 @@ import type {
   AccountAiStatusDto,
   AIProvider,
   AiKeySource,
+  FundingSource,
   ProjectAiSettingsInput,
   ProjectAiStatusDto,
   ProviderDescriptor,
@@ -179,6 +180,15 @@ export class AIService {
     }
 
     const keySource: AiKeySource = accountKey ? 'account' : projectKey ? 'project' : envKey ? 'env' : 'none';
+    // P11 funding attribution: a user-supplied key (account/project BYOK) is
+    // funded by the user; the server env key is operator-funded. An unconfigured
+    // resolver emits nothing, so `none` stays null honestly.
+    const fundingSource: FundingSource | null =
+      keySource === 'account' || keySource === 'project'
+        ? 'byok'
+        : keySource === 'env'
+          ? 'operator_funded'
+          : null;
     // R5.10.3: this is the one gate every text/embedding caller goes through, so
     // wrapping the resolved provider here records exactly one usage event per
     // actual provider call with no per-caller double counting. R5.10.8: the
@@ -188,7 +198,7 @@ export class AIService {
       provider: instrumentAiProvider({
         provider: provider ?? this.openAiProvider(null),
         sink: this.container.usageEvents,
-        scope: { accountId: row.account_id, projectId, userId: actorUserId },
+        scope: { accountId: row.account_id, projectId, userId: actorUserId, fundingSource },
       }),
       configured: Boolean(effectiveKey),
       keySource,

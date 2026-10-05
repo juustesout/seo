@@ -231,6 +231,70 @@ describe('AIService.resolve instrumentation seam', () => {
   });
 });
 
+describe('P11 funding attribution', () => {
+  function containerWithKey(
+    store: InMemoryUsageEventStore,
+    opts: { envKey?: string; projectKey?: string | null },
+  ): ServiceContainer {
+    const chain: Record<string, unknown> = {};
+    for (const method of ['select', 'eq', 'is', 'order', 'limit']) chain[method] = () => chain;
+    chain.maybeSingle = async () => ({ data: { account_id: ACCOUNT, settings: {} }, error: null });
+    return {
+      sb: { from: () => chain },
+      credentials: { reader: () => ({ get: async () => opts.projectKey ?? null }) },
+      config: { env: opts.envKey ? { OPENAI_API_KEY: opts.envKey } : {} },
+      usageEvents: store,
+    } as unknown as ServiceContainer;
+  }
+
+  function stubChat(): void {
+    vi.stubGlobal(
+      'fetch',
+      (async () =>
+        new Response(
+          JSON.stringify({
+            model: 'gpt-4o-mini',
+            choices: [{ message: { content: 'Hello' } }],
+            usage: { prompt_tokens: 5, completion_tokens: 2 },
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        )) as unknown as typeof fetch,
+    );
+  }
+
+  it('marks a server env key as operator_funded', async () => {
+    stubChat();
+    const store = new InMemoryUsageEventStore();
+    const resolved = await new AIService(containerWithKey(store, { envKey: 'sk-test' })).resolve(PROJECT);
+    await resolved.provider.chat({ messages: [{ role: 'user', content: 'hi' }] });
+    const events = await store.list({ projectId: PROJECT });
+    expect(events).toHaveLength(2);
+    expect(events.every((e) => e.fundingSource === 'operator_funded')).toBe(true);
+  });
+
+  it('marks a user-supplied BYOK key as byok', async () => {
+    stubChat();
+    const store = new InMemoryUsageEventStore();
+    const resolved = await new AIService(containerWithKey(store, { envKey: 'sk-env', projectKey: 'sk-byok' })).resolve(PROJECT);
+    await resolved.provider.chat({ messages: [{ role: 'user', content: 'hi' }] });
+    const events = await store.list({ projectId: PROJECT });
+    expect(events).toHaveLength(2);
+    expect(events.every((e) => e.fundingSource === 'byok')).toBe(true);
+  });
+
+  it('leaves fundingSource null when a scope does not set one', async () => {
+    const store = new InMemoryUsageEventStore();
+    await instrumentAiProvider({
+      provider: fakeProvider({ chat: async () => ({ content: 'x', model: 'm', usage: { inputTokens: 3 } }) }),
+      sink: store,
+      scope: { accountId: ACCOUNT, projectId: PROJECT, userId: null },
+    }).chat({ messages: [{ role: 'user', content: 'hi' }] });
+    const events = await store.list({ projectId: PROJECT });
+    expect(events).toHaveLength(1);
+    expect(events[0]!.fundingSource).toBeNull();
+  });
+});
+
 describe('jobUsageEvent', () => {
   const USER = '44444444-4444-4444-8444-444444444444';
   const record = (over: Partial<Parameters<typeof jobUsageEvent>[0]['job']> = {}) => ({

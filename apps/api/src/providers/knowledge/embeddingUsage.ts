@@ -75,6 +75,7 @@ export function buildEmbeddingUsageEvent(
     unit: 'input_token',
     success: true,
     sourceId: usage.sourceId,
+    fundingSource: usage.fundingSource ?? null,
     metadata: { model, batchSize },
     idempotencyKey: usageEventIdempotencyKey({
       category: 'ai',

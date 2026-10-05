@@ -172,15 +172,19 @@ export class ContentIntelligenceService {
     let ai: ContentIntelligenceReport['ai'] = { requested: Boolean(opts.withAi), available: false, note: null };
     let aiRecs: ContentIntelligenceReport['recommendations'] = [];
     if (opts.withAi) {
-      const pass = await this.aiAssistant(projectId, {
-        title,
-        targetKeyword,
-        topic,
-        docText,
-        seoScore: seoResult.score,
-        deterministic: [...seoRecs, ...gscRecs, ...dfRecs, ...knowledgeRecs],
-        actorUserId: opts.actorUserId ?? null,
-      });
+      const pass = await this.container.resourceAdmission.withAdmission(
+        { projectId, userId: opts.actorUserId ?? null, resource: 'ai_generation' },
+        () =>
+          this.aiAssistant(projectId, {
+            title,
+            targetKeyword,
+            topic,
+            docText,
+            seoScore: seoResult.score,
+            deterministic: [...seoRecs, ...gscRecs, ...dfRecs, ...knowledgeRecs],
+            actorUserId: opts.actorUserId ?? null,
+          }),
+      );
       ai = pass.state;
       aiRecs = pass.recommendations;
     }

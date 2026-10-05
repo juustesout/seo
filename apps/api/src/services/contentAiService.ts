@@ -376,6 +376,10 @@ export class ContentAiService {
   /**
    * Runs one AI action for a stored content row and returns a suggestion.
    * The client applies or rejects it; this method never writes the document.
+   *
+   * The action consumes a server-funded AI resource, so it is admitted against
+   * the project's technical ceiling before any provider call (P11). The
+   * admission wraps the whole operation so the reservation is always released.
    */
   async run(
     projectId: string,
@@ -386,7 +390,18 @@ export class ContentAiService {
     if (input.action !== 'generate_section' && !input.selection?.trim()) {
       throw ApiError.badRequest('Select text to edit first.');
     }
+    return this.container.resourceAdmission.withAdmission(
+      { projectId, userId: actorUserId, resource: 'ai_generation' },
+      () => this.runAdmitted(projectId, contentId, input, actorUserId),
+    );
+  }
 
+  private async runAdmitted(
+    projectId: string,
+    contentId: string,
+    input: ContentAiActionInput,
+    actorUserId: string | null,
+  ): Promise<ContentAiSuggestionDto> {
     const row = await this.content.get(projectId, contentId);
     const resolved = await this.ai.resolve(projectId, actorUserId);
     if (!resolved.configured || !resolved.provider.isConfigured()) {

@@ -284,10 +284,14 @@ contentRouter.get(
   asyncHandler(async (req, res) => {
     const projectId = parseProjectId(req);
     const { container, user } = req;
-    await container.access.requireRole(user!.sub, projectId, 'viewer');
+    const withAi = req.query.with_ai === 'true' || req.query.with_ai === '1';
+    // Running the optional AI pass consumes a server-funded resource, so it
+    // requires editor rights; the deterministic report stays viewer-readable
+    // (P11 closes the viewer-triggered AI gap).
+    await container.access.requireRole(user!.sub, projectId, withAi ? 'editor' : 'viewer');
     const svc = new ContentIntelligenceService(container);
     const report = await svc.report(projectId, parseId(req, 'id'), {
-      withAi: req.query.with_ai === 'true' || req.query.with_ai === '1',
+      withAi,
       actorUserId: user!.sub,
     });
     res.json({ data: report });

@@ -54,6 +54,7 @@ export function buildAdsRequestUsageEvent(
     unit: 'ads_request',
     success,
     sourceId: usage.sourceId,
+    fundingSource: usage.fundingSource ?? null,
     idempotencyKey: usageEventIdempotencyKey({
       category: 'google',
       provider: 'ads',

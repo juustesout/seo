@@ -91,6 +91,7 @@ export function buildPublishAttemptUsageEvent(
     unit: 'publish_attempt',
     success,
     sourceId: usage.sourceId,
+    fundingSource: usage.fundingSource ?? null,
     idempotencyKey: usageEventIdempotencyKey({
       category: 'publishing',
       provider,

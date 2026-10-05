@@ -53,6 +53,7 @@ export function buildGa4RequestUsageEvent(
     unit: 'ga4_request',
     success,
     sourceId: usage.sourceId,
+    fundingSource: usage.fundingSource ?? null,
     idempotencyKey: usageEventIdempotencyKey({
       category: 'google',
       provider: 'ga4',

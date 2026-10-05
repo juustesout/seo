@@ -129,3 +129,66 @@ describe('gsc_sync executor usage', () => {
     expect(await store.list({ projectId: PROJECT, limit: 500 })).toHaveLength(9);
   });
 });
+
+describe('gsc_sync executor range bypass closure (P11)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function writer() {
+    return {
+      persistGsc: vi.fn(async () => undefined),
+      ingestGscKeywords: vi.fn(async () => undefined),
+      persistPages: vi.fn(async () => undefined),
+      markDataSourceSynced: vi.fn(async () => undefined),
+    } as never;
+  }
+
+  function spanDays(range: { startDate: string; endDate: string }): number {
+    return (Date.parse(range.endDate) - Date.parse(range.startDate)) / 86_400_000;
+  }
+
+  it('clamps an oversized days parameter from the generic /jobs path', async () => {
+    const store = new InMemoryUsageEventStore();
+    vi.stubGlobal('fetch', vi.fn(async () => response({ rows: [] })));
+
+    const out = await getExecutor('gsc_sync')!({
+      container: container(store, reader()),
+      job: {
+        id: JOB_ID,
+        project_id: PROJECT,
+        data_source_id: 'ds-1',
+        created_by: USER,
+        params: { endDate: '2026-01-31', days: 100000 },
+      } as never,
+      writer: writer(),
+      report: vi.fn(async () => undefined),
+    });
+
+    const range = out.range as { startDate: string; endDate: string };
+    expect(range.endDate).toBe('2026-01-31');
+    expect(spanDays(range)).toBe(89);
+  });
+
+  it('ignores an explicit startDate that would widen the range past the ceiling', async () => {
+    const store = new InMemoryUsageEventStore();
+    vi.stubGlobal('fetch', vi.fn(async () => response({ rows: [] })));
+
+    const out = await getExecutor('gsc_sync')!({
+      container: container(store, reader()),
+      job: {
+        id: JOB_ID,
+        project_id: PROJECT,
+        data_source_id: 'ds-1',
+        created_by: USER,
+        params: { endDate: '2026-01-31', startDate: '1900-01-01' },
+      } as never,
+      writer: writer(),
+      report: vi.fn(async () => undefined),
+    });
+
+    const range = out.range as { startDate: string; endDate: string };
+    expect(range.endDate).toBe('2026-01-31');
+    expect(spanDays(range)).toBe(27);
+  });
+});
