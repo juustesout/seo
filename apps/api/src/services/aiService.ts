@@ -225,8 +225,27 @@ export class AIService {
     return { configured: Boolean(effectiveKey), apiKey: effectiveKey, keySource, accountId: row.account_id };
   }
 
+  /**
+   * Funding attribution for a project's effective AI credential, without
+   * constructing a provider (P11/P13). Mirrors the exact precedence in
+   * `resolve` (account -> project -> env) so a pre-call entitlement decision
+   * cannot disagree with the funding recorded on the eventual usage event.
+   */
+  async resolveFundingSource(projectId: string): Promise<FundingSource | null> {
+    const row = await this.readProjectRow(projectId);
+    const settings = (row.settings.ai ?? {}) as Partial<AiSettings>;
+    const providerId = settings.provider ?? DEFAULT_PROVIDER;
+    const accountKey = await this.accountApiKey(row.account_id, providerId);
+    const projectKey = await this.projectApiKey(projectId);
+    const envKey = this.container.config.env.OPENAI_API_KEY ?? null;
+    if (accountKey || projectKey) return 'byok';
+    if (envKey) return 'operator_funded';
+    return null;
+  }
+
   /** Full non-secret status the UI / future REST + MCP rely on. */
-  async status(projectId: string): Promise<ProjectAiStatusDto> {    const settings = await this.readSettings(projectId);
+  async status(projectId: string): Promise<ProjectAiStatusDto> {
+    const settings = await this.readSettings(projectId);
     const resolved = await this.resolve(projectId);
     const provider = resolved.provider;
     const chatModel = settings.chatModel ?? provider.models().find((m) => m.kind === 'chat')?.id ?? DEFAULT_CHAT_MODEL;

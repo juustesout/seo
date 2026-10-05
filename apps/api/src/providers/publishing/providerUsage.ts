@@ -74,9 +74,9 @@ export function publishUsageOccurrenceBase(retryCount: number | null | undefined
  * token). A malformed fact is never emitted.
  */
 export function buildPublishAttemptUsageEvent(
-  args: PublishUsageScope & { operation: PublishOperation; success: boolean },
+  args: PublishUsageScope & { operation: PublishOperation; success: boolean; metadata?: Record<string, unknown> },
 ): NewUsageEvent | null {
-  const { usage, projectId, userId, provider, operation, success } = args;
+  const { usage, projectId, userId, provider, operation, success, metadata } = args;
   if (!UUID_RE.test(projectId)) return null;
   if (!TOKEN_RE.test(provider)) return null;
   if (!TOKEN_RE.test(operation)) return null;
@@ -92,6 +92,7 @@ export function buildPublishAttemptUsageEvent(
     success,
     sourceId: usage.sourceId,
     fundingSource: usage.fundingSource ?? null,
+    metadata: metadata ?? {},
     idempotencyKey: usageEventIdempotencyKey({
       category: 'publishing',
       provider,
@@ -109,7 +110,7 @@ export function buildPublishAttemptUsageEvent(
  * propagated into the publication call.
  */
 export async function emitPublishAttemptUsage(
-  args: PublishUsageScope & { operation: PublishOperation; success: boolean },
+  args: PublishUsageScope & { operation: PublishOperation; success: boolean; metadata?: Record<string, unknown> },
 ): Promise<void> {
   const event = buildPublishAttemptUsageEvent(args);
   if (!event) return;
@@ -119,13 +120,24 @@ export async function emitPublishAttemptUsage(
 /**
  * Bind a request's scope to a publish client's observer. Returns undefined when
  * there is no usage context (the client then performs no usage work at all).
+ * `metadata` is attached to every fact the observer emits (e.g. `hasLink` for an
+ * X post), giving the entitlement layer the same predicate it admits on.
  */
 export function publishUsageObserver(
   ctx: Pick<ProviderContext, 'usage' | 'projectId' | 'userId'>,
   provider: string,
+  metadata?: Record<string, unknown>,
 ): PublishRequestObserver | undefined {
   const usage = ctx.usage;
   if (!usage) return undefined;
   return (operation, success) =>
-    emitPublishAttemptUsage({ usage, projectId: ctx.projectId, userId: ctx.userId, provider, operation, success });
+    emitPublishAttemptUsage({
+      usage,
+      projectId: ctx.projectId,
+      userId: ctx.userId,
+      provider,
+      operation,
+      success,
+      metadata,
+    });
 }

@@ -60,11 +60,11 @@ export class XPublisher implements PublisherProvider {
    * the publication path, to this request's usage observer. Only `createPost`
    * reports usage; token and identity calls on the same client never do.
    */
-  private client(ctx: ProviderContext): XOAuthClient {
+  private client(ctx: ProviderContext, usageMetadata?: Record<string, unknown>): XOAuthClient {
     return new XOAuthClient(
       this.deps.config.X_OAUTH_CLIENT_ID ?? '',
       this.deps.fetchFn,
-      publishUsageObserver(ctx, this.id),
+      publishUsageObserver(ctx, this.id, usageMetadata),
     );
   }
 
@@ -223,7 +223,11 @@ export class XPublisher implements PublisherProvider {
         { retryable: false },
       );
     }
-    const tweet = await this.withToken(ctx, (access) => this.client(ctx).createPost(access, body));
+    // X charges the operator per post, and a post containing a link costs far
+    // more. The same predicate is attached to the usage fact so the entitlement
+    // layer can count and cap link posts specifically.
+    const hasLink = /https?:\/\/\S+/i.test(body);
+    const tweet = await this.withToken(ctx, (access) => this.client(ctx, { hasLink }).createPost(access, body));
     ctx.logger.info('X post created', { remoteId: tweet.id });
     const username = ctx.config[X_IDENTITY_CONFIG_KEYS.username];
     const handle = typeof username === 'string' && username.trim() ? username.trim() : null;

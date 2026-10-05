@@ -62,12 +62,20 @@ export type ResourceScope = (typeof RESOURCE_SCOPES)[number];
  *
  * - `queue_limit`          too much work is already queued for the scope;
  * - `resource_concurrency` too much work is already running for the scope;
- * - `resource_limit`       too much equivalent work was requested in a window.
+ * - `resource_limit`       too much equivalent work was requested in a window;
+ * - `entitlement_limit`    the product plan does not include this consumption
+ *                          (P13; persistent, distinct from the transient codes
+ *                          above so the UI can branch on the cause).
  *
  * Only distinctions the frontend actually benefits from are modelled; adding a
  * code is an explicit reviewable change.
  */
-export const RESOURCE_ERROR_CODES = ['resource_limit', 'resource_concurrency', 'queue_limit'] as const;
+export const RESOURCE_ERROR_CODES = [
+  'resource_limit',
+  'resource_concurrency',
+  'queue_limit',
+  'entitlement_limit',
+] as const;
 export type ResourceErrorCode = (typeof RESOURCE_ERROR_CODES)[number];
 
 /**

@@ -45,6 +45,7 @@ export * from './designPackage.js';
 export * from './agentRun.js';
 export * from './usageEvent.js';
 export * from './resourceProtection.js';
+export * from './entitlement.js';
 export * from './admin.js';
 export * from './analytics.js';
 export * from './googleAds.js';

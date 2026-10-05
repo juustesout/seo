@@ -96,3 +96,22 @@ accountUsageRouter.get(
     res.json({ data: report });
   }),
 );
+
+/**
+ * Account entitlement read: the caller's own plan, feature entitlements and
+ * per-resource operator-funded allowance vs current-period consumption. The
+ * account is resolved from the session (never a URL id), and the service scopes
+ * every read to that exact account. This is policy + derived usage, never
+ * billing: no prices, invoices or credits.
+ */
+export const accountEntitlementRouter: Router = Router();
+accountEntitlementRouter.use(requireAuth);
+accountEntitlementRouter.get(
+  '/',
+  asyncHandler(async (req, res) => {
+    const { container, user } = req;
+    const { account_id: accountId } = await container.access.requireAccount(user!.sub);
+    const data = await container.entitlements.accountEntitlement(user!.sub, accountId);
+    res.json({ data });
+  }),
+);

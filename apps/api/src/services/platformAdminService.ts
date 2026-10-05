@@ -1,24 +1,28 @@
 /**
- * Platform-administrator read service (P3).
+ * Platform-administrator read service (P3), extended with plan policy in P13.
  *
- * Read-only operational views over data that already exists. Every method calls
- * a service-role-only database function that re-verifies the actor against the
- * platform-admin registry, so the API gate and the database agree (defense in
- * depth). This service never writes, never returns secrets and never derives
- * cost; it is not a second accounting or project-administration system.
+ * Operational views over data that already exists, plus one policy write: plan
+ * assignment. Every method calls a service-role-only database function that
+ * re-verifies the actor against the platform-admin registry, so the API gate
+ * and the database agree (defense in depth). It never derives cost and never
+ * returns secrets; it is not a second accounting or project-administration
+ * system.
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js';
-import type {
-  PlatformAdminAccountDto,
-  PlatformAdminJobDto,
-  PlatformAdminOverviewDto,
-  PlatformAdminProjectDto,
-  PlatformAdminUsageDto,
-  PlatformAdminUserDto,
-  UsageAggregate,
-  UsageCategory,
-  UsageUnit,
+import {
+  isValidEntitlementFeature,
+  type EntitlementFeature,
+  type PlatformAdminAccountDto,
+  type PlatformAdminJobDto,
+  type PlatformAdminOverviewDto,
+  type PlatformAdminPlanDto,
+  type PlatformAdminProjectDto,
+  type PlatformAdminUsageDto,
+  type PlatformAdminUserDto,
+  type UsageAggregate,
+  type UsageCategory,
+  type UsageUnit,
 } from '@seo/contracts';
 import { ApiError } from '../apiErrors.js';
 import { logger } from '../logger.js';
@@ -42,6 +46,8 @@ export interface PlatformAdminReadService {
   listAccounts(actorId: string): Promise<PlatformAdminAccountDto[]>;
   listProjects(actorId: string): Promise<PlatformAdminProjectDto[]>;
   usage(actorId: string, filter: PlatformAdminUsageRequest): Promise<PlatformAdminUsageDto>;
+  listPlans(actorId: string): Promise<PlatformAdminPlanDto[]>;
+  assignPlan(actorId: string, accountId: string, planId: string): Promise<{ accountId: string; planId: string }>;
 }
 
 const num = (v: unknown): number => {
@@ -172,5 +178,41 @@ export class SupabasePlatformAdminService implements PlatformAdminReadService {
       },
       totals,
     };
+  }
+
+  async listPlans(actorId: string): Promise<PlatformAdminPlanDto[]> {
+    const rows = await this.rpc<Array<Record<string, unknown>>>('seo_platform_admin_plans', {
+      p_actor: actorId,
+    });
+    return (rows ?? []).map((r) => ({
+      key: String(r.key),
+      name: String(r.name),
+      description: (r.description as string | null) ?? null,
+      is_default: Boolean(r.is_default),
+      status: String(r.status),
+      features: Array.isArray(r.features)
+        ? r.features.filter((f): f is EntitlementFeature => isValidEntitlementFeature(f))
+        : [],
+      allowance_count: num(r.allowance_count),
+    }));
+  }
+
+  /**
+   * Assign a plan to an account. This is the one policy write on the admin
+   * surface: it changes which entitlements an account resolves to, never usage
+   * or billing. Existence/active checks and the binding swap happen inside the
+   * database function under the actor re-check.
+   */
+  async assignPlan(
+    actorId: string,
+    accountId: string,
+    planId: string,
+  ): Promise<{ accountId: string; planId: string }> {
+    await this.rpc<string>('seo_platform_admin_assign_plan', {
+      p_actor: actorId,
+      p_account: accountId,
+      p_plan: planId,
+    });
+    return { accountId, planId };
   }
 }

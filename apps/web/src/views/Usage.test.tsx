@@ -7,7 +7,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
-import type { UsageReportDto } from '@seo/contracts';
+import type { AccountEntitlementDto, UsageReportDto } from '@seo/contracts';
 import { Usage } from './Usage';
 
 const { apiMock } = vi.hoisted(() => ({ apiMock: { api: vi.fn() } }));
@@ -27,6 +27,29 @@ const REPORT: UsageReportDto = {
       eventCount: 3,
     },
   ],
+};
+
+const ENTITLEMENT: AccountEntitlementDto = {
+  plan: { key: 'base', name: 'Base', isDefault: true },
+  features: [
+    { feature: 'api_access', enabled: true },
+    { feature: 'mcp_access', enabled: false },
+  ],
+  allowances: [
+    {
+      resource: 'x_link_post',
+      unit: 'link_posts',
+      period: 'month',
+      scope: 'account',
+      operatorFunded: true,
+      byokExempt: false,
+      status: 'active',
+      allowance: 10,
+      consumed: 3,
+      remaining: 7,
+    },
+  ],
+  period: { start: '2026-10-01T00:00:00.000Z', end: '2026-11-01T00:00:00.000Z' },
 };
 
 beforeEach(() => {
@@ -69,10 +92,23 @@ describe('Usage view', () => {
     expect(await screen.findByText('usage unavailable')).toBeTruthy();
   });
 
-  it('reads the account scope when no project is given', async () => {
-    apiMock.api.mockResolvedValue({ scope: { accountId: 'a-1', projectId: null }, totals: [] });
+  it('reads the account scope and renders the plan read model', async () => {
+    apiMock.api.mockImplementation((path: string) => {
+      if (path === '/account/entitlement') return Promise.resolve(ENTITLEMENT);
+      return Promise.resolve({ scope: { accountId: 'a-1', projectId: null }, totals: [] });
+    });
     render(<Usage />);
     expect(await screen.findByText('No usage recorded yet')).toBeTruthy();
+    expect(await screen.findByText('Base')).toBeTruthy();
+    expect(screen.getByText('3 / 10 used')).toBeTruthy();
     expect(apiMock.api).toHaveBeenCalledWith('/account/usage');
+    expect(apiMock.api).toHaveBeenCalledWith('/account/entitlement');
+  });
+
+  it('does not request the entitlement read model for a project scope', async () => {
+    apiMock.api.mockResolvedValue(REPORT);
+    render(<Usage projectId="p-1" />);
+    expect(await screen.findByText('openai')).toBeTruthy();
+    expect(apiMock.api).not.toHaveBeenCalledWith('/account/entitlement');
   });
 });

@@ -25,6 +25,8 @@ import { PostgresJobStore } from './jobs/postgresJobStore.js';
 import { GuardedJobStore } from './jobs/guardedJobStore.js';
 import type { JobStore } from './jobs/types.js';
 import { ResourceAdmissionService } from './services/resourceAdmission.js';
+import { EntitlementService } from './services/entitlementService.js';
+import { AIService } from './services/aiService.js';
 import { SupabaseUsageEventStore, type UsageEventStore } from './services/usageEventRepository.js';
 import { SupabasePlatformAdminService, type PlatformAdminReadService } from './services/platformAdminService.js';
 import type { Pool } from 'pg';
@@ -70,6 +72,12 @@ export interface ServiceContainer {
    */
   resourceAdmission: ResourceAdmissionService;
   /**
+   * Product entitlement/allowance layer (P13). Resolves the account's plan,
+   * checks feature/allowance admission before expensive work, and backs the
+   * account entitlement read model. Sits above P9/P11 and never replaces them.
+   */
+  entitlements: EntitlementService;
+  /**
    * Append-only usage ledger (R5.10.2). The seam is append/list/aggregate only:
    * usage evidence is written once and can never be updated or deleted through
    * the application domain.
@@ -109,7 +117,21 @@ export function getContainer(): ServiceContainer {
   const sb = createAdminClient(config.env.SUPABASE_URL!, config.env.SUPABASE_SERVICE_ROLE_KEY!);
   const key = normalizeKey(config.env.CREDENTIALS_ENCRYPTION_KEY);
 
-  const resourceAdmission = new ResourceAdmissionService(sb);
+  // Funding resolver for the resources whose operator-vs-BYOK attribution can
+  // be determined before the call: AI mirrors the credential precedence the
+  // usage ledger records; media and X are always operator-funded. Resources
+  // whose funding cannot be attributed pre-call resolve to null, so no
+  // allowance is consumed from an unattributable event.
+  const entitlements = new EntitlementService(sb, async (projectId, resource) => {
+    if (resource === 'ai_generation' || resource === 'ai_image') {
+      return new AIService(getContainer()).resolveFundingSource(projectId);
+    }
+    if (resource === 'media' || resource === 'x_link_post') return 'operator_funded';
+    return null;
+  });
+  // Product allowance admission wraps the same technical seam; it can only
+  // lower what P9/P11 already allow.
+  const resourceAdmission = new ResourceAdmissionService(sb, entitlements);
 
   let jobStore: JobStore;
   let pgPool: Pool | null = null;
@@ -182,6 +204,7 @@ export function getContainer(): ServiceContainer {
     knowledgeFileExtractors: createKnowledgeFileExtractors(),
     jobStore,
     resourceAdmission,
+    entitlements,
     usageEvents: new SupabaseUsageEventStore(sb),
     platformAdmin: new SupabasePlatformAdminService(sb),
     pgPool,

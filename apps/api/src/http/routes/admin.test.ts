@@ -21,6 +21,7 @@ const ADMIN_USER = 'aa000000-0000-4000-8000-000000000001';
 const PROJECT_OWNER = 'bb000000-0000-4000-8000-000000000002';
 const STRANGER = 'cc000000-0000-4000-8000-000000000003';
 const ACCOUNT = 'dd000000-0000-4000-8000-000000000004';
+const PLAN = 'ee000000-0000-4000-8000-000000000005';
 
 const TOKEN_TO_USER: Record<string, { sub: string } | undefined> = {
   'admin-token': { sub: ADMIN_USER },
@@ -64,6 +65,24 @@ const fakePlatformAdmin: PlatformAdminReadService = {
   async usage(actor, filter) {
     calls.push({ fn: 'usage', actor, filter });
     return { scope: { accountId: null, projectId: null }, totals: [] };
+  },
+  async listPlans(actor) {
+    calls.push({ fn: 'listPlans', actor });
+    return [
+      {
+        key: 'base',
+        name: 'Base',
+        description: null,
+        is_default: true,
+        status: 'active',
+        features: ['api_access'],
+        allowance_count: 5,
+      },
+    ];
+  },
+  async assignPlan(actor, accountId, planId) {
+    calls.push({ fn: 'assignPlan', actor, filter: { accountId, planId } });
+    return { accountId, planId };
   },
 };
 
@@ -173,5 +192,40 @@ describe('platform admin routes', () => {
       expect(res.status).toBe(400);
     }
     expect(calls).toHaveLength(0);
+  });
+
+  it('refuses plan management to a non-administrator', async () => {
+    expect((await request('/api/admin/plans', 'owner-token')).status).toBe(403);
+    const res = await fetch(`${base}/api/admin/accounts/${ACCOUNT}/plan`, {
+      method: 'POST',
+      headers: { authorization: 'Bearer stranger-token', 'content-type': 'application/json' },
+      body: JSON.stringify({ planId: PLAN }),
+    });
+    expect(res.status).toBe(403);
+    expect(calls).toHaveLength(0);
+  });
+
+  it('lists plans for a platform administrator', async () => {
+    const res = await request('/api/admin/plans', 'admin-token');
+    expect(res.status).toBe(200);
+    expect(calls.map((c) => c.fn)).toEqual(['listPlans']);
+  });
+
+  it('assigns a plan and validates the request body', async () => {
+    const invalid = await fetch(`${base}/api/admin/accounts/${ACCOUNT}/plan`, {
+      method: 'POST',
+      headers: { authorization: 'Bearer admin-token', 'content-type': 'application/json' },
+      body: JSON.stringify({ planId: 'not-a-uuid' }),
+    });
+    expect(invalid.status).toBe(400);
+    expect(calls).toHaveLength(0);
+
+    const res = await fetch(`${base}/api/admin/accounts/${ACCOUNT}/plan`, {
+      method: 'POST',
+      headers: { authorization: 'Bearer admin-token', 'content-type': 'application/json' },
+      body: JSON.stringify({ planId: PLAN }),
+    });
+    expect(res.status).toBe(200);
+    expect(calls).toEqual([{ fn: 'assignPlan', actor: ADMIN_USER, filter: { accountId: ACCOUNT, planId: PLAN } }]);
   });
 });

@@ -97,7 +97,8 @@ and the final `seo_usage_events` reality.
 | Google Search Console (`google_search_console`) | Operator ~0 (user quota) | BYOK (user OAuth) | Project | **NO** | none (monitor only) | P9 trigger |
 | Google Analytics (`google_analytics`) | Operator ~0 (user quota) | BYOK (user OAuth) | Project | **NO** | none (monitor only) | P9 trigger |
 | Google Ads (`google_ads`) | Operator ~0 (user quota) | BYOK (user OAuth) | Project | **NO** | none (monitor only) | P9 trigger |
-| Publishing (`publishing`) | Operator ~0 (user creds) | BYOK | Project | **NO** | none; destination count may become a feature limit | P9 trigger |
+| Publishing (`publishing`) | Operator ~0 (WordPress user creds) | BYOK | Project | **NO** | none; destination count may become a feature limit | P9 trigger |
+| X link post (`x_link_post`) | High, per post carrying a link (~20c) vs low without (~1c) | Operator (platform X OAuth app) | Account (shared) | **YES** | allowance (link posts per period) | publish executor entitlement admission |
 | Media/stock (`media`, Unsplash) | Low, server key | Operator | Project | **MAYBE** | bundled with AI/media | P9 trigger + sync admission |
 | Knowledge infra (Jina/Cohere/Qdrant) | Server-funded, unmetered per op | Operator | Project | **NO** | internal, bundled | not individually metered |
 | Background jobs (`background_job`) | Worker compute | Mixed / null | Account + project | **NO** | technical only | P9 trigger |
@@ -272,7 +273,7 @@ should not carry a commercial quota.
 | Resource | Why not monetized | "Free because cheap" or "wrong to monetize"? |
 | --- | --- | --- |
 | Google GSC / GA4 / Ads reads | User's own Google quota and OAuth fund them | **Wrong to monetize** - the user already pays Google |
-| WordPress / X publishing | User's own credentials and site | **Wrong to monetize** - the user owns the destination |
+| WordPress publishing | User's own credentials and site | **Wrong to monetize** - the user owns the destination |
 | Authentication / account creation | Platform obligation | Wrong to monetize |
 | Internal DB operations | No external cost | Free because cheap |
 | Technical rate limits (`jobs_create_rate`, `sync_create_rate`, `*_inflight`) | Abuse/safety, not value | Wrong to monetize - charging for safety bounds is hostile |
@@ -285,6 +286,20 @@ Google quota or their own WordPress site is not merely unnecessary, it is a
 model that would be perceived as double-charging. Charging for queue slots would
 turn a safety mechanism into a toll. These are **product-policy prohibitions**,
 not cost judgments.
+
+**P13 correction - X link posts move out of this list.** The original P12 draft
+grouped all publishing under "never monetize" because WordPress uses the user's
+own credentials. That is correct for WordPress, but X is different: publishing
+to X runs through the platform's own OAuth app, so the **operator** pays, and a
+post that contains a link costs far more per post than a plain post. An
+operator-funded cost that scales with a per-post attribute is exactly the kind
+of resource a product allowance may exist to bound. X link posts therefore
+become the `x_link_post` entitlement resource (see
+`docs/p13-entitlement-foundation.md`); plain X posts (no link) stay cheap and
+unrestricted, WordPress stays user-funded and unmonetized, and the technical
+P9/P11 publishing admission is unchanged. `publishing` remains a single
+technical resource; only the operator-funded X link-post component carries a
+product allowance.
 
 ---
 
@@ -395,7 +410,8 @@ reliable unit?
 | AI image | 1 image | `image_generation` | Yes | Excellent as-is |
 | Embeddings | 1 embedding batch / doc | `input_token` | Yes | Too technical -> bundle under knowledge |
 | Media stock | 1 asset | `asset` | Yes | Good |
-| Publishing | 1 attempt | `publish_attempt` | Yes | Never monetized |
+| Publishing (WordPress) | 1 attempt | `publish_attempt` | Yes | Never monetized (user-funded) |
+| X link post | 1 attempt carrying a link | `publish_attempt` (metadata `hasLink=true`) | Yes | Good; count only link posts |
 
 Findings:
 

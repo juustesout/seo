@@ -107,6 +107,19 @@ describe('buildPublishAttemptUsageEvent', () => {
     });
     expect(event?.idempotencyKey).toBeNull();
   });
+
+  it('attaches caller metadata such as hasLink for allowance attribution', () => {
+    const event = buildPublishAttemptUsageEvent({
+      usage: usage(new InMemoryUsageEventStore()),
+      projectId: PROJECT,
+      userId: USER,
+      provider: 'x',
+      operation: 'publish',
+      success: true,
+      metadata: { hasLink: true },
+    });
+    expect(event?.metadata).toEqual({ hasLink: true });
+  });
 });
 
 describe('publishUsageOccurrenceBase', () => {
@@ -176,5 +189,15 @@ describe('publishUsageObserver', () => {
     const events = await store.list({ projectId: PROJECT });
     expect(events).toHaveLength(1);
     expect(events[0]).toMatchObject({ provider: 'x', operation: 'publish', unit: 'publish_attempt', success: true });
+  });
+
+  it('carries observer metadata into every emitted fact', async () => {
+    const store = new InMemoryUsageEventStore();
+    const observe = publishUsageObserver({ usage: usage(store), projectId: PROJECT, userId: USER }, 'x', {
+      hasLink: true,
+    });
+    await observe!('publish', true);
+    const events = await store.list({ projectId: PROJECT });
+    expect(events[0]?.metadata).toEqual({ hasLink: true });
   });
 });

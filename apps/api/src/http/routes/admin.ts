@@ -108,3 +108,24 @@ adminRouter.get(
     res.json({ data });
   }),
 );
+
+/** Plans are product policy, not billing: names/features/allowance counts only. */
+adminRouter.get(
+  '/plans',
+  asyncHandler(async (req, res) => {
+    const data = await req.container.platformAdmin.listPlans(req.user!.sub);
+    res.json({ data });
+  }),
+);
+
+const assignPlanSchema = z.object({ planId: z.string().uuid() });
+
+adminRouter.post(
+  '/accounts/:accountId/plan',
+  asyncHandler(async (req, res) => {
+    const accountId = z.string().uuid().parse(req.params.accountId);
+    const { planId } = assignPlanSchema.parse(req.body);
+    const data = await req.container.platformAdmin.assignPlan(req.user!.sub, accountId, planId);
+    res.json({ data });
+  }),
+);

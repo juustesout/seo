@@ -12,8 +12,11 @@
  *   - map it onto a stable, secret-free API error;
  *   - record best-effort denial evidence for operational visibility.
  *
- * It is deliberately not a quota/pricing system: there are no plans, tiers,
- * credits or per-feature entitlements. See docs/p9-resource-protection.md.
+ * It is not a quota/pricing system by itself: there are no prices, credits or
+ * wallets. P13 adds an OPTIONAL product-policy layer above it (plans, feature
+ * entitlements and operator-funded allowances) which can only lower what this
+ * technical protection already allows. See docs/p9-resource-protection.md and
+ * docs/p13-entitlement-foundation.md.
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js';
@@ -26,6 +29,7 @@ import {
 } from '@seo/contracts';
 import { ApiError } from '../apiErrors.js';
 import { logger } from '../logger.js';
+import { entitlementResourceFor, type EntitlementAdmitter } from './entitlementService.js';
 
 /**
  * Job type -> coarse protected resource. Unknown types fall back to the generic
@@ -71,6 +75,8 @@ const RESOURCE_ERROR_MESSAGES: Record<ResourceErrorCode, string> = {
   resource_concurrency:
     'This account or project already has too many operations running. Wait for some to finish, then try again.',
   resource_limit: 'Too many requests in a short time. Wait a moment, then try again.',
+  entitlement_limit:
+    'This workspace\u2019s plan allowance for this resource is used up for the current period. It resets next period.',
 };
 
 /** SQLSTATEs raised by seo_admit_job, mapped to the stable public codes. */
@@ -114,7 +120,15 @@ export interface SyncAdmissionRequest {
 }
 
 export class ResourceAdmissionService {
-  constructor(private readonly sb: SupabaseClient) {}
+  constructor(
+    private readonly sb: SupabaseClient,
+    /**
+     * P13 product-policy layer. Optional so the P9/P11 protection remains fully
+     * usable on its own; when present, a synchronous operation is also checked
+     * against the account's plan allowance after the technical reservation.
+     */
+    private readonly entitlements?: EntitlementAdmitter,
+  ) {}
 
   /** The closed resource a given job type consumes. */
   classify(jobType: string): ResourceKind {
@@ -207,12 +221,28 @@ export class ResourceAdmissionService {
    * Run `fn` under a synchronous resource reservation, releasing it afterwards
    * whether `fn` succeeds or throws. A resource denial from `admit` propagates
    * unchanged so callers stop before doing any provider work.
+   *
+   * P13: after the technical reservation, the operation is also admitted
+   * against the account's plan allowance. The entitlement check runs after the
+   * technical one (technical first, product policy second) and its reservation
+   * is always released; a plan denial propagates before `fn` runs.
    */
   async withAdmission<T>(request: SyncAdmissionRequest, fn: () => Promise<T>): Promise<T> {
     const reservationId = await this.admit(request);
+    let entitlementId: string | null = null;
     try {
+      const entitlementResource = this.entitlements ? entitlementResourceFor(request.resource) : null;
+      if (this.entitlements && entitlementResource) {
+        entitlementId = await this.entitlements.admit({
+          projectId: request.projectId,
+          userId: request.userId,
+          resource: entitlementResource,
+          amount: request.amount,
+        });
+      }
       return await fn();
     } finally {
+      if (this.entitlements) await this.entitlements.release(entitlementId);
       await this.release(reservationId);
     }
   }

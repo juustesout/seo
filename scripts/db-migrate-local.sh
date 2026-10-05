@@ -1708,11 +1708,11 @@ begin
 
   -- Only the service role may execute the aggregation RPC; browser roles cannot.
   if has_function_privilege('authenticated',
-      'public.seo_usage_totals(uuid,uuid,uuid,timestamptz,timestamptz,text,text,text,text,boolean)', 'execute') then
+      'public.seo_usage_totals(uuid,uuid,uuid,timestamptz,timestamptz,text,text,text,text,boolean,text)', 'execute') then
     raise exception 'smoke: usage aggregate is executable by authenticated';
   end if;
   if not has_function_privilege('service_role',
-      'public.seo_usage_totals(uuid,uuid,uuid,timestamptz,timestamptz,text,text,text,text,boolean)', 'execute') then
+      'public.seo_usage_totals(uuid,uuid,uuid,timestamptz,timestamptz,text,text,text,text,boolean,text)', 'execute') then
     raise exception 'smoke: usage aggregate is not executable by service_role';
   end if;
 
@@ -2189,13 +2189,13 @@ PSQL -d "${DB_NAME}" -t -A <<'SQL' >/dev/null
 do $$
 begin
   -- S16: usage totals is service-role only.
-  if has_function_privilege('authenticated', 'public.seo_usage_totals(uuid, uuid, uuid, timestamptz, timestamptz, text, text, text, text, boolean)', 'execute') then
+  if has_function_privilege('authenticated', 'public.seo_usage_totals(uuid, uuid, uuid, timestamptz, timestamptz, text, text, text, text, boolean, text)', 'execute') then
     raise exception 'smoke: S16 authenticated can execute seo_usage_totals';
   end if;
-  if has_function_privilege('anon', 'public.seo_usage_totals(uuid, uuid, uuid, timestamptz, timestamptz, text, text, text, text, boolean)', 'execute') then
+  if has_function_privilege('anon', 'public.seo_usage_totals(uuid, uuid, uuid, timestamptz, timestamptz, text, text, text, text, boolean, text)', 'execute') then
     raise exception 'smoke: S16 anon can execute seo_usage_totals';
   end if;
-  if not has_function_privilege('service_role', 'public.seo_usage_totals(uuid, uuid, uuid, timestamptz, timestamptz, text, text, text, text, boolean)', 'execute') then
+  if not has_function_privilege('service_role', 'public.seo_usage_totals(uuid, uuid, uuid, timestamptz, timestamptz, text, text, text, text, boolean, text)', 'execute') then
     raise exception 'smoke: S16 service_role lost execute on seo_usage_totals';
   end if;
 end $$;
@@ -2764,5 +2764,143 @@ begin
 end $$;
 SQL
 echo "   smoke: sync admission ceiling + release + concurrency + account scope OK"
+
+echo "==> smoke test: entitlement & resource-allowance foundation (P13)"
+
+p13_create_project() {
+  local p13_user="$1" p13_name="$2" p13_slug="$3"
+  PSQL -d "${DB_NAME}" <<SQL >/dev/null
+set request.jwt.claims = '{"sub":"${p13_user}","email":"${p13_slug}@example.com"}';
+insert into auth.users (id, email) values ('${p13_user}', '${p13_slug}@example.com') on conflict (id) do nothing;
+select public.seo_create_project('${p13_name}', '${p13_slug}', 'https://${p13_slug}.example', 'p13 entitlement smoke');
+SQL
+}
+
+p13_create_project '00000000-0000-0000-0000-0000000000f1' 'P13 plan' 'p13-plan'
+p13_create_project '00000000-0000-0000-0000-0000000000f2' 'P13 admit' 'p13-admit'
+
+PSQL -d "${DB_NAME}" <<'SQL'
+do $$
+declare
+  v_user_a   uuid := '00000000-0000-0000-0000-0000000000f1';
+  v_user_b   uuid := '00000000-0000-0000-0000-0000000000f2';
+  v_admin    uuid := '00000000-0000-0000-0000-000000000002';
+  v_owner    uuid := '00000000-0000-0000-0000-000000000001';
+  v_a uuid; v_acc uuid;
+  v_b uuid; v_acc_b uuid;
+  v_plan uuid;
+  v_consumed bigint;
+  v_res uuid; v_res2 uuid;
+  v_denied boolean; v_code text;
+  v_plans int;
+begin
+  select id, account_id into v_a, v_acc from public.seo_projects where slug = 'p13-plan';
+  select id, account_id into v_b, v_acc_b from public.seo_projects where slug = 'p13-admit';
+  if v_a is null or v_b is null then raise exception 'p13: projects missing'; end if;
+
+  -- (1) The default plan is seeded, carries features and the inclusive X
+  -- allowance policy, and every account resolves an active binding to it.
+  select id into v_plan from public.seo_plans where key = 'base' and is_default;
+  if v_plan is null then raise exception 'p13: default plan not seeded'; end if;
+  if not exists (select 1 from public.seo_plan_features where plan_id = v_plan) then
+    raise exception 'p13: default plan has no features';
+  end if;
+  if not exists (
+    select 1 from public.seo_account_entitlements
+    where account_id = v_acc and effective_to is null and plan_id = v_plan
+  ) then
+    raise exception 'p13: account not bound to the default plan';
+  end if;
+  if not exists (
+    select 1 from public.seo_resource_policies
+    where plan_id = v_plan and resource = 'x_link_post' and allowance = 0
+  ) then
+    raise exception 'p13: default x_link_post allowance not seeded';
+  end if;
+  raise notice 'p13: default plan seed + account binding OK';
+
+  -- (2) Consumption counts only successful operator-funded facts in the window,
+  -- and applies the X link-post predicate from event metadata.
+  insert into public.seo_usage_events
+    (project_id, category, provider, operation, quantity, unit, success, funding_source, metadata)
+  values
+    (v_a, 'ai', 'openai', 'chat', 2, 'input_token', true, 'operator_funded', '{}'),
+    (v_a, 'ai', 'openai', 'chat', 7, 'input_token', false, 'operator_funded', '{}'),
+    (v_a, 'ai', 'openai', 'chat', 5, 'input_token', true, 'byok', '{}'),
+    (v_a, 'publishing', 'x', 'publish', 1, 'publish_attempt', true, 'operator_funded', '{"hasLink":true}'),
+    (v_a, 'publishing', 'x', 'publish', 1, 'publish_attempt', true, 'operator_funded', '{"hasLink":false}');
+
+  select public.seo_entitlement_consumed(
+    v_acc, 'ai', array['input_token', 'output_token'], false,
+    date_trunc('month', now()), date_trunc('month', now()) + interval '1 month'
+  ) into v_consumed;
+  if v_consumed <> 2 then raise exception 'p13: ai consumption wrong (%)', v_consumed; end if;
+
+  select public.seo_entitlement_consumed(
+    v_acc, 'publishing', array['publish_attempt'], true,
+    date_trunc('month', now()), date_trunc('month', now()) + interval '1 month'
+  ) into v_consumed;
+  if v_consumed <> 1 then raise exception 'p13: x link consumption wrong (%)', v_consumed; end if;
+  raise notice 'p13: consumption accounting + funding filter + link predicate OK';
+
+  -- (3) A finite allowance denies atomically with SE004, and a release frees the
+  -- in-flight hold so a later admission succeeds.
+  insert into public.seo_plans (key, name, description, is_default)
+  values ('p13_smoke', 'P13 smoke', 'smoke only', false)
+  on conflict (key) do nothing;
+  select id into v_plan from public.seo_plans where key = 'p13_smoke';
+  insert into public.seo_resource_policies
+    (plan_id, resource, unit, period, scope, operator_funded, byok_exempt, allowance)
+  values (v_plan, 'x_link_post', 'link_posts', 'month', 'account', true, false, 1)
+  on conflict (plan_id, resource) do update set allowance = 1;
+
+  perform public.seo_platform_admin_assign_plan(v_admin, v_acc_b, v_plan);
+
+  v_res := public.seo_admit_entitlement(
+    p_account_id => v_acc_b, p_project_id => v_b, p_user_id => v_user_b,
+    p_resource => 'x_link_post', p_category => 'publishing',
+    p_units => array['publish_attempt'], p_x_link_only => true, p_amount => 1,
+    p_period_start => date_trunc('month', now()), p_period_end => date_trunc('month', now()) + interval '1 month',
+    p_allowance => 1);
+  v_denied := false; v_code := null;
+  begin
+    v_res2 := public.seo_admit_entitlement(
+      p_account_id => v_acc_b, p_project_id => v_b, p_user_id => v_user_b,
+      p_resource => 'x_link_post', p_category => 'publishing',
+      p_units => array['publish_attempt'], p_x_link_only => true, p_amount => 1,
+      p_period_start => date_trunc('month', now()), p_period_end => date_trunc('month', now()) + interval '1 month',
+      p_allowance => 1);
+  exception when others then v_denied := true; v_code := sqlstate; end;
+  if not v_denied or v_code <> 'SE004' then
+    raise exception 'p13: allowance ceiling not enforced (denied=%, sqlstate=%)', v_denied, v_code;
+  end if;
+  perform public.seo_release_entitlement(v_res);
+  v_res2 := public.seo_admit_entitlement(
+    p_account_id => v_acc_b, p_project_id => v_b, p_user_id => v_user_b,
+    p_resource => 'x_link_post', p_category => 'publishing',
+    p_units => array['publish_attempt'], p_x_link_only => true, p_amount => 1,
+    p_period_start => date_trunc('month', now()), p_period_end => date_trunc('month', now()) + interval '1 month',
+    p_allowance => 1);
+  perform public.seo_release_entitlement(v_res2);
+  raise notice 'p13: atomic allowance admission + release OK';
+
+  -- (4) Platform-admin plan read/manage re-verifies the actor and rejects
+  -- ordinary users even though the API would gate them first.
+  select count(*) into v_plans from public.seo_platform_admin_plans(v_admin);
+  if v_plans < 1 then raise exception 'p13: admin plan read was empty'; end if;
+  begin
+    perform 1 from public.seo_platform_admin_plans(v_owner);
+    raise exception 'p13: ordinary user was allowed to read plans';
+  exception when insufficient_privilege then null;
+  end;
+  begin
+    perform public.seo_platform_admin_assign_plan(v_owner, v_acc_b, v_plan);
+    raise exception 'p13: ordinary user was allowed to assign a plan';
+  exception when insufficient_privilege then null;
+  end;
+  raise notice 'p13: admin plan read/manage boundary OK';
+end $$;
+SQL
+echo "   smoke: entitlement plan + consumption + admission + admin boundary OK"
 
 echo "==> migration validation OK (${DB_NAME})"

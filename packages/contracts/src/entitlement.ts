@@ -1,0 +1,287 @@
+/**
+ * Entitlement & resource-allowance contracts (P13).
+ *
+ * P9/P11 provide technical resource protection: conservative ceilings that keep
+ * expensive work bounded and attributable. P13 adds a product-policy layer on
+ * top: an account has a plan, a plan has feature entitlements and
+ * operator-funded resource allowances, and the effective product ceiling is
+ * applied above (never above) the existing technical ceiling.
+ *
+ * This module is deliberately dependency-free and billing-free: it models
+ * features, allowances, periods and the read model, but no prices, invoices,
+ * payments, credits or wallets. Cost is a future derivation from usage facts +
+ * pricing rules. See docs/p13-entitlement-foundation.md.
+ */
+
+import type { IsoDateTime } from './common.js';
+import type { UsageCategory, UsageUnit } from './usageEvent.js';
+
+// ---------------------------------------------------------------------------
+// Features
+// ---------------------------------------------------------------------------
+
+/**
+ * The closed set of product capabilities a plan can enable or disable. These
+ * are real product surfaces, not speculative placeholders; adding a feature is
+ * an explicit, reviewed change.
+ */
+export const ENTITLEMENT_FEATURES = [
+  'api_access',
+  'mcp_access',
+  'ai_editing',
+  'publishing',
+  'designer',
+  'composer',
+] as const;
+export type EntitlementFeature = (typeof ENTITLEMENT_FEATURES)[number];
+
+// ---------------------------------------------------------------------------
+// Allowances
+// ---------------------------------------------------------------------------
+
+/** The period an allowance resets over. `none` means no reset (lifetime/state). */
+export const ALLOWANCE_PERIODS = ['day', 'week', 'month', 'year', 'none'] as const;
+export type AllowancePeriod = (typeof ALLOWANCE_PERIODS)[number];
+
+/** The scope an allowance is accounted against. Account is the money boundary. */
+export const ALLOWANCE_SCOPES = ['account', 'project'] as const;
+export type AllowanceScope = (typeof ALLOWANCE_SCOPES)[number];
+
+/** Whether an allowance is currently enforced. */
+export const ALLOWANCE_STATUSES = ['active', 'disabled'] as const;
+export type AllowanceStatus = (typeof ALLOWANCE_STATUSES)[number];
+
+/** One feature entitlement on a plan (or resolved for an account). */
+export interface EntitlementFeatureDto {
+  feature: EntitlementFeature;
+  enabled: boolean;
+}
+
+/**
+ * One operator-funded resource allowance resolved for an account in the current
+ * period.
+ *
+ * `allowance === null` means "no product cap": the technical P9/P11 floor is the
+ * only limit (the default product policy preserves the full product for every
+ * authenticated user). `allowance === 0` means the resource is not included.
+ * `remaining` mirrors that: null when the allowance is null, otherwise
+ * `max(allowance - consumed, 0)`.
+ */
+export interface EntitlementAllowanceDto {
+  resource: string;
+  unit: string;
+  period: AllowancePeriod;
+  scope: AllowanceScope;
+  operatorFunded: boolean;
+  byokExempt: boolean;
+  status: AllowanceStatus;
+  allowance: number | null;
+  consumed: number;
+  remaining: number | null;
+}
+
+/** The period the resolved allowance figures apply to. */
+export interface EntitlementPeriodDto {
+  start: IsoDateTime;
+  end: IsoDateTime;
+}
+
+/** The account's resolved entitlement/plan read model. */
+export interface AccountEntitlementDto {
+  plan: {
+    key: string;
+    name: string;
+    isDefault: boolean;
+  };
+  features: EntitlementFeatureDto[];
+  allowances: EntitlementAllowanceDto[];
+  period: EntitlementPeriodDto;
+}
+
+// ---------------------------------------------------------------------------
+// Admin (platform-admin trust boundary)
+// ---------------------------------------------------------------------------
+
+/** One plan as seen by a platform administrator (policy, no secrets). */
+export interface PlatformAdminPlanDto {
+  key: string;
+  name: string;
+  description: string | null;
+  is_default: boolean;
+  status: string;
+  features: EntitlementFeature[];
+  allowance_count: number;
+}
+
+// ---------------------------------------------------------------------------
+// Entitlement resources
+// ---------------------------------------------------------------------------
+
+/**
+ * The closed set of product resources an operator-funded allowance can be
+ * defined over. This is *not* the technical `RESOURCE_KINDS` vocabulary: it is
+ * the customer-facing consumption resource (what a plan sells), and each one
+ * maps onto one or more raw usage categories/units via
+ * `ENTITLEMENT_RESOURCE_SPEC`.
+ *
+ * `x_link_post` is deliberately separate from `publishing`: publishing is a
+ * technical class (WordPress is user-funded and free), while an X post that
+ * contains a link incurs a real per-post operator cost and is a monetizable
+ * consumption resource.
+ */
+export const ENTITLEMENT_RESOURCES = [
+  'ai_generation',
+  'ai_image',
+  'dataforseo_research',
+  'media',
+  'x_link_post',
+] as const;
+export type EntitlementResource = (typeof ENTITLEMENT_RESOURCES)[number];
+
+/** How one entitlement resource is counted from the append-only usage ledger. */
+export interface EntitlementResourceSpec {
+  /** The usage category the resource is measured from. */
+  category: UsageCategory;
+  /** Ledger units summed for this resource; empty means "all units in category". */
+  units: readonly UsageUnit[];
+  /** When true, only X publishing attempts whose metadata marks a link count. */
+  xLinkOnly: boolean;
+  /** Human label for the UI. */
+  label: string;
+  /** Product-facing unit label (not necessarily a raw ledger unit). */
+  unitLabel: string;
+}
+
+/**
+ * The single source of truth mapping an entitlement resource onto the existing
+ * usage vocabulary. Consumption is derived from `seo_usage_events` (the one
+ * ledger), never a second ledger. Where P12 left the customer-facing product
+ * unit as a product decision, the raw canonical unit is used and the default
+ * plan leaves the allowance uncapped (`null`).
+ */
+export const ENTITLEMENT_RESOURCE_SPEC: Record<EntitlementResource, EntitlementResourceSpec> = {
+  ai_generation: {
+    category: 'ai',
+    units: ['input_token', 'output_token'],
+    xLinkOnly: false,
+    label: 'AI text',
+    unitLabel: 'tokens',
+  },
+  ai_image: {
+    category: 'ai',
+    units: ['image_generation'],
+    xLinkOnly: false,
+    label: 'AI image',
+    unitLabel: 'images',
+  },
+  dataforseo_research: {
+    category: 'dataforseo',
+    units: [],
+    xLinkOnly: false,
+    label: 'DataForSEO research',
+    unitLabel: 'requests',
+  },
+  media: {
+    category: 'media',
+    units: ['asset'],
+    xLinkOnly: false,
+    label: 'Stock media',
+    unitLabel: 'assets',
+  },
+  x_link_post: {
+    category: 'publishing',
+    units: ['publish_attempt'],
+    xLinkOnly: true,
+    label: 'X link posts',
+    unitLabel: 'link posts',
+  },
+};
+
+/** True when `value` is one of the closed entitlement resources. */
+export function isValidEntitlementResource(value: unknown): value is EntitlementResource {
+  return typeof value === 'string' && (ENTITLEMENT_RESOURCES as readonly string[]).includes(value);
+}
+
+// ---------------------------------------------------------------------------
+// Periods
+// ---------------------------------------------------------------------------
+
+/** The half-open UTC window an allowance resets over. */
+export interface AllowancePeriodWindow {
+  /** Inclusive start. */
+  start: IsoDateTime;
+  /** Exclusive end. */
+  end: IsoDateTime;
+}
+
+/**
+ * Deterministic UTC period boundaries for an allowance, computed from a single
+ * instant so enforcement and reporting agree without a stored period table.
+ * Weeks start Monday (ISO). `none` is a lifetime window (epoch to far future).
+ * Historical usage is never rewritten: changing the period only changes which
+ * window future reads/enforcement use.
+ */
+export function resolveAllowancePeriod(period: AllowancePeriod, now: Date): AllowancePeriodWindow {
+  const year = now.getUTCFullYear();
+  const month = now.getUTCMonth();
+  const day = now.getUTCDate();
+  if (period === 'day') {
+    return iso(Date.UTC(year, month, day), Date.UTC(year, month, day + 1));
+  }
+  if (period === 'week') {
+    const weekday = (now.getUTCDay() + 6) % 7;
+    const monday = Date.UTC(year, month, day - weekday);
+    return iso(monday, monday + 7 * 86_400_000);
+  }
+  if (period === 'month') {
+    return iso(Date.UTC(year, month, 1), Date.UTC(year, month + 1, 1));
+  }
+  if (period === 'year') {
+    return iso(Date.UTC(year, 0, 1), Date.UTC(year + 1, 0, 1));
+  }
+  return iso(Date.UTC(1970, 0, 1), Date.UTC(9999, 11, 31));
+}
+
+function iso(startMs: number, endMs: number): AllowancePeriodWindow {
+  return { start: new Date(startMs).toISOString(), end: new Date(endMs).toISOString() };
+}
+
+// ---------------------------------------------------------------------------
+// Denial
+// ---------------------------------------------------------------------------
+
+/**
+ * The stable code for a persistent product-policy denial (a plan feature is
+ * disabled or an operator-funded allowance is exhausted). Kept distinct from
+ * P9/P11 technical codes so the UI never tells a user to retry a condition that
+ * will not change, and never tells a user to upgrade for a transient queue.
+ */
+export const ENTITLEMENT_LIMIT_CODE = 'entitlement_limit' as const;
+
+/** Secret-free context attached to an entitlement denial. */
+export interface EntitlementErrorDetails {
+  resource: EntitlementResource;
+  scope: 'account';
+}
+
+// ---------------------------------------------------------------------------
+// Bounds and guards
+// ---------------------------------------------------------------------------
+
+export const ENTITLEMENT_RESOURCE_MAX_CHARS = 40;
+export const ENTITLEMENT_UNIT_MAX_CHARS = 32;
+
+/** True when `value` is one of the closed entitlement features. */
+export function isValidEntitlementFeature(value: unknown): value is EntitlementFeature {
+  return typeof value === 'string' && (ENTITLEMENT_FEATURES as readonly string[]).includes(value);
+}
+
+/** True when `value` is one of the closed allowance periods. */
+export function isValidAllowancePeriod(value: unknown): value is AllowancePeriod {
+  return typeof value === 'string' && (ALLOWANCE_PERIODS as readonly string[]).includes(value);
+}
+
+/** True when `value` is one of the closed allowance scopes. */
+export function isValidAllowanceScope(value: unknown): value is AllowanceScope {
+  return typeof value === 'string' && (ALLOWANCE_SCOPES as readonly string[]).includes(value);
+}

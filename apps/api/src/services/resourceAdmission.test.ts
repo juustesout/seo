@@ -2,9 +2,10 @@
  * Resource admission service (P9): classification, denial recognition, stable
  * error mapping and best-effort denial evidence.
  */
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { ApiError } from '../apiErrors.js';
+import type { EntitlementAdmissionRequest } from './entitlementService.js';
 import { ResourceAdmissionService, resourceForJobType } from './resourceAdmission.js';
 
 interface InsertedRow {
@@ -231,5 +232,67 @@ describe('ResourceAdmissionService sync admission', () => {
     );
     await expect(admission.release('res-1')).resolves.toBeUndefined();
     await expect(admission.release(null)).resolves.toBeUndefined();
+  });
+});
+
+describe('ResourceAdmissionService P13 entitlement seam', () => {
+  /** A structural double of the entitlement admitter (no cast needed). */
+  function fakeEntitlements(
+    overrides: {
+      admit?: (request: EntitlementAdmissionRequest) => Promise<string | null>;
+      release?: (reservationId: string | null | undefined) => Promise<void>;
+    } = {},
+  ) {
+    return {
+      admit: vi.fn(overrides.admit ?? (async () => 'ent-1' as string | null)),
+      release: vi.fn(overrides.release ?? (async () => {})),
+    };
+  }
+
+  function admittingSb() {
+    return fakeSb({
+      rpc: async (fn) => (fn === 'seo_admit_resource' ? { data: 'res-1', error: null } : { data: null, error: null }),
+    });
+  }
+
+  it('admits the mapped entitlement resource after the technical reservation and releases both', async () => {
+    const entitlements = fakeEntitlements();
+    const admission = new ResourceAdmissionService(admittingSb(), entitlements);
+    await expect(
+      admission.withAdmission({ projectId: 'proj-1', userId: 'user-1', resource: 'ai_generation' }, async () => 'ok'),
+    ).resolves.toBe('ok');
+    expect(entitlements.admit).toHaveBeenCalledWith(
+      expect.objectContaining({ projectId: 'proj-1', userId: 'user-1', resource: 'ai_generation' }),
+    );
+    expect(entitlements.release).toHaveBeenCalledWith('ent-1');
+  });
+
+  it('does not consult entitlement for a resource with no product mapping', async () => {
+    const entitlements = fakeEntitlements();
+    const admission = new ResourceAdmissionService(admittingSb(), entitlements);
+    await admission.withAdmission({ projectId: 'proj-1', userId: null, resource: 'publishing' }, async () => 'ok');
+    expect(entitlements.admit).not.toHaveBeenCalled();
+  });
+
+  it('releases the technical reservation when the entitlement admission denies', async () => {
+    const released: Array<Record<string, unknown>> = [];
+    const entitlements = fakeEntitlements({
+      admit: async () => {
+        throw new ApiError(403, 'entitlement_limit', 'xai');
+      },
+    });
+    const admission = new ResourceAdmissionService(
+      fakeSb({
+        rpc: async (fn, args) => {
+          if (fn === 'seo_release_resource') released.push(args);
+          return fn === 'seo_admit_resource' ? { data: 'res-1', error: null } : { data: null, error: null };
+        },
+      }),
+      entitlements,
+    );
+    await expect(
+      admission.withAdmission({ projectId: 'proj-1', userId: null, resource: 'ai_generation' }, async () => 'never'),
+    ).rejects.toMatchObject({ status: 403, code: 'entitlement_limit' });
+    expect(released).toEqual([{ p_reservation_id: 'res-1' }]);
   });
 });

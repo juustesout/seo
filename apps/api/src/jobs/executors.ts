@@ -878,11 +878,16 @@ const publish: JobExecutor = async ({ container, job, report }) => {
 
   const adapter = container.registry.getPublisher(publisher.provider as string);
   if (!adapter) throw new ApiError(503, 'not_configured', `Publisher ${publisher.provider} is not registered`);
+  const providerId = String(publisher.provider);
   const ctx = buildProviderContext(container, {
     projectId: job.project_id,
     userId: job.created_by,
-    owner: { publisherId: String(publisher.id), providerType: String(publisher.provider) },
+    owner: { publisherId: String(publisher.id), providerType: providerId },
     config: (publisher.config as Record<string, unknown>) ?? {},
+    // X posting is funded by the server's OAuth app (operator-funded); a
+    // WordPress site uses the user's own credentials (BYOK). Other test
+    // channels cannot be attributed, so they stay null.
+    fundingSource: providerId === 'x' ? 'operator_funded' : providerId === 'wordpress' ? 'byok' : null,
     // Publishing usage records actual remote attempts: a durable job retry that
     // sends another publication request is a new `publish_attempt`, so the
     // occurrence base advances per execution instead of deduplicating.
@@ -917,11 +922,32 @@ const publish: JobExecutor = async ({ container, job, report }) => {
   const slug = (pub.slug as string | undefined) ?? undefined;
   const remoteStatus = job.params.remote_status === 'draft' ? 'draft' : 'publish';
 
+  // X bills the operator far more for a post carrying a link, so link posts run
+  // through the x_link_post allowance admission. Non-link posts, other
+  // providers, and deletes skip the check (their cost profile differs). The
+  // remote call is what actually emits the usage fact, so admitting around it
+  // holds the reservation until consumption is durable.
+  const contentHasLink = /https?:\/\/\S+/i.test(`${title}\n${content}`);
+  const runRemoteWrite = <T>(fn: () => Promise<T>): Promise<T> =>
+    providerId === 'x' && contentHasLink
+      ? container.entitlements.withAdmission(
+          {
+            projectId: job.project_id,
+            userId: job.created_by,
+            resource: 'x_link_post',
+            fundingSource: 'operator_funded',
+          },
+          fn,
+        )
+      : fn();
+
   if (operation === 'publish_update') {
     const remoteId = pub.remote_id as string | null;
     if (!remoteId) throw new ApiError(400, 'bad_request', 'Cannot update a publication without a remote id');
     await report(40, 'Updating remote post');
-    const result = await adapter.update(ctx, remoteId, { title, content, excerpt: (pub.excerpt as string) ?? undefined, status: remoteStatus });
+    const result = await runRemoteWrite(() =>
+      adapter.update(ctx, remoteId, { title, content, excerpt: (pub.excerpt as string) ?? undefined, status: remoteStatus }),
+    );
     await container.sb
       .from('seo_publications')
       .update({ status: 'updated', target_url: result.url, remote_id: result.remoteId, published_at: new Date().toISOString(), error: null })
@@ -955,7 +981,9 @@ const publish: JobExecutor = async ({ container, job, report }) => {
   }
 
   await report(40, 'Creating remote post');
-  const result = await adapter.publish(ctx, { title, content, excerpt: (pub.excerpt as string) ?? undefined, slug, status: remoteStatus });
+  const result = await runRemoteWrite(() =>
+    adapter.publish(ctx, { title, content, excerpt: (pub.excerpt as string) ?? undefined, slug, status: remoteStatus }),
+  );
   await container.sb
     .from('seo_publications')
     .update({ status: 'published', target_url: result.url, remote_id: result.remoteId, published_at: new Date().toISOString(), error: null })
