@@ -21,6 +21,7 @@ type Handler = (kind: QueryKind, filters: Record<string, unknown>) => { data: un
 
 function query(handler: Handler) {
   const filters: Record<string, unknown> = {};
+  let ordered = false;
   const builder = {
     select: () => builder,
     eq: (col: string, val: unknown) => {
@@ -35,10 +36,17 @@ function query(handler: Handler) {
       filters[col] = val;
       return builder;
     },
-    order: () => Promise.resolve(handler('order', filters)),
+    in: (col: string, val: unknown) => {
+      filters[col] = val;
+      return builder;
+    },
+    order: () => {
+      ordered = true;
+      return builder;
+    },
     maybeSingle: () => Promise.resolve(handler('maybeSingle', filters)),
     then: (resolve: (v: unknown) => unknown, reject?: (e: unknown) => unknown) =>
-      Promise.resolve(handler('list', filters)).then(resolve, reject),
+      Promise.resolve(handler(ordered ? 'order' : 'list', filters)).then(resolve, reject),
   };
   return builder;
 }
@@ -58,7 +66,25 @@ function makeSb(
 }
 
 const activePlanHandler: Handler = () => ({
-  data: { seo_plans: { id: PLAN, key: 'base', name: 'Base', is_default: true, status: 'active' } },
+  data: {
+    seo_plans: {
+      id: PLAN,
+      key: 'base',
+      name: 'Base',
+      display_name: 'Free',
+      description: null,
+      is_default: true,
+      is_public: true,
+      sort_order: 0,
+      status: 'active',
+      currency: null,
+      monthly_price: 0,
+      yearly_price: 0,
+      price_status: 'final',
+      price_label: 'Free',
+      billing_intervals: ['monthly', 'yearly'],
+    },
+  },
   error: null,
 });
 
@@ -270,7 +296,16 @@ describe('EntitlementService.accountEntitlement', () => {
     );
 
     const model = await svc.accountEntitlement(USER, ACC);
-    expect(model.plan).toEqual({ key: 'base', name: 'Base', isDefault: true });
+    expect(model.plan).toMatchObject({
+      key: 'base',
+      name: 'Base',
+      displayName: 'Free',
+      isDefault: true,
+      isPublic: true,
+      sortOrder: 0,
+      pricing: { monthlyPrice: 0, yearlyPrice: 0, priceStatus: 'final', priceLabel: 'Free' },
+      billingIntervals: ['monthly', 'yearly'],
+    });
     expect(model.features.find((f) => f.feature === 'api_access')?.enabled).toBe(true);
     expect(model.features.find((f) => f.feature === 'mcp_access')?.enabled).toBe(false);
     expect(model.allowances).toHaveLength(1);
@@ -282,5 +317,133 @@ describe('EntitlementService.accountEntitlement', () => {
       byokExempt: false,
     });
     expect(model.period.start < model.period.end).toBe(true);
+  });
+});
+
+function planRow(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    id: PLAN,
+    key: 'base',
+    name: 'Base',
+    display_name: 'Free',
+    description: null,
+    is_default: true,
+    is_public: true,
+    sort_order: 0,
+    status: 'active',
+    currency: null,
+    monthly_price: 0,
+    yearly_price: 0,
+    price_status: 'final',
+    price_label: 'Free',
+    billing_intervals: ['monthly', 'yearly'],
+    ...overrides,
+  };
+}
+
+describe('EntitlementService.listCustomerPlans', () => {
+  it('returns active public plans with features, allowances and pricing', async () => {
+    const svc = service({
+      seo_plans: (kind) =>
+        kind === 'order'
+          ? {
+              data: [
+                planRow(),
+                planRow({
+                  id: 'plan-pro',
+                  key: 'pro',
+                  name: 'Pro',
+                  display_name: 'Pro',
+                  is_default: false,
+                  sort_order: 10,
+                  currency: 'EUR',
+                  monthly_price: 4900,
+                  yearly_price: 49000,
+                  price_status: 'draft',
+                  price_label: null,
+                }),
+              ],
+              error: null,
+            }
+          : { data: null, error: null },
+      seo_plan_features: (kind) =>
+        kind === 'list'
+          ? {
+              data: [
+                { plan_id: PLAN, feature: 'api_access', enabled: true },
+                { plan_id: 'plan-pro', feature: 'mcp_access', enabled: true },
+              ],
+              error: null,
+            }
+          : { data: null, error: null },
+      seo_resource_policies: (kind) =>
+        kind === 'order'
+          ? {
+              data: [
+                {
+                  plan_id: PLAN,
+                  resource: 'x_link_post',
+                  unit: 'link_posts',
+                  period: 'month',
+                  scope: 'account',
+                  operator_funded: true,
+                  byok_exempt: false,
+                  status: 'active',
+                  allowance: 0,
+                },
+                {
+                  plan_id: 'plan-pro',
+                  resource: 'media',
+                  unit: 'assets',
+                  period: 'month',
+                  scope: 'account',
+                  operator_funded: true,
+                  byok_exempt: false,
+                  status: 'active',
+                  allowance: null,
+                },
+              ],
+              error: null,
+            }
+          : { data: null, error: null },
+    });
+
+    const plans = await svc.listCustomerPlans();
+    expect(plans).toHaveLength(2);
+
+    const base = plans[0]!;
+    expect(base).toMatchObject({ key: 'base', displayName: 'Free', isDefault: true, isPublic: true, sortOrder: 0 });
+    expect(base.pricing).toEqual({
+      currency: null,
+      monthlyPrice: 0,
+      yearlyPrice: 0,
+      priceStatus: 'final',
+      priceLabel: 'Free',
+    });
+    expect(base.billingIntervals).toEqual(['monthly', 'yearly']);
+    expect(base.features.find((f) => f.feature === 'api_access')?.enabled).toBe(true);
+    expect(base.features.find((f) => f.feature === 'mcp_access')?.enabled).toBe(false);
+    expect(base.allowances).toHaveLength(1);
+    expect(base.allowances[0]).toMatchObject({ resource: 'x_link_post', allowance: 0, operatorFunded: true });
+
+    const pro = plans[1]!;
+    expect(pro.pricing).toMatchObject({ currency: 'EUR', monthlyPrice: 4900, yearlyPrice: 49000, priceStatus: 'draft' });
+    expect(pro.billingIntervals).toEqual(['monthly', 'yearly']);
+    expect(pro.allowances[0]).toMatchObject({ resource: 'media', allowance: null });
+  });
+
+  it('returns an empty catalog when no plan is active and public', async () => {
+    const svc = service({
+      seo_plans: (kind) => (kind === 'order' ? { data: [], error: null } : { data: null, error: null }),
+    });
+    expect(await svc.listCustomerPlans()).toEqual([]);
+  });
+
+  it('maps a storage fault to a 500 storage_error', async () => {
+    const svc = service({
+      seo_plans: (kind) =>
+        kind === 'order' ? { data: null, error: { code: '57014', message: 'timeout' } } : { data: null, error: null },
+    });
+    await expect(svc.listCustomerPlans()).rejects.toMatchObject({ status: 500, code: 'storage_error' });
   });
 });

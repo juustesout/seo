@@ -30,7 +30,17 @@ const REPORT: UsageReportDto = {
 };
 
 const ENTITLEMENT: AccountEntitlementDto = {
-  plan: { key: 'base', name: 'Base', isDefault: true },
+  plan: {
+    key: 'base',
+    name: 'Base',
+    displayName: 'Base',
+    description: null,
+    isDefault: true,
+    isPublic: true,
+    sortOrder: 0,
+    pricing: { currency: null, monthlyPrice: 0, yearlyPrice: 0, priceStatus: 'final', priceLabel: 'Free' },
+    billingIntervals: ['monthly', 'yearly'],
+  },
   features: [
     { feature: 'api_access', enabled: true },
     { feature: 'mcp_access', enabled: false },

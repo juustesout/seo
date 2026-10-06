@@ -11,12 +11,19 @@ import {
   ENTITLEMENT_LIMIT_CODE,
   ENTITLEMENT_RESOURCES,
   ENTITLEMENT_RESOURCE_SPEC,
+  PLAN_BILLING_INTERVALS,
+  PLAN_DISPLAY_NAME_MAX_CHARS,
+  PLAN_PRICE_LABEL_MAX_CHARS,
+  PLAN_PRICE_STATUSES,
   isValidAllowancePeriod,
   isValidAllowanceScope,
   isValidEntitlementFeature,
   isValidEntitlementResource,
+  isValidPlanBillingInterval,
+  isValidPlanPriceStatus,
   resolveAllowancePeriod,
 } from './entitlement.js';
+import type { CustomerPlanDto, PlanSummaryDto } from './entitlement.js';
 
 describe('entitlement vocabulary', () => {
   it('closes the feature vocabulary', () => {
@@ -147,5 +154,61 @@ describe('resolveAllowancePeriod', () => {
       start: '2026-02-01T00:00:00.000Z',
       end: '2026-03-01T00:00:00.000Z',
     });
+  });
+});
+
+describe('plan catalog & pricing vocabulary (P15)', () => {
+  it('closes the billing interval and price status vocabularies', () => {
+    expect(PLAN_BILLING_INTERVALS).toEqual(['monthly', 'yearly']);
+    expect(isValidPlanBillingInterval('monthly')).toBe(true);
+    expect(isValidPlanBillingInterval('weekly')).toBe(false);
+    expect(PLAN_PRICE_STATUSES).toEqual(['draft', 'final']);
+    expect(isValidPlanPriceStatus('final')).toBe(true);
+    expect(isValidPlanPriceStatus('negotiating')).toBe(false);
+  });
+
+  it('rejects non-string values for both guards', () => {
+    expect(isValidPlanBillingInterval(null)).toBe(false);
+    expect(isValidPlanBillingInterval(1)).toBe(false);
+    expect(isValidPlanPriceStatus(undefined)).toBe(false);
+    expect(isValidPlanPriceStatus({})).toBe(false);
+  });
+
+  it('exposes bounded display fields for admin-entered plan copy', () => {
+    expect(PLAN_DISPLAY_NAME_MAX_CHARS).toBe(120);
+    expect(PLAN_PRICE_LABEL_MAX_CHARS).toBe(40);
+  });
+
+  it('models a priced plan summary and its customer projection', () => {
+    const summary: PlanSummaryDto = {
+      key: 'starter',
+      name: 'Starter',
+      displayName: 'Starter',
+      description: null,
+      isDefault: false,
+      isPublic: true,
+      sortOrder: 10,
+      pricing: { currency: 'EUR', monthlyPrice: 1900, yearlyPrice: null, priceStatus: 'draft', priceLabel: null },
+      billingIntervals: ['monthly'],
+    };
+    const plan: CustomerPlanDto = {
+      ...summary,
+      features: [{ feature: 'api_access', enabled: true }],
+      allowances: [
+        {
+          resource: 'ai_generation',
+          unit: 'input_token',
+          period: 'month',
+          scope: 'account',
+          operatorFunded: true,
+          byokExempt: true,
+          status: 'active',
+          allowance: 0,
+        },
+      ],
+    };
+    expect(plan.pricing.monthlyPrice).toBe(1900);
+    expect(plan.pricing.yearlyPrice).toBeNull();
+    expect(plan.allowances[0]?.allowance).toBe(0);
   });
 });

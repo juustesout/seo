@@ -15,7 +15,17 @@ import { SupabasePlatformAdminService } from './platformAdminService.js';
 import type { EntitlementService } from './entitlementService.js';
 
 const EMPTY_ENTITLEMENT: AccountEntitlementDto = {
-  plan: { key: 'base', name: 'Base', isDefault: true },
+  plan: {
+    key: 'base',
+    name: 'Base',
+    displayName: 'Free',
+    description: null,
+    isDefault: true,
+    isPublic: true,
+    sortOrder: 0,
+    pricing: { currency: null, monthlyPrice: 0, yearlyPrice: 0, priceStatus: 'final', priceLabel: 'Free' },
+    billingIntervals: ['monthly', 'yearly'],
+  },
   features: [],
   allowances: [],
   period: { start: '2026-09-01T00:00:00.000Z', end: '2026-10-01T00:00:00.000Z' },

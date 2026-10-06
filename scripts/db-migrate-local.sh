@@ -2845,8 +2845,8 @@ begin
 
   -- (3) A finite allowance denies atomically with SE004, and a release frees the
   -- in-flight hold so a later admission succeeds.
-  insert into public.seo_plans (key, name, description, is_default)
-  values ('p13_smoke', 'P13 smoke', 'smoke only', false)
+  insert into public.seo_plans (key, name, display_name, description, is_default)
+  values ('p13_smoke', 'P13 smoke', 'P13 smoke', 'smoke only', false)
   on conflict (key) do nothing;
   select id into v_plan from public.seo_plans where key = 'p13_smoke';
   insert into public.seo_resource_policies
@@ -2973,15 +2973,17 @@ begin
     raise exception 'p14: base x_link_post must be explicitly 0, found %', v_allowance;
   end if;
 
-  -- Every other monetizable resource stays configurable (uncapped) rather than
-  -- being given a fabricated commercial ceiling.
+  -- P15 tightened the base plan: the operator-funded hosted resources are
+  -- explicitly 0 ("hosted not included") rather than uncapped, so a brand new
+  -- account can never consume operator budget by default. The concrete free-tier
+  -- amounts remain a separate product decision, not a fabricated one here.
   if exists (
     select 1 from public.seo_resource_policies
     where plan_id = v_plan
       and resource in ('ai_generation', 'ai_image', 'dataforseo_research', 'media')
-      and allowance is not null
+      and allowance is distinct from 0
   ) then
-    raise exception 'p14: base plan fabricated an allowance for an undecided resource';
+    raise exception 'p14: base plan hosted resources must be explicitly 0 (not uncapped)';
   end if;
 
   -- Units match the canonical registry labels so the read model and UI agree.
@@ -3021,5 +3023,72 @@ begin
 end $$;
 SQL
 echo "   smoke: canonical base plan resource policies OK"
+
+echo "==> smoke test: customer plans & pricing catalog (P15)"
+PSQL -d "${DB_NAME}" <<'SQL'
+do $$
+declare
+  v_base uuid;
+  v_count int;
+begin
+  -- The default plan carries a customer identity and a decided (final) price.
+  select id into v_base from public.seo_plans where key = 'base' and is_default;
+  if v_base is null then raise exception 'p15: default base plan missing'; end if;
+
+  if not exists (
+    select 1 from public.seo_plans
+    where id = v_base
+      and display_name = 'Free'
+      and status = 'active'
+      and is_public
+      and sort_order = 0
+      and currency is null
+      and monthly_price = 0
+      and yearly_price = 0
+      and price_status = 'final'
+      and price_label = 'Free'
+      and billing_intervals @> array['monthly', 'yearly']::text[]
+  ) then
+    raise exception 'p15: base plan catalog/pricing metadata is not the decided free plan';
+  end if;
+
+  -- Draft commercial tiers exist as structure only: hidden, disabled, no price.
+  select count(*) into v_count
+  from public.seo_plans
+  where key in ('starter', 'pro', 'agency')
+    and status = 'disabled'
+    and is_public = false
+    and price_status = 'draft'
+    and monthly_price is null
+    and yearly_price is null;
+  if v_count <> 3 then raise exception 'p15: expected 3 hidden draft tiers, found %', v_count; end if;
+
+  -- Only the default product plan is customer-visible, so the catalog never
+  -- leaks drafts. (The smoke block above also inserts its own throwaway plan.)
+  select count(*) into v_count
+  from public.seo_plans
+  where key in ('base', 'starter', 'pro', 'agency') and is_public and status = 'active';
+  if v_count <> 1 then raise exception 'p15: expected exactly one public active product plan, found %', v_count; end if;
+
+  -- Every plan has a customer-facing name and a valid billing interval set.
+  if exists (
+    select 1 from public.seo_plans
+    where display_name is null
+       or char_length(btrim(display_name)) not between 1 and 120
+       or cardinality(billing_intervals) < 1
+       or not (billing_intervals <@ array['monthly', 'yearly']::text[])
+  ) then
+    raise exception 'p15: a plan has invalid catalog metadata';
+  end if;
+
+  -- The platform-admin plan read exposes the catalog/pricing columns.
+  if not exists (select 1 from pg_proc where proname = 'seo_platform_admin_plans') then
+    raise exception 'p15: seo_platform_admin_plans missing';
+  end if;
+
+  raise notice 'p15: free plan + hidden draft tiers + pricing metadata OK';
+end $$;
+SQL
+echo "   smoke: customer plan catalog + pricing metadata OK"
 
 echo "==> migration validation OK (${DB_NAME})"

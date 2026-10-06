@@ -7,7 +7,7 @@
  * (`/p/:id/knowledge/sources`) or the unified workspace carry a mode plus a
  * document id (`/p/:id/workspace/:mode/:contentId`).
  */
-export type TopArea = 'overview' | 'projects' | 'compose' | 'integrations' | 'keys' | 'usage';
+export type TopArea = 'overview' | 'projects' | 'compose' | 'integrations' | 'keys' | 'usage' | 'plan';
 
 /** Public legal documents reachable without a session (`/privacy`, `/terms`, `/cookies`). */
 export type LegalPage = 'privacy' | 'terms' | 'cookies';
@@ -47,7 +47,7 @@ export function parseRoute(): Route {
   if (seg[0] === 'admin') {
     return { area: 'admin', view: seg[1] || 'overview' };
   }
-  const area = seg[0] === 'projects' || seg[0] === 'compose' || seg[0] === 'integrations' || seg[0] === 'keys' || seg[0] === 'usage' ? seg[0] : 'overview';
+  const area = seg[0] === 'projects' || seg[0] === 'compose' || seg[0] === 'integrations' || seg[0] === 'keys' || seg[0] === 'usage' || seg[0] === 'plan' ? seg[0] : 'overview';
   return { area };
 }
 

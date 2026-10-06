@@ -72,9 +72,18 @@ const fakePlatformAdmin: PlatformAdminReadService = {
       {
         key: 'base',
         name: 'Base',
+        display_name: 'Free',
         description: null,
         is_default: true,
+        is_public: true,
+        sort_order: 0,
         status: 'active',
+        currency: null,
+        monthly_price: 0,
+        yearly_price: 0,
+        price_status: 'final',
+        price_label: 'Free',
+        billing_intervals: ['monthly', 'yearly'],
         features: ['api_access'],
         allowance_count: 5,
       },
@@ -87,7 +96,17 @@ const fakePlatformAdmin: PlatformAdminReadService = {
   async accountEntitlement(actor, accountId) {
     calls.push({ fn: 'accountEntitlement', actor, filter: { accountId } });
     return {
-      plan: { key: 'base', name: 'Base', isDefault: true },
+      plan: {
+        key: 'base',
+        name: 'Base',
+        displayName: 'Free',
+        description: null,
+        isDefault: true,
+        isPublic: true,
+        sortOrder: 0,
+        pricing: { currency: null, monthlyPrice: 0, yearlyPrice: 0, priceStatus: 'final', priceLabel: 'Free' },
+        billingIntervals: ['monthly', 'yearly'],
+      },
       features: [{ feature: 'api_access', enabled: true }],
       allowances: [
         {

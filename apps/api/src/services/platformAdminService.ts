@@ -12,8 +12,11 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import {
   isValidEntitlementFeature,
+  isValidPlanBillingInterval,
+  isValidPlanPriceStatus,
   type AccountEntitlementDto,
   type EntitlementFeature,
+  type PlanBillingInterval,
   type PlatformAdminAccountDto,
   type PlatformAdminJobDto,
   type PlatformAdminOverviewDto,
@@ -193,9 +196,20 @@ export class SupabasePlatformAdminService implements PlatformAdminReadService {
     return (rows ?? []).map((r) => ({
       key: String(r.key),
       name: String(r.name),
+      display_name: typeof r.display_name === 'string' && r.display_name.length > 0 ? r.display_name : String(r.name),
       description: (r.description as string | null) ?? null,
       is_default: Boolean(r.is_default),
+      is_public: r.is_public === undefined ? true : Boolean(r.is_public),
+      sort_order: num(r.sort_order),
       status: String(r.status),
+      currency: (r.currency as string | null) ?? null,
+      monthly_price: r.monthly_price === null || r.monthly_price === undefined ? null : num(r.monthly_price),
+      yearly_price: r.yearly_price === null || r.yearly_price === undefined ? null : num(r.yearly_price),
+      price_status: isValidPlanPriceStatus(r.price_status) ? r.price_status : 'draft',
+      price_label: (r.price_label as string | null) ?? null,
+      billing_intervals: Array.isArray(r.billing_intervals)
+        ? r.billing_intervals.filter((i): i is PlanBillingInterval => isValidPlanBillingInterval(i))
+        : [],
       features: Array.isArray(r.features)
         ? r.features.filter((f): f is EntitlementFeature => isValidEntitlementFeature(f))
         : [],

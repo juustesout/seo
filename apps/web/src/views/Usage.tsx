@@ -13,121 +13,20 @@
  * (`GET /api/account/entitlement`): current plan, enabled capabilities and
  * per-resource operator-funded allowance vs this-period consumption.
  */
-import type { AccountEntitlementDto, EntitlementAllowanceDto, UsageReportDto } from '@seo/contracts';
-import { ENTITLEMENT_RESOURCE_SPEC, isValidEntitlementResource } from '@seo/contracts';
+import type { AccountEntitlementDto, UsageReportDto } from '@seo/contracts';
 import { api } from '../lib/api';
-import { useAsync, fmtNum, fmtDate, Empty } from '../lib/ui';
-import { Badge } from '@/components/ui/badge';
+import { useAsync, fmtNum, Empty } from '../lib/ui';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { PageHeader } from '@/components/ui/page-header';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-
-const FEATURE_LABELS: Record<string, string> = {
-  api_access: 'API access',
-  mcp_access: 'MCP access',
-  ai_editing: 'AI editing',
-  writing: 'Writing',
-  publishing: 'Publishing',
-  designer: 'Designer',
-  composer: 'Composer',
-};
-
-function resourceLabel(resource: string): string {
-  return isValidEntitlementResource(resource) ? ENTITLEMENT_RESOURCE_SPEC[resource].label : resource;
-}
-
-/** "41 / 100 used" style, or an explicit statement when the plan does not cap it. */
-function allowanceUsage(a: EntitlementAllowanceDto): string {
-  if (a.allowance === null) return `${fmtNum(a.consumed)} used (no plan cap)`;
-  if (a.allowance === 0) return 'Not included';
-  return `${fmtNum(a.consumed)} / ${fmtNum(a.allowance)} used`;
-}
-
-function remainingText(a: EntitlementAllowanceDto): string {
-  if (a.remaining === null) return 'No plan cap';
-  if (a.allowance === 0) return 'Not included on this plan';
-  return `${fmtNum(a.remaining)} remaining`;
-}
-
-/** One compact resource card: usage, remaining and the funding behaviour. */
-function AllowanceCard({ a }: { a: EntitlementAllowanceDto }) {
-  return (
-    <div className="space-y-1 rounded-lg border p-3">
-      <div className="flex items-center justify-between gap-2">
-        <span className="text-sm font-medium">{resourceLabel(a.resource)}</span>
-        {a.status === 'disabled' && <Badge variant="destructive">Disabled</Badge>}
-      </div>
-      <div className="text-lg tabular-nums">{allowanceUsage(a)}</div>
-      <div className="text-xs text-muted-foreground">
-        {remainingText(a)} · {a.unit}
-      </div>
-      {a.status !== 'disabled' && a.byokExempt && (
-        <div className="text-xs text-muted-foreground">Your own key usage does not count</div>
-      )}
-    </div>
-  );
-}
+import { CurrentPlanCard } from '@/components/entitlement/planUi';
 
 function EntitlementCard({ state }: { state: { data: AccountEntitlementDto | null; loading: boolean; error: string | null } }) {
   if (state.loading) return <Empty>Loading plan…</Empty>;
   if (state.error) return <p className="text-sm text-destructive">{state.error}</p>;
   const entitlement = state.data;
   if (!entitlement) return null;
-  const enabled = entitlement.features.filter((f) => f.enabled);
-  const hosted = entitlement.allowances.filter((a) => a.operatorFunded);
-  const byok = entitlement.allowances.filter((a) => a.operatorFunded && a.byokExempt);
-
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-base">Plan &amp; allowances</CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        <div className="flex flex-wrap items-center gap-2 text-sm">
-          <span className="font-medium">{entitlement.plan.name}</span>
-          {entitlement.plan.isDefault && <Badge variant="secondary">Default</Badge>}
-          <span className="text-muted-foreground">
-            Period {fmtDate(entitlement.period.start)} – {fmtDate(entitlement.period.end)}
-          </span>
-        </div>
-        <div className="flex flex-wrap gap-1.5">
-          {enabled.length === 0 ? (
-            <span className="text-sm text-muted-foreground">No product capabilities enabled.</span>
-          ) : (
-            enabled.map((f) => (
-              <Badge key={f.feature} variant="outline">
-                {FEATURE_LABELS[f.feature] ?? f.feature}
-              </Badge>
-            ))
-          )}
-        </div>
-
-        {hosted.length > 0 && (
-          <div className="space-y-2">
-            <div className="text-sm font-medium">Hosted resources</div>
-            <p className="text-xs text-muted-foreground">
-              Usage funded by Old Skool SEO consumes your plan allowance for this period.
-            </p>
-            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-              {hosted.map((a) => (
-                <AllowanceCard key={a.resource} a={a} />
-              ))}
-            </div>
-          </div>
-        )}
-
-        {byok.length > 0 && (
-          <div className="space-y-1 rounded-lg border border-dashed p-3">
-            <div className="text-sm font-medium">Your own keys</div>
-            <p className="text-xs text-muted-foreground">
-              {byok.map((a) => resourceLabel(a.resource)).join(', ')}: when you connect your own provider key,
-              usage runs on your account and does not consume the hosted allowance.
-            </p>
-          </div>
-        )}
-      </CardContent>
-    </Card>
-  );
+  return <CurrentPlanCard entitlement={entitlement} />;
 }
 
 export function Usage({ projectId }: { projectId?: string }) {

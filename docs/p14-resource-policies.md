@@ -102,6 +102,12 @@ price without a schema or engine change.
 Policy semantics are unchanged from P13: `allowance is null` means no product
 cap; `allowance = 0` means not included.
 
+> P15 corrected this table: the base plan's operator-funded hosted resources
+> (`ai_generation`, `ai_image`, `dataforseo_research`, `media`) are now
+> explicitly `0` ("hosted not included") rather than `null` (uncapped), so a new
+> account cannot consume operator budget by default. BYOK is unaffected (those
+> resources stay `byok_exempt`). See `docs/p15-plans-pricing.md` section 4.
+
 ## 4. Funding attribution
 
 An operator allowance is only at stake when the operator actually pays. P14

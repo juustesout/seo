@@ -147,6 +147,13 @@ describe('project route contract', () => {
     expect(routeUrl({ area: 'admin', view: 'users' })).toBe('/admin/users');
   });
 
+  it('parses and renders the account plan area', () => {
+    at('/plan');
+    expect(parseRoute()).toEqual({ area: 'plan' });
+    expect(routePath({ area: 'plan' })).toBe('/plan');
+    expect(routeUrl({ area: 'plan' })).toBe('/plan');
+  });
+
   it('parses and renders the public legal pages', () => {
     at('/privacy');
     expect(parseRoute()).toEqual({ area: 'legal', view: 'privacy' });

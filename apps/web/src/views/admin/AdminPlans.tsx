@@ -1,12 +1,12 @@
 /**
- * Platform admin - plans & effective policy (P14).
+ * Platform admin - plans, pricing & effective policy (P14, P15).
  *
- * Read-only view of the product policy an account resolves to: the configured
- * plans and, for a chosen account, the effective resource allowances with
- * this-period consumption, remaining and funding behaviour. This is the same
- * read model the account owner sees, re-verified against the platform-admin
- * registry server-side. It is policy visibility, never billing: there are no
- * prices, invoices or credits.
+ * Read-only view of the product catalog and the policy an account resolves to:
+ * the configured plans with their customer-facing metadata (display name,
+ * visibility, price metadata) and, for a chosen account, the effective resource
+ * allowances with this-period consumption, remaining and funding behaviour.
+ * Price fields are catalog metadata only - this is policy visibility, never
+ * billing: there is no checkout, invoice, credit or payment here.
  */
 import { useState } from 'react';
 import { ENTITLEMENT_RESOURCE_SPEC, isValidEntitlementResource } from '@seo/contracts';
@@ -17,6 +17,7 @@ import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { PageHeader } from '@/components/ui/page-header';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { PricingTag } from '@/components/entitlement/planUi';
 
 function resourceLabel(resource: string): string {
   return isValidEntitlementResource(resource) ? ENTITLEMENT_RESOURCE_SPEC[resource].label : resource;
@@ -95,7 +96,7 @@ export function AdminPlans() {
     <div className="space-y-6">
       <PageHeader
         title="Plans & policy"
-        description="Product plans and the effective per-resource policy an account resolves to. Policy visibility only - no pricing or billing."
+        description="Product plans, their catalog/pricing metadata and the effective per-resource policy an account resolves to. Policy visibility only - no checkout, invoicing or payment."
       />
 
       {plansState.loading ? (
@@ -116,6 +117,8 @@ export function AdminPlans() {
                   <TableHead>Key</TableHead>
                   <TableHead>Name</TableHead>
                   <TableHead>Status</TableHead>
+                  <TableHead>Visibility</TableHead>
+                  <TableHead>Price</TableHead>
                   <TableHead>Features</TableHead>
                   <TableHead className="text-right">Allowances</TableHead>
                 </TableRow>
@@ -125,15 +128,34 @@ export function AdminPlans() {
                   <TableRow key={plan.key}>
                     <TableCell className="font-mono text-xs">{plan.key}</TableCell>
                     <TableCell>
-                      {plan.name}
-                      {plan.is_default && (
-                        <Badge variant="secondary" className="ml-2">
-                          Default
-                        </Badge>
+                      <div className="flex items-center gap-2">
+                        <span className="font-medium">{plan.display_name || plan.name}</span>
+                        {plan.is_default && <Badge variant="secondary">Default</Badge>}
+                      </div>
+                      {plan.display_name && plan.display_name !== plan.name && (
+                        <div className="text-xs text-muted-foreground">{plan.name}</div>
                       )}
                     </TableCell>
                     <TableCell>
                       <Badge variant={plan.status === 'active' ? 'outline' : 'destructive'}>{plan.status}</Badge>
+                    </TableCell>
+                    <TableCell>
+                      {plan.is_public ? (
+                        <Badge variant="secondary">Public</Badge>
+                      ) : (
+                        <Badge variant="outline">Internal</Badge>
+                      )}
+                    </TableCell>
+                    <TableCell>
+                      <PricingTag
+                        pricing={{
+                          currency: plan.currency,
+                          monthlyPrice: plan.monthly_price,
+                          yearlyPrice: plan.yearly_price,
+                          priceStatus: plan.price_status,
+                          priceLabel: plan.price_label,
+                        }}
+                      />
                     </TableCell>
                     <TableCell className="text-xs text-muted-foreground">
                       {plan.features.length === 0 ? '—' : plan.features.join(', ')}

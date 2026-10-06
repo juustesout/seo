@@ -56,6 +56,7 @@ import { keywordExpansionRouter } from './http/routes/keywordExpansion.js';
 import { competitorResearchRouter } from './http/routes/competitorResearch.js';
 import { opportunitiesRouter } from './http/routes/opportunities.js';
 import { usageRouter, accountUsageRouter, accountEntitlementRouter } from './http/routes/usage.js';
+import { plansRouter } from './http/routes/plans.js';
 import { seoRouter } from './http/routes/seo.js';
 import { projectApiKeysRouter } from './http/routes/projectApiKeys.js';
 import { projectGscRouter } from './http/routes/projectGsc.js';
@@ -172,6 +173,7 @@ export function createApp(): Express {
   app.use('/api/oauth', oauthRouter);
 
   app.use('/api/me', meRouter);
+  app.use('/api/plans', plansRouter);
   app.use('/api/account/entitlement', accountEntitlementRouter);
   app.use('/api/account/usage', accountUsageRouter);
   app.use('/api/account', accountRouter);

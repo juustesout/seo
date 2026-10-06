@@ -27,14 +27,19 @@ import {
   ENTITLEMENT_FEATURES,
   ENTITLEMENT_RESOURCE_SPEC,
   isValidEntitlementResource,
+  isValidPlanBillingInterval,
+  isValidPlanPriceStatus,
   resolveAllowancePeriod,
   type AccountEntitlementDto,
   type AllowancePeriod,
+  type CustomerPlanDto,
   type EntitlementAllowanceDto,
   type EntitlementFeature,
   type EntitlementFeatureDto,
   type EntitlementResource,
   type FundingSource,
+  type PlanAllowanceDto,
+  type PlanSummaryDto,
   type ResourceKind,
 } from '@seo/contracts';
 import { ApiError } from '../apiErrors.js';
@@ -91,8 +96,18 @@ interface PlanRow {
   id: string;
   key: string;
   name: string;
+  display_name: string;
+  description: string | null;
   is_default: boolean;
+  is_public: boolean;
+  sort_order: number;
   status: string;
+  currency: string | null;
+  monthly_price: number | string | null;
+  yearly_price: number | string | null;
+  price_status: string;
+  price_label: string | null;
+  billing_intervals: string[] | null;
 }
 
 interface PolicyRow {
@@ -120,6 +135,34 @@ const num = (v: unknown): number => {
   const n = Number(v ?? 0);
   return Number.isFinite(n) ? n : 0;
 };
+
+/** Columns needed to build a `PlanSummaryDto` / `CustomerPlanDto`. */
+const PLAN_COLUMNS =
+  'id, key, name, display_name, description, is_default, is_public, sort_order, status, currency, monthly_price, yearly_price, price_status, price_label, billing_intervals';
+
+/** The optional money field: null stays null, otherwise an integer count. */
+const nullableNum = (v: unknown): number | null => (v === null || v === undefined ? null : num(v));
+
+/** Map a catalog/policy plan row onto the customer-facing plan summary. */
+function toPlanSummary(plan: PlanRow): PlanSummaryDto {
+  return {
+    key: plan.key,
+    name: plan.name,
+    displayName: plan.display_name,
+    description: plan.description,
+    isDefault: plan.is_default,
+    isPublic: plan.is_public,
+    sortOrder: num(plan.sort_order),
+    pricing: {
+      currency: plan.currency,
+      monthlyPrice: nullableNum(plan.monthly_price),
+      yearlyPrice: nullableNum(plan.yearly_price),
+      priceStatus: isValidPlanPriceStatus(plan.price_status) ? plan.price_status : 'draft',
+      priceLabel: plan.price_label,
+    },
+    billingIntervals: (plan.billing_intervals ?? []).filter(isValidPlanBillingInterval),
+  };
+}
 
 /**
  * Recognise the entitlement admission denial raised by `seo_admit_entitlement`.
@@ -289,11 +332,85 @@ export class EntitlementService implements EntitlementAdmitter {
     }));
 
     return {
-      plan: { key: plan.key, name: plan.name, isDefault: plan.is_default },
+      plan: toPlanSummary(plan),
       features,
       allowances,
       period: resolveAllowancePeriod(accountPeriod, now),
     };
+  }
+
+  /**
+   * The customer-facing plan catalog: every active, public plan with its
+   * feature packaging, operator-funded resource allowances and pricing
+   * metadata. This is product presentation only - it carries no account state,
+   * no consumption and no billing; an account's effective limits are still
+   * resolved by `accountEntitlement` and enforced by the P14 admission path.
+   */
+  async listCustomerPlans(): Promise<CustomerPlanDto[]> {
+    const { data, error } = await this.sb
+      .from('seo_plans')
+      .select(PLAN_COLUMNS)
+      .eq('status', 'active')
+      .eq('is_public', true)
+      .order('sort_order', { ascending: true })
+      .order('key', { ascending: true });
+    if (error) {
+      logger.error({ error }, 'customer plan catalog read failed');
+      throw new ApiError(500, 'storage_error', 'Could not read the plan catalog.');
+    }
+    const plans = (data ?? []) as PlanRow[];
+    if (plans.length === 0) return [];
+
+    const planIds = plans.map((p) => p.id);
+    const [featureRows, policyRows] = await Promise.all([
+      this.sb
+        .from('seo_plan_features')
+        .select('plan_id, feature, enabled')
+        .in('plan_id', planIds),
+      this.sb
+        .from('seo_resource_policies')
+        .select('plan_id, resource, unit, period, scope, operator_funded, byok_exempt, status, allowance')
+        .in('plan_id', planIds)
+        .eq('status', 'active')
+        .order('resource', { ascending: true }),
+    ]);
+
+    const featuresByPlan = new Map<string, { feature: string; enabled: boolean }[]>();
+    for (const row of (featureRows.data ?? []) as { plan_id: string; feature: string; enabled: boolean }[]) {
+      const list = featuresByPlan.get(row.plan_id) ?? [];
+      list.push({ feature: row.feature, enabled: row.enabled });
+      featuresByPlan.set(row.plan_id, list);
+    }
+    const policiesByPlan = new Map<string, PlanAllowanceDto[]>();
+    for (const row of (policyRows.data ?? []) as (PolicyRow & { plan_id: string })[]) {
+      if (!isValidEntitlementResource(row.resource)) continue;
+      const list = policiesByPlan.get(row.plan_id) ?? [];
+      list.push({
+        resource: row.resource,
+        unit: row.unit,
+        period: row.period as AllowancePeriod,
+        scope: row.scope === 'project' ? 'project' : 'account',
+        operatorFunded: row.operator_funded,
+        byokExempt: row.byok_exempt,
+        status: row.status === 'disabled' ? 'disabled' : 'active',
+        allowance: row.allowance,
+      });
+      policiesByPlan.set(row.plan_id, list);
+    }
+
+    return plans.map((plan) => {
+      const rows = featuresByPlan.get(plan.id) ?? [];
+      const enabledByFeature = new Map(rows.map((r) => [r.feature, r.enabled]));
+      const features: EntitlementFeatureDto[] = ENTITLEMENT_FEATURES.map((feature) => ({
+        feature: feature as EntitlementFeature,
+        enabled: enabledByFeature.get(feature) ?? false,
+      }));
+      return {
+        ...toPlanSummary(plan),
+        features,
+        allowances: policiesByPlan.get(plan.id) ?? [],
+      };
+    });
   }
 
   // -------------------------------------------------------------------------
@@ -313,7 +430,7 @@ export class EntitlementService implements EntitlementAdmitter {
   private async activePlan(accountId: string): Promise<PlanRow | null> {
     const { data, error } = await this.sb
       .from('seo_account_entitlements')
-      .select('seo_plans(id, key, name, is_default, status)')
+      .select(`seo_plans(${PLAN_COLUMNS})`)
       .eq('account_id', accountId)
       .is('effective_to', null)
       .maybeSingle<{ seo_plans: PlanRow | PlanRow[] | null }>();
@@ -326,7 +443,7 @@ export class EntitlementService implements EntitlementAdmitter {
     if (plan && plan.status === 'active') return plan;
     const { data: fallback } = await this.sb
       .from('seo_plans')
-      .select('id, key, name, is_default, status')
+      .select(PLAN_COLUMNS)
       .eq('is_default', true)
       .eq('status', 'active')
       .maybeSingle<PlanRow>();

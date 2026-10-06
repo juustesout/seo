@@ -14,6 +14,10 @@ const RESOURCE_ERROR_MESSAGES: Record<string, string> = {
   resource_concurrency:
     'This account or project already has too many jobs running. Wait for some to finish, then try again.',
   resource_limit: 'Too many job requests in a short time. Wait a moment, then try again.',
+  // P14/P15: the plan's operator-funded allowance for this period is exhausted,
+  // or the resource is not included on the current plan.
+  entitlement_limit:
+    'You have reached this plan’s allowance for the period. It resets next period, or connect your own provider key to keep going.',
 };
 
 export function resourceErrorMessage(error: unknown): string | null {

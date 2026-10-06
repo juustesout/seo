@@ -19,6 +19,7 @@ import {
   CalendarDays,
   ChevronLeft,
   ChevronRight,
+  CreditCard,
   FolderKanban,
   KeyRound,
   LayoutDashboard,
@@ -76,6 +77,7 @@ const AccountApiKeys = lazy(() => import('./views/AccountApiKeys').then((m) => (
 const ProjectsPage = lazy(() => import('./views/ProjectsPage').then((m) => ({ default: m.ProjectsPage })));
 const ProjectSettings = lazy(() => import('./views/ProjectSettings').then((m) => ({ default: m.ProjectSettings })));
 const Usage = lazy(() => import('./views/Usage').then((m) => ({ default: m.Usage })));
+const Plan = lazy(() => import('./views/Plan').then((m) => ({ default: m.Plan })));
 const AdminArea = lazy(() => import('./views/admin/AdminArea').then((m) => ({ default: m.AdminArea })));
 
 interface ProjectRow {
@@ -104,6 +106,7 @@ const TOP_NAV: Array<{ id: TopArea; label: string; icon: NavIcon }> = [
   { id: 'integrations', label: 'Connections', icon: Plug },
   { id: 'keys', label: 'API keys', icon: KeyRound },
   { id: 'usage', label: 'Usage', icon: LineChart },
+  { id: 'plan', label: 'Plan', icon: CreditCard },
 ];
 
 /**
@@ -591,6 +594,7 @@ export function App() {
         {route.area === 'integrations' && <AccountIntegrations onOpenProject={goProject} />}
         {route.area === 'keys' && <AccountApiKeys />}
         {route.area === 'usage' && <Usage />}
+        {route.area === 'plan' && <Plan />}
         </Suspense>
       </main>
       <LegalFooter />

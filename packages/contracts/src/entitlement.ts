@@ -57,6 +57,73 @@ export interface EntitlementFeatureDto {
   enabled: boolean;
 }
 
+// ---------------------------------------------------------------------------
+// Plan catalog, pricing & billing metadata (P15)
+// ---------------------------------------------------------------------------
+
+/** Billing intervals a plan may be offered on. Product metadata only. */
+export const PLAN_BILLING_INTERVALS = ['monthly', 'yearly'] as const;
+export type PlanBillingInterval = (typeof PLAN_BILLING_INTERVALS)[number];
+
+/** Whether a plan's commercial price is a decision or still a draft. */
+export const PLAN_PRICE_STATUSES = ['draft', 'final'] as const;
+export type PlanPriceStatus = (typeof PLAN_PRICE_STATUSES)[number];
+
+/**
+ * Commercial price metadata for a plan. This is *product-catalog* data, not a
+ * billing engine: it states what a plan is offered at and must never trigger
+ * payment authorization, invoices or provider charges. Amounts are integer
+ * minor units (`EUR 19.00` -> `1900`), never floating point; `null` means the
+ * value is not yet decided, and `priceStatus: 'draft'` marks a plan whose price
+ * is still a provisional product decision.
+ */
+export interface PlanPricingDto {
+  /** ISO 4217 code, e.g. `EUR`; null when no currency has been decided. */
+  currency: string | null;
+  /** Monthly price in integer minor units; null when undecided. */
+  monthlyPrice: number | null;
+  /** Yearly price in integer minor units; null when undecided. */
+  yearlyPrice: number | null;
+  priceStatus: PlanPriceStatus;
+  /** Optional display override, e.g. "Contact us" or "Free". */
+  priceLabel: string | null;
+}
+
+/**
+ * The customer-facing identity and commercial metadata of a plan, independent
+ * of any account. This is what a plan is, never what an account has consumed.
+ */
+export interface PlanSummaryDto {
+  key: string;
+  name: string;
+  displayName: string;
+  description: string | null;
+  isDefault: boolean;
+  isPublic: boolean;
+  sortOrder: number;
+  pricing: PlanPricingDto;
+  billingIntervals: PlanBillingInterval[];
+}
+
+/** One operator-funded resource allowance as configured on a plan (no usage). */
+export interface PlanAllowanceDto {
+  resource: string;
+  unit: string;
+  period: AllowancePeriod;
+  scope: AllowanceScope;
+  operatorFunded: boolean;
+  byokExempt: boolean;
+  status: AllowanceStatus;
+  /** null = no product cap; 0 = not included; a number is the included amount. */
+  allowance: number | null;
+}
+
+/** A plan as presented in the customer-facing catalog. */
+export interface CustomerPlanDto extends PlanSummaryDto {
+  features: EntitlementFeatureDto[];
+  allowances: PlanAllowanceDto[];
+}
+
 /**
  * One operator-funded resource allowance resolved for an account in the current
  * period.
@@ -88,27 +155,28 @@ export interface EntitlementPeriodDto {
 
 /** The account's resolved entitlement/plan read model. */
 export interface AccountEntitlementDto {
-  plan: {
-    key: string;
-    name: string;
-    isDefault: boolean;
-  };
+  plan: PlanSummaryDto;
   features: EntitlementFeatureDto[];
   allowances: EntitlementAllowanceDto[];
   period: EntitlementPeriodDto;
 }
 
-// ---------------------------------------------------------------------------
-// Admin (platform-admin trust boundary)
-// ---------------------------------------------------------------------------
-
 /** One plan as seen by a platform administrator (policy, no secrets). */
 export interface PlatformAdminPlanDto {
   key: string;
   name: string;
+  display_name: string;
   description: string | null;
   is_default: boolean;
+  is_public: boolean;
+  sort_order: number;
   status: string;
+  currency: string | null;
+  monthly_price: number | null;
+  yearly_price: number | null;
+  price_status: PlanPriceStatus;
+  price_label: string | null;
+  billing_intervals: PlanBillingInterval[];
   features: EntitlementFeature[];
   allowance_count: number;
 }
@@ -304,6 +372,8 @@ export interface EntitlementErrorDetails {
 
 export const ENTITLEMENT_RESOURCE_MAX_CHARS = 40;
 export const ENTITLEMENT_UNIT_MAX_CHARS = 32;
+export const PLAN_DISPLAY_NAME_MAX_CHARS = 120;
+export const PLAN_PRICE_LABEL_MAX_CHARS = 40;
 
 /** True when `value` is one of the closed entitlement features. */
 export function isValidEntitlementFeature(value: unknown): value is EntitlementFeature {
@@ -318,4 +388,14 @@ export function isValidAllowancePeriod(value: unknown): value is AllowancePeriod
 /** True when `value` is one of the closed allowance scopes. */
 export function isValidAllowanceScope(value: unknown): value is AllowanceScope {
   return typeof value === 'string' && (ALLOWANCE_SCOPES as readonly string[]).includes(value);
+}
+
+/** True when `value` is one of the closed plan billing intervals. */
+export function isValidPlanBillingInterval(value: unknown): value is PlanBillingInterval {
+  return typeof value === 'string' && (PLAN_BILLING_INTERVALS as readonly string[]).includes(value);
+}
+
+/** True when `value` is one of the closed plan price statuses. */
+export function isValidPlanPriceStatus(value: unknown): value is PlanPriceStatus {
+  return typeof value === 'string' && (PLAN_PRICE_STATUSES as readonly string[]).includes(value);
 }
