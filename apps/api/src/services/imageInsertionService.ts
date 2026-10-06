@@ -42,6 +42,7 @@ import {
   type CanonicalDocument,
   type DesignerIntent,
   type DesignerProposal,
+  type FundingSource,
   type ImageInsertionBackgroundHostRegion,
   type ImageInsertionBackgroundTarget,
   type ImageInsertionCandidate,
@@ -295,9 +296,13 @@ export class ImageInsertionService {
     const mediaService = new MediaService(this.container.sb, new SupabaseStorageStore(this.container.sb));
     // R5.10.7: external search and confirmed generation are distinct physical
     // requests, each counted once by the media provider. No durable execution id
-    // exists on this agent-run path, so the fact is not deduplicated.
-    const usage = usageScopeContext({ sink: this.container.usageEvents });
-    const mediaUsage: MediaUsageScope | undefined = usage ? { projectId, userId: userId ?? null, usage } : undefined;
+    // exists on this agent-run path, so the fact is not deduplicated. P14: the
+    // stock search uses the server's stock provider (operator-funded); the
+    // confirmed generation is attributed to the resolved image credential.
+    const searchScope = usageScopeContext({ sink: this.container.usageEvents, fundingSource: 'operator_funded' });
+    const searchMediaUsage: MediaUsageScope | undefined = searchScope
+      ? { projectId, userId: userId ?? null, usage: searchScope }
+      : undefined;
     const media = await mediaService.list(projectId);
     const selection = selectImageInsertionCandidate(context, media.map(toVisualCandidate), {
       visual,
@@ -329,15 +334,19 @@ export class ImageInsertionService {
       // A failure is remembered, not fatal, so a permitted generation can still
       // offer a confirmed source below.
       try {
-        image = await acquireExternalImage({
-          provider: this.container.registry?.getMedia('unsplash'),
-          context,
-          ...(subject ? { subject } : {}),
-          visual,
-          projectId,
-          persist: (input2) => mediaService.importExternal(projectId, null, input2),
-          ...(mediaUsage ? { usage: mediaUsage } : {}),
-        });
+        image = await this.container.entitlements.withAdmission(
+          { projectId, userId: userId ?? null, resource: 'media', fundingSource: 'operator_funded' },
+          () =>
+            acquireExternalImage({
+              provider: this.container.registry?.getMedia('unsplash'),
+              context,
+              ...(subject ? { subject } : {}),
+              visual,
+              projectId,
+              persist: (input2) => mediaService.importExternal(projectId, null, input2),
+              ...(searchMediaUsage ? { usage: searchMediaUsage } : {}),
+            }),
+        );
         rationale = 'Selected a stock photo for the surrounding text.';
       } catch (err) {
         if (!(err instanceof ApiError)) throw err;
@@ -375,17 +384,36 @@ export class ImageInsertionService {
         return { status: 'generation_required', proposal: acquisitionProposal };
       }
       // R4.5B case 4: the user explicitly confirmed generation for this run.
-      image = await acquireGeneratedImage({
-        projectId,
-        context,
-        ...(subject ? { subject } : {}),
-        visual,
-        apiKey: credentials.apiKey,
-        baseUrl: this.container.config.env.OPENAI_BASE_URL,
-        model: this.container.config.env.OPENAI_IMAGE_MODEL,
-        persist: (input2) => mediaService.importExternal(projectId, null, input2),
-        ...(mediaUsage ? { usage: mediaUsage } : {}),
+      // P14: attribute the generation to the resolved credential (BYOK vs the
+      // server's operator-funded image key) and admit it against `ai_image`.
+      const generationFunding: FundingSource | null =
+        credentials.keySource === 'account' || credentials.keySource === 'project'
+          ? 'byok'
+          : credentials.keySource === 'env'
+            ? 'operator_funded'
+            : null;
+      const generationScope = usageScopeContext({
+        sink: this.container.usageEvents,
+        ...(generationFunding ? { fundingSource: generationFunding } : {}),
       });
+      const generationMediaUsage: MediaUsageScope | undefined = generationScope
+        ? { projectId, userId: userId ?? null, usage: generationScope }
+        : undefined;
+      image = await this.container.entitlements.withAdmission(
+        { projectId, userId: userId ?? null, resource: 'ai_image', fundingSource: generationFunding },
+        () =>
+          acquireGeneratedImage({
+            projectId,
+            context,
+            ...(subject ? { subject } : {}),
+            visual,
+            apiKey: credentials.apiKey,
+            baseUrl: this.container.config.env.OPENAI_BASE_URL,
+            model: this.container.config.env.OPENAI_IMAGE_MODEL,
+            persist: (input2) => mediaService.importExternal(projectId, null, input2),
+            ...(generationMediaUsage ? { usage: generationMediaUsage } : {}),
+          }),
+      );
       rationale = 'Generated an image for the surrounding text.';
     }
 

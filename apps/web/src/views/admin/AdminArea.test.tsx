@@ -18,6 +18,8 @@ const { adminMock } = vi.hoisted(() => ({
     adminAccounts: vi.fn(),
     adminProjects: vi.fn(),
     adminUsage: vi.fn(),
+    adminPlans: vi.fn(),
+    adminAccountEntitlement: vi.fn(),
   },
 }));
 
@@ -27,6 +29,8 @@ vi.mock('../../lib/admin', () => ({
   adminAccounts: (...args: unknown[]) => adminMock.adminAccounts(...args),
   adminProjects: (...args: unknown[]) => adminMock.adminProjects(...args),
   adminUsage: (...args: unknown[]) => adminMock.adminUsage(...args),
+  adminPlans: (...args: unknown[]) => adminMock.adminPlans(...args),
+  adminAccountEntitlement: (...args: unknown[]) => adminMock.adminAccountEntitlement(...args),
 }));
 
 beforeEach(() => {
@@ -35,6 +39,8 @@ beforeEach(() => {
   adminMock.adminAccounts.mockReset();
   adminMock.adminProjects.mockReset();
   adminMock.adminUsage.mockReset();
+  adminMock.adminPlans.mockReset();
+  adminMock.adminAccountEntitlement.mockReset();
   adminMock.adminOverview.mockResolvedValue({
     users: 3,
     accounts: 2,
@@ -56,6 +62,36 @@ beforeEach(() => {
     { project_id: 'p-1', name: 'Site', account_id: 'acc-1', created_by: 'u-1', created_at: '2026-01-01T00:00:00Z', member_count: 2 },
   ]);
   adminMock.adminUsage.mockResolvedValue({ totals: [] });
+  adminMock.adminPlans.mockResolvedValue([
+    {
+      key: 'base',
+      name: 'Base',
+      description: null,
+      is_default: true,
+      status: 'active',
+      features: ['api_access'],
+      allowance_count: 5,
+    },
+  ]);
+  adminMock.adminAccountEntitlement.mockResolvedValue({
+    plan: { key: 'base', name: 'Base', isDefault: true },
+    features: [{ feature: 'api_access', enabled: true }],
+    allowances: [
+      {
+        resource: 'x_link_post',
+        unit: 'link_posts',
+        period: 'month',
+        scope: 'account',
+        operatorFunded: true,
+        byokExempt: false,
+        status: 'active',
+        allowance: 0,
+        consumed: 0,
+        remaining: 0,
+      },
+    ],
+    period: { start: '2026-09-01T00:00:00.000Z', end: '2026-10-01T00:00:00.000Z' },
+  });
 });
 
 afterEach(() => {
@@ -106,5 +142,16 @@ describe('AdminArea sections', () => {
     adminMock.adminUsage.mockRejectedValue(new Error('Request failed (403)'));
     render(<AdminArea view="usage" isAdmin onNavigate={() => {}} />);
     await waitFor(() => expect(screen.getByText('Request failed (403)')).toBeTruthy());
+  });
+
+  it('renders plans and inspects a chosen account effective policy', async () => {
+    render(<AdminArea view="plans" isAdmin onNavigate={() => {}} />);
+    await waitFor(() => expect(screen.getByText('Base')).toBeTruthy());
+    expect(screen.getByRole('button', { name: 'Plans' })).toBeTruthy();
+
+    fireEvent.change(screen.getByLabelText('Account'), { target: { value: 'acc-1' } });
+    await waitFor(() => expect(adminMock.adminAccountEntitlement).toHaveBeenCalledWith('acc-1'));
+    await waitFor(() => expect(screen.getByText('Effective policy - Base (default)')).toBeTruthy());
+    expect(screen.getByText('X link posts')).toBeTruthy();
   });
 });

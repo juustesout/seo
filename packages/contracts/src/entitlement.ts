@@ -138,11 +138,28 @@ export const ENTITLEMENT_RESOURCES = [
 ] as const;
 export type EntitlementResource = (typeof ENTITLEMENT_RESOURCES)[number];
 
-/** How one entitlement resource is counted from the append-only usage ledger. */
+/**
+ * Who normally pays for a resource. `operator` is always server-funded;
+ * `byok_or_operator` may be server-funded or funded by the user's own key
+ * (BYOK), in which case a BYOK-exempt allowance is not consumed.
+ */
+export type EntitlementFundingModel = 'operator' | 'byok_or_operator';
+
+/**
+ * How one entitlement resource is counted from the append-only usage ledger.
+ * This is the canonical registry entry for a product resource: display name,
+ * measured ledger facts, funding model and the metering definition the UI and
+ * enforcement both read from one place.
+ */
 export interface EntitlementResourceSpec {
   /** The usage category the resource is measured from. */
   category: UsageCategory;
-  /** Ledger units summed for this resource; empty means "all units in category". */
+  /**
+   * Ledger units summed for this resource. There is deliberately no
+   * "all units" fallback: counting an unfiltered category mixed sub-units
+   * (e.g. `keyword` and `task` alongside `request`) and overstated usage, so
+   * every resource now names the exact unit(s) that are one billable request.
+   */
   units: readonly UsageUnit[];
   /** When true, only X publishing attempts whose metadata marks a link count. */
   xLinkOnly: boolean;
@@ -150,6 +167,10 @@ export interface EntitlementResourceSpec {
   label: string;
   /** Product-facing unit label (not necessarily a raw ledger unit). */
   unitLabel: string;
+  /** Which party normally funds the resource. */
+  fundingModel: EntitlementFundingModel;
+  /** Plain-language definition of exactly what one metered unit is. */
+  metering: string;
 }
 
 /**
@@ -166,27 +187,35 @@ export const ENTITLEMENT_RESOURCE_SPEC: Record<EntitlementResource, EntitlementR
     xLinkOnly: false,
     label: 'AI text',
     unitLabel: 'tokens',
+    fundingModel: 'byok_or_operator',
+    metering: 'One AI text call, measured in the input and output tokens the provider reports.',
   },
   ai_image: {
-    category: 'ai',
+    category: 'media',
     units: ['image_generation'],
     xLinkOnly: false,
     label: 'AI image',
     unitLabel: 'images',
+    fundingModel: 'byok_or_operator',
+    metering: 'One generated image from the configured AI image model.',
   },
   dataforseo_research: {
     category: 'dataforseo',
-    units: [],
+    units: ['request', 'serp_request'],
     xLinkOnly: false,
     label: 'DataForSEO research',
     unitLabel: 'requests',
+    fundingModel: 'byok_or_operator',
+    metering: 'One billable DataForSEO provider request: a research call or a SERP retrieval.',
   },
   media: {
     category: 'media',
-    units: ['asset'],
+    units: ['request'],
     xLinkOnly: false,
     label: 'Stock media',
-    unitLabel: 'assets',
+    unitLabel: 'searches',
+    fundingModel: 'operator',
+    metering: 'One external stock-media search request.',
   },
   x_link_post: {
     category: 'publishing',
@@ -194,8 +223,13 @@ export const ENTITLEMENT_RESOURCE_SPEC: Record<EntitlementResource, EntitlementR
     xLinkOnly: true,
     label: 'X link posts',
     unitLabel: 'link posts',
+    fundingModel: 'operator',
+    metering: 'One X publish attempt whose body contains a link.',
   },
 };
+
+/** The key of the default/base plan every account resolves when unbound. */
+export const ENTITLEMENT_BASE_PLAN_KEY = 'base';
 
 /** True when `value` is one of the closed entitlement resources. */
 export function isValidEntitlementResource(value: unknown): value is EntitlementResource {

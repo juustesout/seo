@@ -12,6 +12,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import {
   isValidEntitlementFeature,
+  type AccountEntitlementDto,
   type EntitlementFeature,
   type PlatformAdminAccountDto,
   type PlatformAdminJobDto,
@@ -26,6 +27,7 @@ import {
 } from '@seo/contracts';
 import { ApiError } from '../apiErrors.js';
 import { logger } from '../logger.js';
+import type { EntitlementService } from './entitlementService.js';
 
 /** Validated filter for a cross-account usage read. */
 export interface PlatformAdminUsageRequest {
@@ -48,6 +50,7 @@ export interface PlatformAdminReadService {
   usage(actorId: string, filter: PlatformAdminUsageRequest): Promise<PlatformAdminUsageDto>;
   listPlans(actorId: string): Promise<PlatformAdminPlanDto[]>;
   assignPlan(actorId: string, accountId: string, planId: string): Promise<{ accountId: string; planId: string }>;
+  accountEntitlement(actorId: string, accountId: string): Promise<AccountEntitlementDto>;
 }
 
 const num = (v: unknown): number => {
@@ -56,7 +59,10 @@ const num = (v: unknown): number => {
 };
 
 export class SupabasePlatformAdminService implements PlatformAdminReadService {
-  constructor(private readonly sb: SupabaseClient) {}
+  constructor(
+    private readonly sb: SupabaseClient,
+    private readonly entitlements: EntitlementService,
+  ) {}
 
   private async rpc<T>(fn: string, args: Record<string, unknown>): Promise<T> {
     const { data, error } = await this.sb.rpc(fn, args);
@@ -214,5 +220,18 @@ export class SupabasePlatformAdminService implements PlatformAdminReadService {
       p_plan: planId,
     });
     return { accountId, planId };
+  }
+
+  /**
+   * The effective product policy an account currently resolves to (P14): plan,
+   * features and per-resource operator-funded allowance vs this-period
+   * consumption/remaining. Reuses the exact read model the account owner sees,
+   * after re-verifying the actor against the service-role-only admin registry,
+   * so the operator inspects the same numbers enforcement uses and no second
+   * accounting path exists.
+   */
+  async accountEntitlement(actorId: string, accountId: string): Promise<AccountEntitlementDto> {
+    await this.rpc<null>('seo_assert_platform_admin', { p_actor: actorId });
+    return this.entitlements.accountEntitlement(actorId, accountId);
   }
 }

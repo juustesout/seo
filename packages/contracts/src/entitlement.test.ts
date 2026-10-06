@@ -55,11 +55,36 @@ describe('ENTITLEMENT_RESOURCE_SPEC', () => {
       category: 'ai',
       units: ['input_token', 'output_token'],
       xLinkOnly: false,
+      fundingModel: 'byok_or_operator',
     });
-    expect(ENTITLEMENT_RESOURCE_SPEC.ai_image).toMatchObject({ category: 'ai', units: ['image_generation'] });
-    // Empty units means "all units in the category".
-    expect(ENTITLEMENT_RESOURCE_SPEC.dataforseo_research).toMatchObject({ category: 'dataforseo', units: [] });
-    expect(ENTITLEMENT_RESOURCE_SPEC.media).toMatchObject({ category: 'media', units: ['asset'] });
+    // AI images are metered by the media provider's `image_generation` request.
+    expect(ENTITLEMENT_RESOURCE_SPEC.ai_image).toMatchObject({
+      category: 'media',
+      units: ['image_generation'],
+      fundingModel: 'byok_or_operator',
+    });
+    // DataForSEO is aggregated from the two billable request units only; the
+    // `keyword`/`task` sub-units must never inflate the count.
+    expect(ENTITLEMENT_RESOURCE_SPEC.dataforseo_research).toMatchObject({
+      category: 'dataforseo',
+      units: ['request', 'serp_request'],
+      fundingModel: 'byok_or_operator',
+    });
+    expect(ENTITLEMENT_RESOURCE_SPEC.media).toMatchObject({
+      category: 'media',
+      units: ['request'],
+      fundingModel: 'operator',
+    });
+  });
+
+  it('gives every resource a funding model and a metering definition', () => {
+    for (const resource of ENTITLEMENT_RESOURCES) {
+      const spec = ENTITLEMENT_RESOURCE_SPEC[resource];
+      expect(spec.label.length).toBeGreaterThan(0);
+      expect(spec.unitLabel.length).toBeGreaterThan(0);
+      expect(spec.metering.length).toBeGreaterThan(0);
+      expect(spec.units.length).toBeGreaterThan(0);
+    }
   });
 
   it('counts only X link posts for x_link_post', () => {

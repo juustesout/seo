@@ -111,4 +111,33 @@ describe('Usage view', () => {
     expect(await screen.findByText('openai')).toBeTruthy();
     expect(apiMock.api).not.toHaveBeenCalledWith('/account/entitlement');
   });
+
+  it('groups hosted resources and explains own-key (BYOK) usage', async () => {
+    apiMock.api.mockImplementation((path: string) => {
+      if (path === '/account/entitlement') {
+        return Promise.resolve({
+          ...ENTITLEMENT,
+          allowances: [
+            {
+              ...ENTITLEMENT.allowances[0],
+              resource: 'ai_generation',
+              unit: 'tokens',
+              byokExempt: true,
+              allowance: 100,
+              consumed: 42,
+              remaining: 58,
+            },
+            ENTITLEMENT.allowances[0],
+          ],
+        });
+      }
+      return Promise.resolve({ scope: { accountId: 'a-1', projectId: null }, totals: [] });
+    });
+    render(<Usage />);
+    expect(await screen.findByText('Hosted resources')).toBeTruthy();
+    expect(screen.getByText('42 / 100 used')).toBeTruthy();
+    expect(screen.getByText('3 / 10 used')).toBeTruthy();
+    expect(screen.getByText('Your own keys')).toBeTruthy();
+    expect(screen.getByText('X link posts')).toBeTruthy();
+  });
 });

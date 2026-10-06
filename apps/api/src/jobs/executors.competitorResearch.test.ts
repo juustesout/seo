@@ -53,7 +53,9 @@ function build(adapter: {
       }),
     },
     registry: { getDataSource: () => adapter },
-    credentials: { reader: () => ({}) },
+    config: { env: {} },
+    credentials: { reader: () => ({ get: async () => null }) },
+    entitlements: { withAdmission: async <T>(_req: unknown, fn: () => Promise<T>) => fn() },
   } as never;
   return {
     container,

@@ -14,6 +14,7 @@ import { AdminUsers } from './AdminUsers';
 import { AdminAccounts } from './AdminAccounts';
 import { AdminProjects } from './AdminProjects';
 import { AdminUsage } from './AdminUsage';
+import { AdminPlans } from './AdminPlans';
 
 const ADMIN_NAV = [
   { id: 'overview', label: 'Overview' },
@@ -21,6 +22,7 @@ const ADMIN_NAV = [
   { id: 'accounts', label: 'Accounts' },
   { id: 'projects', label: 'Projects' },
   { id: 'usage', label: 'Usage' },
+  { id: 'plans', label: 'Plans' },
 ] as const;
 
 function NotAuthorized() {
@@ -84,6 +86,7 @@ export function AdminArea({
         {current === 'accounts' && <AdminAccounts />}
         {current === 'projects' && <AdminProjects />}
         {current === 'usage' && <AdminUsage />}
+        {current === 'plans' && <AdminPlans />}
       </div>
     </div>
   );

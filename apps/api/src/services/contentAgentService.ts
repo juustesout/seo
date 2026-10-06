@@ -155,8 +155,26 @@ export class ContentAgentService {
   /**
    * Runs the staged pipeline and persists the result as a project draft.
    * Callers (worker executor) report progress between stages.
+   *
+   * The whole pipeline is admitted once against the account's `ai_generation`
+   * allowance (P14), so a hosted content generation is bounded by the plan
+   * exactly like the interactive AI services - whether it was started from the
+   * UI, the API, MCP or a scheduled job. A denial propagates before any provider
+   * call; BYOK and uncapped plans are unaffected.
    */
   async generate(
+    projectId: string,
+    userId: string | null,
+    input: GenerateContentInput,
+    onStage?: (label: string, progress: number) => Promise<void>,
+  ): Promise<Record<string, unknown>> {
+    return this.container.resourceAdmission.withAdmission(
+      { projectId, userId, resource: 'ai_generation' },
+      () => this.runGenerate(projectId, userId, input, onStage),
+    );
+  }
+
+  private async runGenerate(
     projectId: string,
     userId: string | null,
     input: GenerateContentInput,

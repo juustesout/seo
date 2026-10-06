@@ -7,8 +7,10 @@
  * platform administrator.
  */
 import type {
+  AccountEntitlementDto,
   PlatformAdminAccountDto,
   PlatformAdminOverviewDto,
+  PlatformAdminPlanDto,
   PlatformAdminProjectDto,
   PlatformAdminUserDto,
   UsageReportDto,
@@ -34,4 +36,12 @@ export function adminProjects(): Promise<PlatformAdminProjectDto[]> {
 export function adminUsage(params: Record<string, string> = {}): Promise<UsageReportDto> {
   const qs = new URLSearchParams(params).toString();
   return api(`/admin/usage${qs ? `?${qs}` : ''}`);
+}
+
+export function adminPlans(): Promise<PlatformAdminPlanDto[]> {
+  return api('/admin/plans');
+}
+
+export function adminAccountEntitlement(accountId: string): Promise<AccountEntitlementDto> {
+  return api(`/admin/accounts/${accountId}/entitlement`);
 }

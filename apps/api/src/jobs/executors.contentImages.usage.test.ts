@@ -47,7 +47,12 @@ function recordingMedia(_store: InMemoryUsageEventStore): MediaProvider {
 
 function context(container: unknown, retryCount: number) {
   return {
-    container,
+    container: {
+      // P14: each media request is admitted against the product allowance. These
+      // tests exercise the usage meter, so the admission seam runs unchanged.
+      entitlements: { withAdmission: async <T>(_req: unknown, fn: () => Promise<T>) => fn() },
+      ...(container as Record<string, unknown>),
+    },
     job: {
       id: 'job-content-images',
       project_id: PROJECT,

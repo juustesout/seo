@@ -84,6 +84,28 @@ const fakePlatformAdmin: PlatformAdminReadService = {
     calls.push({ fn: 'assignPlan', actor, filter: { accountId, planId } });
     return { accountId, planId };
   },
+  async accountEntitlement(actor, accountId) {
+    calls.push({ fn: 'accountEntitlement', actor, filter: { accountId } });
+    return {
+      plan: { key: 'base', name: 'Base', isDefault: true },
+      features: [{ feature: 'api_access', enabled: true }],
+      allowances: [
+        {
+          resource: 'x_link_post',
+          unit: 'link_posts',
+          period: 'month',
+          scope: 'account',
+          operatorFunded: true,
+          byokExempt: false,
+          status: 'active',
+          allowance: 0,
+          consumed: 0,
+          remaining: 0,
+        },
+      ],
+      period: { start: '2026-09-01T00:00:00.000Z', end: '2026-10-01T00:00:00.000Z' },
+    };
+  },
 };
 
 let server: Server;
@@ -227,5 +249,23 @@ describe('platform admin routes', () => {
     });
     expect(res.status).toBe(200);
     expect(calls).toEqual([{ fn: 'assignPlan', actor: ADMIN_USER, filter: { accountId: ACCOUNT, planId: PLAN } }]);
+  });
+
+  it('reads an account effective entitlement policy for a platform administrator', async () => {
+    const forbidden = await request(`/api/admin/accounts/${ACCOUNT}/entitlement`, 'owner-token');
+    expect(forbidden.status).toBe(403);
+    expect(calls).toHaveLength(0);
+
+    const invalid = await request('/api/admin/accounts/not-a-uuid/entitlement', 'admin-token');
+    expect(invalid.status).toBe(400);
+    expect(calls).toHaveLength(0);
+
+    const res = await request(`/api/admin/accounts/${ACCOUNT}/entitlement`, 'admin-token');
+    expect(res.status).toBe(200);
+    expect(res.json.data).toMatchObject({
+      plan: { key: 'base' },
+      allowances: [{ resource: 'x_link_post', allowance: 0, consumed: 0, remaining: 0 }],
+    });
+    expect(calls).toEqual([{ fn: 'accountEntitlement', actor: ADMIN_USER, filter: { accountId: ACCOUNT } }]);
   });
 });

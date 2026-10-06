@@ -144,7 +144,14 @@ function intent(over: Partial<DesignerIntent> = {}): DesignerIntent {
   };
 }
 
-const container = { sb: {}, config: { env: {} } } as unknown as ServiceContainer;
+const container = {
+  sb: {},
+  config: { env: {} },
+  // P14: external media acquisition is admitted against the product allowance.
+  // These tests exercise acquisition mechanics, not policy, so the seam runs the
+  // operation unmodified.
+  entitlements: { withAdmission: async <T>(_req: unknown, fn: () => Promise<T>) => fn() },
+} as unknown as ServiceContainer;
 const service = new ImageInsertionService(container);
 
 async function expectApiError(promise: Promise<unknown>) {

@@ -11,9 +11,10 @@ import { buildProviderContext } from '../context.js';
 import type { JobRecord } from './types.js';
 import { ApiError } from '../apiErrors.js';
 import { logger } from '../logger.js';
-import type { KnowledgeDocumentInput, MediaUsageScope, ProviderContext } from '@seo/contracts';
+import type { FundingSource, KnowledgeDocumentInput, MediaUsageScope, ProviderContext } from '@seo/contracts';
 import { GscDataSource } from '../providers/gsc/gscDataSource.js';
 import { DataForSeoDataSource } from '../providers/dataforseo/dataSource.js';
+import { resolveDataForSeoFundingSource } from '../providers/dataforseo/funding.js';
 import { urlBelongsToDomain } from '../providers/dataforseo/normalize.js';
 import { publishUsageOccurrenceBase } from '../providers/publishing/providerUsage.js';
 import { retryOccurrenceBase, usageScopeContext } from '../services/usageInstrumentation.js';
@@ -289,6 +290,48 @@ const analyticsSync: JobExecutor = async ({ container, job, writer, report }) =>
 // DataForSEO
 // ---------------------------------------------------------------------------
 
+/**
+ * Resolve the credential funding a project's DataForSEO integration (P14). Used
+ * both to attribute the usage facts the adapter emits and to admit the call
+ * against the operator-funded `dataforseo_research` allowance before any
+ * provider work. Single definition so every DataForSEO executor agrees.
+ */
+async function dataForSeoFundingSource(
+  container: ServiceContainer,
+  integrationId: string,
+): Promise<FundingSource | null> {
+  return resolveDataForSeoFundingSource({
+    credentials: container.credentials.reader({ integrationId }, 'dataforseo'),
+    env: container.config.env,
+  });
+}
+
+/**
+ * Admit one DataForSEO logical operation against the product allowance before
+ * the provider call, holding `amount` provider requests until it finishes. When
+ * no operator allowance applies (uncapped plan, BYOK, unattributable) the
+ * admission seam returns without reserving and the operation proceeds. A denial
+ * propagates before any provider work.
+ */
+function withDataForSeoAllowance<T>(
+  container: ServiceContainer,
+  job: JobRecord,
+  fundingSource: FundingSource | null,
+  amount: number,
+  fn: () => Promise<T>,
+): Promise<T> {
+  return container.entitlements.withAdmission(
+    {
+      projectId: job.project_id,
+      userId: job.created_by,
+      resource: 'dataforseo_research',
+      fundingSource,
+      amount: Math.max(1, amount),
+    },
+    fn,
+  );
+}
+
 const dataForSeoRankSync: JobExecutor = async ({ container, job, writer, report }) => {
   const ds = await dataSourceRow(container.sb, job.project_id, job.data_source_id);
   const adapter = container.registry.getDataSource('dataforseo');
@@ -299,18 +342,22 @@ const dataForSeoRankSync: JobExecutor = async ({ container, job, writer, report 
   const keywords = (job.params.keywords as string[] | undefined)?.slice(0, 100) ?? (await trackedKeywords(container.sb, job.project_id, 100));
   if (keywords.length === 0) return { message: 'No tracked keywords to rank-sync', found: 0 };
 
+  const fundingSource = await dataForSeoFundingSource(container, String(ds.integration_id));
   const ctx = buildProviderContext(container, {
     projectId: job.project_id,
     userId: job.created_by,
     owner: { integrationId: String(ds.integration_id), providerType: 'dataforseo' },
     config: { ...(ds.config as Record<string, unknown>) },
+    fundingSource,
     usageSourceId: job.id,
   });
 
   await report(10, `Running SERP tracking for ${keywords.length} keywords`);
-  const outcomes = await dfseo.fetchTaskSerp(ctx, keywords, {
-    onProgress: (done, total) => void report(10 + Math.round((done / total) * 60), `SERP tasks ${done}/${total}`),
-  });
+  const outcomes = await withDataForSeoAllowance(container, job, fundingSource, keywords.length, () =>
+    dfseo.fetchTaskSerp(ctx, keywords, {
+      onProgress: (done, total) => void report(10 + Math.round((done / total) * 60), `SERP tasks ${done}/${total}`),
+    }),
+  );
 
   const date = new Date().toISOString().slice(0, 10);
   const today = new Date().toISOString();
@@ -357,15 +404,19 @@ const serpRetrieval: JobExecutor = async ({ container, job, writer, report }) =>
   const keywords = (job.params.keywords as string[] | undefined)?.slice(0, 50) ?? (await trackedKeywords(container.sb, job.project_id, 50));
   if (keywords.length === 0) return { message: 'No keywords to retrieve SERPs for' };
 
+  const fundingSource = await dataForSeoFundingSource(container, String(ds.integration_id));
   const ctx = buildProviderContext(container, {
     projectId: job.project_id,
     userId: job.created_by,
     owner: { integrationId: String(ds.integration_id), providerType: 'dataforseo' },
     config: { ...(ds.config as Record<string, unknown>) },
+    fundingSource,
     usageSourceId: job.id,
   });
   await report(10, `Retrieving live SERPs for ${keywords.length} keywords`);
-  const outcomes = await dfseo.fetchLiveSerp(ctx, keywords, { depth: 20 });
+  const outcomes = await withDataForSeoAllowance(container, job, fundingSource, keywords.length, () =>
+    dfseo.fetchLiveSerp(ctx, keywords, { depth: 20 }),
+  );
   await report(70, 'Storing SERP results');
   await writer.persistSerpSnapshots(
     job.project_id,
@@ -458,6 +509,22 @@ async function runKeywordExpansion(args: {
   return { seeds, methods, methodStatus, candidates, count: candidates.length };
 }
 
+/**
+ * Upper bound on the billable DataForSEO requests one expansion run issues:
+ * `suggestions` and `ideas` are one request each, `related` is one per seed.
+ * Used as the reservation amount so concurrent runs cannot oversubscribe a
+ * finite allowance before their usage facts exist.
+ */
+function expansionRequestAmount(rawMethods: unknown, seeds: string[]): number {
+  const requested = Array.isArray(rawMethods) ? rawMethods.filter((m): m is string => typeof m === 'string') : [];
+  let amount = 0;
+  for (const method of KEYWORD_EXPANSION_METHODS) {
+    if (!requested.includes(method)) continue;
+    amount += method === 'related' ? Math.max(1, seeds.length) : 1;
+  }
+  return Math.max(1, amount);
+}
+
 const dataForSeoKeywordResearch: JobExecutor = async ({ container, job, writer, report }) => {
   const ds = await dataSourceRow(container.sb, job.project_id, job.data_source_id);
   const adapter = container.registry.getDataSource('dataforseo');
@@ -466,22 +533,32 @@ const dataForSeoKeywordResearch: JobExecutor = async ({ container, job, writer, 
   const seeds = boundedResearchSeeds(job.params.seeds ?? job.params.keywords);
   if (seeds.length === 0) throw new ApiError(400, 'bad_request', 'keyword_research requires seeds');
 
+  const fundingSource = await dataForSeoFundingSource(container, String(ds.integration_id));
   const ctx = buildProviderContext(container, {
     projectId: job.project_id,
     userId: job.created_by,
     owner: { integrationId: String(ds.integration_id), providerType: 'dataforseo' },
     config: { ...(ds.config as Record<string, unknown>) },
+    fundingSource,
     usageSourceId: job.id,
   });
 
   // The presence of an explicit `methods` array switches this shared job to the
   // KW4 expansion snapshot; its absence keeps the exact legacy KW2 path below.
   if (Array.isArray(job.params.methods)) {
-    return runKeywordExpansion({ job, report, dfseo, ctx, seeds });
+    return withDataForSeoAllowance(
+      container,
+      job,
+      fundingSource,
+      expansionRequestAmount(job.params.methods, seeds),
+      () => runKeywordExpansion({ job, report, dfseo, ctx, seeds }),
+    );
   }
 
   await report(10, `Researching keywords from ${seeds.length} seed(s)`);
-  const results = await dfseo.researchKeywords(ctx, seeds);
+  const results = await withDataForSeoAllowance(container, job, fundingSource, 1, () =>
+    dfseo.researchKeywords(ctx, seeds),
+  );
   await report(70, `Persisting ${results.length} suggested keywords`);
   await writer.persistKeywordResearch(job.project_id, results);
   // The run's own bounded result (seo_sync_jobs.result) so the UI can show the
@@ -515,19 +592,23 @@ const dataForSeoCompetitorResearch: JobExecutor = async ({ container, job, write
   const domain = normalizeDomain(typeof job.params.domain === 'string' ? job.params.domain : '');
   if (!domain) throw new ApiError(400, 'bad_request', 'competitor_research requires a domain');
 
+  const fundingSource = await dataForSeoFundingSource(container, String(ds.integration_id));
   const ctx = buildProviderContext(container, {
     projectId: job.project_id,
     userId: job.created_by,
     owner: { integrationId: String(ds.integration_id), providerType: 'dataforseo' },
     config: { ...(ds.config as Record<string, unknown>) },
+    fundingSource,
     usageSourceId: job.id,
   });
 
   if (mode === 'discover') {
     await report(10, `Finding competitors for ${domain}`);
-    const candidates = await dfseo.discoverCompetitors(ctx, domain, {
-      limit: COMPETITOR_RESEARCH_MAX_CANDIDATES,
-    });
+    const candidates = await withDataForSeoAllowance(container, job, fundingSource, 1, () =>
+      dfseo.discoverCompetitors(ctx, domain, {
+        limit: COMPETITOR_RESEARCH_MAX_CANDIDATES,
+      }),
+    );
     const competitors: CompetitorCandidateDto[] = candidates.slice(0, COMPETITOR_RESEARCH_MAX_CANDIDATES).map((c) => ({
       domain: c.domain,
       sharedKeywords: c.shared_keywords,
@@ -564,11 +645,13 @@ const dataForSeoCompetitorResearch: JobExecutor = async ({ container, job, write
     // whole bounded budget, which would leave later competitors with no
     // evidence and an ambiguous empty matrix cell.
     const perCompetitor = Math.max(1, Math.floor(COMPETITOR_RESEARCH_RUN_MAX_GAPS / competitors.length));
-    const gaps = await dfseo.findCompetitorKeywordGaps(ctx, domain, competitors, {
-      minSearchVolume: COMPETITOR_GAP_MIN_SEARCH_VOLUME,
-      maxRank: COMPETITOR_GAP_MAX_RANK,
-      limitPerCompetitor: perCompetitor,
-    });
+    const gaps = await withDataForSeoAllowance(container, job, fundingSource, competitors.length, () =>
+      dfseo.findCompetitorKeywordGaps(ctx, domain, competitors, {
+        minSearchVolume: COMPETITOR_GAP_MIN_SEARCH_VOLUME,
+        maxRank: COMPETITOR_GAP_MAX_RANK,
+        limitPerCompetitor: perCompetitor,
+      }),
+    );
     const bounded: CompetitorGapDto[] = gaps.slice(0, COMPETITOR_RESEARCH_RUN_MAX_GAPS).map((g) => ({
       keyword: g.keyword,
       searchVolume: g.search_volume,
@@ -1096,11 +1179,14 @@ async function contentImages(ctx: JobExecContext): Promise<Record<string, unknow
 
   // R5.10.7: each placeholder can issue a real search and/or generation request;
   // every external request is counted once by the media provider itself, with a
-  // retry-aware occurrence base so a retried job is not deduplicated.
+  // retry-aware occurrence base so a retried job is not deduplicated. P14: the
+  // registry media provider is configured server-side, so these requests are
+  // operator-funded and admitted against the plan's `media`/`ai_image` allowance.
   const mediaUsageScope = usageScopeContext({
     sink: container.usageEvents,
     sourceId: job.id,
     occurrenceBase: retryOccurrenceBase(job.retry_count),
+    fundingSource: 'operator_funded',
   });
   const mediaUsage: MediaUsageScope | undefined = mediaUsageScope
     ? { projectId: job.project_id, userId: job.created_by, usage: mediaUsageScope }
@@ -1112,21 +1198,41 @@ async function contentImages(ctx: JobExecContext): Promise<Record<string, unknow
     const title = typeof row.title === 'string' ? row.title : '';
     const alt = String(target.block.attrs.alt || title || 'illustration').slice(0, 500);
     let src: string | null = null;
-    if (media.capabilities.includes('search') && media.search) {
-      const hits = await media.search({
-        query: alt,
-        limit: 1,
-        orientation: 'landscape',
-        ...(mediaUsage ? { usage: mediaUsage } : {}),
-      });
+    const search = media.search;
+    if (media.capabilities.includes('search') && search) {
+      const hits = await container.entitlements.withAdmission(
+        {
+          projectId: job.project_id,
+          userId: job.created_by,
+          resource: 'media',
+          fundingSource: 'operator_funded',
+        },
+        () =>
+          search({
+            query: alt,
+            limit: 1,
+            orientation: 'landscape',
+            ...(mediaUsage ? { usage: mediaUsage } : {}),
+          }),
+      );
       src = hits[0]?.url ?? null;
     }
-    if (!src && media.capabilities.includes('generate') && media.generate) {
-      const gen = await media.generate({
-        prompt: `High-quality editorial image for an article section: ${alt}`,
-        size: '1792x1024',
-        ...(mediaUsage ? { usage: mediaUsage } : {}),
-      });
+    const generate = media.generate;
+    if (!src && media.capabilities.includes('generate') && generate) {
+      const gen = await container.entitlements.withAdmission(
+        {
+          projectId: job.project_id,
+          userId: job.created_by,
+          resource: 'ai_image',
+          fundingSource: 'operator_funded',
+        },
+        () =>
+          generate({
+            prompt: `High-quality editorial image for an article section: ${alt}`,
+            size: '1792x1024',
+            ...(mediaUsage ? { usage: mediaUsage } : {}),
+          }),
+      );
       src = gen.url;
     }
     if (!src) continue;

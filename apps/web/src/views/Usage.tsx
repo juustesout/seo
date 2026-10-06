@@ -43,12 +43,39 @@ function allowanceUsage(a: EntitlementAllowanceDto): string {
   return `${fmtNum(a.consumed)} / ${fmtNum(a.allowance)} used`;
 }
 
+function remainingText(a: EntitlementAllowanceDto): string {
+  if (a.remaining === null) return 'No plan cap';
+  if (a.allowance === 0) return 'Not included on this plan';
+  return `${fmtNum(a.remaining)} remaining`;
+}
+
+/** One compact resource card: usage, remaining and the funding behaviour. */
+function AllowanceCard({ a }: { a: EntitlementAllowanceDto }) {
+  return (
+    <div className="space-y-1 rounded-lg border p-3">
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-sm font-medium">{resourceLabel(a.resource)}</span>
+        {a.status === 'disabled' && <Badge variant="destructive">Disabled</Badge>}
+      </div>
+      <div className="text-lg tabular-nums">{allowanceUsage(a)}</div>
+      <div className="text-xs text-muted-foreground">
+        {remainingText(a)} · {a.unit}
+      </div>
+      {a.status !== 'disabled' && a.byokExempt && (
+        <div className="text-xs text-muted-foreground">Your own key usage does not count</div>
+      )}
+    </div>
+  );
+}
+
 function EntitlementCard({ state }: { state: { data: AccountEntitlementDto | null; loading: boolean; error: string | null } }) {
   if (state.loading) return <Empty>Loading plan…</Empty>;
   if (state.error) return <p className="text-sm text-destructive">{state.error}</p>;
   const entitlement = state.data;
   if (!entitlement) return null;
   const enabled = entitlement.features.filter((f) => f.enabled);
+  const hosted = entitlement.allowances.filter((a) => a.operatorFunded);
+  const byok = entitlement.allowances.filter((a) => a.operatorFunded && a.byokExempt);
 
   return (
     <Card>
@@ -74,42 +101,29 @@ function EntitlementCard({ state }: { state: { data: AccountEntitlementDto | nul
             ))
           )}
         </div>
-        {entitlement.allowances.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No plan allowances are defined.</p>
-        ) : (
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Resource</TableHead>
-                <TableHead>Usage</TableHead>
-                <TableHead className="text-right">Remaining</TableHead>
-                <TableHead>Notes</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {entitlement.allowances.map((a) => (
-                <TableRow key={a.resource}>
-                  <TableCell>
-                    <div className="font-medium">{resourceLabel(a.resource)}</div>
-                    <div className="text-xs text-muted-foreground">{a.unit}</div>
-                  </TableCell>
-                  <TableCell>{allowanceUsage(a)}</TableCell>
-                  <TableCell className="text-right tabular-nums">
-                    {a.remaining === null ? '—' : fmtNum(a.remaining)}
-                  </TableCell>
-                  <TableCell className="text-xs text-muted-foreground">
-                    {a.status === 'disabled'
-                      ? 'Disabled'
-                      : a.allowance === null
-                        ? 'No plan cap'
-                        : a.byokExempt
-                          ? 'Your own key usage does not count'
-                          : 'Server-funded'}
-                  </TableCell>
-                </TableRow>
+
+        {hosted.length > 0 && (
+          <div className="space-y-2">
+            <div className="text-sm font-medium">Hosted resources</div>
+            <p className="text-xs text-muted-foreground">
+              Usage funded by Old Skool SEO consumes your plan allowance for this period.
+            </p>
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              {hosted.map((a) => (
+                <AllowanceCard key={a.resource} a={a} />
               ))}
-            </TableBody>
-          </Table>
+            </div>
+          </div>
+        )}
+
+        {byok.length > 0 && (
+          <div className="space-y-1 rounded-lg border border-dashed p-3">
+            <div className="text-sm font-medium">Your own keys</div>
+            <p className="text-xs text-muted-foreground">
+              {byok.map((a) => resourceLabel(a.resource)).join(', ')}: when you connect your own provider key,
+              usage runs on your account and does not consume the hosted allowance.
+            </p>
+          </div>
         )}
       </CardContent>
     </Card>

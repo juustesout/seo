@@ -9,11 +9,30 @@
  */
 import { describe, expect, it, vi } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';
+import type { AccountEntitlementDto } from '@seo/contracts';
 import { ApiError } from '../apiErrors.js';
 import { SupabasePlatformAdminService } from './platformAdminService.js';
+import type { EntitlementService } from './entitlementService.js';
 
-function serviceWith(rpc: ReturnType<typeof vi.fn>) {
-  return new SupabasePlatformAdminService({ rpc } as unknown as SupabaseClient);
+const EMPTY_ENTITLEMENT: AccountEntitlementDto = {
+  plan: { key: 'base', name: 'Base', isDefault: true },
+  features: [],
+  allowances: [],
+  period: { start: '2026-09-01T00:00:00.000Z', end: '2026-10-01T00:00:00.000Z' },
+};
+
+function serviceWith(
+  rpc: ReturnType<typeof vi.fn>,
+  entitlement: AccountEntitlementDto = EMPTY_ENTITLEMENT,
+  calls?: string[],
+) {
+  const entitlements = {
+    accountEntitlement: async (actor: string, accountId: string) => {
+      calls?.push(`entitlement:${actor}:${accountId}`);
+      return entitlement;
+    },
+  } as unknown as EntitlementService;
+  return new SupabasePlatformAdminService({ rpc } as unknown as SupabaseClient, entitlements);
 }
 
 describe('SupabasePlatformAdminService', () => {
@@ -87,5 +106,23 @@ describe('SupabasePlatformAdminService', () => {
       scope: { accountId: 'acc-1', projectId: null },
       totals: [{ category: 'ai', provider: 'openai', operation: 'chat', unit: 'input_token', quantity: 15, eventCount: 2 }],
     });
+  });
+
+  it('re-verifies the platform admin then returns the effective entitlement policy', async () => {
+    const calls: string[] = [];
+    const rpc = vi.fn(async (fn: string) => {
+      calls.push(fn);
+      return { data: null, error: null };
+    });
+    const svc = serviceWith(rpc, EMPTY_ENTITLEMENT, calls);
+    const out = await svc.accountEntitlement('admin-1', 'acc-1');
+    expect(out).toEqual(EMPTY_ENTITLEMENT);
+    expect(calls).toEqual(['seo_assert_platform_admin', 'entitlement:admin-1:acc-1']);
+  });
+
+  it('refuses to read an entitlement policy when the actor is not a platform admin', async () => {
+    const rpc = vi.fn().mockResolvedValue({ data: null, error: { code: '42501', message: 'not allowed' } });
+    const svc = serviceWith(rpc);
+    await expect(svc.accountEntitlement('u-1', 'acc-1')).rejects.toMatchObject({ status: 403 });
   });
 });

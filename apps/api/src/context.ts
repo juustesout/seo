@@ -27,6 +27,7 @@ import type { JobStore } from './jobs/types.js';
 import { ResourceAdmissionService } from './services/resourceAdmission.js';
 import { EntitlementService } from './services/entitlementService.js';
 import { AIService } from './services/aiService.js';
+import { resolveDataForSeoFundingSource } from './providers/dataforseo/funding.js';
 import { SupabaseUsageEventStore, type UsageEventStore } from './services/usageEventRepository.js';
 import { SupabasePlatformAdminService, type PlatformAdminReadService } from './services/platformAdminService.js';
 import type { Pool } from 'pg';
@@ -119,12 +120,29 @@ export function getContainer(): ServiceContainer {
 
   // Funding resolver for the resources whose operator-vs-BYOK attribution can
   // be determined before the call: AI mirrors the credential precedence the
-  // usage ledger records; media and X are always operator-funded. Resources
-  // whose funding cannot be attributed pre-call resolve to null, so no
-  // allowance is consumed from an unattributable event.
+  // usage ledger records; DataForSEO mirrors the adapter's stored-vs-env
+  // precedence for the project's connected integration; media and X are always
+  // operator-funded. Resources whose funding cannot be attributed pre-call
+  // resolve to null, so no allowance is consumed from an unattributable event.
   const entitlements = new EntitlementService(sb, async (projectId, resource) => {
     if (resource === 'ai_generation' || resource === 'ai_image') {
       return new AIService(getContainer()).resolveFundingSource(projectId);
+    }
+    if (resource === 'dataforseo_research') {
+      const { data } = await sb
+        .from('seo_integrations')
+        .select('id')
+        .eq('project_id', projectId)
+        .eq('provider_type', 'dataforseo')
+        .eq('status', 'connected')
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle<{ id: string }>();
+      if (!data) return null;
+      return resolveDataForSeoFundingSource({
+        credentials: getContainer().credentials.reader({ integrationId: data.id }, 'dataforseo'),
+        env: config.env,
+      });
     }
     if (resource === 'media' || resource === 'x_link_post') return 'operator_funded';
     return null;
@@ -206,7 +224,7 @@ export function getContainer(): ServiceContainer {
     resourceAdmission,
     entitlements,
     usageEvents: new SupabaseUsageEventStore(sb),
-    platformAdmin: new SupabasePlatformAdminService(sb),
+    platformAdmin: new SupabasePlatformAdminService(sb, entitlements),
     pgPool,
   };
   cached = container;

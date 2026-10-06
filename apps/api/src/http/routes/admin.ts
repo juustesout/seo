@@ -129,3 +129,17 @@ adminRouter.post(
     res.json({ data });
   }),
 );
+
+/**
+ * Effective product policy for one account (P14): the plan it resolves to and
+ * every resource allowance with this-period consumption, remaining and funding
+ * behaviour. Read-only and post-gate; ordinary users can never reach it.
+ */
+adminRouter.get(
+  '/accounts/:accountId/entitlement',
+  asyncHandler(async (req, res) => {
+    const accountId = z.string().uuid().parse(req.params.accountId);
+    const data = await req.container.platformAdmin.accountEntitlement(req.user!.sub, accountId);
+    res.json({ data });
+  }),
+);

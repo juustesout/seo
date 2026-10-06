@@ -2947,4 +2947,79 @@ end $$;
 SQL
 echo "   smoke: migration 35 revoke is drift-proof across seo_usage_totals overloads"
 
+echo "==> smoke test: concrete product resource policies (P14)"
+PSQL -d "${DB_NAME}" <<'SQL'
+do $$
+declare
+  v_plan uuid;
+  v_count int;
+  v_allowance integer;
+begin
+  select id into v_plan from public.seo_plans where key = 'base';
+  if v_plan is null then raise exception 'p14: base plan missing'; end if;
+
+  -- The canonical registry has exactly five operator-funded resources seeded on
+  -- the base plan; a missing resource would silently exempt it from policy.
+  select count(*) into v_count
+  from public.seo_resource_policies
+  where plan_id = v_plan
+    and resource in ('ai_generation', 'ai_image', 'dataforseo_research', 'media', 'x_link_post');
+  if v_count <> 5 then raise exception 'p14: expected 5 base policies, found %', v_count; end if;
+
+  -- X link posts are metered and must not be unlimited/free on the base plan.
+  select allowance into v_allowance
+  from public.seo_resource_policies where plan_id = v_plan and resource = 'x_link_post';
+  if v_allowance is distinct from 0 then
+    raise exception 'p14: base x_link_post must be explicitly 0, found %', v_allowance;
+  end if;
+
+  -- Every other monetizable resource stays configurable (uncapped) rather than
+  -- being given a fabricated commercial ceiling.
+  if exists (
+    select 1 from public.seo_resource_policies
+    where plan_id = v_plan
+      and resource in ('ai_generation', 'ai_image', 'dataforseo_research', 'media')
+      and allowance is not null
+  ) then
+    raise exception 'p14: base plan fabricated an allowance for an undecided resource';
+  end if;
+
+  -- Units match the canonical registry labels so the read model and UI agree.
+  if exists (
+    select 1 from (values
+      ('ai_generation', 'tokens'),
+      ('ai_image', 'images'),
+      ('dataforseo_research', 'requests'),
+      ('media', 'searches'),
+      ('x_link_post', 'link_posts')
+    ) as expected(resource, unit)
+    left join public.seo_resource_policies rp
+      on rp.plan_id = v_plan and rp.resource = expected.resource
+    where rp.unit is distinct from expected.unit
+  ) then
+    raise exception 'p14: base policy units do not match the canonical registry';
+  end if;
+
+  -- BYOK-exempt resources are the ones with a user-supplied alternative key;
+  -- stock media and X link posts are operator-only.
+  if exists (
+    select 1 from (values
+      ('ai_generation', true),
+      ('ai_image', true),
+      ('dataforseo_research', true),
+      ('media', false),
+      ('x_link_post', false)
+    ) as expected(resource, byok_exempt)
+    left join public.seo_resource_policies rp
+      on rp.plan_id = v_plan and rp.resource = expected.resource
+    where rp.byok_exempt is distinct from expected.byok_exempt
+  ) then
+    raise exception 'p14: base policy byok_exempt flags do not match the funding model';
+  end if;
+
+  raise notice 'p14: canonical base plan resource policies OK';
+end $$;
+SQL
+echo "   smoke: canonical base plan resource policies OK"
+
 echo "==> migration validation OK (${DB_NAME})"

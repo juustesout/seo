@@ -99,6 +99,11 @@ the existing usage vocabulary by `ENTITLEMENT_RESOURCE_SPEC`:
 
 Consumption is always read from `seo_usage_events`, never a second ledger.
 
+> P14 made this registry canonical and corrected some P13 provisional values:
+> `ai_image` is measured in the `media` category (unit `image_generation`), and
+> `media` is measured in `request` units. See
+> `docs/p14-resource-policies.md` section 2 for the authoritative table.
+
 ## 4. Funding and BYOK
 
 `funding_source` (added in P11) decides whether an operator allowance is at

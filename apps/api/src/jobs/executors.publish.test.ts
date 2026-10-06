@@ -106,16 +106,18 @@ function job(overrides: Partial<JobRecord> = {}): JobRecord {
 }
 
 function container(
-  registry: ReturnType<typeof buildRegistry>,
+  registry: unknown,
   sb: Store,
   usageEvents: ServiceContainer['usageEvents'] = new InMemoryUsageEventStore(),
   credentials: Record<string, string> = {},
+  entitlements: unknown = { withAdmission: async (_req: unknown, fn: () => Promise<unknown>) => fn() },
 ): ServiceContainer {
   return {
     config: { env: {} },
     sb: fakeSb(sb) as never,
     registry,
     usageEvents,
+    entitlements,
     credentials: {
       reader: () => ({
         get: async (key: string) => credentials[key] ?? null,
@@ -416,5 +418,101 @@ describe('publish executor usage accounting (R5.10.6)', () => {
     const events = await store.list({ projectId: PROJECT });
     expect(events).toHaveLength(2);
     expect(events.map((e) => e.success).sort()).toEqual([false, true]);
+  });
+});
+
+/**
+ * X link-post allowance enforcement (P14).
+ *
+ * An X post carrying a link carries a real per-post operator cost, so it must be
+ * admitted against the `x_link_post` product allowance before the remote write;
+ * a non-link post (cheap) must not, and a denial must stop the provider call.
+ */
+describe('publish executor X link-post allowance (P14)', () => {
+  const PROJECT = '11111111-1111-4111-8111-111111111111';
+  const USER = '33333333-3333-4333-8333-333333333333';
+
+  function xStores(content: string): Store {
+    const s = stores();
+    s.seo_publications[0]!.project_id = PROJECT;
+    s.seo_publications[0]!.content = content;
+    s.seo_publishers = [
+      { id: 'pb-1', project_id: PROJECT, provider: 'x', name: 'X', status: 'connected', config: {} },
+    ];
+    return s;
+  }
+
+  function xAdapter() {
+    return {
+      id: 'x',
+      publish: vi.fn(async () => ({ remoteId: 'x-1', url: 'https://x.com/status/1' })),
+      update: vi.fn(),
+      delete: vi.fn(),
+    };
+  }
+
+  function run(c: ServiceContainer) {
+    return executorFor('publish')({
+      container: c,
+      job: job({ project_id: PROJECT, provider: 'x', created_by: USER }),
+      writer: {} as SeoWriter,
+      report: async () => undefined,
+    });
+  }
+
+  it('admits an X link post against the allowance before the remote write', async () => {
+    const admissions: Array<Record<string, unknown>> = [];
+    const adapter = xAdapter();
+    const c = container(
+      { getPublisher: (id: string) => (id === 'x' ? adapter : null) },
+      xStores('<p>Read more at https://example.com/post</p>'),
+      undefined,
+      {},
+      { withAdmission: async (req: Record<string, unknown>, fn: () => Promise<unknown>) => (admissions.push(req), fn()) },
+    );
+
+    const result = await run(c);
+
+    expect(result.remoteId).toBe('x-1');
+    expect(admissions).toEqual([
+      { projectId: PROJECT, userId: USER, resource: 'x_link_post', fundingSource: 'operator_funded' },
+    ]);
+    expect(adapter.publish).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not consume the allowance for an X post without a link', async () => {
+    const admissions: Array<Record<string, unknown>> = [];
+    const adapter = xAdapter();
+    const c = container(
+      { getPublisher: (id: string) => (id === 'x' ? adapter : null) },
+      xStores('<p>Plain text, no link here</p>'),
+      undefined,
+      {},
+      { withAdmission: async (req: Record<string, unknown>, fn: () => Promise<unknown>) => (admissions.push(req), fn()) },
+    );
+
+    const result = await run(c);
+
+    expect(result.remoteId).toBe('x-1');
+    expect(admissions).toHaveLength(0);
+    expect(adapter.publish).toHaveBeenCalledTimes(1);
+  });
+
+  it('denies an X link post before the remote write when the allowance is exhausted', async () => {
+    const adapter = xAdapter();
+    const c = container(
+      { getPublisher: (id: string) => (id === 'x' ? adapter : null) },
+      xStores('<p>Read more at https://example.com/post</p>'),
+      undefined,
+      {},
+      {
+        withAdmission: async () => {
+          throw new Error('seo_entitlement_limit');
+        },
+      },
+    );
+
+    await expect(run(c)).rejects.toThrow('seo_entitlement_limit');
+    expect(adapter.publish).not.toHaveBeenCalled();
   });
 });
