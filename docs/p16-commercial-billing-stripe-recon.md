@@ -1072,16 +1072,69 @@ Metered units by resource bucket (mirrors `RESOURCE_KINDS` / `USAGE_UNITS`):
 | X link post | `publishing` (x-link-only) | `publish_attempt` | operator (never BYOK) |
 | Operator background work | `background_job` | `job` | operator |
 
-Provider cost inputs (only real numbers may be entered):
+Provider cost inputs. Cells marked PUBLIC/PRE-CONTRACT are public list prices
+fetched 2026-10-07 as a starting point; they are not contract rates and may
+change. Real contract rates replace the rate cells when available. Each value is
+in the vendor's own currency; USD/EUR mixing is resolved in 36.4 with an
+explicit FX assumption.
 
-| Resource bucket | Unit | Provider cost/unit | Source | Status |
-| --- | --- | --- | --- | --- |
-| AI text | 1k tokens (input/output mix) | UNKNOWN | operator LLM contract | NEEDS RATE |
-| AI images | 1 image | UNKNOWN | operator image-model contract | NEEDS RATE |
-| DataForSEO | 1 request / 1 serp_request | UNKNOWN | DataForSEO rate card | NEEDS RATE |
-| Media | 1 asset (storage/egress) | UNKNOWN | storage/CDN provider | NEEDS RATE |
-| X link post | 1 post with link | EUR 0.20 | user-provided | USER-PROVIDED |
-| X post without link | 1 post | ~EUR 0.01 | user-provided | USER-PROVIDED (verify) |
+AI text (operator model chosen: gpt-5-mini; OpenAI public list, USD per 1M
+tokens):
+
+| Model | Input / 1M | Output / 1M | Status |
+| --- | --- | --- | --- |
+| gpt-5-mini | 0.25 | 2.00 | CHOSEN (user) |
+
+Reference alternatives at the same source: gpt-4.1-nano 0.10 / 0.40;
+gpt-4.1-mini 0.40 / 1.60; gpt-5.1 1.25 / 10.00.
+
+AI images (user-provided planning figures; provider and currency to confirm):
+
+| Quality | Cost per image |
+| --- | --- |
+| average | 0.05 |
+| HQ | 0.10 |
+
+The OpenAI image models are token-priced (no flat per-image list), so the
+figures above are the operator's planning numbers, not a vendor list.
+
+Media and X:
+
+| Resource bucket | Unit | Rate (reference) | Currency | Source | Status |
+| --- | --- | --- | --- | --- | --- |
+| Media | 1 GB storage / 1 GB cached egress | 0.0213 / 0.03 | USD | Supabase Storage list | PUBLIC/PRE-CONTRACT |
+| X link post | 1 post with link | 0.20 | EUR | user-provided | USER-PROVIDED |
+| X post without link | 1 post | ~0.01 | EUR | user-provided | USER-PROVIDED |
+
+Image transformations are NOT used: media is served through plain public URLs
+(`getPublicUrl`), not the `/render/image` transform endpoint, so the Supabase 5.00
+per 1000 image-transform rate does not apply unless transforms are adopted later.
+
+DataForSEO (user-provided via another model, not yet verified against the
+official rate card; USD):
+
+| Item | Unit | Rate |
+| --- | --- | --- |
+| SERP standard queue | per `serp_request` (1 SERP page) | 0.0006 |
+| SERP priority queue | per `serp_request` | 0.0012 |
+| SERP live mode | per `serp_request` | 0.0020 |
+| SERP screenshot add-on | per image | 0.004 |
+| SERP ai_summary add-on | per task | 0.010 |
+| Labs standard task | per `request` (task) | 0.012 |
+| Labs item | per item | 0.00012 |
+| OnPage crawl | per page | 0.00015 |
+| Keywords Data (max) | per task | 0.18 |
+| Backlinks (max) | per task | 0.024 |
+| Content Analysis (max) | per task | 0.024 |
+| Domain Analytics (max) | per task | 0.12 |
+| Business Data (max) | per task | 0.012 |
+| Merchant (max) | per task | 0.005 |
+| App Data (max) | per task | 0.10 |
+
+DataForSEO also lists a 50.00 USD minimum deposit and a 1.00 USD free-trial
+credit. Our metering is only `request` and `serp_request`; which DataForSEO mode
+or task the generic `request` maps to is still a decision (standard queue vs
+live, Labs task vs item).
 
 Notes:
 
@@ -1091,15 +1144,17 @@ Notes:
   operator cost basis applies only to `operator_funded` usage.
 - Free has zero operator-funded allowance, so its expected cost is EUR 0.
 
-Required inputs before 36.4 can be filled:
+Remaining inputs before 36.4 can be filled:
 
-1. Operator LLM rate card (per 1k input/output tokens) for the chosen model(s).
-2. Operator image-model rate card (per image).
-3. DataForSEO contract rate card (per request / serp_request), including any
-   priority/live multipliers.
-4. Media storage/CDN rate (per asset and per GB egress).
-5. Confirmation of the X per-post rates above.
-6. Revisit `safety_factor`, `expected_utilization` and margin floor (working
+1. AI images: confirm the provider and the currency of the 0.05 / 0.10 per-image
+   planning figures.
+2. DataForSEO: verify the seeded rates against the official rate card and decide
+   which mode/task the generic `request` maps to.
+3. Media: confirm Supabase Storage stays the provider and that image transforms
+   remain unused.
+4. Confirm the X per-post rates (EUR 0.20 with link, ~EUR 0.01 without) against
+   the current X API plan.
+5. Revisit `safety_factor`, `expected_utilization` and margin floor (working
    hypotheses 1.30 / 0.40 / 70 percent) if better evidence appears.
 
 Do not silently decide commercially meaningful choices.
