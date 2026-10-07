@@ -1027,6 +1027,81 @@ Hosted operator-funded resources (numeric values still UNKNOWN):
 
 Project count is a candidate plan entitlement/resource (D). No value is set yet.
 
+### 36.5 Unit Economics Worksheet (draft - inputs required)
+
+Purpose: derive the 36.4 numbers from real vendor costs instead of guessing.
+This is a working sheet: it fixes the method and the input slots, not final
+prices or allowances. The parameters below are working hypotheses, not product
+decisions, and may be revised as evidence appears.
+
+Per-resource basis:
+
+```text
+provider_cost_per_unit
+  x safety_factor          = safe_cost_per_unit
+  x allowance_units        = worst_case_cost_per_period
+  x expected_utilization   = expected_cost_per_period
+
+plan_price_per_period - expected_cost_per_period = gross_margin
+```
+
+Definitions:
+
+- `provider_cost_per_unit` - raw vendor price for one metered unit (below).
+- `safety_factor` - covers retries, waste, vendor price drift, FX and refunds.
+  Working hypothesis: 1.30.
+- `allowance_units` - included units per plan per period (36.4; not set yet).
+- `expected_utilization` - share of the allowance a typical customer actually
+  consumes; an allowance is a ceiling, not an average. Working hypothesis: 0.40.
+- margin floor - working hypothesis: 70 percent at expected utilization. This is
+  a target to test, not a hard constraint: if a feature cannot reach it at a sane
+  volume, that is a finding, not a reason to back-fit the allowance.
+
+Vendor cost inputs are seeded from public list prices and labelled
+public/pre-contract. Real contract rates take precedence when available and
+replace only the rate cells.
+
+Metered units by resource bucket (mirrors `RESOURCE_KINDS` / `USAGE_UNITS`):
+
+| Resource bucket | Resource kind(s) | Metered unit(s) | Funding |
+| --- | --- | --- | --- |
+| AI text | `ai_generation` | `input_token` + `output_token` | BYOK or operator |
+| AI images | `ai_image` | `image_generation` | BYOK or operator |
+| DataForSEO | `dataforseo_research`, `dataforseo_serp`, `dataforseo_keywords` | `request` + `serp_request` | operator (BYOK where supported) |
+| Media | `media` | `asset` | operator |
+| X link post | `publishing` (x-link-only) | `publish_attempt` | operator (never BYOK) |
+| Operator background work | `background_job` | `job` | operator |
+
+Provider cost inputs (only real numbers may be entered):
+
+| Resource bucket | Unit | Provider cost/unit | Source | Status |
+| --- | --- | --- | --- | --- |
+| AI text | 1k tokens (input/output mix) | UNKNOWN | operator LLM contract | NEEDS RATE |
+| AI images | 1 image | UNKNOWN | operator image-model contract | NEEDS RATE |
+| DataForSEO | 1 request / 1 serp_request | UNKNOWN | DataForSEO rate card | NEEDS RATE |
+| Media | 1 asset (storage/egress) | UNKNOWN | storage/CDN provider | NEEDS RATE |
+| X link post | 1 post with link | EUR 0.20 | user-provided | USER-PROVIDED |
+| X post without link | 1 post | ~EUR 0.01 | user-provided | USER-PROVIDED (verify) |
+
+Notes:
+
+- Google (`gsc`/`ga4`/`ads`) and DataForSEO are request-priced; DataForSEO is
+  metered on `request` and `serp_request` only.
+- BYOK consumption is excluded from hosted allowances (section 22), so the
+  operator cost basis applies only to `operator_funded` usage.
+- Free has zero operator-funded allowance, so its expected cost is EUR 0.
+
+Required inputs before 36.4 can be filled:
+
+1. Operator LLM rate card (per 1k input/output tokens) for the chosen model(s).
+2. Operator image-model rate card (per image).
+3. DataForSEO contract rate card (per request / serp_request), including any
+   priority/live multipliers.
+4. Media storage/CDN rate (per asset and per GB egress).
+5. Confirmation of the X per-post rates above.
+6. Revisit `safety_factor`, `expected_utilization` and margin floor (working
+   hypotheses 1.30 / 0.40 / 70 percent) if better evidence appears.
+
 Do not silently decide commercially meaningful choices.
 
 ## 37. P17 Proposal
