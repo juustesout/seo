@@ -902,7 +902,51 @@ webhook; user cannot choose another account's plan or price.
 
 This document: `docs/p16-commercial-billing-stripe-recon.md`.
 
-## 36. Open Product Decisions (must be finalized before P17)
+## 36. Product Decisions (must be finalized before P17)
+
+### 36.1 Decided
+
+Locked on 2026-10-07. These constrain all later pricing and all P17 work.
+
+**A. Billing scope - account-level (DECIDED).**
+
+> Plans, pricing, subscriptions and hosted resource allowances are
+> account-scoped. Projects consume the account's entitlements but do not have
+> their own commercial plan.
+
+One commercial plan per account; never one subscription per project. This
+matches the schema as built (sections 1.1 and 1.2): `seo_account_entitlements`
+and `seo_entitlement_reservations` are keyed by `account_id` (with a nullable
+`project_id` used only for attribution), so entitlements already resolve at
+account scope. A per-project subscription would fight this model.
+
+**B. Free plan definition (DECIDED).**
+
+> Free is EUR 0 with **zero** operator-funded hosted resources (AI generation,
+> AI images, DataForSEO research, media). It is a usable product environment,
+> not a free sample of paid capacity.
+
+Free still provides: account and projects, Google integrations, bring-your-own
+keys (BYOK) / user-funded functionality, and read access to the account's own
+data. It does **not** gift operator-funded AI, DataForSEO or X link posts. This
+matches the P15 base plan (hosted resource policies = 0) and keeps unit
+economics clean from day one. BYOK stays exempt from hosted allowances.
+
+**C. Paid-tier positioning (DECIDED).**
+
+> Starter / Pro / Agency are ascending **SEO-capacity levels** of the platform,
+> not credit-bucket SKUs.
+
+- Starter - for one operator/site, limited hosted automation.
+- Pro - for serious daily SEO work: multiple projects, wider research and
+  content capacity.
+- Agency - for multiple clients/sites: higher automation and publishing
+  capacity, API/MCP, larger allowances.
+
+The tiers describe capability. Concrete numeric allowances and prices are
+attached afterwards (36.2 and 36.4); a tier is not a fixed credit count.
+
+### 36.2 Still Open
 
 | Decision | Status |
 | --- | --- |
@@ -921,6 +965,31 @@ This document: `docs/p16-commercial-billing-stripe-recon.md`.
 | Manual beta/customer overrides | **RECOMMENDED** (existing plan assignment; dedicated table deferred) |
 | Shared/business accounts (account members) | **UNKNOWN** (no `seo_account_members` yet) |
 | Price display source (P15 metadata vs mapping) | **RECOMMENDED** (P15 for display; mapping for charge) |
+| API/MCP as a paid capability (which tier) | **UNKNOWN** |
+| Project-count limits per tier | **UNKNOWN** |
+
+### 36.3 Decision Notes
+
+- A/B/C are foundational: they fix billing scope, the free boundary and tier
+  meaning. The first three rows of 36.2 (prices, billing interval, allowances)
+  depend on them and must be derived from unit economics, not guessed.
+- None of A/B/C needs a schema change; all are consistent with P13/P14/P15 as
+  built.
+- BYOK stays outside hosted allowances (section 22), so paid tiers meter only
+  operator-funded capacity.
+
+### 36.4 Pricing and Allowance Matrix (to be filled once unit costs are known)
+
+| | Free | Starter | Pro | Agency |
+| --- | --- | --- | --- | --- |
+| Price / month | EUR 0 | UNKNOWN | UNKNOWN | UNKNOWN |
+| AI text | 0 | UNKNOWN | UNKNOWN | UNKNOWN |
+| AI images | 0 | UNKNOWN | UNKNOWN | UNKNOWN |
+| DataForSEO | 0 | UNKNOWN | UNKNOWN | UNKNOWN |
+| X link posts | 0 | UNKNOWN | UNKNOWN | UNKNOWN |
+| API | UNKNOWN | UNKNOWN | UNKNOWN | UNKNOWN |
+| MCP | UNKNOWN | UNKNOWN | UNKNOWN | UNKNOWN |
+| Projects | UNKNOWN | UNKNOWN | UNKNOWN | UNKNOWN |
 
 Do not silently decide commercially meaningful choices.
 
