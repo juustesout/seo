@@ -1237,6 +1237,421 @@ Remaining inputs before 36.4 can be filled:
 
 Do not silently decide commercially meaningful choices.
 
+### 36.6 Unit Economics Model
+
+Purpose: turn the rates fixed in 36.5 into a cost basis that P16.4 can price
+against. This is a calculation layer on top of 36.5, not a second rate recon.
+36.5.1-36.5.4 stay intact as the provider-rate source.
+
+Economics rules applied here (from 36.5, restated so 36.6 is self-contained):
+
+- `effective unit cost = provider_cost_per_unit x safety_factor`.
+- `expected period cost = allowance_units x provider_cost_per_unit x utilization x safety_factor`.
+- An allowance is a ceiling, never a historical average.
+- Unknown rates stay labelled; they are scenario inputs, not facts.
+
+Three units are kept strictly apart:
+
+| Unit | Definition | Example |
+| --- | --- | --- |
+| Provider unit | What the vendor actually bills | 1M input tokens; 1 image; 1 DataForSEO provider task; 1 GB egress; 1 X post |
+| Internal metering unit | What `seo_usage_events` records | `ai_generation` / `input_token`; `ai_image` / `image_generation`; `dataforseo_research` / `request`; `x_link_post` / `publish_attempt`; `media` / `request` |
+| Product unit | What the customer experiences as capacity | AI article; keyword research; competitor research; AI image; X post; X link post; media asset |
+
+These are not interchangeable. In particular an internal `request` is not one
+provider call (36.5.3), and one "AI article" is not one AI call (36.6.1).
+
+All model parameters below are **economics modelling assumptions, not product
+rules**. They are candidates to be revised in P16.4, not plan decisions.
+
+#### 36.6.1 Cost basis
+
+**Production text cost basis.** The repository default `OPENAI_CHAT_MODEL` is
+`gpt-4o-mini` (`VERIFIED_REPOSITORY`), so the only current production basis is
+the verified official rate USD 0.15 / 1M input and USD 0.60 / 1M output. A
+`gpt-5-mini` scenario (0.25 / 2.00, plus cached 0.025) stays a *future option*
+only; it is **not** the current production cost basis and is not used to price
+anything here.
+
+FX (explicit planning assumption, not a provider price):
+
+```text
+FX_USD_EUR = 0.92   (planning assumption, 2026-10-07)
+planning FX only; native provider currency is preserved everywhere above
+```
+
+**Known vs unknown inputs.**
+
+| Input | Value | Currency | Status |
+| --- | ---: | --- | --- |
+| OpenAI text in/out (`gpt-4o-mini`) | 0.15 / 0.60 per 1M | USD | VERIFIED_OFFICIAL |
+| Supabase storage / cached egress / egress | 0.0213 / 0.03 / 0.09 per GB | USD | VERIFIED_OFFICIAL |
+| Unsplash search | 0.00 | USD | VERIFIED_OFFICIAL |
+| DataForSEO SERP / Labs | UNKNOWN | USD | UNKNOWN (scenario only) |
+| AI image per image | UNKNOWN (0.05 / 0.10 scenario) | - | UNVERIFIED_PLANNING_ASSUMPTION |
+| X non-link / link post | 0.01 / 0.20 | EUR | UNVERIFIED_PLANNING_ASSUMPTION |
+
+**DataForSEO internal-metering distortion (36.5.3), and its economics treatment.**
+
+| Internal event | Actual provider relationship | Economics treatment |
+| --- | --- | --- |
+| `request` | one Labs `/live` call per seed; `researchKeywords` loops up to 20 seeds but records one `request` | provider-call-count model (1..20), never 1:1 |
+| `serp_request` | one SERP call per keyword, blending live + standard modes | endpoint/mode model, not a single blended rate |
+| `task` | client HTTP batch (up to 50 keywords per post), not a vendor task | do not bill directly |
+| `keyword` / `item` | observational result rows | bill only if the vendor bills per item |
+| `image_generation` | one generated image | 1:1 with the vendor image unit |
+| `publish_attempt` (link) | one X `POST /2/tweets` | 1:1 with the vendor post unit |
+
+Consequence: `COUNT(seo_usage_events)` on `request` must **not** be read as a
+provider bill while provider-call cardinality is not one-to-one. Economics uses
+an explicit call-count scenario for DataForSEO.
+
+**OpenAI token economics (`gpt-4o-mini`).** Raw and safe cost by generation size:
+
+| Scenario | Input tokens | Output tokens | Raw USD | Safe @1.15 | Safe @1.30 | Safe @1.50 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| small | 10,000 | 2,000 | 0.002700 | 0.003105 | 0.003510 | 0.004050 |
+| medium | 25,000 | 5,000 | 0.006750 | 0.007763 | 0.008775 | 0.010125 |
+| large | 50,000 | 10,000 | 0.013500 | 0.015525 | 0.017550 | 0.020250 |
+
+Embeddings (`text-embedding-3-small`, USD 0.02 / 1M) are not an operator
+entitlement resource; a full 1M-token corpus is USD 0.02. If AI is
+operator-funded this is a small uncapped cost to keep in view, priced directly
+from prompt tokens (`embeddingUsage` counts physical `POST /embeddings` calls).
+
+**AI article is multiple calls (code-grounded).** The writer never generates an
+article in one call:
+
+- Quick Draft (`graph.writeSections`): 1 planning call + 1 section call per
+  approved section; the review step is deterministic (no AI). An optional
+  human-requested revision adds 1 call per selected section.
+- Deep Write (`runDeepWriteGeneration`): 1 architecture call + 1 section-plan
+  call per section + 1 paragraph call per paragraph + up to 8 refinement calls
+  + 1 coherence call, hard-capped at 90 calls (`WRITER_DEEP_MAX_TOTAL_LLM_CALLS`).
+- Call/output ceilings (`VERIFIED_REPOSITORY`): plan 2000 output tokens,
+  section 1500, revision 1500, deep paragraph 900, deep section-plan 700;
+  plan holds 1..12 sections.
+
+Per-call token *distribution* is not measured in the repository, so the article
+scenarios below use labelled per-call token assumptions
+(`UNVERIFIED_PLANNING_ASSUMPTION`); the call *structure* is verified.
+
+| Article scenario | Mode (code) | Model calls | Input tokens | Output tokens | Raw USD | Safe @1.30 |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| article-small | Quick Draft, 3 sections | 1 + 3 = 4 | 15,000 | 5,100 | 0.005310 | 0.006903 |
+| article-medium | Quick Draft, 6 sections | 1 + 6 = 7 | 24,000 | 8,700 | 0.008820 | 0.011466 |
+| article-large | Quick Draft, 12 sections | 1 + 12 = 13 | 42,000 | 15,900 | 0.015840 | 0.020592 |
+| article-medium-deep | Deep Write, 6 sections x 3 paragraphs | 1 + 6 + 18 + 8 + 1 = 34 | 81,000 | 18,100 | 0.023010 | 0.029913 |
+
+Token assumptions per call (planning): plan 6k in / 1.5k out; section 3k in /
+1.2k out; deep section-plan 2.5k in / 0.5k out; deep paragraph 2k in / 0.5k out;
+deep refinement 2.5k in / 0.5k out; coherence 4k in / 0.6k out. These are not
+historical averages and must not be published as such.
+
+#### 36.6.2 Product-unit economics
+
+Per product unit, with raw and safe (safety 1.30) cost where defensible.
+`provider` = the vendor that bills; `driver` = what scales the cost.
+
+| Product unit | Provider | Cost driver | Raw | Safe @1.30 | Confidence |
+| --- | --- | --- | ---: | ---: | --- |
+| AI article (medium, Quick Draft) | OpenAI | tokens x calls | USD 0.00882 | USD 0.01147 | medium |
+| AI article (medium, Deep Write) | OpenAI | tokens x calls | USD 0.02301 | USD 0.02991 | medium |
+| AI image (average scenario) | image provider | image | USD 0.05 | USD 0.065 | low |
+| AI image (HQ scenario) | image provider | image | USD 0.10 | USD 0.13 | low |
+| Keyword research (base, 10 Labs calls) | DataForSEO | provider calls | USD 0.12 | USD 0.156 | low |
+| Keyword research (low, 1 call) | DataForSEO | provider calls | USD 0.012 | USD 0.0156 | low |
+| Keyword research (high, 20 calls) | DataForSEO | provider calls | USD 0.24 | USD 0.312 | low |
+| Competitor research | DataForSEO | provider calls | same call-cost model as keyword research | | low |
+| SERP rank (per keyword, standard) | DataForSEO | SERP call | USD 0.0006 | USD 0.00078 | low |
+| SERP rank (per keyword, live) | DataForSEO | SERP call | USD 0.0020 | USD 0.0026 | low |
+| X post (no link) | X | post | EUR 0.01 | EUR 0.013 | low |
+| X link post | X | link post | EUR 0.20 | EUR 0.26 | low |
+| Media asset (stored 1 month) | Supabase | GB-month | see table below | | high |
+| Media asset (served) | Supabase | GB egress | see table below | | high |
+| Embedding (1M tokens) | OpenAI | tokens | USD 0.02 | USD 0.026 | high |
+
+AI image cost remains `UNKNOWN`: the repository default `dall-e-3` is absent
+from the current OpenAI list and current models are token-priced
+(`gpt-image-1.5` is 8.00 in / 32.00 out per 1M), so per-image cost depends on an
+unresolved model choice and output-token count. The 0.05 / 0.10 figures are
+planning assumptions only. A token-priced HQ image can plausibly exceed 0.10,
+so the scenario likely **understates** the high end.
+
+DataForSEO scenario (assumed Labs 0.012 per call, UNVERIFIED) and SERP scenario
+(assumed standard 0.0006 / live 0.0020 per call, UNVERIFIED):
+
+| Provider calls | Labs raw | Labs safe @1.30 | SERP std raw | SERP std safe | SERP live raw | SERP live safe |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 0.0120 | 0.0156 | 0.0006 | 0.00078 | 0.0020 | 0.0026 |
+| 10 | 0.1200 | 0.1560 | 0.0060 | 0.00780 | 0.0200 | 0.0260 |
+| 20 | 0.2400 | 0.3120 | 0.0120 | 0.01560 | 0.0400 | 0.0520 |
+
+X, per post (native EUR):
+
+| Posts | Normal raw | @1.15 | @1.30 | @1.50 | Link raw | @1.15 | @1.30 | @1.50 |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 0.01 | 0.0115 | 0.013 | 0.015 | 0.20 | 0.23 | 0.26 | 0.30 |
+| 25 | 0.25 | 0.2875 | 0.325 | 0.375 | 5.00 | 5.75 | 6.50 | 7.50 |
+| 100 | 1.00 | 1.15 | 1.30 | 1.50 | 20.00 | 23.00 | 26.00 | 30.00 |
+
+The 20x gap between link and non-link posts means they must never be averaged
+without an explicit weight.
+
+Media (native USD). Storage is per GB-month; egress is per full serve. No
+`/render/image` call exists repository-wide (`getPublicUrl` only), so image
+transforms cost nothing (`VERIFIED_REPOSITORY`).
+
+| Asset | GB | Storage / month | Egress cached | Egress uncached |
+| ---: | ---: | ---: | ---: | ---: |
+| 1 MB | 0.001 | 0.0000213 | 0.00003 | 0.00009 |
+| 10 MB | 0.01 | 0.000213 | 0.0003 | 0.0009 |
+| 50 MB | 0.05 | 0.001065 | 0.0015 | 0.0045 |
+| 100 MB | 0.1 | 0.002130 | 0.0030 | 0.0090 |
+
+Media is sub-cent at any realistic volume; it is not a cost driver. Whether
+public-object traffic bills as cached or uncached egress remains `UNKNOWN`
+(36.5.1); the cached column is the optimistic bound.
+
+AI image scenarios (planning only):
+
+| Images | Raw @0.05 | Safe @1.30 | Raw @0.10 HQ | Safe @1.30 HQ |
+| ---: | ---: | ---: | ---: | ---: |
+| 1 | 0.05 | 0.065 | 0.10 | 0.13 |
+| 10 | 0.50 | 0.65 | 1.00 | 1.30 |
+| 25 | 1.25 | 1.625 | 2.50 | 3.25 |
+| 50 | 2.50 | 3.25 | 5.00 | 6.50 |
+| 100 | 5.00 | 6.50 | 10.00 | 13.00 |
+
+#### 36.6.3 Allowance scenarios
+
+Fictional allowances below are **calculation examples only** (not a
+recommendation). Unit costs are safe @1.30; `worst` = 100 percent utilization,
+`base` = 40 percent, `stress` = 80 percent (36.5 worksheet parameters).
+Magnitudes in native currency (AI/DataForSEO USD, X EUR).
+
+AI article (medium Quick Draft, safe USD 0.01147):
+
+| Allowance | worst | base (40%) | stress (80%) |
+| ---: | ---: | ---: | ---: |
+| 10 | 0.1147 | 0.0459 | 0.0918 |
+| 50 | 0.5735 | 0.2294 | 0.4588 |
+| 200 | 2.2940 | 0.9176 | 1.8352 |
+
+Keyword research (base 10 Labs calls, safe USD 0.156):
+
+| Allowance | worst | base (40%) | stress (80%) |
+| ---: | ---: | ---: | ---: |
+| 10 | 1.560 | 0.624 | 1.248 |
+| 50 | 7.800 | 3.120 | 6.240 |
+| 200 | 31.200 | 12.480 | 24.960 |
+
+AI image (average 0.05, safe USD 0.065):
+
+| Allowance | worst | base (40%) | stress (80%) |
+| ---: | ---: | ---: | ---: |
+| 10 | 0.650 | 0.260 | 0.520 |
+| 50 | 3.250 | 1.300 | 2.600 |
+| 200 | 13.000 | 5.200 | 10.400 |
+
+X link post (safe EUR 0.26):
+
+| Allowance | worst | base (40%) | stress (80%) |
+| ---: | ---: | ---: | ---: |
+| 5 | 1.300 | 0.520 | 1.040 |
+| 25 | 6.500 | 2.600 | 5.200 |
+| 100 | 26.000 | 10.400 | 20.800 |
+
+Curve shape: AI articles and media are flat enough to allocate freely;
+DataForSEO research and X link posts scale into real money; AI images sit in
+between and are additionally encumbered by an unresolved provider rate.
+
+#### 36.6.4 Plan economics
+
+Illustrative plan prices and allowances below are **ECONOMIC MODEL INPUT ONLY**
+and are not a pricing or allowance decision. Prices in EUR; costs converted at
+`FX_USD_EUR = 0.92` (planning).
+
+| Tier | Price | AI articles | Keyword research | AI images | X link posts |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Starter | EUR 29 | 10 | 10 | 10 | 5 |
+| Pro | EUR 79 | 50 | 50 | 50 | 25 |
+| Agency | EUR 199 | 200 | 200 | 200 | 100 |
+
+Per tier (safe @1.30; base 40 percent, stress 80 percent; costs in EUR):
+
+| Tier | Price | base cost | base margin | stress cost | stress margin | worst cost | worst margin |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Starter | 29 | 1.38 | 95.3% | 2.75 | 90.5% | 3.44 | 88.1% |
+| Pro | 79 | 6.88 | 91.3% | 13.75 | 82.6% | 17.19 | 78.2% |
+| Agency | 199 | 27.51 | 86.2% | 55.02 | 72.4% | 68.77 | 65.4% |
+
+At these examples every tier clears the 70 percent working margin floor at
+base and at 80 percent utilization; only Agency at full utilization (100
+percent) drops below it (65.4 percent). The result is sensitive to the example
+allowances, so P16.4 must confirm the allowance matrix before quoting margin.
+
+Price-point view (base 40 percent cost, using the same example allowances) to
+show where economics become comfortable. Cost is nearly price-independent at
+these example allowances, so margin rises with price; the interesting zone is
+where a *realistic* allowance still clears the margin floor once provider rates
+are contract-verified.
+
+| Price EUR | base cost (Agency example) | base margin |
+| ---: | ---: | ---: |
+| 19 | 27.51 | -44.8% |
+| 29 | 27.51 | 5.1% |
+| 49 | 27.51 | 43.9% |
+| 79 | 27.51 | 65.2% |
+| 99 | 27.51 | 72.2% |
+| 149 | 27.51 | 81.5% |
+| 199 | 27.51 | 86.2% |
+| 299 | 27.51 | 90.8% |
+
+Read together with the per-tier table: the same allowance set is ruinous at
+EUR 19-29 and comfortable from roughly EUR 79 up. That is exactly the kind of
+decision P16.4 must make explicitly.
+
+#### 36.6.5 Sensitivity analysis
+
+Four axes, evaluated on the Agency example (base cost EUR 27.51 at 40 percent
+utilization, safety 1.30, 10 DataForSEO calls, 40 X link posts consumed = 40
+percent of the 100 allowance).
+
+A. Utilization (20 / 40 / 60 / 80 percent):
+
+| 20% | 40% | 60% | 80% |
+| ---: | ---: | ---: | ---: |
+| 13.75 | 27.51 | 41.26 | 55.02 |
+
+B. Safety factor (1.15 / 1.30 / 1.50):
+
+| 1.15 | 1.30 | 1.50 |
+| ---: | ---: | ---: |
+| 24.34 | 27.51 | 31.74 |
+
+C. DataForSEO provider calls per research action (1 / 10 / 20):
+
+| 1 call | 10 calls | 20 calls |
+| ---: | ---: | ---: |
+| 17.18 | 27.51 | 38.99 |
+
+D. X link-post consumption (5 / 25 / 50 / 100 actual posts; the base has 40
+consumed at 40 percent of the 100 allowance):
+
+| 5 posts | 25 posts | 50 posts | 100 posts |
+| ---: | ---: | ---: | ---: |
+| 18.41 | 23.61 | 30.11 | 43.11 |
+
+Ranking by swing on the Agency example: utilization (13.75 -> 55.02,
+EUR 41.27) is the largest single lever because it multiplies everything, then
+X link-post consumption (18.41 -> 43.11, EUR 24.70), then DataForSEO call
+cardinality (17.18 -> 38.99, EUR 21.81), then safety factor (24.34 -> 31.74,
+EUR 7.40). Two consequences:
+
+- Safety factor is a second-order knob at these volumes; it cannot rescue a
+  badly sized X or DataForSEO allowance.
+- The two axes that matter most (X link posts, DataForSEO call count) are also
+  the two with the least verified cost basis. That uncertainty is the core
+  risk to the plan margins.
+
+#### 36.6.6 Break-even analysis
+
+Maximum operator-funded expected cost per month at a target gross margin:
+`maximum_cost = price x (1 - target_margin)`.
+
+| Price EUR | 50% margin | 60% margin | 70% margin | 80% margin |
+| ---: | ---: | ---: | ---: | ---: |
+| 19 | 9.50 | 7.60 | 5.70 | 3.80 |
+| 29 | 14.50 | 11.60 | 8.70 | 5.80 |
+| 49 | 24.50 | 19.60 | 14.70 | 9.80 |
+| 79 | 39.50 | 31.60 | 23.70 | 15.80 |
+| 99 | 49.50 | 39.60 | 29.70 | 19.80 |
+| 149 | 74.50 | 59.60 | 44.70 | 29.80 |
+| 199 | 99.50 | 79.60 | 59.70 | 39.80 |
+| 299 | 149.50 | 119.60 | 89.70 | 59.80 |
+
+Example check: EUR 79 at 70 percent margin allows at most EUR 23.70 expected
+operator cost per month.
+
+Cross-checking the Agency example: at EUR 199 / 70 percent the ceiling is
+EUR 59.70, and the Agency *worst-case* example cost is EUR 68.77 - it breaks
+the floor; the base (EUR 27.51) and stress (EUR 55.02) cases do not. This is
+the single most useful output for P16.4: it converts a price into the cost
+budget each allowance set must fit inside, and shows the Agency example is
+only safe if full-utilization behavior is bounded (or allowances are lowered).
+
+#### 36.6.7 Commercial findings
+
+1. Cheap enough to allocate generously: AI text (articles), media
+   storage/egress, embeddings. Even 200 medium quick-draft articles are under
+   USD 2.30 worst-case, and media is sub-cent. These should be positioned as
+   broad capabilities, not scarce credits.
+2. Keep scarce: DataForSEO research, X link posts, and (pending a rate) AI
+   images. These are the only units that move the plan margin.
+3. Too uncertain to quote definitively: DataForSEO (no contract rate), AI
+   images (model and per-image cost unresolved), X (no public rate). They may
+   appear as scenarios, not as verified allowances.
+4. X link posting deserves its own allowance. At EUR 0.20 vs EUR 0.01 it is 20x
+   a normal post; merging them into "X posts" would silently blend a cheap and
+   an expensive action. The `x_link_post` resource already isolates the link
+   case in admission and metering.
+5. DataForSEO: keep one product allowance for v1
+   (`dataforseo_research` already exists), but model call cardinality
+   explicitly and consider separating the SERP (`serp_request`) path later if
+   usage shows it dominates. One allowance today, two possible later.
+6. AI text is cheap enough to be a broad, capability-level feature on every
+   paid tier; it should not be the thing that distinguishes tiers.
+7. AI image economics are **not** sufficient for a concrete allowance until the
+   operator model is chosen; the high end is plausibly above the 0.10 scenario.
+8. The resource that most likely determines plan economics is DataForSEO
+   research, with X link posts the largest single swing factor. AI text and
+   media will not decide any plan.
+
+#### 36.6.8 P16.4 inputs
+
+Concrete decisions P16.4 must take before allowances are fixed:
+
+**Safe to price now** (cost basis reliable):
+
+- AI text (`ai_generation`): `gpt-4o-mini` at verified official rates; price
+  from token scenarios, allocate generously.
+- Media (`media`): Supabase storage/egress at verified official rates; no
+  image transforms; allocate generously.
+- Embeddings (uncapped, not an entitlement resource): verified 0.02 / 1M; keep
+  as a monitored cost, not an allowance.
+
+**Price with scenario** (usable planning rate, no verified provider rate):
+
+- DataForSEO research (`dataforseo_research`): price with the 1/10/20-call
+  model and an explicit contract-rate placeholder; do not hard-code a rate.
+- X link posts (`x_link_post`) and normal X posts: price from the 0.01 / 0.20
+  EUR planning assumptions, kept separate.
+- AI images (`ai_image`): scenario only.
+
+**Do not hard-code yet** (economics insufficient or UNKNOWN):
+
+- AI image per-image cost (model choice unresolved; `dall-e-3` unlisted).
+- Any DataForSEO per-call rate and the `serp_request` live/standard blend.
+- Supabase public-object traffic as cached vs uncached egress.
+- X per-post contract rate for link and non-link.
+
+**P16.4 decisions required:**
+
+1. Choose the operator image model and derive a real per-image cost.
+2. Obtain the DataForSEO contract rate card; decide the `serp_request`
+   live/standard blend.
+3. Obtain the current X API plan economics for link vs non-link.
+4. Decide whether Supabase public-object traffic bills as cached egress.
+5. Fix the allowance matrix per tier, using the break-even ceilings in 36.6.6
+   as the budget, and confirm each tier clears the chosen margin floor at
+   expected and stress utilization.
+6. Decide whether X link posting is a separate allowance (36.6.7 finding 4).
+7. Decide whether DataForSEO stays one allowance or splits into research vs
+   SERP (36.6.7 finding 5).
+8. Revisit `safety_factor` (1.30), `expected_utilization` (0.40) and the
+   margin floor (70 percent) with real evidence; none is settled.
+
 ## 37. P17 Proposal
 
 If P16 finds no architectural blockers (it does not):
@@ -1281,7 +1696,8 @@ P17 must not build anything P16 did not recommend.
 
 P16 did not: install Stripe; add Stripe keys; add the Stripe SDK; implement
 webhooks; implement checkout; implement subscriptions/customers/invoices/payment
-collection; invent prices or allowances; rewrite P13/P14 entitlement logic;
+collection; invent prices or allowances (the 36.6 figures are labelled ECONOMIC
+MODEL INPUT ONLY and are not plan decisions); rewrite P13/P14 entitlement logic;
 redesign the P15 catalog; replace the usage ledger; introduce credits; or build
 provider-cost accounting.
 
