@@ -1057,103 +1057,181 @@ Definitions:
   a target to test, not a hard constraint: if a feature cannot reach it at a sane
   volume, that is a finding, not a reason to back-fit the allowance.
 
-Vendor cost inputs are seeded from public list prices and labelled
-public/pre-contract. Real contract rates take precedence when available and
-replace only the rate cells.
+Vendor-neutral status rule (P16.2). Every rate carries one of:
 
-Metered units by resource bucket (mirrors `RESOURCE_KINDS` / `USAGE_UNITS`):
+```text
+VERIFIED_OFFICIAL               official provider pricing or documentation
+VERIFIED_REPOSITORY             established from this repository's code/config
+PUBLIC_PRE_CONTRACT             public list price, not our contract rate
+UNVERIFIED_PLANNING_ASSUMPTION  P16 planning number, not vendor-verified
+UNKNOWN                         not determinable without contract/account data
+```
 
-| Resource bucket | Resource kind(s) | Metered unit(s) | Funding |
+No invented rate: `UNKNOWN / NEEDS CONTRACT RATE` is preferred over a guess.
+Native provider currency is kept here; EUR normalization is an explicit later
+step (36.5.4).
+
+Metered units by resource bucket. The provider/mode column is the verified
+repository mapping (36.5.2). `dataforseo_research` deliberately sums only
+`request` and `serp_request`; raw `keyword` / `task` facts are observation only
+and are not billed.
+
+| Resource bucket | Entitlement resource | Metered unit(s) | Funding | Provider / mode (code) |
+| --- | --- | --- | --- | --- |
+| AI text | `ai_generation` | `input_token` + `output_token` | BYOK or operator | OpenAI chat/generate (`OPENAI_CHAT_MODEL`) |
+| AI images | `ai_image` | `image_generation` | BYOK or operator | OpenAI images (`openai_media`, default `dall-e-3`) |
+| DataForSEO | `dataforseo_research` | `request` + `serp_request` | operator (BYOK where supported) | DataForSEO Labs `/live` (`request`); SERP live + task (`serp_request`) |
+| Stock media | `media` | `request` | operator | Unsplash `search/photos` (`media_search`) |
+| X link post | `x_link_post` | `publish_attempt` (link only) | operator (never BYOK) | X API v2 `POST /2/tweets` |
+| Operator background work | `background_job` | `job` | operator | platform worker |
+
+#### 36.5.1 Verified provider-rate findings
+
+Verified 2026-10-07. Native currency per provider.
+
+| Resource | Rate | Currency | Source | Status |
+| --- | ---: | --- | --- | --- |
+| AI text input, `gpt-5-mini` | 0.25 / 1M | USD | OpenAI pricing | VERIFIED_OFFICIAL |
+| AI text output, `gpt-5-mini` | 2.00 / 1M | USD | OpenAI pricing | VERIFIED_OFFICIAL |
+| AI text cached input, `gpt-5-mini` | 0.025 / 1M | USD | OpenAI pricing | VERIFIED_OFFICIAL |
+| AI text input, repo default `gpt-4o-mini` | 0.15 / 1M | USD | OpenAI pricing | VERIFIED_OFFICIAL |
+| AI text output, repo default `gpt-4o-mini` | 0.60 / 1M | USD | OpenAI pricing | VERIFIED_OFFICIAL |
+| Embedding, repo default `text-embedding-3-small` | 0.02 / 1M | USD | OpenAI pricing | VERIFIED_OFFICIAL |
+| Operator text model actually selected | `OPENAI_CHAT_MODEL` (default `gpt-4o-mini`) | - | repo `providers/ai/openai.ts` | VERIFIED_REPOSITORY |
+| AI image tokens, `gpt-image-1.5` (example) | 8.00 in / 32.00 out / 1M | USD | OpenAI pricing | VERIFIED_OFFICIAL |
+| AI image per image, repo default `dall-e-3` | UNKNOWN / NEEDS CONTRACT RATE | - | OpenAI pricing (not listed) | UNKNOWN |
+| AI image planning (average / HQ) | 0.05 / 0.10 | not stated | P16 planning | UNVERIFIED_PLANNING_ASSUMPTION |
+| Repo image default model | `dall-e-3` | - | repo `providers/media/openaiMedia.ts` | VERIFIED_REPOSITORY |
+| DataForSEO SERP standard | UNKNOWN / NEEDS CONTRACT RATE | USD | DataForSEO (403 / login) | UNKNOWN |
+| DataForSEO SERP live | UNKNOWN / NEEDS CONTRACT RATE | USD | DataForSEO (403 / login) | UNKNOWN |
+| DataForSEO Labs task / item | UNKNOWN / NEEDS CONTRACT RATE | USD | DataForSEO (403 / login) | UNKNOWN |
+| DataForSEO usage vocabulary | `request` = Labs live; `serp_request` = SERP (live + task) | - | repo adapters | VERIFIED_REPOSITORY |
+| Supabase storage | 0.0213 / GB | USD | Supabase pricing | VERIFIED_OFFICIAL |
+| Supabase cached egress | 0.03 / GB | USD | Supabase pricing | VERIFIED_OFFICIAL |
+| Supabase uncached egress | 0.09 / GB | USD | Supabase pricing | VERIFIED_OFFICIAL |
+| Supabase image transformations | not used (excluded) | - | repo `infra/mediaStorage.ts` | VERIFIED_REPOSITORY |
+| Stock media search, Unsplash | 0.00 / request | USD | Unsplash docs | VERIFIED_OFFICIAL |
+| X post without link | 0.01 | EUR | P16 planning (no public rate) | UNVERIFIED_PLANNING_ASSUMPTION |
+| X link post | 0.20 | EUR | P16 planning (no public rate) | UNVERIFIED_PLANNING_ASSUMPTION / NEEDS CONTRACT RATE |
+
+AI text (OpenAI). The planning assumption (gpt-5-mini, USD 0.25 in / 2.00 out
+per 1M) is confirmed against the official OpenAI price list. The repository
+defaults to `gpt-4o-mini` (`OPENAI_CHAT_MODEL`); the operator-chosen model only
+takes effect once that env var is set, so the billed rate is
+`OPENAI_CHAT_MODEL`'s, not an assumption. `usageInstrumentation` records one
+`input_token` / `output_token` pair per real call from the provider's own
+`usage` block, so economics can price tokens directly. Embeddings default to
+`text-embedding-3-small` (USD 0.02 / 1M) under the same server key; embedding is
+not an operator entitlement resource, so if AI is operator-funded it is a small
+uncapped cost to keep in view. Batch mode (gpt-5-mini 0.125 / 1.00) is not used.
+
+AI images (OpenAI). Generation runs through `openai_media` with a default model
+of `dall-e-3`. Current OpenAI image models are token-priced (no flat per-image
+list) and `dall-e-3` is absent from the current price list, so there is no
+verified per-image vendor rate to attach. The 0.05 / 0.10 figures remain
+planning inputs only (`UNVERIFIED_PLANNING_ASSUMPTION`) and must not be shown as
+verified cost. The metered unit is `image_generation` (one generated image).
+
+DataForSEO. The official pricing page is not machine-readable (HTTP 403 /
+login-gated) and the public docs do not publish rates, so no DataForSEO rate is
+`VERIFIED_OFFICIAL`. Every seeded number is retained only as
+`UNVERIFIED_PLANNING_ASSUMPTION`; the authoritative source is our contract rate
+card (`NEEDS CONTRACT RATE`). The repository mapping is verified (36.5.2): the
+`request` unit comes from DataForSEO Labs `/live` endpoints, and the
+`serp_request` unit comes from both the SERP live endpoint and the SERP standard
+task queue. Priority, screenshot, ai_summary, OnPage, Keywords Data, Backlinks,
+Content Analysis, Domain Analytics, Business Data, Merchant and App Data are not
+used by this repository, so their seeded rows do not affect current marginal
+cost. A 50.00 USD minimum deposit and 1.00 USD trial credit are account/deposit
+constraints, not marginal cost (36.5.3).
+
+Stock media and storage. Stock-media search (Unsplash, metered as `media`) is a
+free API: no per-request vendor fee, only a production rate limit (1000/hour)
+and mandatory attribution (`VERIFIED_OFFICIAL`). Supabase Storage is an
+infrastructure cost, not a per-account entitlement resource: storage 0.0213/GB,
+cached egress 0.03/GB and uncached egress 0.09/GB are official (Pro tiers,
+beyond the included 100 GB / 250 GB). Media is served through plain public
+objects (`getPublicUrl`); no `/render/image` transform call exists
+repository-wide, so the 5.00 / 1000 image-transform rate is excluded. Whether
+public object traffic actually bills as *cached* egress is a CDN/platform
+behavior and remains `UNKNOWN` at the worksheet level.
+
+X. The publisher uses X API v2 `POST /2/tweets`; the link/non-link split is
+detected in code (`/https?:\/\/\S+/i`) and a link post runs through the
+`x_link_post` admission. X's public developer tiers do not publish a per-post
+rate, so 0.01 (no link) and 0.20 (link) are P16 planning assumptions, not a
+public or contract rate: `PUBLIC / CONTRACT RATE REQUIRED`. There is no plan or
+per-post configuration in the repository.
+
+#### 36.5.2 Code-grounded provider mappings
+
+DataForSEO: product action -> adapter -> endpoint -> mode -> billable unit.
+
+| Product action | Internal usage | Provider endpoint | Mode | Billable unit |
+| --- | --- | --- | --- | --- |
+| Keyword suggestions | `request` x1 (+`keyword` xN) | Labs `keyword_suggestions/live` | live | Labs task (one provider call per seed) |
+| Related keywords | `request` x1 | Labs `related_keywords/live` | live | Labs task |
+| Keyword ideas | `request` x1 | Labs `keyword_ideas/live` | live | Labs task |
+| Competitor discovery | `request` x1 | Labs `competitors_domain/live` | live | Labs task |
+| Competitor keyword gaps | `request` xN | Labs `domain_intersection/live` | live | Labs task per competitor |
+| Interactive SERP / SERP competitors | `serp_request` xN | SERP `serp/google/organic/live/regular` | live | SERP per keyword |
+| Bulk rank SERP | `serp_request` xN (+`task`/`keyword`) | SERP `task_post` -> `task_get/regular` | standard queue | SERP per keyword/task |
+
+`serp_request` therefore blends two vendor modes (live and standard) under one
+entitlement unit; a single blended rate would hide that. `request` currently maps
+to Labs `/live` only.
+
+Other resources:
+
+| Resource | Product action | Code seam | Metered fact |
 | --- | --- | --- | --- |
-| AI text | `ai_generation` | `input_token` + `output_token` | BYOK or operator |
-| AI images | `ai_image` | `image_generation` | BYOK or operator |
-| DataForSEO | `dataforseo_research`, `dataforseo_serp`, `dataforseo_keywords` | `request` + `serp_request` | operator (BYOK where supported) |
-| Media | `media` | `asset` | operator |
-| X link post | `publishing` (x-link-only) | `publish_attempt` | operator (never BYOK) |
-| Operator background work | `background_job` | `job` | operator |
+| AI text | chat / generate | `instrumentAiProvider` -> `AIService.resolve` | `input_token` + `output_token` |
+| AI image | generate | `mediaUsage` `image_generate` (`openai_media`) | `image_generation` |
+| Stock media | search | `mediaUsage` `media_search` (Unsplash) | `request` |
+| X link post | publish | X publisher link predicate -> `x_link_post` admission | `publish_attempt` (link) |
 
-Provider cost inputs. Cells marked PUBLIC/PRE-CONTRACT are public list prices
-fetched 2026-10-07 as a starting point; they are not contract rates and may
-change. Real contract rates replace the rate cells when available. Each value is
-in the vendor's own currency; USD/EUR mixing is resolved in 36.4 with an
-explicit FX assumption.
+#### 36.5.3 Metering vs provider billing (findings)
 
-AI text (operator model chosen: gpt-5-mini; OpenAI public list, USD per 1M
-tokens):
+- `researchKeywords` loops one `keyword_suggestions/live` provider call per seed
+  (up to 20) but records a single `request` fact for the whole logical operation,
+  so the ledger understates Labs calls for keyword-suggestion sweeps. Economics
+  must not equate one `request` to one provider call here.
+- `task` facts on `fetchTaskSerp` count client HTTP batches (50 keywords per
+  post), not vendor tasks; the billable count is `serp_request` (one per
+  keyword). `keyword` facts are likewise observational.
+- `serp_request` mixes live and standard modes, which carry different vendor
+  prices.
+- `keywordDifficulties` (Labs `keyword_difficulty/live`) exists in the client
+  but is never called, so it bills nothing today.
+- Google (`gsc`/`ga4`/`ads`) is quota-limited, not per-request priced; keep it
+  separate from DataForSEO pricing.
+- A DataForSEO minimum deposit (e.g. 50.00 USD) and trial credit are
+  account/deposit constraints, never cost per usage period.
+- BYOK consumption is excluded from hosted allowances (section 22): the operator
+  cost basis applies only to `operator_funded` usage. Free has zero
+  operator-funded allowance, so its expected provider cost is EUR 0.
 
-| Model | Input / 1M | Output / 1M | Status |
-| --- | --- | --- | --- |
-| gpt-5-mini | 0.25 | 2.00 | CHOSEN (user) |
+#### 36.5.4 Currency normalization
 
-Reference alternatives at the same source: gpt-4.1-nano 0.10 / 0.40;
-gpt-4.1-mini 0.40 / 1.60; gpt-5.1 1.25 / 10.00.
+Keep native currencies in this worksheet: OpenAI USD, DataForSEO USD, Supabase
+USD, X EUR. EUR normalization happens only at 36.4, with an explicit planning FX
+assumption recorded alongside it (never presented as a provider rate):
 
-AI images (user-provided planning figures; provider and currency to confirm):
-
-| Quality | Cost per image |
-| --- | --- |
-| average | 0.05 |
-| HQ | 0.10 |
-
-The OpenAI image models are token-priced (no flat per-image list), so the
-figures above are the operator's planning numbers, not a vendor list.
-
-Media and X:
-
-| Resource bucket | Unit | Rate (reference) | Currency | Source | Status |
-| --- | --- | --- | --- | --- | --- |
-| Media | 1 GB storage / 1 GB cached egress | 0.0213 / 0.03 | USD | Supabase Storage list | PUBLIC/PRE-CONTRACT |
-| X link post | 1 post with link | 0.20 | EUR | user-provided | USER-PROVIDED |
-| X post without link | 1 post | ~0.01 | EUR | user-provided | USER-PROVIDED |
-
-Image transformations are NOT used: media is served through plain public URLs
-(`getPublicUrl`), not the `/render/image` transform endpoint, so the Supabase 5.00
-per 1000 image-transform rate does not apply unless transforms are adopted later.
-
-DataForSEO (user-provided via another model, not yet verified against the
-official rate card; USD):
-
-| Item | Unit | Rate |
-| --- | --- | --- |
-| SERP standard queue | per `serp_request` (1 SERP page) | 0.0006 |
-| SERP priority queue | per `serp_request` | 0.0012 |
-| SERP live mode | per `serp_request` | 0.0020 |
-| SERP screenshot add-on | per image | 0.004 |
-| SERP ai_summary add-on | per task | 0.010 |
-| Labs standard task | per `request` (task) | 0.012 |
-| Labs item | per item | 0.00012 |
-| OnPage crawl | per page | 0.00015 |
-| Keywords Data (max) | per task | 0.18 |
-| Backlinks (max) | per task | 0.024 |
-| Content Analysis (max) | per task | 0.024 |
-| Domain Analytics (max) | per task | 0.12 |
-| Business Data (max) | per task | 0.012 |
-| Merchant (max) | per task | 0.005 |
-| App Data (max) | per task | 0.10 |
-
-DataForSEO also lists a 50.00 USD minimum deposit and a 1.00 USD free-trial
-credit. Our metering is only `request` and `serp_request`; which DataForSEO mode
-or task the generic `request` maps to is still a decision (standard queue vs
-live, Labs task vs item).
-
-Notes:
-
-- Google (`gsc`/`ga4`/`ads`) and DataForSEO are request-priced; DataForSEO is
-  metered on `request` and `serp_request` only.
-- BYOK consumption is excluded from hosted allowances (section 22), so the
-  operator cost basis applies only to `operator_funded` usage.
-- Free has zero operator-funded allowance, so its expected cost is EUR 0.
+```text
+FX_USD_EUR = <planning assumption; set explicitly when 36.4 is filled>
+FX date/source = <record at 36.4>
+```
 
 Remaining inputs before 36.4 can be filled:
 
-1. AI images: confirm the provider and the currency of the 0.05 / 0.10 per-image
-   planning figures.
-2. DataForSEO: verify the seeded rates against the official rate card and decide
-   which mode/task the generic `request` maps to.
-3. Media: confirm Supabase Storage stays the provider and that image transforms
-   remain unused.
-4. Confirm the X per-post rates (EUR 0.20 with link, ~EUR 0.01 without) against
-   the current X API plan.
+1. AI images: choose an operator image model (a current `gpt-image-*`, since
+   `dall-e-3` is unlisted), then derive per-image cost from token usage; the
+   0.05 / 0.10 figures stay unverified planning inputs until then.
+2. DataForSEO: obtain the contract rate card and set actual per-SERP and
+   per-Labs rates; decide whether `serp_request` is priced as a live/standard
+   blend.
+3. X: obtain the current X API plan's per-post economics for link vs non-link.
+4. Supabase: decide whether public-object traffic bills as cached egress.
 5. Revisit `safety_factor`, `expected_utilization` and margin floor (working
    hypotheses 1.30 / 0.40 / 70 percent) if better evidence appears.
 
