@@ -941,10 +941,34 @@ economics clean from day one. BYOK stays exempt from hosted allowances.
 - Pro - for serious daily SEO work: multiple projects, wider research and
   content capacity.
 - Agency - for multiple clients/sites: higher automation and publishing
-  capacity, API/MCP, larger allowances.
+  capacity, larger allowances.
 
 The tiers describe capability. Concrete numeric allowances and prices are
 attached afterwards (36.2 and 36.4); a tier is not a fixed credit count.
+
+**D. Agency topology (DECIDED).**
+
+> Account = the commercial customer/organization. One account can hold multiple
+> projects/sites. End clients are not required to have their own Old Skool SEO
+> account.
+
+- Billing stays account-level; every project under the account shares the plan
+  capacity. `project_id` remains attribution; `account_id` remains the
+  entitlement and billing boundary.
+- `seo_account_members` becomes relevant once several people inside one account
+  must work together; adding staff or end clients later does not change the
+  billing model.
+- To stop an agency from placing unlimited clients for one price, project/site
+  count can later become its own plan entitlement/resource.
+
+**E. API/MCP availability (DECIDED).**
+
+> REST API and MCP are available on every tier, including Free. They are
+> interfaces to the product, not a metered resource by themselves. Consumption
+> through them is enforced by the same P13/P14 entitlement engine and resource
+> admission, so Free can automate a BYOK workflow via API/MCP but cannot open an
+> operator-funded AI/DataForSEO/X tap. Any future API/MCP rate limits are a
+> separate resource policy, not a reason to gate API behind Pro/Agency.
 
 ### 36.2 Still Open
 
@@ -963,22 +987,34 @@ attached afterwards (36.2 and 36.4); a tier is not a fixed credit count.
 | Customer portal scope | **RECOMMENDED** (payment method, invoices, cancel) |
 | Discounts / promotions | **UNKNOWN** |
 | Manual beta/customer overrides | **RECOMMENDED** (existing plan assignment; dedicated table deferred) |
-| Shared/business accounts (account members) | **UNKNOWN** (no `seo_account_members` yet) |
+| Shared/business accounts (account members) | **UNKNOWN** (topology decided in D; `seo_account_members` not built yet) |
 | Price display source (P15 metadata vs mapping) | **RECOMMENDED** (P15 for display; mapping for charge) |
-| API/MCP as a paid capability (which tier) | **UNKNOWN** |
-| Project-count limits per tier | **UNKNOWN** |
+| Project-count limits per tier | **UNKNOWN** (candidate plan entitlement/resource, see D) |
+| API/MCP rate limits per tier | **UNKNOWN** (separate future resource policy, see E) |
 
 ### 36.3 Decision Notes
 
 - A/B/C are foundational: they fix billing scope, the free boundary and tier
   meaning. The first three rows of 36.2 (prices, billing interval, allowances)
   depend on them and must be derived from unit economics, not guessed.
-- None of A/B/C needs a schema change; all are consistent with P13/P14/P15 as
-  built.
+- D pins the agency/organization shape (one account, many projects) and E pins
+  API/MCP as interfaces available on all tiers; both follow from A.
+- None of A/B/C/D/E needs a schema change; all are consistent with P13/P14/P15
+  as built.
 - BYOK stays outside hosted allowances (section 22), so paid tiers meter only
   operator-funded capacity.
 
 ### 36.4 Pricing and Allowance Matrix (to be filled once unit costs are known)
+
+Interface availability (decided, D/E):
+
+| Capability | Free | Starter | Pro | Agency |
+| --- | --- | --- | --- | --- |
+| Web UI | yes | yes | yes | yes |
+| REST API | yes | yes | yes | yes |
+| MCP | yes | yes | yes | yes |
+
+Hosted operator-funded resources (numeric values still UNKNOWN):
 
 | | Free | Starter | Pro | Agency |
 | --- | --- | --- | --- | --- |
@@ -987,9 +1023,9 @@ attached afterwards (36.2 and 36.4); a tier is not a fixed credit count.
 | AI images | 0 | UNKNOWN | UNKNOWN | UNKNOWN |
 | DataForSEO | 0 | UNKNOWN | UNKNOWN | UNKNOWN |
 | X link posts | 0 | UNKNOWN | UNKNOWN | UNKNOWN |
-| API | UNKNOWN | UNKNOWN | UNKNOWN | UNKNOWN |
-| MCP | UNKNOWN | UNKNOWN | UNKNOWN | UNKNOWN |
 | Projects | UNKNOWN | UNKNOWN | UNKNOWN | UNKNOWN |
+
+Project count is a candidate plan entitlement/resource (D). No value is set yet.
 
 Do not silently decide commercially meaningful choices.
 
