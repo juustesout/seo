@@ -1006,6 +1006,11 @@ attached afterwards (36.2 and 36.4); a tier is not a fixed credit count.
 
 ### 36.4 Pricing and Allowance Matrix (to be filled once unit costs are known)
 
+> Filled in P16.4. The unit costs exist (36.6) and the recommendation exists
+> (36.7); 36.8 restates 36.7.3 as this matrix. The values are RECOMMENDED,
+> pending owner approval (36.7.9), not decided. The tables below stay as the
+> original open worksheet for history.
+
 Interface availability (decided, D/E):
 
 | Capability | Free | Starter | Pro | Agency |
@@ -1651,6 +1656,354 @@ Concrete decisions P16.4 must take before allowances are fixed:
    SERP (36.6.7 finding 5).
 8. Revisit `safety_factor` (1.30), `expected_utilization` (0.40) and the
    margin floor (70 percent) with real evidence; none is settled.
+
+### 36.7 Pricing & Allowance Recommendation
+
+Status: **product/decision recommendation, not an implementation**. Everything
+here is a proposal for owner approval. No price, allowance, plan row, code,
+schema or provider adapter is changed by this section. Where a resource still
+lacks a reliable cost basis the value is `TBD`, not a guess.
+
+#### 36.7.1 Basis - quality check of 36.6
+
+P16.3 was re-read and its arithmetic re-checked before recommending anything.
+
+- **Arithmetic verified.** The 36.6.4 per-tier costs, the 36.6.5 sensitivity
+  tables and the 36.6.6 break-even ceilings are internally consistent (Agency
+  base 100 percent to 80 percent to 40 percent scaling, USD-to-EUR at 0.92, X
+  link posts kept in native EUR). No calculation error was found.
+- **Verification status preserved.** Verified-official rates (OpenAI
+  `gpt-4o-mini`, Supabase storage/egress, Unsplash, embeddings) stay separate
+  from P16 planning assumptions (DataForSEO per-call, X per-post, AI image
+  per-image). 36.6.1's "known vs unknown" table is not contradicted here.
+- **Example prices/allowances correctly labelled.** The 36.6.4 EUR 29/79/199
+  numbers are `ECONOMIC MODEL INPUT ONLY`; this section reuses the same ladder
+  as a *candidate* but derives its allowances independently and does not treat
+  the example values as decisions.
+- **No fabricated usage data.** All volume figures are model inputs, not
+  historical averages, and remain labelled so.
+- **One translation caveat to carry forward.** 36.6.3/36.6.4 cost a
+  DataForSEO "research action" at 10 Labs calls, but the entitlement unit is
+  `requests` (`request` + `serp_request`) and 36.5.3 proves one internal
+  `request` is not one provider call. This section therefore states the
+  DataForSEO allowance in `requests` and prices it with an explicit
+  calls-per-request **planning** assumption, shown at the 1/10/20-call range.
+- **One direction flag.** 36.6.2 notes the AI-image 0.05/0.10 scenario likely
+  *understates* a token-priced HQ image, so any image allowance used below is an
+  upper-confidence placeholder only.
+
+#### 36.7.2 Model parameters used (carried from 36.6, not re-derived)
+
+| Parameter | Value | Status |
+| --- | --- | --- |
+| FX_USD_EUR | 0.92 | planning assumption (36.6.1) |
+| safety_factor | 1.30 | working hypothesis, not settled |
+| expected_utilization (base) | 0.40 | working hypothesis, not settled |
+| stress_utilization | 0.80 | working hypothesis |
+| worst_utilization | 1.00 | ceiling, not an average |
+| margin floor at expected utilization | 70 percent | working hypothesis |
+
+Planning unit costs used below, all **safe @1.30** and converted to EUR at 0.92
+except X (already EUR):
+
+| Resource | Metered unit | Safe @1.30 | Status |
+| --- | --- | ---: | --- |
+| AI text | token (medium Quick Draft article = 32,700 tokens) | EUR 0.01055 / article (3.227e-7 EUR/token) | verified rate, modelled token mix |
+| DataForSEO | request (planning: 10 Labs calls) | EUR 0.14352 / request | UNVERIFIED range: 0.01435 (1 call) to 0.28704 (20 calls) |
+| AI image | image | EUR 0.1196 (HQ scenario) | UNVERIFIED_PLANNING_ASSUMPTION, likely understated |
+| X link post | link post | EUR 0.26 | UNVERIFIED_PLANNING_ASSUMPTION |
+| Stock media | search | EUR 0.00 | verified official (free API) |
+
+#### 36.7.3 Recommended tier matrix (preferred)
+
+Commercial judgment: keep the four-tier ladder, all four sharing the same
+feature set, differing only in hosted capacity and (candidate) project count.
+
+| | Free | Starter | Pro | Agency |
+| --- | ---: | ---: | ---: | ---: |
+| Monthly price (EUR) | 0 | 29 | 79 | 199 |
+| Monthly price (minor units) | 0 | 2900 | 7900 | 19900 |
+| Yearly price (EUR, = 10x monthly) | 0 | 290 | 790 | 1990 |
+| Yearly price (minor units) | 0 | 29000 | 79000 | 199000 |
+| Annual discount | - | ~17 percent (2 months) | ~17 percent | ~17 percent |
+| AI text (tokens / month) | 0 | 1,000,000 | 3,500,000 | 10,000,000 |
+| AI text (approx medium articles) | 0 | ~30 | ~107 | ~306 |
+| DataForSEO (requests / month) | 0 | 30 | 100 | 250 |
+| AI images / month | 0 | TBD | TBD | TBD |
+| X link posts / month | 0 | 5 | 20 | 60 |
+| Stock media searches / month | 0 | 500 | 2,000 | 10,000 |
+| Projects (candidate, not implemented) | 1 | 2 | 5 | 20 |
+| Expected operator cost / month (base 40 percent) | 0 | EUR 2.37 | EUR 8.27 | EUR 21.88 |
+| Base margin (40 percent) | n/a | 91.8 percent | 89.5 percent | 89.0 percent |
+| Stress margin (80 percent) | n/a | 83.6 percent | 79.1 percent | 78.0 percent |
+| Worst margin (100 percent) | n/a | 79.6 percent | 73.8 percent | 72.5 percent |
+| Key risk / uncertainty | none (BYOK only) | DataForSEO rate and X rate | DataForSEO rate, AI image TBD | DataForSEO rate dominates |
+
+Notes:
+
+- The cost/margin rows exclude AI images (kept `TBD`); 36.7.5 shows the image
+  scenario impact separately.
+- Free stays exactly EUR 0 with zero operator-funded allowance. BYOK (user LLM
+  / embeddings key) still works on Free and on every paid tier.
+- The project-count row is a commercial judgment with near-zero marginal cost;
+  it is **not enforceable today** because no project/state-limit entitlement
+  exists (P12 section 23 "state limits" was never built). It is listed so P17
+  can decide, not as a shipped limit. Until built, tiers differ only by hosted
+  allowances.
+
+#### 36.7.4 Capabilities vs capacity
+
+Feature access and usage volume are separate, and the recommendation keeps them
+separate.
+
+Capabilities (identical on all tiers, including Free):
+
+| Capability | Free | Starter | Pro | Agency | Basis |
+| --- | --- | --- | --- | --- | --- |
+| Web UI | yes | yes | yes | yes | decided |
+| REST API | yes | yes | yes | yes | 36.1 E (decided) |
+| MCP | yes | yes | yes | yes | 36.1 E (decided) |
+| Google integrations (GSC/GA4/Ads) | yes | yes | yes | yes | user-funded, quota-limited |
+| WordPress publishing | yes | yes | yes | yes | user-funded, free |
+| AI editing (BYOK) | yes | yes | yes | yes | byok_exempt on all plans |
+| Designer / Composer | yes | yes | yes | yes | seeded on all plans |
+
+No capability is gated between paid tiers. This follows 36.6.7 finding 6 (AI
+text is too cheap to be a differentiator) and the P13/P15 baseline where every
+plan has the full feature set. The tier difference is capacity, not access.
+API/MCP are not modelled as credits, buckets or a billing layer; their
+underlying consumption uses the same P13/P14 admission path as every other
+surface.
+
+Capacity (operator-funded, account-scoped, monthly) is the allowance table in
+36.7.3. `ai_generation` and `ai_image` and `dataforseo_research` remain
+`byok_exempt`; `media` and `x_link_post` remain operator-funded.
+
+#### 36.7.5 Cost and margin detail (preferred)
+
+Base = 40 percent, stress = 80 percent, worst = 100 percent utilization; safe
+@1.30; EUR. AI images excluded (TBD).
+
+| Tier | Price | Base cost | Base margin | Stress cost | Stress margin | Worst cost | Worst margin |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Starter | 29 | 2.37 | 91.8% | 4.74 | 83.6% | 5.93 | 79.6% |
+| Pro | 79 | 8.27 | 89.5% | 16.55 | 79.1% | 20.68 | 73.8% |
+| Agency | 199 | 21.88 | 89.0% | 43.77 | 78.0% | 54.71 | 72.5% |
+
+Every tier clears the 70 percent floor at base and stress, and even at 100
+percent utilization, **at the central DataForSEO planning rate**. That is the
+whole margin story; the risk is not the central case.
+
+The two unverified rates are what break it. Same tiers at the **high**
+DataForSEO rate (20 calls per request, EUR 0.28704) and 100 percent
+utilization, images excluded:
+
+| Tier | Worst cost (high DFS) | Worst margin |
+| --- | ---: | ---: |
+| Starter | 10.23 | 64.7% |
+| Pro | 35.03 | 55.7% |
+| Agency | 90.59 | 54.5% |
+
+And the AI-image scenario (Starter 15 / Pro 50 / Agency 150 images, HQ safe
+EUR 0.1196) layered on the central case:
+
+| Tier | Base cost | Base margin | Stress margin | Worst margin |
+| --- | ---: | ---: | ---: | ---: |
+| Starter | 3.09 | 89.3% | 78.7% | 73.4% |
+| Pro | 10.66 | 86.5% | 73.0% | 66.3% |
+| Agency | 29.06 | 85.4% | 70.8% | 63.5% |
+
+Reading: the recommended allowances are safe at expected and stress usage, but
+(a) the DataForSEO contract rate and (b) the AI-image model choice each move
+worst-case margin by double digits. Those two decisions, not the prices, are
+what P17 must settle before publishing allowances.
+
+#### 36.7.6 Uncertainty decisions per resource
+
+Per-resource: can a safe allowance be recommended now; should it stay `TBD`;
+what is the cost of over-allocation; what is the smallest next step.
+
+**DataForSEO (`dataforseo_research`) - recommend a bounded allowance, keep rate
+open.** A central 10-call planning rate gives allowances 30/100/250. Over-
+allocation risk: one internal `request` can be up to 20 provider calls
+(36.5.3), so the same allowance can cost 2x the central estimate; at 100 percent
+utilization that already pushes Pro/Agency toward 55 percent margin. Smallest
+next step: obtain the DataForSEO contract rate card and decide whether
+`serp_request` is priced as a live/standard blend. Do not hard-code a per-call
+rate in product data.
+
+**AI images (`ai_image`) - keep `TBD`, do not ship an operator allowance yet.**
+The per-image cost depends on an unresolved model choice and the 0.05/0.10
+scenario likely understates HQ. Over-allocation risk: an image cap priced from
+the understated scenario can lose money on every generation and is the one
+resource with no floor at all. Smallest next step: choose the operator image
+model (a current `gpt-image-*`, since the repo default `dall-e-3` is unlisted)
+and measure per-image token usage. Interim: expose the capability via BYOK only,
+operator-funded allowance 0 until the rate is known.
+
+**X link posts (`x_link_post`) - recommend a small separate allowance.** EUR
+0.20 is a planning assumption with no public rate, but at 20x a normal post the
+risk is bounded by keeping the number low (5/20/60). Over-allocation risk: each
+attempt costs EUR 0.26 safe; 100 allowance would be EUR 26 worst. Smallest next
+step: obtain the current X API plan's per-post economics for link vs non-link.
+Keep `x_link_post` separate from any "posts" number.
+
+**AI text (`ai_generation`) - verified basis, allocate generously.** Use
+`gpt-4o-mini` (repo default `OPENAI_CHAT_MODEL`) at the verified official rate;
+the token allowances above are far below the break-even ceilings. No further
+rate work needed. Embeddings stay a monitored uncapped cost, not an allowance.
+
+**Stock media (`media`) - verified free, allowance is abuse control only.** The
+500/2,000/10,000 searches are safety caps, not economic limits (search is free,
+storage sub-cent). They can be raised without margin impact.
+
+**Supabase egress - monitored cost, not an allowance.** Cached-vs-uncached are
+both sub-cent per month at realistic volumes; a plan does not need an egress
+entitlement.
+
+#### 36.7.7 Alternatives and trade-offs
+
+Preferred matrix = 36.7.3. Two alternatives:
+
+**Conservative / lower-risk.**
+
+| | Free | Starter | Pro | Agency |
+| --- | ---: | ---: | ---: | ---: |
+| Monthly price (EUR) | 0 | 19 | 49 | 149 |
+| AI text (tokens/month) | 0 | 500,000 | 2,000,000 | 6,000,000 |
+| DataForSEO (requests/month) | 0 | 15 | 60 | 150 |
+| AI images/month | 0 | 0 (TBD) | 0 (TBD) | 0 (TBD) |
+| X link posts/month | 0 | 3 | 12 | 40 |
+| Base margin (40%) | - | 93.5% | 89.9% | 90.9% |
+| Stress margin (80%) | - | 87.0% | 79.8% | 81.8% |
+| Worst margin (100%) | - | 83.7% | 74.7% | 77.3% |
+
+Trade-offs: very safe even at the high DataForSEO rate; lower list price and
+lower capacity make it easier to land early customers, but it leaves ARPU on
+the table and may under-serve agencies. It also does not solve the AI-image
+gap.
+
+**Ambitious / higher-risk.**
+
+| | Free | Starter | Pro | Agency |
+| --- | ---: | ---: | ---: | ---: |
+| Monthly price (EUR) | 0 | 39 | 99 | 249 |
+| AI text (tokens/month) | 0 | 2,000,000 | 5,000,000 | 15,000,000 |
+| DataForSEO (requests/month) | 0 | 50 | 150 | 400 |
+| AI images/month (scenario) | 0 | 30 | 100 | 300 |
+| X link posts/month | 0 | 10 | 35 | 100 |
+| Base margin (40%) | - | 85.6% | 82.1% | 80.1% |
+| Stress margin (80%) | - | 71.3% | 64.3% | 60.1% |
+| Worst margin (100%) | - | 64.1% | 55.4% | 50.1% |
+
+Trade-offs: more attractive capacity and ARPU, but stress/worst margins fall
+below the 70 percent floor before any rate uncertainty is resolved, and the
+AI-image scenario is included despite an unresolved rate. Not recommended until
+DataForSEO and X rates are contract-verified.
+
+**Trade-off summary.** Preferred is the balance: clears the floor at expected
+and stress usage with margin headroom for the two unverified rates, keeps the
+ladder simple, and leaves AI images `TBD` rather than pricing a resource we
+cannot cost. Conservative protects the floor but under-monetizes. Ambitious
+only works after rate verification.
+
+#### 36.7.8 What follows from economics vs commercial judgment
+
+Follows from the 36.6 economics:
+
+- Free must stay EUR 0 with zero operator-funded allowance (36.1 B and 36.6
+  break-even).
+- All tiers must clear 70 percent at expected utilization; the price/allowance
+  pairs in 36.7.3 are chosen to do so with headroom.
+- AI text and media can be allocated generously because their unit cost is
+  verified and negligible.
+- DataForSEO and X link posts must stay bounded and separate; they are the only
+  real margin levers.
+- AI images cannot be priced yet.
+
+Commercial judgment (not derivable from cost):
+
+- The exact price ladder (EUR 29/79/199) and the annual 10x-monthly discount.
+- The exact allowance volumes (30/100/250 requests; 5/20/60 link posts).
+- Project/site counts per tier.
+- No capability gating between paid tiers.
+- Keeping a Free tier as a real product surface rather than a trial.
+
+#### 36.7.9 Remaining decisions for the owner
+
+Only items that still need human approval. Already-decided items (billing
+scope, Free = EUR 0/zero allowance, BYOK exemption, account-level entitlements,
+API/MCP on all tiers, no credits) are not reopened.
+
+| # | Decision | Recommended | Alternative | Consequence | P17 depends? |
+| --- | --- | --- | --- | --- | --- |
+| 1 | Final monthly prices | EUR 29 / 79 / 199 | EUR 19/49/149 or 39/99/249 | Sets ARPU vs margin floor headroom | yes (price mapping) |
+| 2 | Annual discount | 10x monthly (~17 percent) | 20 percent (9.6x) | Slight margin dilution for prepay | yes (yearly price IDs) |
+| 3 | Operator AI image model and allowance | Choose model, then set cap; `TBD` until then | Ship scenario caps now | Unbounded risk if mispriced | no for billing, yes for catalog |
+| 4 | DataForSEO contract rate and calls-per-request model | Get rate card; one allowance; bound calls | Split research vs SERP now | Determines allowance safety | no (allowance already numeric) |
+| 5 | X API plan and per-post rate | Get rate card; keep separate allowance | Merge into "posts" | Blends a 20x cost difference | no |
+| 6 | safety_factor / utilization / margin floor | Keep 1.30 / 0.40 / 70 percent | Raise to 1.50 / 0.30 / 75 percent | Shrinks allowances or prices | no |
+| 7 | Project/site limits | Free 1 / Starter 2 / Pro 5 / Agency 20 | No project limit in v1 | Needs a not-yet-built limit mechanic | no (can launch without) |
+| 8 | Trial | None for v1; Free is the trial | 14-day trial | Trial needs lifecycle + abuse handling | yes if trial |
+| 9 | VAT/tax | Stripe Tax; confirm with fiscal advice | Manual VAT | Compliance risk if wrong | yes |
+| 10 | API/MCP rate limits | None per tier in v1 | Per-tier throttles | Abusive use of Free remains technical-only | no |
+
+#### 36.7.10 P17 readiness checklist
+
+| Input | Value / status |
+| --- | --- |
+| Plan identifiers | `base` (Free), `starter`, `pro`, `agency` (stable `key`); UUIDs generated per environment |
+| Monthly prices (minor units) | 0 / 2900 / 7900 / 19900 (recommended) |
+| Yearly prices (minor units) | 0 / 29000 / 79000 / 199000 (recommended) |
+| Currency and intervals | EUR; monthly + yearly |
+| Tier active status | Free active/public; Starter/Pro/Agency to be `active` + `is_public` on approval (currently disabled drafts) |
+| Allowances per resource | in 36.7.3; AI images `TBD` |
+| Project/site limits | recommended, not implemented |
+| Stripe product/price mapping | OPEN: needs the owner's product/price IDs (Model B, `seo_plan_prices`) |
+| Payment-status -> entitlement sync | decided in 36.1/section 9 (webhook re-fetch, single plan-assignment write) |
+| Upgrade / downgrade / cancel / failure | decided: immediate upgrade, period-end downgrade and cancel, bounded grace (exact grace length UNKNOWN) |
+
+Undecided inputs that block a P17 launch: prices 1, discount 2, Stripe
+product/price IDs, VAT 9. Blocking a *complete* catalog but not billing
+infrastructure: AI image allowance 3, DataForSEO rate 4, X rate 5, project
+limits 7. P17 must not start automatically from this section.
+
+#### 36.7.11 Boundaries
+
+This section is a recommendation only: no Stripe, no checkout/portal, no
+webhook or subscription code, no migration, no quota or entitlement code, no
+provider-adapter change, no pricing UI, no credit architecture, and no final
+price or allowance written into code or schema. 36.5 stays the rate source and
+36.6 stays the economics model; nothing above silently rewrites a historical
+assumption in either.
+
+### 36.8 Pricing and Allowance Matrix (36.4 filled - RECOMMENDED, pending owner approval)
+
+36.4 kept its numeric cells as `UNKNOWN` because unit costs were not yet
+derived. The derivation now exists (36.6) and the decision proposal exists
+(36.7). The table below restates 36.7.3 as the filled 36.4. Every number is
+**RECOMMENDED, not decided** until the owner approves 36.7.9.
+
+Hosted operator-funded resources:
+
+| | Free | Starter | Pro | Agency |
+| --- | --- | --- | --- | --- |
+| Price / month | EUR 0 | EUR 29 (recommended) | EUR 79 (recommended) | EUR 199 (recommended) |
+| Price / year | EUR 0 | EUR 290 (recommended) | EUR 790 (recommended) | EUR 1990 (recommended) |
+| AI text (tokens / month) | 0 | 1,000,000 | 3,500,000 | 10,000,000 |
+| AI images / month | 0 | TBD | TBD | TBD |
+| DataForSEO (requests / month) | 0 | 30 | 100 | 250 |
+| X link posts / month | 0 | 5 | 20 | 60 |
+| Stock media searches / month | 0 | 500 | 2,000 | 10,000 |
+| Projects | 1 | 2 | 5 | 20 |
+
+Interface availability is unchanged from 36.4 and 36.1 E: Web UI, REST API and
+MCP are `yes` on every tier including Free.
+
+Reasons these remain recommendations and not facts: DataForSEO and X rates are
+unverified planning assumptions, AI image cost is `UNKNOWN`, and the exact
+prices and allowances are commercial judgments awaiting owner approval
+(36.7.9). No value here is written to code or schema by P16.4.
 
 ## 37. P17 Proposal
 
