@@ -111,6 +111,8 @@ describe('MembersPanel', () => {
     await waitFor(() =>
       expect(membersMock.updateProjectMemberRole).toHaveBeenCalledWith('p-1', 'u-editor', 'viewer'),
     );
+    await screen.findByText('Role updated.');
+    await waitFor(() => expect(membersMock.listProjectMembers).toHaveBeenCalledTimes(2));
   });
 
   it('removes a member only after confirmation', async () => {
@@ -124,6 +126,8 @@ describe('MembersPanel', () => {
     confirmSpy.mockReturnValue(true);
     fireEvent.click(screen.getByRole('button', { name: 'Remove editor@example.com' }));
     await waitFor(() => expect(membersMock.removeProjectMember).toHaveBeenCalledWith('p-1', 'u-editor'));
+    await screen.findByText('Member removed.');
+    await waitFor(() => expect(membersMock.listProjectMembers).toHaveBeenCalledTimes(2));
   });
 
   it('protects the last owner from removal and demotion', async () => {

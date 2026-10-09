@@ -50,5 +50,7 @@ describe('AccountApiKeys', () => {
     await waitFor(() =>
       expect(apiMock).toHaveBeenCalledWith('/account/api-keys/k1/revoke', { method: 'POST', body: {} }),
     );
+    await screen.findByText('API key "Agent key" revoked.');
+    await waitFor(() => expect(apiMock).toHaveBeenCalledTimes(3));
   });
 });

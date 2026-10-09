@@ -1,5 +1,4 @@
 import StarterKit from '@tiptap/starter-kit';
-import Link from '@tiptap/extension-link';
 import { ImageBlock } from '../ImageBlock';
 import {
   CompositionButton,
@@ -15,12 +14,13 @@ export function createEditorExtensions(options: { nodeViews?: boolean } = {}) {
   return [
     StarterKit.configure({
       heading: { levels: [1, 2, 3, 4] },
-    }),
-    Link.configure({
-      openOnClick: false,
-      autolink: true,
-      defaultProtocol: 'https',
-      HTMLAttributes: { rel: 'noopener noreferrer', target: '_blank' },
+      link: {
+        openOnClick: false,
+        autolink: true,
+        defaultProtocol: 'https',
+        HTMLAttributes: { rel: 'noopener noreferrer', target: '_blank' },
+      },
+      trailingNode: false,
     }),
     ImageBlock,
     CompositionHero.configure({ nodeView }),

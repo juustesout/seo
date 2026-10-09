@@ -70,11 +70,12 @@ const startSchema = z
 const researchPurposeSchema = z.enum(['planning', 'section_magic', 'revision']).optional();
 
 /** Strict W3 approval vocabulary is validated through the shared gate. */
-function parseRunId(raw: string | undefined): WriterRunId {
-  if (!raw || !isWriterRunId(raw)) {
-    throw ApiError.badRequest('runId must be a writer run id (wr_<uuid>)', { runId: raw });
+function parseRunId(raw: string | string[] | undefined): WriterRunId {
+  const value = Array.isArray(raw) ? raw[0] : raw;
+  if (!value || !isWriterRunId(value)) {
+    throw ApiError.badRequest('runId must be a writer run id (wr_<uuid>)', { runId: value });
   }
-  return raw;
+  return value;
 }
 
 /** Start a writer run for one content item (editor+). The optional

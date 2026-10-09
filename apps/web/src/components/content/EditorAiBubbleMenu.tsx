@@ -6,7 +6,8 @@
  * endpoint - the menu itself holds no document state and never edits the
  * document. `Ask AI` collects a short instruction and uses the same path.
  */
-import { BubbleMenu, type Editor } from '@tiptap/react';
+import { BubbleMenu } from '@tiptap/react/menus';
+import type { Editor } from '@tiptap/react';
 import type { ContentAiEditOperation } from '@seo/contracts';
 import { Button } from '@/components/ui/button';
 
@@ -45,7 +46,7 @@ export function EditorAiBubbleMenu({ editor, actions }: { editor: Editor | null;
     <BubbleMenu
       editor={editor}
       shouldShow={({ state }) => !state.selection.empty}
-      tippyOptions={{ duration: 120, maxWidth: 520 }}
+      options={{ placement: 'top' }}
     >
       <div className="flex flex-wrap items-center gap-1 rounded-lg border bg-card p-1 shadow-lg">
         {ACTIONS.map((action) => (

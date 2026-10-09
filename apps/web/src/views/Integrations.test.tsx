@@ -46,5 +46,6 @@ describe('Integrations', () => {
     await waitFor(() =>
       expect(apiMock).toHaveBeenCalledWith('/projects/p1/integrations/i1', { method: 'DELETE' }),
     );
+    await waitFor(() => expect(apiMock).toHaveBeenCalledTimes(4));
   });
 });
