@@ -169,7 +169,6 @@ accountRouter.get(
 
     // Reuse any existing account-scoped GSC integration (any status) so a
     // re-connect keeps the same token owner and registry links intact.
-    let integrationId: string | null = null;
     const existing = await container.sb
       .from('seo_integrations')
       .select('id')
@@ -179,7 +178,7 @@ accountRouter.get(
       .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle();
-    integrationId = (existing.data as { id: string } | null)?.id ?? null;
+    let integrationId: string | null = (existing.data as { id: string } | null)?.id ?? null;
 
     if (!integrationId) {
       const insert = await container.sb
@@ -318,7 +317,6 @@ accountRouter.get(
     requireConfigured(container.config.googleConfigured, 'Google OAuth');
     requireConfigured(container.config.encryptionConfigured, 'Credential storage');
 
-    let integrationId: string | null = null;
     const existing = await container.sb
       .from('seo_integrations')
       .select('id')
@@ -328,7 +326,7 @@ accountRouter.get(
       .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle();
-    integrationId = (existing.data as { id: string } | null)?.id ?? null;
+    let integrationId: string | null = (existing.data as { id: string } | null)?.id ?? null;
 
     if (!integrationId) {
       const insert = await container.sb

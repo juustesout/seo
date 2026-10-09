@@ -1133,7 +1133,7 @@ export class KnowledgeService {
     const candidates: KnowledgeDiscoveryCandidate[] = [];
 
     for (const link of links) {
-      let normalized: string | null = null;
+      let normalized: string | null;
       try {
         normalized = normalizeDiscoveryUrl(link.url);
       } catch {
