@@ -15,6 +15,17 @@ import { ApiError } from '../../apiErrors.js';
 /** Reusable UUID param validator (projectId and generic resource ids). */
 export const uuidParam = z.string().uuid();
 
+/**
+ * Express 5 types route params as `string | string[]` (repeatable segments).
+ * A named `:param` segment is always a single string at runtime; this narrows
+ * the type and fails fast if the shape is ever unexpected.
+ */
+export function routeParam(raw: string | string[] | undefined): string {
+  if (typeof raw === 'string') return raw;
+  if (Array.isArray(raw) && typeof raw[0] === 'string') return raw[0];
+  throw ApiError.badRequest('Missing route parameter');
+}
+
 /** Validate and return req.params.projectId; 400 on anything else. */
 export function parseProjectId(req: Request): string {
   const parsed = uuidParam.safeParse(req.params.projectId);

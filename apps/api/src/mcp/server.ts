@@ -608,10 +608,10 @@ export function buildTools(): ToolDef[] {
       project_id: z.string().uuid().optional().describe('Project to operate on (required for account keys; must match the bound project otherwise)'),
       mode: z.enum(['intent', 'plan']).describe('intent: natural language instruction. plan: an explicit validated DesignerPlan'),
       instruction: z.string().min(1).max(DESIGNER_INTENT_INSTRUCTION_MAX_CHARS).optional().describe('Natural-language instruction (intent mode)'),
-      plan: z.record(z.unknown()).optional().describe('Validated DesignerPlan (plan mode)'),
+      plan: z.record(z.string(), z.unknown()).optional().describe('Validated DesignerPlan (plan mode)'),
       content_id: z.string().uuid().optional().describe('Existing content to edit; the base revision is derived server-side'),
       base_revision: z.string().min(1).max(DESIGNER_BASE_REVISION_MAX_CHARS).optional().describe('Creation base revision when there is no content_id'),
-      brief: z.record(z.unknown()).optional().describe('Optional structured design brief'),
+      brief: z.record(z.string(), z.unknown()).optional().describe('Optional structured design brief'),
       idempotency_key: z.string().min(1).max(AGENT_RUN_IDEMPOTENCY_KEY_MAX_CHARS).optional().describe('Collapses a duplicate submission onto the existing run'),
     },
     handler: async (deps, args) => {
@@ -664,7 +664,7 @@ export function buildTools(): ToolDef[] {
     inputSchema: {
       project_id: z.string().uuid().optional().describe('Project to operate on (required for account keys; must match the bound project otherwise)'),
       content_id: z.string().uuid().describe('Content item the proposal was generated for'),
-      proposal: z.record(z.unknown()).describe('The validated DesignerProposal returned by designer_get_run'),
+      proposal: z.record(z.string(), z.unknown()).describe('The validated DesignerProposal returned by designer_get_run'),
     },
     handler: async (deps, args) => {
       requireWrite(deps);

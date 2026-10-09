@@ -67,7 +67,7 @@ vi.mock('../views/EditorView', async () => {
       }, [onEditor]);
       React.useEffect(() => {
         const editor = editorRef.current;
-        if (editor && !editor.isDestroyed) editor.commands.setContent(ws.doc, false);
+        if (editor && !editor.isDestroyed) editor.commands.setContent(ws.doc, { emitUpdate: false });
       }, [ws.doc]);
       return (
         <div data-testid="mode-editor" data-boundary={ws.session.boundary}>

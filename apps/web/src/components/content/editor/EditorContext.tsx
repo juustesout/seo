@@ -137,7 +137,7 @@ export function EditorContextProvider({
         // A normal transaction: it is undoable and emits an update, so the
         // existing onDocChange + autosave boundary persists it. Selection is
         // deliberately reset by the replacement rather than guessed at.
-        return editor.commands.setContent(next, true) ? { ok: true } : { ok: false, reason: 'apply-failed' };
+        return editor.commands.setContent(next, { emitUpdate: true }) ? { ok: true } : { ok: false, reason: 'apply-failed' };
       } catch {
         return { ok: false, reason: 'apply-failed' };
       }
@@ -183,7 +183,7 @@ export function EditorContextProvider({
       try {
         // One replacement transaction: undoable, emits a single update and
         // therefore reuses the existing onDocChange + autosave boundary.
-        if (!editor.commands.setContent(canonicalDocumentToEditorDocument(next), true)) {
+        if (!editor.commands.setContent(canonicalDocumentToEditorDocument(next), { emitUpdate: true })) {
           return { ok: false, reason: 'apply-failed' };
         }
       } catch {
