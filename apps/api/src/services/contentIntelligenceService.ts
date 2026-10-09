@@ -118,7 +118,7 @@ export class ContentIntelligenceService {
     const dfConfigured = await this.dataforseoConnected(projectId, accountId);
 
     // ------------------------------------------------------------------ GSC
-    let gscSources: ContentIntelligenceReport['sources'] = [];
+    let gscSources: ContentIntelligenceReport['sources'];
     let gscRecs: ContentIntelligenceReport['recommendations'] = [];
     if (gscConfigured) {
       const gsc = await this.gscSignals(projectId, row, { docText, topic, published });
@@ -136,7 +136,7 @@ export class ContentIntelligenceService {
     }
 
     // ------------------------------------------------------------ DataForSEO
-    let dfSources: ContentIntelligenceReport['sources'] = [];
+    let dfSources: ContentIntelligenceReport['sources'];
     let dfRecs: ContentIntelligenceReport['recommendations'] = [];
     if (dfConfigured) {
       const df = await this.dataforseoSignals(projectId, row, targetKeyword);

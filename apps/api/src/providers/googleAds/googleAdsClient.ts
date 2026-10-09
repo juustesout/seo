@@ -251,7 +251,7 @@ export class GoogleAdsClient {
   private async parseError(res: Response): Promise<GoogleAdsError> {
     let reason: string | null = null;
     let providerCode: string | null = null;
-    let detail = '';
+    let detail: string;
     try {
       const body = (await res.json()) as Row;
       const error = (body.error as Row | undefined) ?? {};

@@ -113,7 +113,7 @@ export function createAiWriterAgentCoordinator(resolve: WriterAiResolver): Write
         resolution = await resolve(input.projectId);
       } catch (err) {
         logger.warn({ err, projectId: input.projectId }, 'writer agent AI resolution failed');
-        throw new Error('The agent coordinator could not resolve project AI.');
+        throw new Error('The agent coordinator could not resolve project AI.', { cause: err });
       }
       const { provider, configured } = resolution;
       if (!configured || !provider.isConfigured()) {

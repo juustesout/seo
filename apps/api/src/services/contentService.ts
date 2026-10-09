@@ -235,7 +235,7 @@ export class ContentService {
     }).score;
 
     const hasPublishedAt = existing?.published_at ? true : false;
-    let saved: Row | null = null;
+    let saved: Row | null;
     if (mode === 'create') {
       payload.project_id = projectId;
       payload.status = status;
