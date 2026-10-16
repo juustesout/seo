@@ -1,8 +1,8 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi, type Mock } from 'vitest';
 import { act, renderHook } from '@testing-library/react';
 import { useAutosave } from './useAutosave';
 
-function mount(initialSnapshot: string, persist = vi.fn(async () => undefined)) {
+function mount(initialSnapshot: string, persist: Mock<() => Promise<void>> = vi.fn(async () => {})) {
   const view = renderHook(
     ({ snapshot }: { snapshot: string }) =>
       useAutosave({

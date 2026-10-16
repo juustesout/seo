@@ -153,7 +153,7 @@ export class GoogleAnalyticsClient {
     }
     if (!res.ok) {
       await this.record(operation, false);
-      let detail = '';
+      let detail: string;
       try {
         const body = (await res.json()) as { error?: { message?: string } };
         detail = body?.error?.message ?? '';

@@ -315,7 +315,7 @@ export function EditorView({
    */
   const useWriterArticle = (review: WriterRunReviewDto) => {
     const liveDoc = live.current.doc;
-    let currentEmpty = false;
+    let currentEmpty: boolean;
     try {
       currentEmpty = isCanonicalDocumentEmpty(canonicalFromEditorDocument(liveDoc));
     } catch {

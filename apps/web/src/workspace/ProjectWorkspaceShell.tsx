@@ -290,7 +290,7 @@ function WorkspaceBody({
    */
   const applyComposition = (document: CanonicalDocument) => {
     if (!canEdit || lifecycle.status !== 'ready') return;
-    let empty = false;
+    let empty: boolean;
     try {
       empty = isCanonicalDocumentEmpty(canonicalFromEditorDocument(ws.live.current.doc));
     } catch {
